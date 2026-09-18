@@ -483,6 +483,38 @@ function CachedTiles({ url, attribution }: { url: string; attribution: string })
   return null;
 }
 
+/**
+ * Sfondo satellite (18/09/2026): due TileLayer sopra quello di base — le
+ * foto dall'alto (zIndex 2) e le sole etichette CARTO (zIndex 4). Figlio
+ * della mappa come CachedTiles, cosi' `useMap()` c'e' sempre: un effetto su
+ * `mapRef` nel componente grande al primo giro trova la mappa ancora nulla,
+ * e il satellite rimasto acceso dalla volta prima non ripartiva.
+ * Il perche' delle scelte (fonte, quote, etichette) sta accanto a
+ * `satelliteActive` in MapArea.
+ */
+function SfondoSatellite({ token, urlEtichette }: { token: string; urlEtichette: string }) {
+  const map = useMap();
+  useEffect(() => {
+    const foto = L.tileLayer(
+      `https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}{r}.jpg90?access_token=${token}`,
+      {
+        zIndex: 2,
+        maxNativeZoom: 19,
+        maxZoom: 22,
+        attribution: '© <a href="https://www.mapbox.com/about/maps/" target="_blank" rel="noopener">Mapbox</a> © Maxar',
+      },
+    );
+    const etichette = L.tileLayer(urlEtichette, { zIndex: 4, maxNativeZoom: 20, maxZoom: 22 });
+    foto.addTo(map);
+    etichette.addTo(map);
+    return () => {
+      map.removeLayer(foto);
+      map.removeLayer(etichette);
+    };
+  }, [map, token, urlEtichette]);
+  return null;
+}
+
 function MapController({
   center,
   zoom,
@@ -2129,9 +2161,23 @@ function MapArea({
     });
   }, []);
 
+  // PRESTAZIONI (18/09/2026, committente: «con ciclovie e mountain bike
+  // l'app rallenta e si muove male»). Tre cause, tutte qui:
+  //  1. nessuna soglia sul moveend (i sentieri ce l'hanno): ogni micro-fix
+  //     GPS rifaceva due query e ridisegnava tutto;
+  //  2. le chiamate si accavallavano: A svuota e aspetta, B svuota e aspetta,
+  //     poi disegnano TUTTE E DUE → tracciati doppi finche' non si ricarica.
+  //     Ora ogni chiamata ha un numero e solo l'ultima disegna;
+  //  3. migliaia di <path> SVG puntinati: ora stanno in una tela canvas sola
+  //     (e routeLines.ts ritaglia le ciclovie al riquadro: una EuroVelo non
+  //     arriva piu' con i suoi 3.000 km per mostrarne trecento metri).
+  const ciclabiliSeqRef = useRef(0);
+  const ciclabiliRendererRef = useRef<L.Renderer | null>(null);
+
   const caricaCiclabili = useCallback(async (bounds: L.LatLngBounds) => {
     const map = mapRef.current;
     if (!map) return;
+    const seq = ++ciclabiliSeqRef.current;
     setCiclabiliLoading(true);
     try {
       const zoom = map.getZoom();
@@ -2149,8 +2195,32 @@ function MapArea({
         .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
         .limit(zoom < CICLABILI_ZOOM_LOCALI ? 120 : 200);
 
+      // Le linee si chiedono PRIMA di toccare la mappa: si svuota e si
+      // ridisegna in un colpo solo, e solo se nel frattempo non e' partita
+      // una chiamata piu' recente.
+      const livelloBici = livelloDaZoom(zoom);
+      const lineeBici = livelloBici
+        ? await fetchRouteLines(
+          bounds, ['bici'],
+          livelloBici === 'regionale' ? 60 : livelloBici === 'medio' ? 120 : 150,
+          livelloBici === 'medio' ? 2 : 1,
+          livelloBici,
+        )
+        : [];
+      if (seq !== ciclabiliSeqRef.current) return;
+
       if (!ciclabiliLayerRef.current) ciclabiliLayerRef.current = creaGruppoPercorsi('#ea580c', CICLABILI_ZOOM_LOCALI);
       if (!ciclabiliLineeRef.current) ciclabiliLineeRef.current = L.layerGroup();
+      if (!ciclabiliRendererRef.current) {
+        // Tela in un pane suo, SOTTO l'overlayPane (z 400): un <canvas> copre
+        // tutta la mappa e, stando sopra, toglierebbe tocchi e tooltip ai
+        // tracciati SVG degli altri layer (sentieri, giro a tappe).
+        if (!map.getPane('wip-ciclabili')) {
+          const pane = map.createPane('wip-ciclabili');
+          pane.style.zIndex = '390';
+        }
+        ciclabiliRendererRef.current = L.canvas({ padding: 0.5, pane: 'wip-ciclabili' });
+      }
       const group = ciclabiliLayerRef.current;
       const linee = ciclabiliLineeRef.current;
       group.clearLayers();
@@ -2173,15 +2243,8 @@ function MapArea({
       }
 
       const nomi = new Map<string, string>((data || []).map((c: any) => [String(c.id), String(c.name || '')]));
-      const livelloBici = livelloDaZoom(zoom);
       if (livelloBici) {
-        const lineeBici = await fetchRouteLines(
-          bounds, ['bici'],
-          livelloBici === 'regionale' ? 60 : livelloBici === 'medio' ? 120 : 150,
-          livelloBici === 'medio' ? 2 : 1,
-          livelloBici,
-        );
-        drawRouteLines(linee, lineeBici, '#ea580c', nomi);
+        drawRouteLines(linee, lineeBici, '#ea580c', nomi, ciclabiliRendererRef.current ?? undefined);
         if (livelloBici === 'pieno') {
           for (const l of lineeBici) {
             if (l.stops?.length) drawRouteStops(linee, l.stops, '#ea580c', nomi.get(l.poiId));
@@ -2195,7 +2258,7 @@ function MapArea({
     } catch (e) {
       console.warn('[Ciclabili] fetch fallito:', e);
     } finally {
-      setCiclabiliLoading(false);
+      if (seq === ciclabiliSeqRef.current) setCiclabiliLoading(false);
     }
   }, [language]);
 
@@ -2219,8 +2282,33 @@ function MapArea({
       void caricaCiclabili(map.getBounds());
     };
     aggiorna();
-    map.on('moveend', aggiorna);
-    return () => { map.off('moveend', aggiorna); };
+    // Soglia come i sentieri: senza, ogni micro-fix GPS del follow-me (e
+    // ogni trascinamento di due dita) rilanciava query e ridisegno. Il
+    // ritaglio dei tracciati tiene una schermata di margine per lato (mai
+    // meno di ~660 m), quindi entro 400 m non si scopre mai un bordo vuoto.
+    let ultimoCentro = map.getCenter();
+    let ultimoZoom = map.getZoom();
+    const onMoveEnd = () => {
+      const c = map.getCenter();
+      const z = map.getZoom();
+      // A zoom di strada lo schermo e' largo 300 m: con 400 m fissi si
+      // potrebbe attraversarlo tutto senza vedere i pin nuovi. Un terzo
+      // della larghezza, con 400 m come tetto.
+      const b = map.getBounds();
+      const soglia = Math.min(400, map.distance(b.getSouthWest(), b.getSouthEast()) * 0.3);
+      if (z === ultimoZoom && getDistanceFromLatLonInM(ultimoCentro.lat, ultimoCentro.lng, c.lat, c.lng) < soglia) {
+        return;
+      }
+      ultimoCentro = c;
+      ultimoZoom = z;
+      aggiorna();
+    };
+    map.on('moveend', onMoveEnd);
+    return () => {
+      map.off('moveend', onMoveEnd);
+      // Le chiamate ancora in volo non devono ridisegnare un layer spento.
+      ciclabiliSeqRef.current++;
+    };
   }, [ciclabiliActive, caricaCiclabili]);
 
   // ── VINO E GUSTO ──────────────────────────────────────────────────────
@@ -2521,6 +2609,34 @@ function MapArea({
     return d.toISOString().slice(0, 10);
   }
 
+  // ── SFONDO SATELLITE (18/09/2026, richiesta del committente) ───────────
+  //
+  // Non sostituisce il layer di base (CachedTiles, che serve anche
+  // l'offline e deve restare identico al byte): gli si SOVRAPPONE. Due
+  // TileLayer nello stesso tilePane:
+  //  · zIndex 2 — le foto dall'alto di Mapbox (`mapbox.satellite`, Raster
+  //    Tiles API: il conto Mapbox c'e' gia' per routing e mappe dei PDF; la
+  //    fascia gratuita e' di 750.000 tile al mese, e il layer e' spento di
+  //    default, quindi le consuma solo chi lo accende);
+  //  · zIndex 4 — le sole ETICHETTE di CARTO (`voyager_only_labels`, stessa
+  //    chiave dello sfondo): una foto aerea senza i nomi delle vie e dei
+  //    paesi non si legge, e i nostri pin da soli non bastano a orientarsi.
+  // In mezzo (zIndex 3) resta la copertura neve MODIS.
+  // Senza VITE_MAPBOX_TOKEN la voce non compare nel pannello: meglio
+  // assente che una mappa a scacchi grigi.
+  const MAPBOX_TOKEN_SAT = (import.meta.env.VITE_MAPBOX_TOKEN as string | undefined) || '';
+  const [satelliteActive, setSatelliteActive] = useState(() => {
+    try { return !!MAPBOX_TOKEN_SAT && localStorage.getItem('wip_satellite_enabled') === '1'; } catch { return false; }
+  });
+
+  const toggleSatellite = useCallback(() => {
+    setSatelliteActive((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('wip_satellite_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+      return next;
+    });
+  }, []);
+
   const toggleNeve = useCallback(() => {
     setNeveActive((prev) => {
       const next = !prev;
@@ -2644,6 +2760,8 @@ function MapArea({
         {
           maxNativeZoom: NEVE_MODIS_MAX_NATIVE_ZOOM,
           opacity: 0.55,
+          // Sopra lo sfondo satellitare (zIndex 2), sotto le sue etichette (4).
+          zIndex: 3,
           attribution: 'NASA GIBS · MODIS Terra NDSI Snow Cover',
         },
       );
@@ -6144,13 +6262,23 @@ function MapArea({
       dettaglio: getTranslation('mp_layer_lusso_det', language),
       onClick: toggleLusso,
     },
+    // Lo SFONDO e' una terza natura: non e' una rete ne' una condizione.
+    // Ultimo gruppo = in fondo al pannello, cioe' il piu' vicino al pollice
+    // (il pannello si apre sopra il tasto). Senza token la voce non esiste.
+    ...(MAPBOX_TOKEN_SAT ? [{
+      id: 'satellite', gruppo: 'sfondo', on: satelliteActive, loading: false, emoji: '🛰️',
+      tinta: 'bg-slate-700 border-slate-400', zoomMin: 0,
+      nome: getTranslation('mp_layer_satellite_nome', language),
+      dettaglio: getTranslation('mp_layer_satellite_det', language),
+      onClick: toggleSatellite,
+    }] : []),
   ], [
     language, sentieriActive, sentieriLoading, ciclabiliActive, ciclabiliLoading,
     stradeGustoActive, stradeGustoLoading, servicesActive, servicesLoading,
     neveActive, neveLoading, soleActive, soleLoading, bathingActive, bathingLoading,
     areeActive, areeLoading, AREE_MIN_ZOOM, shoppingActive, shoppingLoading, lussoActive, lussoLoading,
     toggleSentieri, toggleCiclabili, toggleStradeGusto, toggleServices, toggleNeve, toggleSole, toggleBathing, toggleAree,
-    toggleShopping, toggleLusso,
+    toggleShopping, toggleLusso, satelliteActive, toggleSatellite, MAPBOX_TOKEN_SAT,
   ]);
 
   const layerAccesi = useMemo(() => LIVELLI.filter((l) => l.on), [LIVELLI]);
@@ -6246,6 +6374,12 @@ function MapArea({
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
             url={cartoUrl}
           />
+          {satelliteActive && MAPBOX_TOKEN_SAT && (
+            <SfondoSatellite
+              token={MAPBOX_TOKEN_SAT}
+              urlEtichette={cartoUrl.replace('/rastertiles/voyager/', '/rastertiles/voyager_only_labels/')}
+            />
+          )}
           <MapController center={center} zoom={mapZoom} />
           <MapEventsHandler
             onMoveEnd={fetchPois}
@@ -6572,15 +6706,30 @@ function MapArea({
           non condividere lo schermo con loro, non solo vincere lo z-fight.
           07/09/2026: stessa cosa con la card di un pin aperta — il chip
           meteo sta alla sua stessa quota (5.25rem) e le spuntava sopra. */}
-      <div className={`absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 ${serviziAperti ? 'z-[2100]' : 'z-[1000]'} flex flex-col-reverse items-start gap-2 pointer-events-none transition-opacity ${(ricercaAperta || activePoi) ? 'opacity-0 pointer-events-none invisible' : ''}`}>
-        {/* Chip meteo (Open-Meteo, cache 30 min) */}
-        {meteo && (
+      {/* 18/09/2026 (committente): «il tasto dei livelli portalo in basso
+          all'altezza del tasto percorsi, e il meteo mettilo al centro, stessa
+          altezza, tra di loro». Una fila sola a 5.25rem dal fondo:
+          livelli a sinistra (questa colonna) · meteo al centro (qui sotto) ·
+          percorsi a destra (App.tsx). Il meteo esce dalla colonna: stando
+          SOTTO il tasto livelli lo alzava di una riga rispetto ai percorsi. */}
+      {meteo && (
+        <div className={`absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-[1000] h-11 flex items-center pointer-events-none transition-opacity ${(ricercaAperta || activePoi) ? 'opacity-0 invisible' : ''}`}>
+          {/* Chip meteo (Open-Meteo, cache 30 min) */}
           <div className="pointer-events-auto bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-2xl rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.12)] border border-white/60 dark:border-white/10 px-3 py-1.5 flex items-center gap-1.5 text-[12px] font-black text-[#1e3a8a] dark:text-white select-none">
             <span className="text-[14px] leading-none">{weatherEmoji(meteo.code)}</span>
             {Math.round(meteo.temp)}°
           </div>
-        )}
+        </div>
+      )}
 
+      {/* `top` fissato oltre a `bottom`: la colonna ha un'altezza vera (quella
+          del guscio della mappa meno i margini), e il pannello dei livelli si
+          restringe e scorre dentro invece di uscire dall'alto. E' tutta
+          `pointer-events-none`: lo spazio vuoto sopra il tasto non ruba i
+          tocchi alla mappa. In fondo alla colonna sta il blocco dei livelli
+          (`order-first` piu' sotto: in col-reverse il primo e' in basso),
+          pioggia e «al coperto» gli stanno sopra. */}
+      <div className={`absolute top-[calc(env(safe-area-inset-top)+0.5rem)] bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 ${serviziAperti ? 'z-[2100]' : 'z-[1000]'} flex flex-col-reverse items-start gap-2 pointer-events-none transition-opacity ${(ricercaAperta || activePoi) ? 'opacity-0 pointer-events-none invisible' : ''}`}>
         {/* Banner pioggia: propone l'evidenziazione dei luoghi al coperto */}
         <AnimatePresence>
           {meteo && meteo.rainProb >= 50 && !rainBannerDismissed && !indoorMode && (
@@ -6637,7 +6786,12 @@ function MapArea({
             Trasparente e non cliccabile con la card di un pin aperta: la
             card e' ancorata alla stessa quota e altrimenti il tasto le
             spunta sopra dal bordo arrotondato (07/09/2026, committente). */}
-        <div className={`pointer-events-auto flex flex-col-reverse items-start gap-2 transition-opacity ${activePoi ? 'opacity-0 pointer-events-none invisible' : ''}`}>
+        {/* `order-first` = in fondo alla colonna, alla quota del tasto
+            percorsi. `min-h-0` = puo' restringersi: e' cosi' che il pannello
+            dentro eredita il tetto e scorre. `pointer-events-none` sul blocco
+            e `auto` sui figli: il blocco e' largo quanto il pannello anche
+            nei punti vuoti accanto al tasto, e li' i tocchi sono della mappa. */}
+        <div className={`order-first min-h-0 pointer-events-none [&>*]:pointer-events-auto flex flex-col-reverse items-start gap-2 transition-opacity ${activePoi ? 'opacity-0 !pointer-events-none invisible' : ''}`}>
           <button
             onClick={() => setServiziAperti((v) => !v)}
             // Era una ⓘ, che vuol dire «informazioni» e non «livelli»: chi
@@ -6649,7 +6803,7 @@ function MapArea({
               layerAccesi.length ? ` · ${layerAccesi.length} ${getTranslation('mp_attivi', language)}` : ''}`}
             aria-expanded={serviziAperti}
             // 44 px: la soglia sotto la quale il pollice sbaglia bersaglio.
-            className={`relative w-11 h-11 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60 ${
+            className={`relative shrink-0 w-11 h-11 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60 ${
               serviziAperti || layerAccesi.length
                 ? 'bg-[#1e3a8a] text-white border-blue-400 ring-2 ring-blue-500/40'
                 : 'bg-white/70 dark:bg-[#1C1C1E]/70 border-white/60 dark:border-white/10 text-[#1e3a8a] dark:text-white'
@@ -6679,7 +6833,7 @@ function MapArea({
             <button
               onClick={() => setServiziAperti(true)}
               aria-label={`${getTranslation('mp_livelli_attivi', language)}: ${layerAccesi.map((l) => l.nome).join(', ')}`}
-              className="pointer-events-auto flex items-center gap-1.5 h-11 bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-full shadow-[0_2px_10px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 px-3 active:scale-95 transition-all focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60"
+              className="pointer-events-auto shrink-0 flex items-center gap-1.5 h-11 bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-full shadow-[0_2px_10px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 px-3 active:scale-95 transition-all focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60"
             >
               {layerAccesi.map((l) => (
                 <span key={l.id} aria-hidden="true" className="text-[15px] leading-none">{l.emoji}</span>
@@ -6724,16 +6878,31 @@ function MapArea({
                 // Cosi' anche con tutti i layer accesi si legge tutto, e se
                 // proprio non ci sta scorre dentro i suoi bordi invece di
                 // finire tagliato.
-                className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-2 flex flex-col gap-0.5 min-w-[232px] max-h-[calc(100dvh_-_env(safe-area-inset-top)_-_env(safe-area-inset-bottom)_-_10.5rem)] overflow-y-auto overscroll-contain touch-pan-y"
+                // 18/09/2026 — IL TETTO NON SI CALCOLA PIU`, SI EREDITA.
+                // Il conto in `100dvh - …` qui sopra presumeva che la mappa
+                // fosse alta quanto lo schermo e che sotto il pannello ci
+                // fosse solo il tasto: ma sotto c'erano anche il chip meteo
+                // e il banner pioggia, e la mappa non arriva al bordo dello
+                // schermo (c'e' la barra delle schede). Risultato: la cima
+                // del pannello usciva dall'alto e «Sentieri e cammini», la
+                // prima voce, non si poteva toccare — scorreva, ma la parte
+                // che scorreva in vista era fuori schermo (committente).
+                // Ora la colonna ha un'altezza VERA (top e bottom fissati
+                // sul guscio della mappa) e il pannello e' un figlio flex
+                // che si restringe (`min-h-0`) e scorre dentro i suoi bordi,
+                // qualunque cosa gli stia sopra o sotto.
+                className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-2 flex flex-col gap-0.5 min-w-[232px] min-h-0 shrink overflow-y-auto overscroll-contain touch-pan-y [&>*]:shrink-0"
               >
-                {(['reti', 'condizioni'] as const).map((gruppo) => (
+                {(['reti', 'condizioni', 'sfondo'] as const).filter((g) => LIVELLI.some((v) => v.gruppo === g)).map((gruppo) => (
                   <Fragment key={gruppo}>
-                    {/* Due nature diverse, separate anche a vedersi: dove si
-                        va e com'è adesso. */}
+                    {/* Nature diverse, separate anche a vedersi: dove si
+                        va, com'è adesso, e su che sfondo lo si guarda. */}
                     <div className="px-2 pt-1.5 pb-1 text-[10px] font-black uppercase tracking-wider text-[#1e3a8a]/55 dark:text-white/50">
                       {gruppo === 'reti'
                         ? getTranslation('mp_dove_andare', language)
-                        : getTranslation('mp_come_adesso', language)}
+                        : gruppo === 'condizioni'
+                          ? getTranslation('mp_come_adesso', language)
+                          : getTranslation('mp_sfondo_mappa', language)}
                     </div>
                     {LIVELLI.filter((v) => v.gruppo === gruppo).map((v) => (
                       <button
@@ -6794,7 +6963,7 @@ function MapArea({
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
-                className="bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 px-3 py-2.5 max-w-[240px]"
+                className="shrink-0 bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 px-3 py-2.5 max-w-[240px]"
               >
                 {datiSole && (
                 <div className="flex items-center gap-2.5">
@@ -6886,13 +7055,28 @@ function MapArea({
             initial={{ opacity: 0, y: 40 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 40 }}
-            className="absolute bottom-16 md:bottom-20 right-2 md:right-4 z-[1001] flex flex-col items-center gap-2 pointer-events-auto"
+            /* SOPRA A TUTTO, E NELLA FILA DEI TASTI (18/09/2026, committente:
+               «l'icona rimane coperta, deve essere visivamente sopra a
+               tutto»). Stava a `bottom-16` fisso, senza l'area di sicurezza:
+               su iPhone l'etichetta finiva SOTTO la barra di ricerca
+               (z-2200) e la bussola sotto il tasto dei percorsi di App.tsx,
+               che sta alla stessa quota sul bordo destro. Ora:
+                · stessa quota della fila livelli / meteo / percorsi
+                  (5.25rem + safe area), subito a SINISTRA del tasto percorsi
+                  (right 4.25rem = 1rem di margine + 2.75rem di tasto + gap);
+                · z-[2300]: sopra chip (2000), pannelli (2100-2150) e barra
+                  di ricerca (2200);
+                · etichetta sopra la bussola, allineata a destra, cosi' non
+                  invade la colonna di tasti di App.tsx.
+               Sparisce solo con la ricerca o la card di un pin aperte, come
+               il resto della fila: li' lo spazio serve a loro. */
+            className={`absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] right-[4.25rem] z-[2300] flex flex-col-reverse items-end gap-1.5 pointer-events-auto transition-opacity ${(ricercaAperta || activePoi) ? 'opacity-0 pointer-events-none invisible' : ''}`}
           >
             {/* Bussola: era un <div onClick> muto per lo screen reader (UX-11).
                 Tocco = esci dal follow-me; l'etichetta dice orientamento e azione. */}
             <button
               type="button"
-              className={`w-12 h-12 bg-white/60 dark:bg-black/60 backdrop-blur-3xl rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/50 dark:border-white/20 flex items-center justify-center cursor-pointer hover:scale-105 active:scale-95 transition-all ${followMode ? 'ring-2 ring-blue-500' : ''}`}
+              className={`w-11 h-11 bg-white/90 dark:bg-black/80 backdrop-blur-3xl rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.25)] border border-white/50 dark:border-white/20 flex items-center justify-center cursor-pointer hover:scale-105 active:scale-95 transition-all ${followMode ? 'ring-2 ring-blue-500' : ''}`}
               title={`${getTranslation('map_orientamento', language)}: ${Math.round(mapRotation)}°`}
               aria-label={`${getTranslation('map_orientamento', language)}: ${Math.round(mapRotation)}°. ${getTranslation('a11y_esci_follow', language)}`}
               onClick={() => stopFollowMode()}
@@ -6912,7 +7096,7 @@ function MapArea({
               </svg>
             </button>
 
-            <div className="bg-blue-600/80 backdrop-blur-2xl text-white text-[11px] font-black uppercase tracking-wider px-3 py-1.5 rounded-full shadow-2xl border border-white/20 flex items-center gap-2" aria-live="polite">
+            <div className="bg-blue-600/95 backdrop-blur-2xl text-white text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full shadow-2xl border border-white/20 flex items-center gap-1.5 whitespace-nowrap" aria-live="polite">
               <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse inline-block" aria-hidden="true" />
               {getTranslation('map_follow_on', language)}
             </div>
@@ -6922,7 +7106,10 @@ function MapArea({
 
       {/* z-[2100] e non z-[1000] (10/09/2026): le chip categoria stanno a
           z-[2000] (CategoryChips.tsx) e questo banner ci finiva sotto. */}
-      <div className={`absolute md:top-[60px] right-4 z-[2100] flex flex-col gap-2 max-w-[280px] pointer-events-none ${followMode ? 'top-[160px]' : 'top-[60px]'}`}>
+      {/* 18/09/2026: niente piu' scalino a 160px col follow-me acceso — la
+          bussola non sta piu' in alto a destra da tempo, ora e' nella fila
+          dei tasti in basso, e gli avvisi scendevano di 100px per nulla. */}
+      <div className="absolute top-[60px] right-4 z-[2100] flex flex-col gap-2 max-w-[280px] pointer-events-none">
         <AnimatePresence>
           {Object.entries(fetchErrors).map(([key, error]) => (
             <motion.div

@@ -332,6 +332,19 @@ export const TRAD_MAPPA: Record<string, Partial<Record<Language, string>>> = {
     IT: 'Com’è adesso', EN: 'Conditions now', FR: 'Conditions actuelles',
     ES: 'Cómo está ahora', DE: 'Aktuelle Bedingungen', RU: 'Условия сейчас', ZH: '当前状况',
   },
+  mp_sfondo_mappa: {
+    IT: 'Sfondo', EN: 'Background', FR: 'Fond de carte', ES: 'Fondo',
+    DE: 'Hintergrund', RU: 'Подложка', ZH: '底图',
+  },
+  mp_layer_satellite_nome: {
+    IT: 'Satellite', EN: 'Satellite', FR: 'Satellite', ES: 'Satélite',
+    DE: 'Satellit', RU: 'Спутник', ZH: '卫星图',
+  },
+  mp_layer_satellite_det: {
+    IT: 'Foto dall’alto al posto della mappa', EN: 'Aerial imagery instead of the map',
+    FR: 'Vue aérienne à la place de la carte', ES: 'Imagen aérea en lugar del mapa',
+    DE: 'Luftbild statt Karte', RU: 'Снимки вместо карты', ZH: '用航拍影像代替地图',
+  },
   mp_avvicinati: {
     IT: 'avvicinati per vederli', EN: 'zoom in to see them', FR: 'zoomez pour les voir',
     ES: 'acércate para verlos', DE: 'heranzoomen, um sie zu sehen',
