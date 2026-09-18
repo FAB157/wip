@@ -5,6 +5,7 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -149,6 +150,59 @@ object AudioPrefetchManager {
     }
 
     /**
+     * PRE-SCARICO DI UN GIRO INTERO (18/09/2026, committente: «fai che sia
+     * scaricato sempre in nativo anche»). All'avvio di un giro il JS
+     * pre-scarica testi e MP3 di tutte le tappe — ma nell'IndexedDB della
+     * WebView, che a schermo spento dorme: il servizio nativo non li vedeva, e
+     * restava col solo prefetch all'avvicinamento (150 m), cioè proprio dove
+     * nel centro storico la rete manca. Risultato: teaser sì, audioguida
+     * completa no, finché non si riapriva l'app.
+     *
+     * Qui le stesse tappe finiscono ANCHE in questa cache, subito, con la
+     * stessa catena di `prefetch` (testo integrale → MP3): all'arrivo il file
+     * c'è già, anche senza rete. Il server è caldo — il JS ha appena generato
+     * lo stesso testo con la stessa voce — quindi sono colpi di cache, non
+     * sintesi nuove. IN FILA, una alla volta: dieci download insieme non
+     * servono a nessuno. Il prefetch all'avvicinamento resta com'è (rete di
+     * sicurezza: se il file c'è già esce subito). Mai eccezioni al chiamante.
+     * Ritorna quante tappe sono state messe in lista.
+     */
+    fun prefetchMolti(context: Context, poiIds: List<String>, lang: String, guideCharacter: String?): Int {
+        val appContext = context.applicationContext
+        val ids = poiIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (ids.isEmpty()) return 0
+        scope.launch {
+            try { cleanup(appContext) } catch (_: Exception) { }
+            val character = resolveCharacter(appContext, guideCharacter)
+            var primo = true
+            for (poiId in ids) {
+                try {
+                    if (cachedFile(appContext, poiId, lang, character) != null) continue
+                    // Un secondo e mezzo fra una tappa e l'altra, come su iOS
+                    // (dalla revisione): /api/poi/audioguide ha un limite di 60
+                    // chiamate al minuto per utente CONDIVISO con l'acquisto di
+                    // una guida — dieci richieste a raffica subito dopo quelle
+                    // del JS potevano far rispondere 429 a un acquisto vero.
+                    if (!primo) delay(1500)
+                    primo = false
+                    // Senza rete non si insiste: ci riprova il prefetch all'avvicinamento.
+                    if (!com.itaintasca.app.offline.ConnectivityMonitor.isOnline(appContext)) break
+                    // soloCache = true su TUTTE E DUE le chiamate: il blocco prende
+                    // solo testi già scritti e voci già sintetizzate (il JS le ha
+                    // appena prodotte). Ciò che manca NON si genera qui — niente
+                    // AI, niente sintesi, niente quota giornaliera mangiata da N
+                    // tappe — lo farà l'arrivo, col cancello di sempre.
+                    val text = resolveAudioText(appContext, poiId, lang, character, soloCache = true) ?: continue
+                    downloadBlocking(appContext, poiId, lang, character, text, soloCache = true)
+                } catch (e: Exception) {
+                    Log.w(TAG, "prefetchMolti failed for $poiId: ${e.message}")
+                }
+            }
+        }
+        return ids.size
+    }
+
+    /**
      * Gradino "MP3 scaricabile" della catena al trigger: tentativo SINCRONO
      * (dal thread IO del chiamante) di scaricare ora l'MP3. Grazie al prefetch
      * dell'approach il server è quasi sempre già caldo e risponde col redirect
@@ -177,7 +231,7 @@ object AudioPrefetchManager {
      * audio_script → description_long → description_ai → description del
      * Day Pass in GeofenceBroadcastReceiver).
      */
-    private suspend fun resolveAudioText(context: Context, poiId: String, lang: String, character: String): String? {
+    private suspend fun resolveAudioText(context: Context, poiId: String, lang: String, character: String, soloCache: Boolean = false): String? {
         return try {
             val dao = com.itaintasca.app.db.PoiDatabase.getInstance(context).offlineDao()
             val local = dao.getPoiById(poiId)?.audioText
@@ -195,7 +249,7 @@ object AudioPrefetchManager {
                 val token = SecurePrefs.get(context).getString(ListeningHistoryStore.PREF_ACCESS_TOKEN, "")
                 // Solo il testo INTEGRALE: un 402 (anteprima) qui vale null,
                 // niente MP3 di due frasi spacciato per guida.
-                SupabaseClient(context).fetchAudioguideText(poiId, lang, character, token)?.takeIf { it.isNotBlank() }
+                SupabaseClient(context).fetchAudioguideText(poiId, lang, character, token, soloCache = soloCache)?.takeIf { it.isNotBlank() }
             }
         } catch (_: Exception) {
             null
@@ -209,7 +263,8 @@ object AudioPrefetchManager {
         lang: String,
         guideCharacter: String?,
         text: String,
-        quick: Boolean = false
+        quick: Boolean = false,
+        soloCache: Boolean = false
     ): File? {
         val character = resolveCharacter(context, guideCharacter)
         val key = "${poiId}_${lang}_$character"
@@ -218,6 +273,8 @@ object AudioPrefetchManager {
             val body = JSONObject().apply {
                 put("text", text)
                 put("voice", azureVoiceFor(lang, character))
+                // Solo dal pre-scarico in blocco: voce mancante = 204, mai sintesi.
+                if (soloCache) put("soloCache", true)
             }.toString().toRequestBody("application/json".toMediaType())
 
             // (28/08/2026) Il server esige il Bearer su /api/tts/smart per le

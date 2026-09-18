@@ -228,13 +228,19 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
         lang: String,
         character: String,
         accessToken: String? = null,
-        ritenta: Boolean = true
+        ritenta: Boolean = true,
+        // (18/09/2026) Pre-scarico in blocco di un giro: il server risponde solo
+        // col testo GIA` scritto (204 se manca → Fallito qui sotto), senza far
+        // partire una generazione AI per ogni tappa. Default false: l'arrivo e
+        // il prefetch all'avvicinamento restano get-or-create come sempre.
+        soloCache: Boolean = false
     ): AudioguideResult = withContext(Dispatchers.IO) {
         try {
             val body = JSONObject().apply {
                 put("poiId", poiId)
                 put("lang", lang)
                 put("character", character)
+                if (soloCache) put("soloCache", true)
             }.toString().toRequestBody("application/json".toMediaType())
             val requestBuilder = Request.Builder()
                 // (SEC-09) Dominio unico in WipApi.BASE.
@@ -274,7 +280,7 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
                             } catch (_: Exception) { "" }
                             if (nuovo.isNotBlank() && nuovo != accessToken) {
                                 Log.d(TAG, "Audioguida $poiId: 401, ritento con il token rinnovato")
-                                return@withContext fetchAudioguide(poiId, lang, character, nuovo, ritenta = false)
+                                return@withContext fetchAudioguide(poiId, lang, character, nuovo, ritenta = false, soloCache = soloCache)
                             }
                         }
                         // Ripiego sui campi grezzi di shared_pois (fetchPoiAudioText),
@@ -309,8 +315,9 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
         poiId: String,
         lang: String,
         character: String,
-        accessToken: String? = null
-    ): String? = (fetchAudioguide(poiId, lang, character, accessToken) as? AudioguideResult.Testo)?.text
+        accessToken: String? = null,
+        soloCache: Boolean = false
+    ): String? = (fetchAudioguide(poiId, lang, character, accessToken, soloCache = soloCache) as? AudioguideResult.Testo)?.text
 
     /**
      * Fallback mono-lingua dai campi grezzi di shared_pois (tipicamente

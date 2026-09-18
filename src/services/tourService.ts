@@ -33,6 +33,7 @@ import {
 } from '../lib/tour/tourState';
 import { decidi, CodaVoci, VOLUME_ABBASSATO } from '../lib/tour/audioDirector';
 import { istruzionePerStep, getEvitaScale } from './osrmService';
+import { prescaricaGuideNativo } from '../plugins/ItaintaBackgroundPoi';
 import { poiLungoIlCorridoio, type PoiLungoStrada } from '../lib/tour/corridoio';
 import { getOrCreateAudioguideText } from './audioguideService';
 import { azureVoiceName } from './ttsService';
@@ -1298,6 +1299,17 @@ class TourService {
       }
       onProgresso?.(fatte, tappe.length);
     }));
+
+    // ANCHE NELLA CACHE DEL SERVIZIO NATIVO (18/09/2026, committente: «fai che
+    // sia scaricato sempre in nativo anche»). Qui sopra testi e MP3 sono
+    // finiti nell'IndexedDB della WebView — che a schermo spento dorme: il
+    // servizio nativo non li vede, e gli restava il solo prefetch
+    // all'avvicinamento, cioe` proprio dove nel centro storico la rete manca.
+    // DOPO lo scarico JS, non insieme: a questo punto il server ha gia` testo e
+    // voce in cache, quindi per il nativo sono colpi di cache e non seconde
+    // sintesi. Non addebita nulla (vedi prescaricaGuideNativo). Si fa anche se
+    // qui l'audio non e` riuscito: il nativo ha la sua strada e i suoi tempi.
+    void prescaricaGuideNativo(tappe.map(t => String(t.id)), lang, carattere);
 
     const esito = { testi, audio, totali: tappe.length, mancanti: tappe.length - audio };
     if (this.giro?.id === giroId) {

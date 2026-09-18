@@ -152,6 +152,12 @@ export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi
   // campiona — meglio dirlo nel sottotitolo che far contare le fermate a chi guida.
   const quanteInAuto = giroInAuto ? Math.min(giroInAuto.length, MAX_TAPPE_GOOGLE) : 0;
   const stop = (e: React.SyntheticEvent) => { e.preventDefault(); e.stopPropagation(); };
+  // Solo «non far salire il clic», SENZA preventDefault (18/09/2026): sul
+  // contenitore e sull'etichetta di «Evita scale» il preventDefault annullava
+  // il clic della casella — la preferenza si salvava (onChange parte lo stesso)
+  // ma il browser rimetteva la spunta com'era, e la si vedeva cambiata solo
+  // alla riapertura del foglio.
+  const soloFerma = (e: React.SyntheticEvent) => { e.stopPropagation(); };
   // Su iPhone, verso una meta sola: Mappe di Apple E Google Maps, due tasti
   // (App Review, Guideline 4). Con un giro di più tappe resta Google, che
   // accetta le tappe intermedie; Mappe no.
@@ -167,7 +173,7 @@ export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi
       style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 5.5rem)' }}
       onClick={(e) => { stop(e); onClose(); }}
     >
-      <div className="w-full max-w-sm m-3 rounded-2xl bg-white shadow-2xl overflow-y-auto max-h-[calc(100dvh-8rem)]" style={{ WebkitOverflowScrolling: 'touch' } as any} onClick={stop}>
+      <div className="w-full max-w-sm m-3 rounded-2xl bg-white shadow-2xl overflow-y-auto max-h-[calc(100dvh-8rem)]" style={{ WebkitOverflowScrolling: 'touch' } as any} onClick={soloFerma}>
         <p className="px-4 pt-3 pb-2 text-[11px] font-bold uppercase tracking-wide text-gray-400 truncate">
           {titolo || poi.name || poi.nome}
         </p>
@@ -191,7 +197,7 @@ export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi
         {/* Evita scale: per passeggini e mobilita' ridotta. Il percorso a piedi
             usa Valhalla/ORS con profilo accessibile quando e' attivo. */}
         <label
-          onClick={stop}
+          onClick={soloFerma}
           className="w-full flex items-center gap-3 px-4 py-2.5 text-left border-t border-gray-100 cursor-pointer select-none"
         >
           <span className="text-xl">♿</span>

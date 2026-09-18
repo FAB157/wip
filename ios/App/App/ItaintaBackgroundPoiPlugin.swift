@@ -78,7 +78,11 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         CAPPluginMethod(name: "setNavRoute", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearNavRoute", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "navHeartbeat", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "getNavProgress", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "getNavProgress", returnType: CAPPluginReturnPromise),
+        // (18/09/2026) Pre-scarico delle audioguide di un giro nella cache
+        // NATIVA (il JS le mette nell'IndexedDB della WebView, che a schermo
+        // spento dorme). Dichiarato QUI o dal JS la promise resta appesa.
+        CAPPluginMethod(name: "prefetchGuides", returnType: CAPPluginReturnPromise)
     ]
 
     private let prefs = UserDefaults.standard
@@ -702,6 +706,25 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
     /// da qui senza ripetere ciò che il nativo ha già detto.
     @objc func getNavProgress(_ call: CAPPluginCall) {
         call.resolve(NavFollower.shared.progress())
+    }
+
+    /// (18/09/2026, committente: «fai che sia scaricato sempre in nativo
+    /// anche») Pre-scarico delle audioguide di un giro nella cache NATIVA: il
+    /// JS le mette nell'IndexedDB della WebView, che a schermo spento dorme.
+    /// Vedi BackgroundPoiManager.prescaricaGuide. NESSUN ADDEBITO possibile:
+    /// la richiesta del testo non porta `charge` (lo decide il server: senza
+    /// diritto risponde 402 con l'anteprima, e qui vale «niente MP3»). L'MP3
+    /// di norma è un colpo di cache di /api/tts/smart (non consuma nulla); sul
+    /// cache miss vale la stessa regola del prefetch all'avvicinamento che
+    /// c'era già: una sintesi a nostre spese, mai un addebito all'utente.
+    /// Risponde subito: lo scarico è in background, mai un reject.
+    @objc func prefetchGuides(_ call: CAPPluginCall) {
+        let grezzi: JSArray = call.getArray("poiIds") ?? []
+        let ids = grezzi.compactMap { $0 as? String }
+        let linguaGrezza = (call.getString("lang") ?? "it").lowercased()
+        let lang = linguaGrezza.isEmpty ? "it" : String(linguaGrezza.prefix(2))
+        let n = BackgroundPoiManager.shared.prescaricaGuide(poiIds: ids, lang: lang, character: call.getString("character"))
+        call.resolve(["ok": true, "accodati": n])
     }
 
     // MARK: - Teaser / deep link

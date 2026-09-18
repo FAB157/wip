@@ -146,8 +146,15 @@ audio da navigatore, ducking dell'audioguida). NON creare un secondo motore TTS.
 - **«Sei arrivato a X» nel giro**: il follower lo dice solo per le tappe senza
   guida o a cuffie spente; a cuffie accese lo dice già il geofence («Sei
   arrivato a X. <teaser>») e si sentiva due volte.
-- **App.tsx**: «pausa» e «termina» dal cruscotto NON si scartano dopo 60 s (il
-  nativo ha già obbedito); «salta» e «ricalcola» sì.
+- **App.tsx**: «pausa» dal cruscotto NON si scarta dopo 60 s (il nativo ha già
+  obbedito, e pausa/riprendi si disfano). «Termina» in ritardo (> 60 s) con un
+  giro/percorso in corso NON si esegue alla cieca: è distruttivo e un percorso
+  su misura è PAGATO — si chiede conferma a pagina visibile (`pc_termina_conferma`
+  per il percorso, `tour_termina` + «?» per il giro); al «no» il JS riconsegna
+  il percorso al follower, che nel frattempo l'aveva svuotato. Nella
+  navigazione a tappa singola un «termina» in ritardo si scarta. «Salta» e
+  «ricalcola» in ritardo si scartano sempre. Un «termina» fresco (< 60 s)
+  vale subito, senza domande.
 - **Limiti noti, accettati**: le regole «mancata» e «salta» del nativo sono a
   linea d'aria (su strade parallele possono sbagliare: al risveglio il JS
   corregge); una frase scaduta dietro un TTS lungo è persa; in muto a schermo

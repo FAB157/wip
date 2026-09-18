@@ -254,8 +254,8 @@ final class WipSupabaseClient {
 
     /// Compatibilità: i chiamanti che vogliono solo "testo o niente". Un 402
     /// qui è nil come un errore — chi deve distinguerlo usa `fetchAudioguide`.
-    func fetchAudioguideText(poiId: String, lang: String, character: String, accessToken: String? = nil, completion: @escaping (String?) -> Void) {
-        fetchAudioguide(poiId: poiId, lang: lang, character: character, accessToken: accessToken) { esito in
+    func fetchAudioguideText(poiId: String, lang: String, character: String, accessToken: String? = nil, soloCache: Bool = false, completion: @escaping (String?) -> Void) {
+        fetchAudioguide(poiId: poiId, lang: lang, character: character, accessToken: accessToken, soloCache: soloCache) { esito in
             if case .testo(let t) = esito { completion(t) } else { completion(nil) }
         }
     }
@@ -296,7 +296,11 @@ final class WipSupabaseClient {
         }
     }
 
-    func fetchAudioguide(poiId: String, lang: String, character: String, accessToken: String? = nil, ritenta: Bool = true, completion: @escaping (AudioguideEsito) -> Void) {
+    /// `soloCache` (18/09/2026): solo dal pre-scarico IN BLOCCO di un giro. Il
+    /// server risponde col testo già scritto oppure 204 (→ `.fallito` qui
+    /// sotto), senza far partire una generazione AI per ogni tappa. Default
+    /// false: arrivo e prefetch all'avvicinamento restano get-or-create.
+    func fetchAudioguide(poiId: String, lang: String, character: String, accessToken: String? = nil, ritenta: Bool = true, soloCache: Bool = false, completion: @escaping (AudioguideEsito) -> Void) {
         guard let url = URL(string: "\(WipApi.base)/api/poi/audioguide") else {
             completion(.fallito); return
         }
@@ -310,9 +314,9 @@ final class WipSupabaseClient {
         if let token = token, !token.isEmpty {
             req.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        req.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "poiId": poiId, "lang": lang, "character": character
-        ])
+        var corpo: [String: Any] = ["poiId": poiId, "lang": lang, "character": character]
+        if soloCache { corpo["soloCache"] = true }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: corpo)
         session.dataTask(with: req) { [weak self] data, response, _ in
             guard let http = response as? HTTPURLResponse else { completion(.fallito); return }
             let obj = data.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
@@ -340,7 +344,7 @@ final class WipSupabaseClient {
                         let nuovo = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken) ?? ""
                         if !nuovo.isEmpty && nuovo != (token ?? "") {
                             self.fetchAudioguide(poiId: poiId, lang: lang, character: character,
-                                                 accessToken: nuovo, ritenta: false, completion: completion)
+                                                 accessToken: nuovo, ritenta: false, soloCache: soloCache, completion: completion)
                         } else {
                             self.ripiegoDopo401(poiId: poiId, lang: lang, completion: completion)
                         }

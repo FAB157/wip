@@ -1401,6 +1401,41 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         call.resolve(ret)
     }
 
+    /**
+     * (18/09/2026, committente: «fai che sia scaricato sempre in nativo
+     * anche») PRE-SCARICO DELLE AUDIOGUIDE DI UN GIRO nella cache NATIVA. Il
+     * JS pre-scarica già testi e MP3 delle tappe, ma nell'IndexedDB della
+     * WebView, che a schermo spento dorme: il servizio non li vede. Qui le
+     * stesse tappe vanno anche nella cache di AudioPrefetchManager, così
+     * all'arrivo l'audioguida completa c'è anche senza rete. Vedi
+     * AudioPrefetchManager.prefetchMolti. Risponde subito: lo scarico è in
+     * background, best-effort, mai un reject.
+     */
+    @PluginMethod
+    fun prefetchGuides(call: PluginCall) {
+        try {
+            val arr = call.getArray("poiIds")
+            val ids = ArrayList<String>()
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val s = arr.optString(i, "").trim()
+                    if (s.isNotEmpty() && s != "null") ids.add(s)
+                }
+            }
+            val lang = (call.getString("lang") ?: "it").lowercase().take(2).ifEmpty { "it" }
+            val character = call.getString("character")
+            val n = com.itaintasca.app.service.AudioPrefetchManager.prefetchMolti(context, ids, lang, character)
+            val ret = JSObject()
+            ret.put("ok", true)
+            ret.put("accodati", n)
+            call.resolve(ret)
+        } catch (e: Exception) {
+            val ret = JSObject()
+            ret.put("ok", false)
+            call.resolve(ret)
+        }
+    }
+
     // ------------------------------------------------------------------
     // BILLING OFFLINE — snapshot saldo, Day Pass, per-listen con registro
     // ------------------------------------------------------------------

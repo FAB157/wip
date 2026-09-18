@@ -1766,6 +1766,68 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    /// PRE-SCARICO DI UN GIRO INTERO (18/09/2026, committente: «fai che sia
+    /// scaricato sempre in nativo anche»). All'avvio di un giro il JS
+    /// pre-scarica testi e MP3 di tutte le tappe — ma nell'IndexedDB della
+    /// WebView, che a schermo spento dorme: il nativo non li vedeva e restava
+    /// col solo prefetch all'avvicinamento, cioè proprio dove nel centro
+    /// storico la rete manca (teaser sì, audioguida completa no, finché non si
+    /// riapriva l'app). Qui le stesse tappe finiscono ANCHE nella cache di
+    /// AudioPrefetchManager, con la stessa catena di `prefetchAudio` (testo
+    /// offline se c'è, altrimenti get-or-create per lingua → MP3). Il server è
+    /// caldo: il JS ha appena generato lo stesso testo con la stessa voce.
+    /// UNA ALLA VOLTA, a distanza di un secondo e mezzo. Il prefetch
+    /// all'avvicinamento resta com'è (se il file c'è già esce subito).
+    /// Port di AudioPrefetchManager.prefetchMolti (Android). Ritorna quante
+    /// tappe sono state messe in lista; mai errori verso il chiamante.
+    func prescaricaGuide(poiIds: [String], lang: String, character: String?) -> Int {
+        var visti = Set<String>()
+        let ids = poiIds
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && visti.insert($0).inserted }
+        guard !ids.isEmpty else { return 0 }
+        workQueue.async {
+            // PRIMA la voce delle preferenze, come fa l'arrivo (resolveGuideVoice)
+            // e come fa Android: la voce è nel NOME del file in cache, e un file
+            // scaricato con un'altra voce all'arrivo non verrebbe trovato. Quella
+            // passata dal JS vale solo come ripiego.
+            let ripiego = (character == "nicky" || character == "dante") ? (character ?? "nicky") : "nicky"
+            let voce = self.resolveGuideVoice(fallback: ripiego)
+            self.prescaricaProssimaGuida(ids, 0, lang: lang, voce: voce)
+        }
+        return ids.count
+    }
+
+    private func prescaricaProssimaGuida(_ ids: [String], _ i: Int, lang: String, voce: String) {
+        // Senza rete non si insiste: ci riprova il prefetch all'avvicinamento.
+        guard i < ids.count, isOnline else { return }
+        let poiId = ids[i]
+        let avanti: () -> Void = { [weak self] in
+            self?.workQueue.asyncAfter(deadline: .now() + 1.5) {
+                self?.prescaricaProssimaGuida(ids, i + 1, lang: lang, voce: voce)
+            }
+        }
+        if AudioPrefetchManager.cachedFile(poiId: poiId, lang: lang, character: voce) != nil {
+            avanti()
+            return
+        }
+        // soloCache su TUTTE E DUE le chiamate (come Android): il blocco prende
+        // solo testi già scritti e voci già sintetizzate — il JS le ha appena
+        // prodotte. Ciò che manca NON si genera qui (niente AI, niente sintesi,
+        // niente quota giornaliera mangiata da N tappe): lo farà l'arrivo, col
+        // cancello di sempre.
+        if let localText = store.getOfflineAudioText(poiId, lang: lang) {
+            AudioPrefetchManager.prefetch(poiId: poiId, lang: lang, character: voce, text: localText, soloCache: true)
+            avanti()
+            return
+        }
+        let audioguideToken = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken)
+        supabase.fetchAudioguideText(poiId: poiId, lang: lang, character: voce, accessToken: audioguideToken, soloCache: true) { text in
+            AudioPrefetchManager.prefetch(poiId: poiId, lang: lang, character: voce, text: text, soloCache: true)
+            avanti()
+        }
+    }
+
     /// `soloNotifica` (AUD-04): secondo e successivi arrivi dello stesso fix.
     /// Stato ARRIVED_FIRED ed evento come sempre — la macchina a stati non
     /// cambia — ma niente voce, niente pass, niente audioguida in coda: solo

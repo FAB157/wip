@@ -87,6 +87,16 @@ export interface ItaintaBackgroundPoiPlugin {
    * algoritmo (identico su Kotlin e Swift): `docs/nav-nativo-spec.md`.
    * Chi chiama passa da `src/lib/nav/navNativo.ts`, mai da qui direttamente.
    */
+  /**
+   * PRE-SCARICO DELLE AUDIOGUIDE NELLA CACHE NATIVA (18/09/2026, committente:
+   * «fai che sia scaricato sempre in nativo anche»). Il pre-scarico del giro
+   * (tourService.prescarica) salva testi e MP3 nell'IndexedDB della WebView,
+   * che a schermo spento dorme: il servizio nativo non li vedeva, e restava
+   * col solo prefetch all'avvicinamento (150 m), proprio dove nel centro
+   * storico la rete manca. Qui le stesse tappe vanno anche nella cache del
+   * servizio. Non addebita nulla: vedi `prescaricaGuideNativo` più sotto.
+   */
+  prefetchGuides(options: { poiIds: string[]; lang: string; character?: string }): Promise<{ ok?: boolean; accodati?: number }>;
   setNavRoute(options: { routeJson: string }): Promise<{ ok?: boolean }>;
   clearNavRoute(): Promise<void>;
   navHeartbeat(options: { indice: number; dettiVicino?: number[]; dettiLontano?: number[] }): Promise<void>;
@@ -199,6 +209,38 @@ export async function apriImpostazioniApp(): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Le audioguide di queste tappe ANCHE nella cache del servizio nativo (vedi
+ * `prefetchGuides` nell'interfaccia). Sul web e sulle build native senza il
+ * metodo è un no-op silenzioso: best-effort, mai un errore verso chi chiama.
+ *
+ * NON TOCCA I PAGAMENTI (verificato il 18/09/2026 su richiesta del
+ * committente): il nativo chiede il testo a `/api/poi/audioguide` SENZA
+ * `charge` — l'addebito lo decide il server e scatta solo con `charge:true`;
+ * chi non ha diritto (POI non acquistato, niente Day Pass) riceve 402 con
+ * l'anteprima, che per il pre-scarico vale «niente MP3». L'MP3 poi viene da
+ * `/api/tts/smart`, che è cache-first: DI NORMA è un colpo di cache (il
+ * pre-scarico JS ha appena sintetizzato lo stesso testo con la stessa voce) e
+ * non consuma nulla; se il passo JS era fallito è un cache miss, e vale la
+ * STESSA regola del prefetch all'avvicinamento che c'era già — una sintesi a
+ * nostre spese e un'unità del tetto anti-abuso giornaliero, mai un addebito
+ * all'utente. Nessun credito, nessun Day Pass consumato, nessun ascolto
+ * registrato; e il file in cache non aggira il cancello all'arrivo, che
+ * controlla il diritto PRIMA di guardare se l'MP3 c'è (ArrivalWorker).
+ * Revisione indipendente del 18/09/2026: «pagamenti e cancelli intatti».
+ */
+export async function prescaricaGuideNativo(poiIds: string[], lang: string, character?: string): Promise<number> {
+  if (!isNative()) return 0;
+  const ids = Array.from(new Set((poiIds || []).map(x => String(x || '').trim()).filter(Boolean)));
+  if (ids.length === 0) return 0;
+  try {
+    const r = await ItaintaBackgroundPoi.prefetchGuides({ poiIds: ids, lang: String(lang || 'it').toLowerCase().slice(0, 2), character });
+    return Number(r?.accodati) || 0;
+  } catch {
+    return 0;
   }
 }
 

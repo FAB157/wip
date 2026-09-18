@@ -344,12 +344,19 @@ export default function App() {
       if (!action) return;
       // Un evento trattenuto (retainUntilConsumed) e consegnato dopo un
       // minuto non e` piu` un tocco: non si salta una tappa a sorpresa.
-      // TRANNE «pausa» e «termina» (18/09/2026, navigatore a schermo spento):
-      // a pagina congelata il follower nativo ha GIA` obbedito a quel tasto —
-      // scartarli qui lasciava il giro in cammino nel JS e in pausa (o chiuso)
-      // nel nativo. Pausa/riprendi si alternano: applicarli tutti, in ordine,
-      // riporta il JS dove l'utente ha lasciato il nativo. «Salta» e
-      // «ricalcola» no: fatti a sorpresa minuti dopo sono un danno.
+      // TRANNE «pausa» (18/09/2026, navigatore a schermo spento): a pagina
+      // congelata il follower nativo ha GIA` obbedito a quel tasto — scartarla
+      // qui lasciava il giro in cammino nel JS e in pausa nel nativo.
+      // Pausa/riprendi si alternano: applicarle tutte, in ordine, riporta il JS
+      // dove l'utente ha lasciato il nativo, ed e` un gesto che si disfa.
+      // «TERMINA» IN RITARDO NON SI ESEGUE ALLA CIECA: e` DISTRUTTIVO, e un
+      // tocco per sbaglio sulla schermata di blocco chiuderebbe anche un
+      // percorso su misura gia` PAGATO (ricrearlo si ripaga). Con un giro in
+      // corso si CHIEDE CONFERMA (stessa domanda del tasto «Termina percorso»
+      // del pannello); se la risposta e` no, navNativo riconsegna il percorso
+      // al follower che nel frattempo lo aveva svuotato. Un «termina» fresco
+      // (pagina viva, < 60 s) vale come sempre, senza domande.
+      // «Salta» e «ricalcola» in ritardo si scartano: a sorpresa sono un danno.
       const vecchio = Number.isFinite(ts) && ts > 0 && Date.now() - ts > 60_000;
       if (vecchio && action !== 'pausa' && action !== 'termina') return;
       if (tourService.inCorso()) {
@@ -358,10 +365,37 @@ export default function App() {
           case 'riascolta': riascoltaTappa(); break;
           case 'salta': posizioneVeloce((p) => { void tourService.salta(p); }); break;
           case 'ricalcola': posizioneVeloce((p) => { void tourService.ricalcolaDaQui(p); }); break;
-          case 'termina': tourService.termina(); setGiroInCorso(false); break;
+          case 'termina': {
+            const chiudi = () => { tourService.termina(); setGiroInCorso(false); };
+            if (!vecchio) { chiudi(); break; }
+            const chiedi = () => {
+              if (!tourService.inCorso()) return;
+              const L = linguaCorrente();
+              const domanda = tourService.vista()?.modo === 'percorso'
+                ? getTranslation('pc_termina_conferma', L)
+                : `${getTranslation('tour_termina', L)}?`;
+              // Senza finestra di conferma non si chiude: nel dubbio il giro resta.
+              if (typeof window.confirm === 'function' && window.confirm(domanda)) chiudi();
+            };
+            // La domanda a pagina VISIBILE: consegnata a una pagina ancora
+            // nascosta, la finestra bloccherebbe il JS senza nessuno a rispondere.
+            if (document.visibilityState === 'visible') chiedi();
+            else {
+              const quandoVisibile = () => {
+                if (document.visibilityState !== 'visible') return;
+                document.removeEventListener('visibilitychange', quandoVisibile);
+                chiedi();
+              };
+              document.addEventListener('visibilitychange', quandoVisibile);
+            }
+            break;
+          }
         }
         return;
       }
+      // Navigazione a tappa singola (gratis, si rifa` con un tocco): un
+      // «termina» in ritardo si scarta come prima di oggi.
+      if (vecchio && action === 'termina') return;
       window.dispatchEvent(new CustomEvent('wip-nav-banner-action', { detail: { action } }));
     }).then((h) => { if (vivo) handle = h; else void h.remove(); }).catch(() => {});
     return () => { vivo = false; if (handle) void handle.remove(); };

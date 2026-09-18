@@ -15758,6 +15758,13 @@ ${manuale}`;
         return res.json({ text: cachedText, cached: true });
       }
 
+      // SOLO CACHE (18/09/2026): il pre-scarico IN BLOCCO del servizio nativo
+      // (prefetchGuides) prende i testi gia` scritti e basta. DOPO il controllo
+      // del diritto (chi non l'ha si e` gia` preso il 402 sopra) e PRIMA della
+      // generazione: un prefetch di N tappe non deve mai far partire N
+      // generazioni AI. Il testo mancante lo genera l'arrivo, come sempre.
+      if (req.body?.soloCache === true) return res.status(204).end();
+
       // 2. BASE INFO: prima i dettagli nella lingua (se già arricchiti),
       //    altrimenti i campi di shared_pois (spesso in italiano: è solo la
       //    materia prima, il passo 3 la traduce). poi_details può usare l'uno
@@ -33536,6 +33543,14 @@ out center tags;`;
         if (preloadOnly) return res.status(204).end();
         return res.redirect(cachedUrl);
       }
+
+      // SOLO CACHE (18/09/2026): il pre-scarico IN BLOCCO del servizio nativo
+      // (prefetchGuides, tutte le tappe di un giro in una volta) prende solo
+      // cio` che e` gia` sintetizzato. Una voce mancante NON si genera qui:
+      // niente sintesi, niente quota giornaliera mangiata da un prefetch di N
+      // tappe — la si fara` all'arrivo, col cancello di sempre. 204 = «non
+      // c'e`», che i client nativi trattano gia` come nulla di fatto.
+      if (req.body?.soloCache === true) return res.status(204).end();
 
       // Cache miss = sintesi a pagamento: Bearer obbligatorio, tetto
       // persistente per utente, poi la quota giornaliera (mai anonima).

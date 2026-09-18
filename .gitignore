@@ -7,6 +7,9 @@ coverage/
 *.log
 .env*
 !.env.example
+# Token GitHub usato in locale per interrogare la CI (18/09/2026): stava nella
+# root NON ignorato — un `git add .` lo avrebbe pubblicato. Mai nel repository.
+.ghtok
 
 .vercel
 
@@ -38,3 +41,4 @@ certificati-ios/
 AuthKey_*.p8
 SubscriptionKey_*.p8
 *.p12
+.aider*
