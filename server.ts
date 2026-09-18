@@ -312,6 +312,14 @@ function sembraItaliano(testo: string): boolean {
 }
 
 // --- CENTRAL AI HELPER WITH FALLBACK & TOKEN TRACKING ---
+// LEAK MULTILINGUE GONKA (18/09/2026, vedi tryEngine "gonka" sotto): script
+// che non hanno motivo di comparire in una guida/itinerario scritto in una
+// lingua latina — cirillico, CJK, hangul. Deliberatamente NON include
+// greco/arabo/ebraico: possono comparire legittimamente in citazioni o nomi
+// originali di un sito (es. iscrizioni greche in un monastero), mentre una
+// singola parola cirillica o cinese in mezzo a una frase italiana è sempre
+// un errore del modello, mai contenuto reale.
+const SCRIPT_INATTESO_RE = /[Ѐ-ӿ一-鿿가-힣]/;
 // Rotazione delle chiavi Agnes AI (load balancing come nello script di
 // enrichment massivo). Si resetta a ogni cold start serverless: va bene.
 let agnesKeyCounter = 0;
@@ -422,6 +430,19 @@ async function callUniversalAi(
       textContent = res.data.choices?.[0]?.message?.content || "";
       responseData = res.data;
       tokensUsed = res.data.usage?.total_tokens || 0;
+      // LEAK MULTILINGUE (18/09/2026): trovato dal vivo sul castello di
+      // Heidelberg — una parola in russo ("расположен") incollata in mezzo
+      // a una frase italiana altrimenti corretta. DeepSeek-V4-Flash via
+      // Gonka ogni tanto perde la lingua per un singolo token in mezzo al
+      // testo, non l'intera risposta: da qui il controllo sul CONTENUTO,
+      // non solo sulla lingua dichiarata. Cirillico/CJK/coreano non hanno
+      // motivo di comparire in una guida in lingue latine — se compaiono,
+      // il testo è da buttare, non da pubblicare mezzo corrotto. Si
+      // rilancia l'errore così il chiamante (tryEngine) passa al motore
+      // successivo in coda, stessa strada già usata per gli altri fallimenti.
+      if (SCRIPT_INATTESO_RE.test(textContent)) {
+        throw new Error(`gonka: output con script inatteso (probabile leak multilingue) — scartato`);
+      }
       return true;
     }
 
@@ -438,7 +459,11 @@ async function callUniversalAi(
       // rispondeva 400 «property 'ultimaSpiaggiaPagante' is unsupported» a
       // OGNI chiamata dell'arricchimento POI e tutto ricadeva su Agnes
       // (visto nel log del 05/09/2026).
-      const { strictEngine: _se, excludeEngines: _ee, ultimaSpiaggiaPagante: _up, groqOnTheFly: _otf, ...groqOptions } = options as any;
+      // Terza volta (18/09/2026): `gonkaPool`, aggiunto il 16/09 alle chiamate
+      // di musei e itinerari, era rimasto fuori e Groq rispondeva 400
+      // «property 'gonkaPool' is unsupported» a OGNI chiamata della semina —
+      // il motore più veloce tagliato fuori da un campo in più per due giorni.
+      const { strictEngine: _se, excludeEngines: _ee, ultimaSpiaggiaPagante: _up, groqOnTheFly: _otf, gonkaPool: _gp, gonkaUltimo: _gu, gonkaModel: _gm, ...groqOptions } = options as any;
       const chiediGroq = (groqInstance: any) => groqInstance.chat.completions.create({
         messages,
         model: finalModel,
@@ -726,7 +751,18 @@ async function callUniversalAi(
     !!gonkaKeys[gonkaPoolRichiesto] &&
     (await seminaGonkaConsentita(gonkaPoolRichiesto))
   ) {
-    consentiti = [...consentiti, 'gonka'];
+    // PER PRIMO, NON IN FONDO (18/09/2026, committente: «gonka anche nella
+    // semina musei e itinerari»). Dal 16/09 stava in coda a cinque gratuiti:
+    // veniva provato solo se fallivano TUTTI nella stessa chiamata — cioè
+    // mai: zero chiamate e contatori assenti dopo due notti di semina, con
+    // la semina dei musei ferma sui «motori saturi» e quella degli itinerari
+    // appesa ai 2-4 minuti di Agnes. Nei lavori di sfondo ora Gonka lavora
+    // per primo (0,0018 $/1M token, tetto per pool controllato qui sopra) e
+    // i gratuiti fanno da riserva: così Groq e Gemini non bruciano di notte
+    // la quota che di giorno serve a chi è in diretta.
+    // `gonkaUltimo: true` lo lascia in fondo: serve al REVISORE, che non
+    // deve rileggere un testo scritto dallo stesso modello.
+    consentiti = options.gonkaUltimo === true ? [...consentiti, 'gonka'] : ['gonka', ...consentiti];
   }
   // Un motore che ha appena detto "quota esaurita" si salta finché il tetto
   // non si ricarica: nella semina del 19/08/2026 groq era esaurito e veniva
@@ -10236,7 +10272,7 @@ ${JSON.stringify(elenco)}`;
           const ver = await callUniversalAi('gemini', [{ role: 'user', content: promptVerifica }], {
             temperature: 0, max_tokens: 3000, response_format: { type: 'json_object' },
             excludeEngines: [motoreGuida, 'agnes'], ultimaSpiaggiaPagante: false,
-            gonkaPool: 'musei',
+            gonkaPool: 'musei', gonkaUltimo: true, // il revisore non deve essere lo stesso modello che ha scritto
           }, 'venue_guide_verifica', supabaseUrl, supabaseServiceKey, groq, userId);
           const rawV = String(ver?.data || '');
           const esito = JSON.parse(rawV.slice(rawV.indexOf('{'), rawV.lastIndexOf('}') + 1));
@@ -13269,6 +13305,72 @@ x e y sono la posizione del CENTRO della sala in frazione della larghezza e dell
     }
   });
 
+  // FOTO DA VERIFICARE (18/09/2026, committente: «dove devo verificare le
+  // foto?»). Il job delle foto (scripts/foto-gemme-sito-ufficiale.mjs) scrive
+  // in app solo da fonte verificata; tutto il resto — blog, social, guide,
+  // file Commons che combaciano alla larga — si ferma in
+  // foto_pois_da_verificare e resta invisibile finché un umano non decide da
+  // qui. Approvare = la foto entra in shared_pois; le altre candidate dello
+  // stesso luogo si chiudono da sole. Controllo admin DENTRO l'handler (mai
+  // come middleware: vedi l'incidente TDZ di requireAdmin del 12/09).
+  app.get("/api/admin/foto-da-verificare", rateLimiter, async (req, res) => {
+    try {
+      const adminId = await verifyAdminToken(req);
+      if (!adminId) return res.status(401).json({ error: 'Unauthorized' });
+      const statoQ = String(req.query.stato || '');
+      const stato = ['da_verificare', 'approvata', 'rifiutata'].includes(statoQ) ? statoQ : 'da_verificare';
+      const limite = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '40'), 10) || 40));
+      const offset = Math.max(0, parseInt(String(req.query.offset || '0'), 10) || 0);
+      const svc = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+      const r = await axios.get(`${supabaseUrl}/rest/v1/foto_pois_da_verificare?stato=eq.${stato}&select=id,poi_id,poi_nome,foto_url,fonte_url,fonte_dominio,fonte_tipo,stato,creato_at&order=creato_at.desc&limit=${limite}&offset=${offset}`, { headers: { ...svc, Prefer: 'count=exact' }, timeout: 8000 });
+      const righe: any[] = Array.isArray(r.data) ? r.data : [];
+      const totale = parseInt(String(r.headers['content-range'] || '0/0').split('/')[1] || '0', 10) || 0;
+      // Dove sta il luogo: serve a giudicare la foto a colpo d'occhio.
+      const perId: Record<string, any> = {};
+      const ids = [...new Set(righe.map(x => String(x.poi_id)))];
+      if (ids.length) {
+        try {
+          const p = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?id=in.(${ids.map(i => `"${i.replace(/"/g, '')}"`).join(',')})&select=id,city,country,category,lat,lon,image_url`, { headers: svc, timeout: 8000 });
+          for (const x of (Array.isArray(p.data) ? p.data : [])) perId[String(x.id)] = x;
+        } catch { /* senza dettagli del luogo la scheda funziona lo stesso */ }
+      }
+      res.json({ ok: true, stato, totale, righe: righe.map(x => ({ ...x, luogo: perId[String(x.poi_id)] || null })) });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.response?.data?.message || e?.message || 'foto_da_verificare_failed' });
+    }
+  });
+
+  app.post("/api/admin/foto-da-verificare/decidi", rateLimiter, async (req, res) => {
+    try {
+      const adminId = await verifyAdminToken(req);
+      if (!adminId) return res.status(401).json({ error: 'Unauthorized' });
+      const id = parseInt(String(req.body?.id || ''), 10);
+      const decisione = req.body?.decisione === 'approva' ? 'approvata' : req.body?.decisione === 'rifiuta' ? 'rifiutata' : '';
+      if (!id || !decisione) return res.status(400).json({ error: 'id e decisione (approva|rifiuta) richiesti' });
+      const svc = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+      const r = await axios.get(`${supabaseUrl}/rest/v1/foto_pois_da_verificare?id=eq.${id}&select=id,poi_id,foto_url,fonte_dominio,stato&limit=1`, { headers: svc, timeout: 8000 });
+      const riga = r.data?.[0];
+      if (!riga) return res.status(404).json({ error: 'candidata non trovata' });
+      const ora = new Date().toISOString();
+      if (decisione === 'approvata') {
+        // L'origine resta scritta: «verificata a mano» + il dominio da cui viene.
+        await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(String(riga.poi_id))}`,
+          { image_url: riga.foto_url, photo_url: riga.foto_url, image_source: `verificata_a_mano:${riga.fonte_dominio}` },
+          { headers: { ...svc, Prefer: 'return=minimal' }, timeout: 8000 });
+        // Le altre candidate dello stesso luogo non servono più.
+        await axios.patch(`${supabaseUrl}/rest/v1/foto_pois_da_verificare?poi_id=eq.${encodeURIComponent(String(riga.poi_id))}&stato=eq.da_verificare&id=neq.${id}`,
+          { stato: 'rifiutata', deciso_at: ora, deciso_da: 'auto:altra_approvata' },
+          { headers: { ...svc, Prefer: 'return=minimal' }, timeout: 8000 }).catch(() => { /* la decisione principale vale comunque */ });
+      }
+      await axios.patch(`${supabaseUrl}/rest/v1/foto_pois_da_verificare?id=eq.${id}`,
+        { stato: decisione, deciso_at: ora, deciso_da: String(adminId).slice(0, 80) },
+        { headers: { ...svc, Prefer: 'return=minimal' }, timeout: 8000 });
+      res.json({ ok: true, id, stato: decisione });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.response?.data?.message || e?.message || 'decisione_failed' });
+    }
+  });
+
   // Correzione a mano dell'admin: i pin definitivi.
   app.post("/api/admin/museums/map/pins", rateLimiter, async (req, res) => {
     try {
@@ -14669,6 +14771,88 @@ ${wikiExtracts.join('\n') || 'nessuno'}`;
     } catch (e: any) {
       console.error('[Vision Community Feed] Errore:', e?.message);
       res.status(500).json({ error: 'feed_failed' });
+    }
+  });
+
+  /**
+   * PIN DELLA CHIP COMMUNITY (18/09/2026, il committente: «TUTTE le foto
+   * approvate della community devono essere mostrate nella mappa sotto
+   * categoria community, e le foto devono essere anche nel pin»).
+   *
+   * Si parte dalle VISION APPROVATE (vision_cards: tabella piccola), non da
+   * shared_pois. La strada di prima — contenimento jsonb sulla galleria di
+   * shared_pois, senza indice — misurata oggi: 2,5 s su 0,3° di mappa e
+   * timeout (57014) su 2°, inghiottito in silenzio dal client: la spiaggia
+   * della Lecciona (foto ALLEGATE a un POI ufficiale, che resta 'beach') nella
+   * chip non compariva mai. Da qui invece ogni scheda approvata porta al suo
+   * luogo per chiave primaria, a qualunque zoom: un pin per luogo, nato
+   * community o ufficiale che sia, con dentro tutte le sue foto approvate.
+   * ANONIMO come il feed: user_id non e' nemmeno nella select. La moderazione
+   * resta: un luogo sospeso o nascosto non esce.
+   */
+  app.get("/api/community/pins", rateLimiter, async (req, res) => {
+    try {
+      const n = (k: string) => parseFloat(String(req.query[k]));
+      const south = n('south'), west = n('west'), north = n('north'), east = n('east');
+      if (![south, west, north, east].every(Number.isFinite) || north < south) {
+        return res.status(400).json({ error: 'bbox_required' });
+      }
+      const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+      // La foto si scatta dal punto in cui si sta, il luogo a cui e' allegata
+      // puo' stare piu' in la' (una spiaggia lunga chilometri): margine sulle
+      // schede, poi il taglio vero si fa sulla posizione del LUOGO.
+      const M = 0.05;
+      // Mappa a cavallo dell'antimeridiano (west > east): niente filtro in lon.
+      const filtroLon = west <= east ? `&lon=gte.${(west - M).toFixed(5)}&lon=lte.${(east + M).toFixed(5)}` : '';
+      const { data: cards } = await axios.get(
+        `${supabaseUrl}/rest/v1/vision_cards?review_status=eq.approved&published_poi_id=not.is.null&lat=gte.${(south - M).toFixed(5)}&lat=lte.${(north + M).toFixed(5)}${filtroLon}&select=id,published_poi_id,published_photo_url,reviewed_at&order=reviewed_at.desc&limit=2000`,
+        { headers: svcHeaders, timeout: 15000 }
+      );
+      const fotoPerLuogo = new Map<string, string[]>();
+      for (const c of (cards || [])) {
+        const k = String(c.published_poi_id);
+        if (!fotoPerLuogo.has(k)) fotoPerLuogo.set(k, []);
+        if (typeof c.published_photo_url === 'string' && /^https?:\/\//.test(c.published_photo_url)) fotoPerLuogo.get(k)!.push(c.published_photo_url);
+      }
+      const ids = Array.from(fotoPerLuogo.keys());
+      const luoghi: any[] = [];
+      for (let i = 0; i < ids.length; i += 40) {
+        const blocco = ids.slice(i, i + 40).map(x => `"${x.replace(/"/g, '')}"`).join(',');
+        const { data } = await axios.get(
+          `${supabaseUrl}/rest/v1/shared_pois?id=in.(${encodeURIComponent(blocco)})&select=id,name,lat,lon,category,poi_type,description_short,description_ai,image_url,images_json,status,is_hidden`,
+          { headers: svcHeaders, timeout: 15000 }
+        );
+        luoghi.push(...(data || []));
+      }
+      const NASCOSTI = new Set(['draft', 'needs_revision', 'rejected', 'hidden']);
+      const dentroLon = (lon: number) => west <= east ? (lon >= west && lon <= east) : (lon >= west || lon <= east);
+      const pins = luoghi
+        .filter((p: any) => p?.name && p.is_hidden !== true && !NASCOSTI.has(String(p.status || '').toLowerCase()))
+        .filter((p: any) => Number(p.lat) >= south && Number(p.lat) <= north && dentroLon(Number(p.lon)))
+        .map((p: any) => {
+          // Foto del luogo: quelle delle schede approvate + quelle gia' in
+          // galleria con source 'wip_community' (accorpamenti vecchi, schede
+          // poi cancellate dall'autore ma foto rimasta alla community).
+          let galleria: any[] = [];
+          try { galleria = Array.isArray(p.images_json) ? p.images_json : JSON.parse(p.images_json || '[]'); } catch { galleria = []; }
+          const foto = Array.from(new Set<string>([
+            ...(fotoPerLuogo.get(String(p.id)) || []),
+            ...galleria.filter((x: any) => x?.source === 'wip_community' && typeof x?.url === 'string' && /^https?:\/\//.test(x.url)).map((x: any) => x.url)
+          ]));
+          return {
+            id: p.id, name: p.name, lat: Number(p.lat), lon: Number(p.lon),
+            category: p.category, poi_type: p.poi_type,
+            description: p.description_ai || p.description_short || null,
+            image_url: p.image_url || null, status: p.status || 'verified',
+            photos: foto
+          };
+        })
+        .filter((p: any) => p.photos.length > 0 || p.category === 'community');
+      res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=120');
+      res.json({ pins });
+    } catch (e: any) {
+      console.error('[Community Pins] Errore:', e?.message);
+      res.status(500).json({ error: 'pins_failed' });
     }
   });
 
@@ -24156,12 +24340,63 @@ Schema: {"emoji":"🥾","name":"nome del cammino","start":"località di partenza
     try { const o = JSON.parse(s); if (o && typeof o === 'object') return o; } catch { /* sotto */ }
     const m = s.match(/\{[\s\S]*\}/);
     if (m) { try { const o = JSON.parse(m[0]); if (o && typeof o === 'object') return o; } catch { /* niente */ } }
-    return null;
+    return libOggettoJsonPiuGrande(s);
+  }
+
+  /**
+   * L'oggetto JSON valido PIU' GRANDE dentro un testo misto (18/09/2026).
+   *
+   * Provato oggi su DeepSeek-V4-Flash via Gonka: il modello scrive il suo
+   * ragionamento DENTRO `content`, PRIMA del JSON — a volte fra
+   * <think>…</think>, a volte in prosa nuda («…so I'll do that now:\n\n{…}»)
+   * — e nel ragionamento CITA il prompt, graffe comprese. La regex golosa
+   * qui sopra va dalla prima graffa (quella citata) all'ultima e fallisce:
+   * erano gli scarti «output del generatore non è JSON valido». Il PRIMO
+   * oggetto bilanciato sarebbe peggio: e' proprio il frammento citato
+   * ({"citta":"Lucca","tappe":["...","...","..."]} e' JSON valido). Si
+   * prendono allora tutti gli oggetti bilanciati di primo livello e vince il
+   * piu' lungo: la risposta vera e' sempre molto piu' grande di una citazione.
+   * Su un output TRONCATO non salva niente, ed e' giusto: il JSON sta in
+   * fondo, quindi e' lui a essere tagliato.
+   */
+  function libOggettoJsonPiuGrande(raw: any): any {
+    const s = String(raw || '').replace(/<think>[\s\S]*?<\/think>/gi, ' ');
+    let migliore: any = null, lunghezzaMigliore = 0, partenze = 0;
+    let da = s.indexOf('{');
+    while (da >= 0 && partenze++ < 300) {
+      let profondita = 0, inStringa = false, escape = false, fine = -1;
+      for (let i = da; i < s.length; i++) {
+        const c = s[i];
+        if (inStringa) {
+          if (escape) escape = false;
+          else if (c === '\\') escape = true;
+          else if (c === '"') inStringa = false;
+          continue;
+        }
+        if (c === '"') inStringa = true;
+        else if (c === '{') profondita++;
+        else if (c === '}' && --profondita === 0) { fine = i; break; }
+      }
+      let valido = false;
+      if (fine > da) {
+        try {
+          const o = JSON.parse(s.slice(da, fine + 1));
+          if (o && typeof o === 'object') {
+            valido = true;
+            if (fine - da > lunghezzaMigliore) { migliore = o; lunghezzaMigliore = fine - da; }
+          }
+        } catch { /* non era JSON: si riparte dalla graffa dopo */ }
+      }
+      da = s.indexOf('{', valido ? fine + 1 : da + 1);
+    }
+    return migliore;
   }
 
   // Nome del motore dal model id restituito da callUniversalAi.
   function libEngineName(model: any): string {
     const m = String(model || '').toLowerCase();
+    // Prima di 'deepseek': il model id di Gonka lo contiene ("gonka:<pool>:deepseek-ai/…").
+    if (m.startsWith('gonka:')) return 'gonka';
     if (m.includes('agnes')) return 'agnes';
     if (m.includes('deepseek')) return 'deepseek';
     if (m.includes('gemini')) return 'gemini';
@@ -25025,10 +25260,27 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
     // ramo non si tocca.
     const daSfondo = engine === 'agnes';
     if (daSfondo) opts.gonkaPool = 'itinerari';
-    const resp = await callUniversalAi(engine as any,
-      [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
-      opts,
+    const messaggi = [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }];
+    let resp = await callUniversalAi(engine as any, messaggi, opts,
       feature, supabaseUrl, supabaseServiceKey, null, daSfondo ? 'background-script' : undefined);
+    // GONKA TRONCA → SI PASSA AL MOTORE DOPO, NON SI BUTTA L'ITINERARIO
+    // (18/09/2026). Misurato sul droplet 207 la mattina in cui Gonka e'
+    // diventata il primo motore della semina: 26 scarti «output troncato»
+    // e 1 salvato in due ore, contro 4 salvati e 0 troncati nell'ora prima.
+    // DeepSeek-V4-Flash via Gonka consuma il tetto di 8192 token prima di
+    // chiudere il JSON, e una risposta troncata per callUniversalAi e' un
+    // «successo»: la coda dei ripieghi non partiva mai. Un solo secondo
+    // giro, senza Gonka (senza pool il motore resta fuori per costruzione).
+    if (resp?.truncated && daSfondo && String(resp?.model || '').startsWith('gonka:')) {
+      // Niente «recupero» dal testo troncato: questo modello ragiona in prosa
+      // PRIMA del JSON (vedi libOggettoJsonPiuGrande), quindi a essere
+      // tagliato e' proprio il JSON, e l'unico oggetto intero rimasto
+      // sarebbe un frammento citato nel ragionamento.
+      const { gonkaPool: _gp, ...senzaGonka } = opts;
+      console.warn(`[Library] ${feature}: output di Gonka troncato, ritento sui motori gratuiti`);
+      resp = await callUniversalAi(engine as any, messaggi, senzaGonka,
+        feature, supabaseUrl, supabaseServiceKey, null, 'background-script');
+    }
     if (resp?.truncated) throw new Error('output del generatore troncato (finish_reason=length)');
     const obj = libParseJsonLoose(resp?.data);
     if (!obj) throw new Error('output del generatore non è JSON valido');
@@ -25449,7 +25701,11 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
     // indipendente resta comunque: la revisione DeepSeek che scatta al primo
     // utente che apre l'itinerario (libraryFinalReview). Si marca l'esito
     // così è riconoscibile e rifacibile quando i motori tornano.
-    const ripiego = String(genEngine || '').split('+')[0] || 'groq';
+    // Generatore 'gonka' (18/09/2026): qui senza pool il motore resta fuori
+    // coda, e comunque i revisori gratuiti sono gia' TUTTI una seconda
+    // opinione vera rispetto a Gonka. Il ripiego torna su groq.
+    const primoGen = String(genEngine || '').split('+')[0];
+    const ripiego = (primoGen && primoGen !== 'gonka') ? primoGen : 'groq';
     const esitoRipiego = await provaRevisore(ripiego, true);
     if (esitoRipiego) {
       console.warn(`[library] revisione di ripiego con lo stesso motore del generatore (${ripiego}): gli altri revisori non rispondono`);
