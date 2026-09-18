@@ -492,16 +492,18 @@ function CachedTiles({ url, attribution }: { url: string; attribution: string })
  * Il perche' delle scelte (fonte, quote, etichette) sta accanto a
  * `satelliteActive` in MapArea.
  */
-function SfondoSatellite({ token, urlEtichette }: { token: string; urlEtichette: string }) {
+function SfondoSatellite({ urlFoto, urlEtichette }: { urlFoto: string; urlEtichette: string }) {
   const map = useMap();
   useEffect(() => {
     const foto = L.tileLayer(
-      `https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}{r}.jpg90?access_token=${token}`,
+      urlFoto,
       {
         zIndex: 2,
-        maxNativeZoom: 19,
+        // Oltre il 18 in campagna Esri risponde con la tessera «Map data not
+        // yet available»: meglio la 18 ingrandita che un riquadro grigio.
+        maxNativeZoom: 18,
         maxZoom: 22,
-        attribution: '© <a href="https://www.mapbox.com/about/maps/" target="_blank" rel="noopener">Mapbox</a> © Maxar',
+        attribution: 'Immagini © <a href="https://www.esri.com/" target="_blank" rel="noopener">Esri</a>, Maxar, Earthstar Geographics, GIS User Community',
       },
     );
     const etichette = L.tileLayer(urlEtichette, { zIndex: 4, maxNativeZoom: 20, maxZoom: 22 });
@@ -511,7 +513,7 @@ function SfondoSatellite({ token, urlEtichette }: { token: string; urlEtichette:
       map.removeLayer(foto);
       map.removeLayer(etichette);
     };
-  }, [map, token, urlEtichette]);
+  }, [map, urlFoto, urlEtichette]);
   return null;
 }
 
@@ -2614,19 +2616,25 @@ function MapArea({
   // Non sostituisce il layer di base (CachedTiles, che serve anche
   // l'offline e deve restare identico al byte): gli si SOVRAPPONE. Due
   // TileLayer nello stesso tilePane:
-  //  · zIndex 2 — le foto dall'alto di Mapbox (`mapbox.satellite`, Raster
-  //    Tiles API: il conto Mapbox c'e' gia' per routing e mappe dei PDF; la
-  //    fascia gratuita e' di 750.000 tile al mese, e il layer e' spento di
-  //    default, quindi le consuma solo chi lo accende);
+  //  · zIndex 2 — le foto dall'alto di ESRI World Imagery. NON Mapbox
+  //    (ordine del committente, 18/09/2026: «non usare Mapbox» — la prima
+  //    stesura usava `mapbox.satellite`, che oltre la fascia gratuita si
+  //    paga a consumo). L'indirizzo pubblico di Esri non chiede chiave; se
+  //    un giorno si apre un conto ArcGIS Location Platform (2 milioni di
+  //    tile al mese gratis, ed e' la via in regola per un'app commerciale)
+  //    basta mettere VITE_ARCGIS_API_KEY e si passa da solo all'indirizzo
+  //    con la chiave. Il layer e' spento di default;
   //  · zIndex 4 — le sole ETICHETTE di CARTO (`voyager_only_labels`, stessa
   //    chiave dello sfondo): una foto aerea senza i nomi delle vie e dei
   //    paesi non si legge, e i nostri pin da soli non bastano a orientarsi.
   // In mezzo (zIndex 3) resta la copertura neve MODIS.
-  // Senza VITE_MAPBOX_TOKEN la voce non compare nel pannello: meglio
-  // assente che una mappa a scacchi grigi.
-  const MAPBOX_TOKEN_SAT = (import.meta.env.VITE_MAPBOX_TOKEN as string | undefined) || '';
+  const ARCGIS_KEY = (import.meta.env.VITE_ARCGIS_API_KEY as string | undefined) || '';
+  // Esri numera {z}/{y}/{x}, non {z}/{x}/{y}.
+  const URL_FOTO_SATELLITE = ARCGIS_KEY
+    ? `https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token=${ARCGIS_KEY}`
+    : 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
   const [satelliteActive, setSatelliteActive] = useState(() => {
-    try { return !!MAPBOX_TOKEN_SAT && localStorage.getItem('wip_satellite_enabled') === '1'; } catch { return false; }
+    try { return localStorage.getItem('wip_satellite_enabled') === '1'; } catch { return false; }
   });
 
   const toggleSatellite = useCallback(() => {
@@ -6264,21 +6272,21 @@ function MapArea({
     },
     // Lo SFONDO e' una terza natura: non e' una rete ne' una condizione.
     // Ultimo gruppo = in fondo al pannello, cioe' il piu' vicino al pollice
-    // (il pannello si apre sopra il tasto). Senza token la voce non esiste.
-    ...(MAPBOX_TOKEN_SAT ? [{
+    // (il pannello si apre sopra il tasto).
+    {
       id: 'satellite', gruppo: 'sfondo', on: satelliteActive, loading: false, emoji: '🛰️',
       tinta: 'bg-slate-700 border-slate-400', zoomMin: 0,
       nome: getTranslation('mp_layer_satellite_nome', language),
       dettaglio: getTranslation('mp_layer_satellite_det', language),
       onClick: toggleSatellite,
-    }] : []),
+    },
   ], [
     language, sentieriActive, sentieriLoading, ciclabiliActive, ciclabiliLoading,
     stradeGustoActive, stradeGustoLoading, servicesActive, servicesLoading,
     neveActive, neveLoading, soleActive, soleLoading, bathingActive, bathingLoading,
     areeActive, areeLoading, AREE_MIN_ZOOM, shoppingActive, shoppingLoading, lussoActive, lussoLoading,
     toggleSentieri, toggleCiclabili, toggleStradeGusto, toggleServices, toggleNeve, toggleSole, toggleBathing, toggleAree,
-    toggleShopping, toggleLusso, satelliteActive, toggleSatellite, MAPBOX_TOKEN_SAT,
+    toggleShopping, toggleLusso, satelliteActive, toggleSatellite,
   ]);
 
   const layerAccesi = useMemo(() => LIVELLI.filter((l) => l.on), [LIVELLI]);
@@ -6374,9 +6382,9 @@ function MapArea({
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
             url={cartoUrl}
           />
-          {satelliteActive && MAPBOX_TOKEN_SAT && (
+          {satelliteActive && (
             <SfondoSatellite
-              token={MAPBOX_TOKEN_SAT}
+              urlFoto={URL_FOTO_SATELLITE}
               urlEtichette={cartoUrl.replace('/rastertiles/voyager/', '/rastertiles/voyager_only_labels/')}
             />
           )}
