@@ -1026,6 +1026,10 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         // Si cerca col titolo della FONTE: è quello che Wikipedia e Wikidata
         // conoscono; la traduzione, spesso, no.
         artwork: tappa.nomeFonte || tappa.nome,
+        // Il titolo che l'utente legge: il server prova a cercare la fonte
+        // anche con questo (Wikipedia italiana lo conosce, il titolo inglese
+        // della fonte no).
+        nomeAlt: tappa.nome,
         venueName: visit.venue.name,
         artist: tappa.autore || null,
         room: tappa.dove || null,
@@ -1035,22 +1039,59 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       });
       setOperaLoading(null);
       if (!resp) { notify(t('vis_generic_error')); return; }
+      let daTappa = false;
       if (resp.ok !== true) {
-        notify(
-          resp.reason === 'needs_pass' ? t('mv_art_needs_pass')
-            : resp.reason === 'pass_exhausted' ? t('mv_art_exhausted')
-            : t('mv_art_no_source')
-        );
-        return;
+        // IL TESTO CHE HAI GIÀ SOTTO GLI OCCHI (18/09/2026, committente:
+        // «Su quest'opera non ho fonti verificate» sulle vetrate del Duomo di
+        // Milano, con la spiegazione lunga e giusta scritta proprio sopra il
+        // pulsante). L'audioguida per-opera cerca una fonte sua a partire dal
+        // titolo della fonte (spesso inglese, con trattini): se non la trova
+        // dice «nessuna fonte», anche quando la guida della visita — già
+        // verificata — ha scritto la spiegazione di questa tappa. Il no vale
+        // solo per il pass (serve / esaurito, che restano avvisi veri): per
+        // ogni altra risposta negativa si legge ad alta voce la spiegazione
+        // della tappa, che è il testo che si sta già leggendo. Niente di
+        // inventato: è lo stesso testo di prima. L'avviso resta solo se la
+        // tappa non ha proprio nulla da dire.
+        if (resp.reason === 'needs_pass' || resp.reason === 'pass_exhausted') {
+          notify(resp.reason === 'needs_pass' ? t('mv_art_needs_pass') : t('mv_art_exhausted'));
+          return;
+        }
+        // «L'AVVISO NON DEVE PIÙ ESSERE MOSTRATO» (committente, 18/09/2026):
+        // «nessuna fonte» non e' mai una risposta da dare a chi e' fermo
+        // davanti a un'opera. Se la tappa ha poco o niente da dire, si compone
+        // una presentazione dai soli dati che la guida ha gia' verificato per
+        // lei (nome, autore, anno, dove): mai una frase in piu' di quelle.
+        const testoPieno = [tappa.perche, tappa.curiosita].map((s) => String(s || '').trim()).filter(Boolean).join(' ');
+        const testoTappa = testoPieno.length >= 40 ? testoPieno : [
+          `${tappa.nome}${tappa.autore && tappa.autore !== 'Ignoto' ? `, ${tappa.autore}` : ''}${tappa.anno ? `, ${tappa.anno}` : ''}.`,
+          tappa.dove ? `${tappa.dove}.` : '',
+          testoPieno,
+        ].filter(Boolean).join(' ');
+        daTappa = true;
+        guida = {
+          testo: testoTappa,
+          titolo: tappa.nome,
+          autore: tappa.autore || '',
+          anno: tappa.anno || '',
+          tecnica: '',
+          misure: '',
+          daGuardare: [],
+          parole: testoTappa.split(/\s+/).length,
+          language,
+        };
+      } else {
+        guida = resp.guide;
       }
-      guida = resp.guide;
       setOperaGuide(prev => ({ ...prev, [i]: guida }));
       // TUTTO QUELLO CHE ASCOLTI RESTA: l'audioguida appena pagata entra
       // subito nell'archivio. Da adesso in poi il riascolto — stasera, fra
       // un mese, senza rete — non chiama più il server e non costa più nulla.
       // Nell'archivio va solo il racconto per adulti: è quello che si
-      // riascolta e si stampa.
-      if (!pers.bambini) conservaOpera(visit.venueKey, language, tappa.nome, guida);
+      // riascolta e si stampa. NON il ripiego dalla tappa: non è
+      // un'audioguida vera, e nell'archivio impedirebbe alla vera di
+      // arrivare quando una fonte si trova.
+      if (!pers.bambini && !daTappa) conservaOpera(visit.venueKey, language, tappa.nome, guida);
     }
     setOperaAperta(i);
     // Il cruscotto della visita museo (Live Activity): questa entra in
@@ -1195,7 +1236,25 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     setCaricandoGuidaCartellino(false);
     if (!resp) { notify(t('vis_generic_error')); return; }
     if (resp.ok !== true) {
-      notify(resp.reason === 'needs_pass' ? t('mv_art_needs_pass') : resp.reason === 'pass_exhausted' ? t('mv_art_exhausted') : t('mv_art_no_source'));
+      if (resp.reason === 'needs_pass' || resp.reason === 'pass_exhausted') {
+        notify(resp.reason === 'needs_pass' ? t('mv_art_needs_pass') : t('mv_art_exhausted'));
+        return;
+      }
+      // Mai «nessuna fonte» (committente, 18/09/2026): si legge quello che
+      // dice il cartellino stesso, tradotto se serve — l'unico testo che
+      // abbiamo davvero davanti — piu' i suoi dati (titolo, autore, anno, tecnica).
+      const testoCartellino = [
+        `${cartellino.titolo}${cartellino.autore ? `, ${cartellino.autore}` : ''}${cartellino.anno ? `, ${cartellino.anno}` : ''}.`,
+        cartellino.tecnica ? `${cartellino.tecnica}.` : '',
+        cartellino.traduzione || '',
+      ].filter(Boolean).join(' ');
+      const guidaLabel: ArtworkGuide = {
+        testo: testoCartellino, titolo: cartellino.titolo, autore: cartellino.autore || '', anno: cartellino.anno || '',
+        tecnica: cartellino.tecnica || '', misure: '', daGuardare: [], parole: testoCartellino.split(/\s+/).length, language,
+      };
+      setGuidaCartellino(guidaLabel);
+      stopSpeech(); setOperaParla(null); setOperaInPausa(null);
+      try { await speakAudioguide(guidaLabel.testo, String(language).toLowerCase(), getGuideCharacter()); } catch { /* voce assente */ }
       return;
     }
     setGuidaCartellino(resp.guide);

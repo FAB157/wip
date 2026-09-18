@@ -1512,6 +1512,9 @@ export type ArtworkGuideResponse =
 
 export async function fetchArtworkGuide(args: {
   artwork: string;
+  /** Il titolo che l'utente legge (spesso italiano): il server cerca la fonte
+   *  anche con questo, oltre che col titolo della FONTE in `artwork`. */
+  nomeAlt?: string;
   venueName: string;
   artist?: string | null;
   room?: string | null;
@@ -1530,6 +1533,7 @@ export async function fetchArtworkGuide(args: {
       headers,
       body: JSON.stringify({
         artwork: args.artwork,
+        ...(args.nomeAlt ? { nomeAlt: args.nomeAlt } : {}),
         venueName: args.venueName,
         ...(args.venueKey ? { venueKey: args.venueKey } : {}),
         ...(args.artist ? { artist: args.artist } : {}),

@@ -10465,6 +10465,18 @@ ${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeF
       const autoreDetto = String(req.body?.artist || '').trim().slice(0, 120);
       const salaDetta = String(req.body?.room || '').trim().slice(0, 100);
       if (!opera || !museo) return res.status(400).json({ error: 'artwork e venueName richiesti' });
+      // NOMI CON CUI CERCARE LA FONTE (18/09/2026, «Su quest'opera non ho
+      // fonti verificate» sulle vetrate del Duomo di Milano): `artwork` e' il
+      // titolo della FONTE, spesso inglese e col museo davanti separato da un
+      // trattino («Duomo di Milano - Stained-glass windows»), che non somiglia
+      // al titolo Wikipedia («Vetrate del Duomo di Milano») e la voce giusta
+      // veniva scartata dalla soglia di somiglianza. Ora si prova anche il
+      // titolo che l'utente legge (`nomeAlt`, quello italiano della tappa) e
+      // il titolo senza il museo davanti. La soglia resta 0,6: si allarga
+      // dove si cerca, non quanto si accetta.
+      const nomeAlt = String(req.body?.nomeAlt || '').trim().slice(0, 160);
+      const senzaMuseo = opera.replace(new RegExp(`^${museo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[-–—:]\\s*`, 'i'), '').trim();
+      const nomiRicerca = [...new Set([opera, nomeAlt, senzaMuseo].filter((n) => n && n.length >= 3))];
 
       const langKey = String(req.body?.language || 'IT').toUpperCase();
       const LANGS: Record<string, { name: string; wiki: string }> = {
@@ -10553,9 +10565,11 @@ ${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeF
         try {
           // Il nome del museo nella ricerca è ciò che tiene l'opera al SUO
           // museo: "Annunciazione" da sola pesca quella sbagliata.
-          const s = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srlimit=5&format=json&srsearch=${encodeURIComponent(`${opera} ${autoreDetto || museo}`)}`, ua);
+          for (const nomeCerca of nomiRicerca) {
+          if (testoOpera) break;
+          const s = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srlimit=5&format=json&srsearch=${encodeURIComponent(`${nomeCerca} ${autoreDetto || museo}`)}`, ua);
           for (const h of (s.data?.query?.search || [])) {
-            const sim = Math.max(sovrapposizioneNomi(opera, h.title), sovrapposizioneNomi(h.title, opera));
+            const sim = Math.max(sovrapposizioneNomi(nomeCerca, h.title), sovrapposizioneNomi(h.title, nomeCerca));
             if (sim < 0.6) continue;
             const ext = await axios.get(
               `https://${wl}.wikipedia.org/w/api.php?action=query&prop=extracts|pageprops&ppprop=wikibase_item&explaintext=1&exsectionformat=plain&exlimit=1&format=json&titles=${encodeURIComponent(h.title)}`,
@@ -10604,6 +10618,7 @@ ${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeF
             }
             break;
           }
+          } // fine del ciclo sui nomiRicerca
           if (testoOpera) break;
         } catch { /* si prova la lingua successiva */ }
       }

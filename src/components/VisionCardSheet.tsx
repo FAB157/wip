@@ -78,7 +78,19 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
     setEstesaLoading(false);
     if (!resp) { notify(t('vis_generic_error')); return; }
     if (resp.ok !== true) {
-      notify(resp.reason === 'needs_pass' ? t('mv_art_needs_pass') : resp.reason === 'pass_exhausted' ? t('mv_art_exhausted') : t('mv_art_no_source'));
+      if (resp.reason === 'needs_pass' || resp.reason === 'pass_exhausted') {
+        notify(resp.reason === 'needs_pass' ? t('mv_art_needs_pass') : t('mv_art_exhausted'));
+        return;
+      }
+      // Mai «nessuna fonte» (committente, 18/09/2026): la scheda ha gia' il
+      // suo testo, generato dalla foto e verificato — si usa quello.
+      const testoScheda = [card.descrizione_dettagliata, card.storia, card.curiosita]
+        .map((s: any) => String(s || '').trim()).filter(Boolean).join(' ')
+        || String(card.spiegazione_audio || card.descrizione_breve || card.nome || '');
+      setEstesa({
+        testo: testoScheda, titolo: String(card.nome), autore: card.autore && card.autore !== 'Ignoto' ? String(card.autore) : '',
+        anno: '', tecnica: '', misure: '', daGuardare: [], parole: testoScheda.split(/\s+/).length, language,
+      });
       return;
     }
     setEstesa(resp.guide);
