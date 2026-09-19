@@ -2075,4 +2075,13 @@ export const TRAD_MANUALE: Record<string, Partial<Record<Language, string>>> = {
     RU: 'Добавьте день или ближайшую остановку (поездку за город) к уже имеющемуся маршруту. Если день приходит готовым из Библиотеки, половина стоимости возвращается.',
     ZH: '为已有行程增加一天或附近的站点（郊游）。如果这一天直接来自行程库，将退还一半费用。',
   },
+  man_cr_li_3_web: {
+    IT: 'Voucher/Coupon: se hai un codice (es. da una struttura partner), riscattalo nel WIP Shop sul sito web wip.guide (da computer o dal browser del telefono, anche iPhone) oppure nell’app Android. Un riscatto per persona.',
+    EN: 'Voucher/Coupon: if you have a code (e.g. from a partner venue), redeem it in the WIP Shop on the website wip.guide (from a computer or your phone’s browser, iPhone included) or in the Android app. One redemption per person.',
+    FR: 'Bon/Coupon : si tu as un code (par ex. d’un établissement partenaire), utilise-le dans le WIP Shop sur le site web wip.guide (depuis un ordinateur ou le navigateur du téléphone, iPhone compris) ou dans l’app Android. Un seul usage par personne.',
+    ES: 'Vale/Cupón: si tienes un código (p. ej. de un establecimiento asociado), canjéalo en el WIP Shop en la web wip.guide (desde un ordenador o el navegador del teléfono, iPhone incluido) o en la app Android. Un canje por persona.',
+    DE: 'Gutschein/Coupon: Wenn du einen Code hast (z. B. von einem Partnerbetrieb), löse ihn im WIP Shop auf der Website wip.guide ein (am Computer oder im Browser des Handys, auch iPhone) oder in der Android-App. Eine Einlösung pro Person.',
+    RU: 'Ваучер/купон: если у вас есть код (например, от партнёрского заведения), активируйте его в WIP Shop на сайте wip.guide (с компьютера или из браузера телефона, включая iPhone) либо в приложении для Android. Одна активация на человека.',
+    ZH: '优惠券：如果你有优惠码（例如来自合作商家），可在网站 wip.guide 的 WIP 商店兑换（电脑或手机浏览器均可，iPhone 也可以），或在 Android 应用中兑换。每人限兑换一次。',
+  },
 };

@@ -32,7 +32,7 @@ import PremiumGuideRenderer from './PremiumGuideRenderer';
 import PremiumGuideAudiobook from './PremiumGuideAudiobook';
 import TravelerDashboard from './TravelerDashboard';
 import { downloadGuideAsPdf } from '../services/premiumGuideService';
-import { Download, X, Fingerprint, Lock } from 'lucide-react';
+import { Download, X, Fingerprint, Lock, Users } from 'lucide-react';
 import { useBiometricAuth } from '../hooks/useBiometricAuth';
 import { BIOMETRIC_PREF_KEY, isBiometricPrefEnabled } from './LoginScreen';
 import { APPLOCK_PREF_KEY } from './AppLockGate';
@@ -1789,6 +1789,34 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl shadow-sm border border-indigo-50/50">
                         <span className="text-xs font-bold text-gray-700 flex items-center gap-2">{getTranslation('pf_xp_trivia', language)}</span>
                         <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">{getTranslation('pf_xp_bonus', language)}</span>
+                      </div>
+                      <div className="flex items-start gap-3 bg-white px-4 py-3 rounded-2xl shadow-sm border border-emerald-50/50">
+                        <Download className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <div>
+                          <h5 className="text-xs font-black text-gray-800 mb-0.5">{getTranslation('pf_gratis_lib', language)}</h5>
+                          <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_lib_desc', language)}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-3 bg-white px-4 py-3 rounded-2xl shadow-sm border border-emerald-50/50">
+                        <Users className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <div>
+                          <h5 className="text-xs font-black text-gray-800 mb-0.5">{getTranslation('pf_gratis_com', language)}</h5>
+                          <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_com_desc', language)}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-3 bg-white px-4 py-3 rounded-2xl shadow-sm border border-emerald-50/50">
+                        <Star className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <div>
+                          <h5 className="text-xs font-black text-gray-800 mb-0.5">{getTranslation('pf_gratis_ev', language)}</h5>
+                          <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_ev_desc', language)}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-3 bg-white px-4 py-3 rounded-2xl shadow-sm border border-emerald-50/50">
+                        <Award className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <div>
+                          <h5 className="text-xs font-black text-gray-800 mb-0.5">{getTranslation('pf_gratis_diario', language)}</h5>
+                          <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_diario_desc', language)}</p>
+                        </div>
                       </div>
                     </div>
                   </div>
