@@ -617,7 +617,10 @@ const hashBreve = (s: string) => createHash('md5').update(s).digest('hex').slice
 export async function ricercaWeb(query: string, opts: { lang?: string; cc?: string; count?: number;
   /** 12/09/2026: fornitore e chiave dedicati (i musei non devono bruciare il credito degli Eventi).
    *  'searxng' = istanza SearXNG auto-ospitata (SEARXNG_URL + SEARXNG_TOKEN): gratis, senza crediti. */
-  provider?: 'brave' | 'google' | 'searxng'; braveKey?: string } = {}): Promise<RisultatoWeb[]> {
+  provider?: 'brave' | 'google' | 'searxng'; braveKey?: string;
+  /** 19/09/2026: chi salva già il proprio risultato (guide dei musei) non passa dalla cache dei 7 giorni:
+   *  nel periodo in cui SearXNG era degradato vi si erano fissate risposte spazzatura. */
+  senzaCache?: boolean } = {}): Promise<RisultatoWeb[]> {
   let fornitore: 'brave' | 'google' | 'searxng' | null = opts.provider || fornitoreRicerca();
   const riserva = (): 'brave' | 'google' | null => (opts.braveKey || process.env.BRAVE_SEARCH_API_KEY) ? 'brave' : (process.env.GOOGLE_CSE_API_KEY && process.env.GOOGLE_CSE_CX) ? 'google' : null;
   if (fornitore === 'searxng' && !process.env.SEARXNG_URL) fornitore = riserva();
@@ -629,7 +632,7 @@ export async function ricercaWeb(query: string, opts: { lang?: string; cc?: stri
   const cc = String(opts.cc || '').toUpperCase();
   const count = Math.min(20, Math.max(1, opts.count || 8));
   const chiave = `web_${fornitore}_${lang}_${hashBreve(`${q}|${cc}|${count}`)}`;
-  const hit = await cacheLeggi(chiave, 7 * 86400_000);
+  const hit = opts.senzaCache ? null : await cacheLeggi(chiave, 7 * 86400_000);
   if (Array.isArray(hit)) return hit;
   let out: RisultatoWeb[] = [];
   try {
@@ -665,7 +668,7 @@ export async function ricercaWeb(query: string, opts: { lang?: string; cc?: stri
     return [];
   }
   out = out.filter((x) => /^https?:\/\//i.test(x.url));
-  cacheScrivi(chiave, 'ricerca_web', out);
+  if (!opts.senzaCache && out.length) cacheScrivi(chiave, 'ricerca_web', out);
   return out;
 }
 

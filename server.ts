@@ -8277,10 +8277,12 @@ ORDER BY DESC(?fama)`;
     if (!process.env.SEARXNG_URL || !o.tokOpera.length) return vuoto;
     try {
       const HOST_SCARTATI = /facebook|instagram|youtube|youtu\.be|twitter|x\.com|tiktok|pinterest|linkedin|reddit|quora|booking\.|expedia|airbnb|amazon|ebay|tripadvisor|yelp|foursquare|google\.|tiqets|getyourguide|viator|civitatis|musement|klook|trip\.com|eventbrite|ticketone|vivaticket|biglietteria|prenotazion|mapcarta|openstreetmap|waze|flickr|wikimedia|wikidata/i;
-      const HOST_AFFIDABILI = /(^|\.)(wikipedia\.org|wikivoyage\.org|treccani\.it|europeana\.eu|beniculturali\.it|unesco\.org|britannica\.com)$|\.(gov|edu)(\.[a-z]{2})?$|\.(gob|gouv)\.[a-z]{2}$/i;
+      // beniculturali.it anche senza il punto davanti: lombardiabeniculturali.it,
+      // catalogo.beniculturali.it… sono tutti cataloghi ufficiali.
+      const HOST_AFFIDABILI = /(^|\.)(wikipedia\.org|wikivoyage\.org|treccani\.it|europeana\.eu|unesco\.org|britannica\.com)$|beniculturali\.it$|\.(gov|edu)(\.[a-z]{2})?$|\.(gob|gouv)\.[a-z]{2}$/i;
       const nomiWeb = [...new Set(o.nomi.filter((n) => n && n.length >= 3))].slice(0, 2);
       const ricerche = await Promise.all(nomiWeb.flatMap((n) => o.lingue.map((l) =>
-        eventiFeed.ricercaWeb(`"${n}" ${o.museo}`, { lang: l, count: 6, provider: 'searxng' }).catch(() => [] as any[])
+        eventiFeed.ricercaWeb(`"${n}" ${o.museo}`, { lang: l, count: 6, provider: 'searxng', senzaCache: true }).catch(() => [] as any[])
       )));
       const visti = new Set<string>((o.escludiUrl || []).filter(Boolean));
       const candidati: { url: string; host: string; tier: 'A' | 'B' }[] = [];
@@ -10775,8 +10777,13 @@ Rispondi ESCLUSIVAMENTE con JSON: {"perche": "la spiegazione", "curiosita": "un 
       // l'enciclopedia non ha. Solo se il progetto ha una chiave di ricerca.
       let schedaMuseo = '';
       let urlSchedaMuseo = '';
+      // Il sito ufficiale come lo ha risolto il server (anche se il client non
+      // lo manda): serve a riconoscere le sue pagine come fonte affidabile
+      // nella ricerca sul web aperto.
+      let sitoMuseoRisolto = '';
       try {
         const sitoMuseo = String(req.body?.officialSite || '') || await trovaSitoUfficiale(museo, langCfg.wiki);
+        sitoMuseoRisolto = sitoMuseo || '';
         if (sitoMuseo && eventiFeed.fornitoreRicerca()) {
           const host = (() => { try { return new URL(/^https?:\/\//i.test(sitoMuseo) ? sitoMuseo : `https://${sitoMuseo}`).hostname.replace(/^www\./, ''); } catch { return ''; } })();
           if (host) {
@@ -10806,7 +10813,7 @@ Rispondi ESCLUSIVAMENTE con JSON: {"perche": "la spiegazione", "curiosita": "un 
       let fontiWeb: { url: string; host: string; tier: 'A' | 'B' }[] = [];
       let haFontiTerzi = false;
       if ([datiWikidata, schedaMuseo, testoOpera].join('').length < 1500) {
-        const hostSitoMuseo = (() => { try { const s = String(req.body?.officialSite || ''); return s ? new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`).hostname.replace(/^www\./, '') : ''; } catch { return ''; } })();
+        const hostSitoMuseo = (() => { try { const s = String(sitoMuseoRisolto || req.body?.officialSite || ''); return s ? new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`).hostname.replace(/^www\./, '') : ''; } catch { return ''; } })();
         const w = await cercaMaterialeWeb({
           nomi: [nomeAlt || opera, senzaMuseo || opera], museo, lingue: [...new Set([langCfg.wiki, 'en'])],
           tokOpera: tokenSignificativi(nomeAlt || opera), hostSitoMuseo, escludiUrl: [urlSchedaMuseo],
