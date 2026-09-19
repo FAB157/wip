@@ -1318,9 +1318,30 @@ const tokensNomeLuogo = (s: string): string[] => {
 };
 const normTesto = (s: string) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
 
+/** VISITA DELLE PAGINE TROVATE (19/09/2026, committente: «con SearXNG andare a
+ *  visitare quando cerca qualcosa»). Uno snippet di due righe non dice se la
+ *  pagina parla DAVVERO del luogo: qui si aprono i primi risultati (solo host
+ *  pubblici, tempo e peso limitati, tutte insieme) e si torna il testo
+ *  normalizzato. `ok:false` = la pagina non si e' aperta (sito morto,
+ *  anti-bot): non e' una prova ne' a favore ne' contro il nome. Chi cerca con
+ *  SearXNG e decide su un luogo passi da qui invece di fidarsi dello snippet. */
+async function visitaRisultatiWeb(ris: { url: string }[], opts: { max?: number; timeoutMs?: number } = {}): Promise<{ url: string; ok: boolean; testo: string; lungo: number }[]> {
+  const SALTA = /facebook|instagram|youtube|youtu\.be|tiktok|pinterest|twitter|x\.com|linkedin|reddit|quora/i;
+  const scelti = ris.filter((r) => isPublicHttpUrl(r.url) && !SALTA.test(r.url) && !/\.(pdf|jpe?g|png|gif|webp|mp4|zip)(\?|$)/i.test(r.url)).slice(0, opts.max ?? 3);
+  return Promise.all(scelti.map(async (r) => {
+    try {
+      const p = await axios.get(r.url, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)', Accept: 'text/html' }, timeout: opts.timeoutMs ?? 5000, maxRedirects: 2, maxContentLength: 1_500_000, responseType: 'text', validateStatus: (s) => s < 400 });
+      if (!/html|text/i.test(String(p.headers?.['content-type'] || 'text/html'))) return { url: r.url, ok: false, testo: '', lungo: 0 };
+      const chiaro = String(p.data || '').slice(0, 400_000).replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/gi, ' ');
+      return { url: r.url, ok: true, testo: normTesto(chiaro), lungo: chiaro.replace(/\s+/g, ' ').trim().length };
+    } catch { return { url: r.url, ok: false, testo: '', lungo: 0 }; }
+  }));
+}
+
 /** Riscontro web di un nome di luogo in una città. `hit` = almeno una pagina
  *  cita il nome; `conCitta` = una di quelle cita anche la città. null =
- *  ricerca spenta o fallita (nessun segnale, non «assente»). */
+ *  ricerca spenta o fallita (nessun segnale, non «assente»). Se gli snippet
+ *  non bastano si APRONO le prime pagine (visitaRisultatiWeb). */
 async function firmaWebLuogo(nome: string, citta: string, lang: string): Promise<{ hit: boolean; conCitta: boolean } | null> {
   if (!process.env.SEARXNG_URL) return null;
   const tok = tokensNomeLuogo(nome);
@@ -1336,6 +1357,16 @@ async function firmaWebLuogo(nome: string, citta: string, lang: string): Promise
       if (!citaNome) continue;
       hit = true;
       if (cittaTok.length && cittaTok.some((c) => testo.includes(c))) { conCitta = true; break; }
+    }
+    // Lo snippet non ha dato la prova piena (nome + citta'): si aprono le
+    // prime pagine e si guarda nel testo vero. Tetto di 5 s, tutte insieme.
+    if (!conCitta && cittaTok.length) {
+      const pagine = await visitaRisultatiWeb(ris, { max: 3, timeoutMs: 5000 });
+      for (const p of pagine) {
+        if (!p.ok || tok.filter((t) => p.testo.includes(t)).length < Math.min(2, tok.length)) continue;
+        hit = true;
+        if (cittaTok.some((c) => p.testo.includes(c))) { conCitta = true; break; }
+      }
     }
     return { hit, conCitta };
   } catch { return null; }
@@ -1363,7 +1394,18 @@ async function sitoUfficialeViaRicerca(nome: string, citta: string, lang: string
       const titolo = normTesto(`${r.title} ${r.snippet}`);
       const nomeIntero = tok.every((t) => titolo.includes(t));
       const siDichiara = /ufficiale|official|officiel|oficial|offiziell/i.test(`${r.title} ${r.snippet}`);
-      if (dominioColNome || (nomeIntero && siDichiara)) return { url: r.url, host };
+      if (!(dominioColNome || (nomeIntero && siDichiara))) continue;
+      // VISITA: il candidato si apre davvero. Se risponde con testo vero ma
+      // non nomina mai il luogo e' un omonimo (dominio simile, altra cosa).
+      // Se NON si apre (anti-bot 403, timeout) non e' una prova contro: i
+      // grandi musei bloccano i bot e restano ammessi come prima. Pagine
+      // povere di testo (splash, JS) idem.
+      if (visitati < 3) {
+        visitati++;
+        const [p] = await visitaRisultatiWeb([r], { max: 1, timeoutMs: 6000 });
+        if (p?.ok && p.lungo > 400 && tok.filter((t) => p.testo.includes(t)).length < Math.min(2, tok.length)) continue;
+      }
+      return { url: r.url, host };
     }
     return null;
   } catch { return null; }
