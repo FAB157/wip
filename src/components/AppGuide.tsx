@@ -9,10 +9,10 @@ import {
   Play, Pause, RefreshCw, Plus, CheckCircle,
   History, Bookmark, User, ShoppingCart, Trash2,
   ChevronDown, Ticket, WifiOff, KeyRound, Users,
-  Calendar, PartyPopper, Sparkles, Route
+  Calendar, PartyPopper, Sparkles, Route, Landmark, Coins
 } from 'lucide-react';
 import { Language, getTranslation } from '../lib/i18n';
-import { PRICING_LIST, DAY_PASS_GUIDE_CAP, MUSEUM_PASS_HOURS } from '../lib/pricing';
+import { PRICING_LIST, DAY_PASS_GUIDE_CAP, MUSEUM_PASS_HOURS, MUSEUM_PASS_SCANS, MUSEUM_VISIT_SCANS, MUSEUM_VISIT_MIN_WORKS } from '../lib/pricing';
 
 interface AppGuideProps {
   language: Language;
@@ -240,11 +240,12 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li>{t('man_intro_li_audio_1')} <CostBadge cost={cr(PRICING_LIST.audio_guide)} /> {t('man_intro_li_audio_2')}</Li>
             <Li><strong>Day Pass 24h</strong> {t('man_intro_li_daypass', { n: DAY_PASS_GUIDE_CAP })} <CostBadge cost={cr(PRICING_LIST.day_pass)} /></Li>
             <Li>{t('man_intro_li_percorso')} <CostBadge cost={cr(PRICING_LIST.custom_route)} /></Li>
-            <Li>{t('man_intro_li_poidetail')} <CostBadge cost={cr(PRICING_LIST.poi_detail)} /></Li>
+            <Li>{t('man_intro_li_poidetail')} <FreeBadge label={t('man_gratis')} /></Li>
             <Li>{t('man_intro_li_itin_1')} <CostBadge cost={crGiorno(PRICING_LIST.itinerary_daily)} /> {t('man_intro_li_itin_2')} <strong>{t('man_intro_li_itin_3')}</strong> {t('man_intro_li_itin_4')} WIP</Li>
             <Li>{t('man_intro_li_chat')} <CostBadge cost={cr10Msg(PRICING_LIST.chat_session)} /></Li>
             <Li>{t('man_intro_li_vision')} <CostBadge cost={cr(PRICING_LIST.photo_search)} /></Li>
-            <Li><strong>{t('museum_pass_title')}</strong> {t('man_intro_li_museumpass', { h: MUSEUM_PASS_HOURS })} <CostBadge cost={cr(PRICING_LIST.museum_pass)} /></Li>
+            <Li><strong>{t('museum_pass_tour_title')}</strong> {t('man_intro_li_visita')} <CostBadge cost={cr(PRICING_LIST.museum_pass_tour)} /></Li>
+            <Li><strong>{t('museum_pass_title')}</strong> {t('man_intro_li_museumpass', { h: MUSEUM_PASS_HOURS, s: MUSEUM_PASS_SCANS })} <CostBadge cost={cr(PRICING_LIST.museum_pass)} /></Li>
             <Li>{t('man_intro_li_library')} <FreeBadge label={t('man_gratis')} /></Li>
             <Li>{t('man_intro_li_community_1')} <strong>WIP Community</strong>{t('man_intro_li_community_2')} <FreeBadge label={t('man_gratis')} /> {t('man_intro_li_community_3')} <strong>{t('man_intro_li_community_4')}</strong></Li>
             <Li>{t('man_intro_li_guidapremium')} <CostBadge cost={crGiorno(PRICING_LIST.premium_guide_daily)} /> · {t('man_intro_li_podcast')} <CostBadge cost={crGiorno(PRICING_LIST.podcast_daily)} /></Li>
@@ -315,6 +316,7 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li><Headphones className="w-4 h-4 inline" /> {t('man_map_li_cuffie')}</Li>
             <Li>{t('man_map_li_radar')}</Li>
             <Li>{t('man_map_li_livelli')}</Li>
+            <Li>{t('man_map_li_mirino')}</Li>
             <Li>{t('man_map_li_community')}</Li>
           </ul>
           <H>{t('man_map_h_giro')}</H>
@@ -389,6 +391,8 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li>{t('man_off_li_2')}</Li>
             <Li>{t('man_off_li_3')}</Li>
             <Li>{t('man_off_li_4')}</Li>
+            <Li>{t('man_off_li_musei')}</Li>
+            <Li>{t('man_off_li_giro')}</Li>
           </ul>
           <H><Download className="w-4 h-4 inline" /> {t('man_off_h_download')}</H>
           <P>{t('man_off_p_download')}</P>
@@ -412,7 +416,7 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li>{t('man_plan_li_chat')}</Li>
             <Li>{t('man_plan_li_rigenera')}</Li>
             <Li>{t('man_plan_li_segui')}</Li>
-            <Li>{t('man_plan_li_offline', { n: PRICING_LIST.audio_guide + PRICING_LIST.poi_detail })}</Li>
+            <Li>{t('man_plan_li_offline', { n: PRICING_LIST.audio_guide })}</Li>
             <Li>{t('man_plan_li_tappe_reali')}</Li>
             <Li>{t('man_plan_li_pdf', { n: PRICING_LIST.premium_guide_daily })}</Li>
           </ul>
@@ -478,6 +482,8 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li>{t('man_wn_li_6')}</Li>
             <Li>{t('man_wn_li_7')}</Li>
           </ul>
+          <H>{t('man_wn_h_spento')}</H>
+          <P>{t('man_wn_p_spento')}</P>
           <P>{t('man_wn_p_auto')}</P>
         </>
       ),
@@ -574,13 +580,42 @@ export default function AppGuide({ language }: AppGuideProps) {
           <P>{t('man_vis_p_1')} <CostBadge cost={cr(PRICING_LIST.photo_search)} /></P>
           <P>{t('man_vis_p_2')}</P>
           <H>{t('man_vis_h_museo')}</H>
-          <P>{t('man_vis_p_museo', { h: MUSEUM_PASS_HOURS })} <CostBadge cost={cr(PRICING_LIST.museum_pass)} /></P>
+          <P>{t('man_vis_p_museo', { h: MUSEUM_PASS_HOURS, s: MUSEUM_PASS_SCANS })} <CostBadge cost={cr(PRICING_LIST.museum_pass)} /></P>
           <ul className="mb-2">
             <Li>{t('man_vis_li_1')}</Li>
             <Li>{t('man_vis_li_2')}</Li>
             <Li>{t('man_vis_li_3', { h: MUSEUM_PASS_HOURS, m: Math.floor(PRICING_LIST.museum_pass / PRICING_LIST.photo_search) })}</Li>
             <Li>{t('man_vis_li_4')}</Li>
           </ul>
+        </>
+      ),
+    },
+    {
+      id: 'museums',
+      title: t('man_mu_title'),
+      icon: Landmark,
+      content: (
+        <>
+          <P>{t('man_mu_p_intro')}</P>
+          <H>{t('man_mu_h_cosa')}</H>
+          <ul className="mb-2">
+            <Li>{t('man_mu_li_1')}</Li>
+            <Li>{t('man_mu_li_2')}</Li>
+            <Li>{t('man_mu_li_3')}</Li>
+            <Li>{t('man_mu_li_4')}</Li>
+            <Li>{t('man_mu_li_5')}</Li>
+          </ul>
+          <H><Download className="w-4 h-4 inline" /> {t('man_mu_h_offline')}</H>
+          <P>{t('man_mu_p_offline')}</P>
+          <H>{t('man_mu_h_costi')}</H>
+          <ul className="mb-2">
+            <Li>{t('man_mu_li_c1', { n: PRICING_LIST.museum_pass_tour, s: MUSEUM_VISIT_SCANS })}</Li>
+            <Li>{t('man_mu_li_c2', { n: PRICING_LIST.museum_pass, s: MUSEUM_PASS_SCANS, h: MUSEUM_PASS_HOURS })}</Li>
+            <Li>{t('man_mu_li_c3', { n: PRICING_LIST.photo_search, m: MUSEUM_VISIT_MIN_WORKS })}</Li>
+          </ul>
+          <H>{t('man_mu_h_pdf')}</H>
+          <P>{t('man_mu_p_pdf')}</P>
+          <P>{t('man_mu_p_fonti')}</P>
         </>
       ),
     },
@@ -657,6 +692,33 @@ export default function AppGuide({ language }: AppGuideProps) {
       ),
     },
     {
+      id: 'pricelist',
+      title: t('man_pl_title'),
+      icon: Coins,
+      content: (
+        <>
+          <P>{t('man_pl_p_intro')}</P>
+          <ul className="mb-2">
+            <Li><strong>{t('vr_b_svc_chat')}</strong> — <CostBadge cost={cr(PRICING_LIST.chat_session)} /> · {t('vr_b_unit_10messages')}</Li>
+            <Li><strong>Vision AI</strong> — <CostBadge cost={cr(PRICING_LIST.photo_search)} /> · {t('vr_b_unit_per_scan')}</Li>
+            <Li><strong>{t('vr_b_svc_iti')}</strong> — <CostBadge cost={cr(PRICING_LIST.itinerary_daily)} /> · {t('vr_b_unit_per_day')}</Li>
+            <Li><strong>{t('vr_b_svc_audio')}</strong> — <CostBadge cost={cr(PRICING_LIST.audio_guide)} /> · {t('vr_b_unit_per_place')}</Li>
+            <Li><strong>WIP Day Pass</strong> — <CostBadge cost={cr(PRICING_LIST.day_pass)} /> · {t('vr_b_unit_24h')}</Li>
+            <Li><strong>{t('museum_pass_tour_title')}</strong> — <CostBadge cost={cr(PRICING_LIST.museum_pass_tour)} /> · {t('vr_b_unit_per_museum')}</Li>
+            <Li><strong>{t('museum_pass_title')}</strong> — <CostBadge cost={cr(PRICING_LIST.museum_pass)} /> · {t('vr_b_unit_pass_scans')}</Li>
+            <Li><strong>{t('pc_listino_nome')}</strong> — <CostBadge cost={cr(PRICING_LIST.custom_route)} /> · {t('pc_listino_unit')}</Li>
+            <Li><strong>{t('vr_b_pl_replace_name')}</strong> — <CostBadge cost={cr(PRICING_LIST.replace_stop)} /> · {t('vr_b_pl_replace_unit')}</Li>
+            <Li><strong>{t('vr_b_pl_extend_name')}</strong> — <CostBadge cost={cr(PRICING_LIST.extend_itinerary_day)} /> · {t('vr_b_pl_extend_unit')}</Li>
+            <Li><strong>{t('vr_b_svc_podcast')}</strong> — <CostBadge cost={cr(PRICING_LIST.podcast_daily)} /> · {t('vr_b_unit_per_day')}</Li>
+            <Li><strong>{t('vr_b_svc_pdf')}</strong> — <CostBadge cost={cr(PRICING_LIST.premium_guide_daily)} /> · {t('vr_b_unit_per_day')}</Li>
+          </ul>
+          <H>{t('vr_b_pl_free_title')}</H>
+          <P>{t('vr_b_pl_free_desc')}</P>
+          <P>{t('man_pl_packs')}</P>
+        </>
+      ),
+    },
+    {
       id: 'settings',
       title: t('vr_a_guide_sec_settings'),
       icon: Settings,
@@ -671,6 +733,10 @@ export default function AppGuide({ language }: AppGuideProps) {
           <Li>{t('man_st_li_7')}</Li>
           <Li>{t('man_st_li_8')}</Li>
           <Li><Bell className="w-3.5 h-3.5 inline" /> {t('man_st_li_notifiche')}</Li>
+          <Li>{t('man_st_li_consumi')}</Li>
+          <Li>{t('man_st_li_storico')}</Li>
+          <Li>{t('man_st_li_gemme')}</Li>
+          <Li>{t('man_st_li_widget')}</Li>
           <Li>{t('man_st_li_9')}</Li>
         </ul>
       ),
@@ -691,6 +757,7 @@ export default function AppGuide({ language }: AppGuideProps) {
           </ul>
           <H>{t('man_sp_h_privacy')}</H>
           <P>{t('man_sp_p_privacy')}</P>
+          <P>{t('man_sp_p_ai')}</P>
           <p className="text-[10px] text-gray-500 font-bold mt-2">ItaInta / WIP — World in Pocket · Carrara (MS), Italia</p>
         </>
       ),

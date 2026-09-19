@@ -2191,55 +2191,29 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     <h5 className="text-[11px] font-black uppercase tracking-widest text-amber-800 mb-1 text-center">{getTranslation('pf_listino_ai', language)}</h5>
                     <p className="text-[9px] font-bold uppercase tracking-widest text-amber-900/60 text-center mb-4">{getTranslation('pf_trasparenza', language)}</p>
                     <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-                      <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>{getTranslation('pf_esperto_viaggi', language)}</span>
-                        <div className="text-right leading-tight">
-                          <span className="font-black text-amber-600 text-xs block">3 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_10_msg', language)}</span>
+                      {/* Prezzi da PRICING_LIST (19/09/2026): prima erano numeri
+                          scritti a mano, con «Dettagli POI 5» ormai gratuito e
+                          senza Day Pass, Pass Museo, Visita Museo e Percorso. */}
+                      {([
+                        [getTranslation('pf_esperto_viaggi', language), PRICING_LIST.chat_session, getTranslation('pf_10_msg', language)],
+                        ['Vision AI', PRICING_LIST.photo_search, getTranslation('pf_per_scansione', language)],
+                        [getTranslation('pf_itinerario_ai', language), PRICING_LIST.itinerary_daily, getTranslation('pf_al_giorno', language)],
+                        [getTranslation('pf_audioguida', language), PRICING_LIST.audio_guide, getTranslation('pf_per_luogo', language)],
+                        ['WIP Day Pass', PRICING_LIST.day_pass, getTranslation('vr_b_unit_24h', language)],
+                        [getTranslation('museum_pass_tour_title', language), PRICING_LIST.museum_pass_tour, getTranslation('vr_b_unit_per_museum', language)],
+                        [getTranslation('museum_pass_title', language), PRICING_LIST.museum_pass, getTranslation('vr_b_unit_pass_scans', language)],
+                        [getTranslation('pc_listino_nome', language), PRICING_LIST.custom_route, getTranslation('pc_listino_unit', language)],
+                        ['Podcast AI', PRICING_LIST.podcast_daily, getTranslation('pf_al_giorno', language)],
+                        [getTranslation('pf_guida_pdf', language), PRICING_LIST.premium_guide_daily, getTranslation('pf_al_giorno', language)],
+                      ] as [string, number, string][]).map(([nome, prezzo, unita]) => (
+                        <div key={nome} className="flex justify-between items-center gap-2 text-[10px] font-bold text-amber-900/70">
+                          <span>{nome}</span>
+                          <div className="text-right leading-tight shrink-0">
+                            <span className="font-black text-amber-600 text-xs block">{prezzo} 🪙</span>
+                            <span className="text-[8px] opacity-70 uppercase">{unita}</span>
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>{getTranslation('pf_dettagli_poi', language)}</span>
-                        <div className="text-right leading-tight">
-                          <span className="font-black text-amber-600 text-xs block">5 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_per_luogo', language)}</span>
-                        </div>
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>Vision AI</span>
-                        <div className="text-right leading-tight">
-                          <span className="font-black text-amber-600 text-xs block">5 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_per_scansione', language)}</span>
-                        </div>
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>{getTranslation('pf_itinerario_ai', language)}</span>
-                        <div className="text-right leading-tight">
-                          <span className="font-black text-amber-600 text-xs block">10 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_al_giorno', language)}</span>
-                        </div>
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>{getTranslation('pf_audioguida', language)}</span>
-                        <div className="text-right leading-tight">
-                          <span className="font-black text-amber-600 text-xs block">15 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_per_luogo', language)}</span>
-                        </div>
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>Podcast AI</span>
-                        <div className="text-right leading-tight">
-                          <span className="font-black text-amber-600 text-xs block">15 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_al_giorno', language)}</span>
-                        </div>
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>{getTranslation('pf_guida_pdf', language)}</span>
-                        <div className="text-right leading-tight">
-                          <span className="font-black text-amber-600 text-xs block">20 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_al_giorno', language)}</span>
-                        </div>
-                      </div>
+                      ))}
                     </div>
                     <div className="mt-4 pt-3 border-t border-amber-200/50 text-center">
                       <p className="text-[9px] font-black text-amber-800 uppercase tracking-widest">

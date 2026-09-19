@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import {
   Coins, MessageSquare, Info, Camera, Map,
   Headphones, Volume2, BookOpen, ShieldCheck, Zap,
-  Ticket, RefreshCw, Route, Landmark
+  Ticket, RefreshCw, Route, Landmark, CalendarPlus
 } from 'lucide-react';
 import { Language, getTranslation } from '../lib/i18n';
 import { PRICING_LIST, DAY_PASS_GUIDE_CAP } from '../lib/pricing';
@@ -81,14 +81,14 @@ export default function PriceList({ language, onOpenShop }: PriceListProps) {
             icon={<Ticket className="w-5 h-5" />}
             name={t('museum_pass_title')}
             price={String(PRICING_LIST.museum_pass)}
-            unit={t('vr_b_unit_4h')}
+            unit={t('vr_b_unit_pass_scans')}
             desc={t('museum_pass_desc')}
           />
           <PriceItem
             icon={<Landmark className="w-5 h-5" />}
             name={t('museum_pass_tour_title')}
             price={String(PRICING_LIST.museum_pass_tour)}
-            unit={t('vr_b_unit_4h')}
+            unit={t('vr_b_unit_per_museum')}
             desc={t('museum_pass_tour_desc')}
           />
           <PriceItem
@@ -97,6 +97,13 @@ export default function PriceList({ language, onOpenShop }: PriceListProps) {
             price={String(PRICING_LIST.custom_route)}
             unit={t('pc_listino_unit')}
             desc={t('pc_listino_desc')}
+          />
+          <PriceItem
+            icon={<CalendarPlus className="w-5 h-5" />}
+            name={t('vr_b_pl_extend_name')}
+            price={String(PRICING_LIST.extend_itinerary_day)}
+            unit={t('vr_b_pl_extend_unit')}
+            desc={t('vr_b_pl_extend_desc')}
           />
           <PriceItem
             icon={<RefreshCw className="w-5 h-5" />}
@@ -121,7 +128,9 @@ export default function PriceList({ language, onOpenShop }: PriceListProps) {
           />
         </div>
 
-        <div className="mt-8 p-6 bg-emerald-50 rounded-3xl border border-emerald-100">
+        <p className="mt-6 text-xs text-gray-500 font-medium leading-relaxed">{t('man_pl_packs')}</p>
+
+        <div className="mt-6 p-6 bg-emerald-50 rounded-3xl border border-emerald-100">
           <div className="flex items-center gap-3 mb-2">
             <Zap className="w-5 h-5 text-emerald-600" />
             <h4 className="font-black text-emerald-900 text-sm uppercase tracking-wider">{t('vr_b_pl_free_title')}</h4>

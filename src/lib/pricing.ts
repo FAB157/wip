@@ -35,6 +35,13 @@ export const CUSTOM_ROUTE_MAX_CHANGES = 3;
 /** Durata del Pass Museo in ore. Allineare a MUSEUM_PASS_HOURS in server.ts. */
 export const MUSEUM_PASS_HOURS = 4;
 
+/** Scansioni incluse nel Pass Museo (40 in MUSEUM_PASS_HOURS ore) e nella Visita Museo (20 per museo).
+ *  Allineare a MUSEUM_PASS_MAX_SCANS e alle scansioni della Visita in server.ts. */
+export const MUSEUM_PASS_SCANS = 40;
+export const MUSEUM_VISIT_SCANS = 20;
+/** Sotto questo numero di opere la Visita non si vende (restano le scansioni singole). */
+export const MUSEUM_VISIT_MIN_WORKS = 12;
+
 /** Cap audioguide del Day Pass nelle 24 ore. */
 export const DAY_PASS_GUIDE_CAP = 40;
 
