@@ -329,6 +329,7 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li>{t('man_map_li_pc_personale')}</Li>
           </ul>
           <P>{t('man_map_p_percorso_2')}</P>
+          <P>{t('man_map_p_percorso_3')}</P>
           <H>{t('man_map_h_beni')}</H>
           <P>{t('man_map_p_beni_1')}</P>
           <ul className="mb-2">

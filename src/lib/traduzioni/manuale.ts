@@ -2084,4 +2084,13 @@ export const TRAD_MANUALE: Record<string, Partial<Record<Language, string>>> = {
     RU: 'Ваучер/купон: если у вас есть код (например, от партнёрского заведения), активируйте его в WIP Shop на сайте wip.guide (с компьютера или из браузера телефона, включая iPhone) либо в приложении для Android. Одна активация на человека.',
     ZH: '优惠券：如果你有优惠码（例如来自合作商家），可在网站 wip.guide 的 WIP 商店兑换（电脑或手机浏览器均可，iPhone 也可以），或在 Android 应用中兑换。每人限兑换一次。',
   },
+  man_map_p_percorso_3: {
+    IT: 'Percorsi e giri continuano a parlare anche a schermo spento (vedi WIP Nav). Se dalla schermata di blocco tocchi «Termina» mentre l’app era ferma, WIP ti chiede conferma prima di chiudere un percorso già pagato: così non lo perdi per sbaglio.',
+    EN: 'Routes and tours keep speaking with the screen off (see WIP Nav). If you tap "End" on the lock screen while the app was suspended, WIP asks you to confirm before closing a route you have already paid for, so you don\'t lose it by mistake.',
+    FR: 'Parcours et tours continuent de parler écran éteint (voir WIP Nav). Si tu touches « Terminer » sur l’écran de verrouillage alors que l’app était en pause, WIP te demande confirmation avant de clore un parcours déjà payé : tu ne le perds pas par erreur.',
+    ES: 'Rutas y giros siguen hablando con la pantalla apagada (ver WIP Nav). Si tocas «Terminar» en la pantalla de bloqueo mientras la app estaba detenida, WIP te pide confirmación antes de cerrar una ruta ya pagada: así no la pierdes por error.',
+    DE: 'Routen und Touren sprechen auch bei ausgeschaltetem Display weiter (siehe WIP Nav). Tippst du auf dem Sperrbildschirm auf „Beenden“, während die App angehalten war, fragt WIP nach, bevor eine bereits bezahlte Route geschlossen wird – so verlierst du sie nicht versehentlich.',
+    RU: 'Маршруты и туры продолжают звучать и при выключенном экране (см. WIP Nav). Если вы нажали «Завершить» на экране блокировки, пока приложение было приостановлено, WIP запросит подтверждение перед закрытием уже оплаченного маршрута — так вы не потеряете его случайно.',
+    ZH: '路线和行程在熄屏时仍会继续播报（见 WIP Nav）。如果应用暂停期间你在锁屏上点了"结束"，WIP 会先请你确认再关闭已付费的路线，避免误操作丢失。',
+  },
 };
