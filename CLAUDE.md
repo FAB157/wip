@@ -97,6 +97,9 @@ Set after the committente's order: «il navigatore, sia nell'audioguida che nei 
 - While a route is active the native service raises its GPS rate on its own (in "navigator mode" it would otherwise idle at 20 s / 80 m).
 - The contract and the algorithm live in `docs/nav-nativo-spec.md` and must stay **identical** on Kotlin and Swift: change one, change the other and the spec. The native side cannot recalculate a route (the server routes, JS phrases): off-route with the screen off is only *announced*.
 - The single native route slot is shared by both JS navigators: each one retires only the route it published.
+- A **stale «Termina»** from the lock-screen dashboard (delivered > 60 s late, page was frozen) never closes a tour blindly — a percorso su misura is *paid*: `App.tsx` asks for confirmation once the page is visible; on "no" `navNativo` re-delivers the route to the follower. Only «pausa» is applied late without questions.
+
+**The same rule applies to audio: whatever must play with the screen off has to be handed to the NATIVE side up front.** `tourService.prescarica` stores texts + MP3s in the WebView's IndexedDB, which the native service cannot read; at its end it calls the plugin method `prefetchGuides` (`prescaricaGuideNativo` → Android `AudioPrefetchManager.prefetchMolti`, iOS `BackgroundPoiManager.prescaricaGuide`) so the same stops land in the native file cache too, one at a time, 1.5 s apart. That bulk path sends **`soloCache: true`** to both `/api/poi/audioguide` and `/api/tts/smart`: the server answers 204 instead of generating text or synthesizing voice, so a prefetch of N stops never costs AI, TTS or daily quota — what is missing is produced on arrival, behind the usual gate. Native clients never send `charge`; keep it that way. The flag defaults to false everywhere else (arrival and on-approach prefetch stay get-or-create).
 
 ### Cross-component communication
 
@@ -192,6 +195,43 @@ came out generic in all three voices (Nicky, Dante, duet).
   paste a copy.
 - Cached guides in `poi_audioguides` predate the rule: they only change when
   purged and regenerated.
+
+## Museum guides: no empty stop, gaps are filled from the open web
+
+Standing rule, set 19/09/2026 by the committente («può prendere il sito del
+museo, un blog ecc. e riempire… deve essere una regola per le guide
+future») after the Duomo di Milano guide came out with 4 stops without text
+and «Opera (1500).» as the explanation of the stained-glass windows, and the
+per-work button answered «nessuna fonte».
+
+- **A stop never ships empty or with filler.** A `perche` under 60 characters
+  («Opera (1500).», nothing) is a gap. Gaps are filled by
+  **`cercaMaterialeWeb`** (`server.ts`, next to `testoDalSitoUfficiale`): the
+  ONLY place that goes to the open web for a guide. It searches SearXNG (the
+  droplet, free — never a paid search API), downloads the pages and returns
+  the passage that names the work. Used by `/api/museums/artwork-guide` (when
+  the direct sources are under 1,500 chars) and by the venue-guide generation
+  (`venue_guide`, a post-pass over the stops with a gap: at most 4 on demand,
+  12 when seeding). A new generation path MUST call it, not rewrite it.
+- **Two tiers of source.** A = reliable (Wikipedia/Wikivoyage/Treccani/
+  Europeana/Beni Culturali/UNESCO/Britannica, `.gov`/`.edu`, the museum's own
+  site) — used as facts. B = blogs and third-party sites — marked «NON
+  VERIFICATA» in the material, and the prompt says: take only what another
+  section confirms or what describes what is visible; dates, names,
+  attributions, measures and anecdotes found ONLY there are not said. A page
+  counts only if it names the work (≥ 2 significant words) AND the museum.
+- **Never copy.** Third-party text is copyrighted: facts are rewritten in our
+  own words, the prompt forbids reusing phrases. The pages used are kept in
+  the payload (`fontiWeb`: url, host, tier) so a guide can say where it comes
+  from. No sales/social/UGC sites (Tripadvisor, Viator, Instagram…).
+- **Still no invention.** If the web gives < 400 chars of material the stop
+  stays as it is: the client never reads filler and never shows «nessuna
+  fonte» (see `MuseumVisitSheet.handleOpera`: it falls back to the stop's own
+  text, or composes name/author/year/room).
+- Search the work with the title the user READS (`nomeAlt`, Italian) and the
+  title of the source (`nomeFonte`, often English with the museum in front):
+  Wikipedia's title match is ≥ 0.6, and only the Italian title finds
+  «Vetrate del Duomo di Milano».
 
 ## Print rules (itinerary PDF and Premium Guide)
 

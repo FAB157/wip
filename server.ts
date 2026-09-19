@@ -8251,6 +8251,90 @@ ORDER BY DESC(?fama)`;
       .replace(/\s+/g, ' ')
       .trim();
   }
+  /**
+   * MATERIALE DAL WEB APERTO (19/09/2026, committente: «può prendere il sito
+   * del museo, un blog ecc. e riempire» — e «deve essere una regola per le
+   * guide future»). UNICO punto che va sul web per riempire i vuoti di una
+   * guida: lo usano l'audioguida per opera (/api/museums/artwork-guide) e la
+   * generazione delle guide dei musei (spiegazioni delle tappe vuote). Chi
+   * scrive una nuova via di generazione DEVE passare da qui, non riscrivere.
+   *
+   * SearXNG (droplet, gratis) cerca «nome + museo» nelle lingue date, si
+   * scaricano le pagine e si restituisce il PASSAGGIO che nomina l'opera.
+   * Due fasce: A = fonti affidabili (Wikipedia/Wikivoyage/Treccani/Europeana/
+   * Beni Culturali/UNESCO/Britannica, .gov/.edu, sito del museo); B = blog e
+   * siti di terzi, marcate «NON VERIFICATA»: il prompt che le riceve deve dire
+   * che se ne usa solo cio' che un'altra fonte conferma o che descrive cio'
+   * che si vede, e MAI copiare le frasi (i fatti si riscrivono).
+   * Una pagina vale solo se nomina l'opera (almeno due parole significative)
+   * E il museo: senza il museo puo' parlare di un'omonima altrove.
+   */
+  async function cercaMaterialeWeb(o: {
+    nomi: string[]; museo: string; lingue: string[]; tokOpera: string[];
+    hostSitoMuseo?: string; escludiUrl?: string[];
+  }): Promise<{ materialeWeb: string; fontiWeb: { url: string; host: string; tier: 'A' | 'B' }[]; haFontiTerzi: boolean }> {
+    const vuoto = { materialeWeb: '', fontiWeb: [] as { url: string; host: string; tier: 'A' | 'B' }[], haFontiTerzi: false };
+    if (!process.env.SEARXNG_URL || !o.tokOpera.length) return vuoto;
+    try {
+      const HOST_SCARTATI = /facebook|instagram|youtube|youtu\.be|twitter|x\.com|tiktok|pinterest|linkedin|reddit|quora|booking\.|expedia|airbnb|amazon|ebay|tripadvisor|yelp|foursquare|google\.|tiqets|getyourguide|viator|civitatis|musement|klook|trip\.com|eventbrite|ticketone|vivaticket|biglietteria|prenotazion|mapcarta|openstreetmap|waze|flickr|wikimedia|wikidata/i;
+      const HOST_AFFIDABILI = /(^|\.)(wikipedia\.org|wikivoyage\.org|treccani\.it|europeana\.eu|beniculturali\.it|unesco\.org|britannica\.com)$|\.(gov|edu)(\.[a-z]{2})?$|\.(gob|gouv)\.[a-z]{2}$/i;
+      const nomiWeb = [...new Set(o.nomi.filter((n) => n && n.length >= 3))].slice(0, 2);
+      const ricerche = await Promise.all(nomiWeb.flatMap((n) => o.lingue.map((l) =>
+        eventiFeed.ricercaWeb(`"${n}" ${o.museo}`, { lang: l, count: 6, provider: 'searxng' }).catch(() => [] as any[])
+      )));
+      const visti = new Set<string>((o.escludiUrl || []).filter(Boolean));
+      const candidati: { url: string; host: string; tier: 'A' | 'B' }[] = [];
+      for (const t of ricerche.flat() as any[]) {
+        const url = String(t?.url || '');
+        if (!/^https?:\/\//i.test(url) || visti.has(url) || /\.(pdf|jpe?g|png|gif|webp|mp4)(\?|$)/i.test(url)) continue;
+        let host = ''; try { host = new URL(url).hostname.replace(/^www\./, ''); } catch { continue; }
+        if (HOST_SCARTATI.test(host)) continue;
+        visti.add(url);
+        candidati.push({ url, host, tier: (HOST_AFFIDABILI.test(host) || (o.hostSitoMuseo && host.endsWith(o.hostSitoMuseo))) ? 'A' : 'B' });
+      }
+      // Prima le affidabili, poi al piu' tre di terzi; 8 pagine al massimo da scaricare.
+      const daScaricare = [...candidati.filter((c) => c.tier === 'A').slice(0, 5), ...candidati.filter((c) => c.tier === 'B').slice(0, 3)];
+      const tokMuseo = tokenSignificativi(o.museo);
+      // Il pezzo di pagina che nomina l'opera, non l'inizio: un blog sul Duomo
+      // parla di cento cose, e l'inizio sarebbe di un'altra opera.
+      const passaggioIntorno = (testo: string, tokens: string[], lung = 3000): string => {
+        let stripped = ''; const map: number[] = [];
+        for (let i = 0; i < testo.length; i++) {
+          const s = testo[i].normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+          for (const ch of s) { stripped += ch; map.push(i); }
+        }
+        let pos = -1;
+        for (const t of tokens) { const k = stripped.indexOf(t); if (k >= 0 && (pos < 0 || k < pos)) pos = k; }
+        if (pos < 0) return testo.slice(0, lung);
+        const da = Math.max(0, (map[pos] ?? 0) - 400);
+        return testo.slice(da, da + lung);
+      };
+      const pagine = await Promise.all(daScaricare.map(async (c) => {
+        try {
+          const p = await axios.get(c.url, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 8000, maxRedirects: 2, maxContentLength: 2_000_000, responseType: 'text', validateStatus: (s) => s < 400 });
+          if (!/html|text/i.test(String(p.headers?.['content-type'] || 'text/html'))) return null;
+          const testo = testoPaginaMuseo(String(p.data || ''));
+          if (testo.length < 500) return null;
+          const norm = normalizzaTesto(testo);
+          const nOpera = o.tokOpera.filter((t) => norm.includes(t)).length;
+          if (nOpera < Math.min(2, o.tokOpera.length)) return null;
+          if (tokMuseo.length && !tokMuseo.some((t) => norm.includes(t))) return null;
+          return { ...c, passo: passaggioIntorno(testo, o.tokOpera) };
+        } catch { return null; }
+      }));
+      const buone = pagine.filter(Boolean) as any[];
+      const scelte = [...buone.filter((c) => c.tier === 'A').slice(0, 3), ...buone.filter((c) => c.tier === 'B').slice(0, 2)];
+      const fontiWeb = scelte.map((c) => ({ url: c.url as string, host: c.host as string, tier: c.tier as 'A' | 'B' }));
+      const materialeWeb = scelte.map((c) =>
+        `${c.tier === 'A' ? `PAGINA DI FONTE AFFIDABILE (${c.host}, ${c.url})` : `PAGINA DI BLOG O SITO DI TERZI, NON VERIFICATA (${c.host}, ${c.url})`}:\n${c.passo}`
+      ).join('\n\n');
+      console.log(`[MaterialeWeb] «${nomiWeb[0]}» (${o.museo}): ${candidati.length} candidati, ${buone.length} pagine buone, usate ${scelte.length} (${scelte.map((c) => `${c.tier}:${c.host}`).join(', ') || 'nessuna'})`);
+      return { materialeWeb, fontiWeb, haFontiTerzi: fontiWeb.some((f) => f.tier === 'B') };
+    } catch (e: any) {
+      console.warn('[MaterialeWeb] ricerca web aperta fallita:', e?.message);
+      return vuoto;
+    }
+  }
   async function testoDalSitoUfficiale(sito: string, maxChars = 9000): Promise<{ testo: string; pagine: string[]; pianta: string }> {
     const out: string[] = [];
     const visitate: string[] = [];
@@ -10339,6 +10423,66 @@ ${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeF
         } catch (e: any) { console.warn('[VenueGuide] revisore non riuscito:', e?.message); }
       }
 
+      // ── REGOLA PER LE GUIDE FUTURE (19/09/2026, committente: «può prendere il
+      // sito del museo, un blog ecc. e riempire… deve essere una regola per le
+      // guide future») ───────────────────────────────────────────────────────
+      // Una tappa con la spiegazione vuota o di riempimento («Opera (1500).»,
+      // meno di 60 caratteri) NON esce cosi': si cerca sul web (SearXNG →
+      // cercaMaterialeWeb: sito del museo, fonti affidabili, blog marcati
+      // «non verificati») e si scrive una spiegazione di 2-4 frasi dal solo
+      // materiale trovato. Se non si trova nulla la tappa resta com'e' (il
+      // client non legge mai il riempitivo). Un'opera alla volta: i motori
+      // gratuiti non reggono le raffiche; in diretta al massimo 4 tappe e solo
+      // con tempo, nella semina 12. Le guide gia' in libreria si riempiono
+      // con lo stesso passaggio (script di riempimento), non a mano.
+      const fontiVuoti: { url: string; host: string; tier: 'A' | 'B' }[] = [];
+      try {
+        const vuoti = tappeVerificate.filter((t: any) => t?.nome && String(t?.perche || '').trim().length < 60 && !t?.soloCollezione);
+        const tettoVuoti = daScript ? 12 : 4;
+        if (vuoti.length && process.env.SEARXNG_URL && (daScript || msRimasti() > 120_000)) {
+          const hostMuseo = (() => { try { return new URL(String(sitoOut?.pagine?.[0] || '')).hostname.replace(/^www\./, ''); } catch { return ''; } })();
+          for (const t of vuoti.slice(0, tettoVuoti)) {
+            if (!daScript && msRimasti() < 60_000) break;
+            const w = await cercaMaterialeWeb({
+              nomi: [t.nomeFonte || t.nome, t.nome], museo: String(venue.name), lingue: [...new Set([langCfg.wiki, 'en'])],
+              tokOpera: tokenSignificativi(t.nome || t.nomeFonte), hostSitoMuseo: hostMuseo,
+            });
+            if (w.materialeWeb.length < 400) continue;
+            const promptVuoto = `Sei l'autore di una guida museale. Scrivi la SPIEGAZIONE BREVE di UNA tappa: l'opera "${t.nome}"${t.autore ? ` di ${t.autore}` : ''}${t.anno ? ` (${t.anno})` : ''}, ${venue.name}.
+
+MATERIALE (unica fonte ammessa — ogni fatto deve venire da qui):
+"""
+${w.materialeWeb}
+"""
+
+REGOLE TASSATIVE:
+- ${langCfg.name}, 2-4 frasi (40-90 parole), testo piano senza markdown: cosa e', com'e' fatta o che cosa rappresenta, perche' e' importante o che storia ha.
+- Solo fatti che il materiale dice su QUESTA opera in QUESTO museo. Se il materiale parla d'altro, d'altre opere o d'altri luoghi, ignoralo.
+- Le sezioni «NON VERIFICATA» sono blog o siti di terzi: da queste prendi SOLO cio' che un'altra sezione conferma o che descrive cio' che si vede. Date, nomi, attribuzioni e cifre che stanno solo li' non si dicono.
+- Non copiare frasi ne' giri di parole dal materiale: riscrivi i fatti con parole tue.
+- Niente formule da brochure, niente ipotesi, niente «probabilmente».
+
+Rispondi ESCLUSIVAMENTE con JSON: {"perche": "la spiegazione", "curiosita": "un fatto concreto e documentato in una frase, oppure ''"}`;
+            try {
+              const aiV = await callUniversalAi('groq', [{ role: 'user', content: promptVuoto }], {
+                temperature: 0.3, max_tokens: 500, response_format: { type: 'json_object' },
+                excludeEngines: inDiretta ? ['agnes'] : [], ultimaSpiaggiaPagante: inDiretta, gonkaPool: 'musei',
+              }, 'venue_guide_vuoti', supabaseUrl, supabaseServiceKey, groq, userId);
+              const rawV = String(aiV?.data || '');
+              const jV = JSON.parse(rawV.slice(rawV.indexOf('{'), rawV.lastIndexOf('}') + 1));
+              const nuova = togliFrasiGeneriche(String(jV?.perche || '').replace(/[*#`]/g, '').trim());
+              if (nuova.length >= 80 && nuova.length <= 900 && !/^Opera \(/i.test(nuova)) {
+                t.perche = nuova;
+                const cur = campoOpzionale(jV?.curiosita, 300);
+                if (cur && (!String(t.curiosita || '').trim() || /guardala da vicino|osservala da vicino/i.test(String(t.curiosita)))) t.curiosita = cur;
+                for (const f of w.fontiWeb) if (!fontiVuoti.some((x) => x.url === f.url)) fontiVuoti.push(f);
+                console.log(`[VenueGuide] ${venue.name}: tappa «${t.nome}» riempita dal web (${w.fontiWeb.map((f) => f.tier).join('')}), ${nuova.length} car.`);
+              }
+            } catch (e: any) { console.warn(`[VenueGuide] vuoto «${t.nome}» non riempito:`, e?.message); }
+          }
+        }
+      } catch (e: any) { console.warn('[VenueGuide] riempimento vuoti dal web fallito:', e?.message); }
+
       const guide = {
         // Le sale le dichiara il museo o non le dichiara nessuno: dirlo
         // apertamente vale più di un percorso che finge di sapere dove sono
@@ -10397,6 +10541,9 @@ ${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeF
         // Attribuzione (12/09/2026): il testo delle tappe "opera per opera"
         // nasce dalla voce Wikipedia dell'opera (CC BY-SA) o da Wikidata.
         ...(guide?.tappe?.some((t: any) => t.daListaOpere) ? { fonti: ['Wikipedia', 'Wikidata'] } : {}),
+        // Pagine del web usate per riempire tappe vuote (fascia A affidabile /
+        // B di terzi): cosi' la guida sa dire da dove viene ogni riempimento.
+        ...(fontiVuoti.length ? { fontiWeb: fontiVuoti } : {}),
       };
       await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payload));
       // LIBRERIA: la guida entra anche in museum_guides, così è elencabile,
@@ -10652,10 +10799,26 @@ ${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeF
         console.warn('[ArtworkGuide] scheda dal sito del museo non trovata:', e?.message);
       }
 
+      // ── RICERCA SUL WEB APERTO (19/09/2026) — vedi cercaMaterialeWeb: la
+      // stessa funzione riempie i vuoti anche nella generazione delle guide.
+      // Solo se le fonti dirette (Wikidata + sito del museo + voce) sono scarse.
+      let materialeWeb = '';
+      let fontiWeb: { url: string; host: string; tier: 'A' | 'B' }[] = [];
+      let haFontiTerzi = false;
+      if ([datiWikidata, schedaMuseo, testoOpera].join('').length < 1500) {
+        const hostSitoMuseo = (() => { try { const s = String(req.body?.officialSite || ''); return s ? new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`).hostname.replace(/^www\./, '') : ''; } catch { return ''; } })();
+        const w = await cercaMaterialeWeb({
+          nomi: [nomeAlt || opera, senzaMuseo || opera], museo, lingue: [...new Set([langCfg.wiki, 'en'])],
+          tokOpera: tokenSignificativi(nomeAlt || opera), hostSitoMuseo, escludiUrl: [urlSchedaMuseo],
+        });
+        ({ materialeWeb, fontiWeb, haFontiTerzi } = w);
+      }
+
       const materiale = [
         datiWikidata ? `SCHEDA TECNICA VERIFICATA (Wikidata):\n${datiWikidata}` : '',
         schedaMuseo ? `SCHEDA DELL'OPERA SUL SITO DEL MUSEO (${urlSchedaMuseo}):\n${schedaMuseo}` : '',
         testoOpera ? `VOCE ENCICLOPEDICA DELL'OPERA:\n${testoOpera}` : '',
+        materialeWeb,
       ].filter(Boolean).join('\n\n');
       if (materiale.length < 400) {
         // Nessuna fonte sull'opera: meglio il silenzio di un testo inventato.
@@ -10687,6 +10850,8 @@ REGOLE TASSATIVE:
 - Nomi, date, misure e attribuzioni SOLO se stanno nel materiale. Se un dato manca, taci quel dato.
 - Testo piano, senza asterischi, cancelletti o markdown: lo leggerà una voce sintetica.
 - Non aprire con formule di benvenuto al museo: il visitatore è già dentro e sta guardando l'opera.
+${materialeWeb ? `- Le sezioni del materiale prese dal WEB parlano di questa opera ma possono contenere anche altro (altre opere, altri luoghi): usa solo i passaggi che riguardano QUESTA opera in QUESTO museo. I testi sono di altri autori: NON copiare frasi né giri di parole, riscrivi i fatti con parole tue, come un'audioguida parlata.${haFontiTerzi ? `
+- Le sezioni «NON VERIFICATA» sono blog o siti di terzi. Da queste puoi prendere SOLO ciò che (a) un'altra sezione del materiale conferma, oppure (b) descrive ciò che si vede o dove si trova l'opera. Date, nomi di artisti e committenti, attribuzioni, misure, cifre e aneddoti che compaiono SOLO in queste sezioni NON si dicono: meglio una frase in meno di un fatto non confermato.` : ''}` : ''}
 ${regolaSpecificita(opera)}
 
 Rispondi ESCLUSIVAMENTE con un oggetto JSON valido:
@@ -10770,7 +10935,10 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON valido:
       if (!guida.daGuardare.length || !guida.curiosita) {
         console.warn(`[ArtworkGuide] "${opera}": ${!guida.daGuardare.length ? 'nessun dettaglio da cercare' : ''}${!guida.curiosita ? ' nessuna curiosità' : ''}`);
       }
-      const payload = { ok: true, artwork: opera, venue: museo, guide: guida, source: fonteOpera, museumPage: urlSchedaMuseo || null };
+      // `fontiWeb`: da dove viene il materiale preso dal web aperto (pagina,
+      // dominio, fascia A affidabile / B di terzi), cosi' una guida sa dire
+      // da quali pagine e' nata e si puo' rivedere.
+      const payload = { ok: true, artwork: opera, venue: museo, guide: guida, source: fonteOpera, museumPage: urlSchedaMuseo || null, ...(fontiWeb.length ? { fontiWeb } : {}) };
       await saveToCache(cacheKey, 'artwork_guide', JSON.stringify(payload));
       // Una generazione vera consuma una delle audioguide del pass — ma solo
       // per un visitatore: la semina non ha pass da consumare.

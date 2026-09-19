@@ -1062,7 +1062,15 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         // davanti a un'opera. Se la tappa ha poco o niente da dire, si compone
         // una presentazione dai soli dati che la guida ha gia' verificato per
         // lei (nome, autore, anno, dove): mai una frase in piu' di quelle.
-        const testoPieno = [tappa.perche, tappa.curiosita].map((s) => String(s || '').trim()).filter(Boolean).join(' ');
+        // Il riempitivo («Opera (1500).», «guardala da vicino per coglierne la
+        // tecnica») NON si legge mai ad alta voce (19/09/2026: nella guida del
+        // Duomo le vetrate avevano solo quello): conta solo testo vero.
+        const percheTappa = String(tappa.perche || '').trim();
+        const curTappa = String(tappa.curiosita || '').trim();
+        const testoPieno = [
+          percheTappa.length >= 40 && !/^Opera \(/i.test(percheTappa) ? percheTappa : '',
+          curTappa.length >= 40 && !/(guardala|osservala) da vicino/i.test(curTappa) ? curTappa : '',
+        ].filter(Boolean).join(' ');
         const testoTappa = testoPieno.length >= 40 ? testoPieno : [
           `${tappa.nome}${tappa.autore && tappa.autore !== 'Ignoto' ? `, ${tappa.autore}` : ''}${tappa.anno ? `, ${tappa.anno}` : ''}.`,
           tappa.dove ? `${tappa.dove}.` : '',
