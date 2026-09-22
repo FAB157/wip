@@ -737,10 +737,18 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     // frase d'avvio la dice gia` questo hook — e l'arrivo porta la sua frase.
     const l2 = (language || 'it').toLowerCase().slice(0, 2);
     const nomeMeta = targetRef.current?.poiName || '';
-    const passi: PassoNav[] = route.steps.map((s) => {
+    const ultimoPasso = route.steps.length - 1;
+    const passi: PassoNav[] = route.steps.map((s, i) => {
       const tipo = String(s.maneuverType || '').toLowerCase();
+      // (22/09/2026) `metriDopo`: metri LUNGO il percorso fino al passo dopo
+      // (OSRM step.distance: dalla manovra al passo seguente). Il cruscotto a
+      // schermo spento li somma al posto della linea d'aria fra le manovre, che
+      // su una mulattiera a tornanti dava «350 m» a chi ne aveva 1.500 davanti.
+      // Solo se e` un numero vero > 0, e mai sull'ultimo passo (non ha un dopo).
+      const dopo = Number(s.distance);
+      const metriDopo = i < ultimoPasso && Number.isFinite(dopo) && dopo > 0 ? { metriDopo: dopo } : {};
       // tappa + manovra grezza: servono al cruscotto ridisegnato dal nativo.
-      const base = { lat: s.location.lat, lon: s.location.lon, tappa: nomeMeta, manovraTipo: s.maneuverType || '', manovraVerso: s.maneuverModifier || '' };
+      const base = { lat: s.location.lat, lon: s.location.lon, tappa: nomeMeta, manovraTipo: s.maneuverType || '', manovraVerso: s.maneuverModifier || '', ...metriDopo };
       if (tipo === 'depart') return { ...base, testo: '', tipo: 'depart' as const };
       if (tipo === 'arrive') {
         const frase = s.instruction || (ARRIVE_PHRASES[l2] || ARRIVE_PHRASES.en).replace('{name}', nomeMeta).trim();
@@ -773,6 +781,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       // Con un giro in corso il cruscotto, dopo l'arrivo, e` del giro: il
       // follower non lo spegne (21/09/2026, vedi giroRiprendeIlCruscotto).
       spegniCruscotto: !giroRiprendeIlCruscotto(),
+      // Partenza da un indirizzo personalizzato (21/09/2026): come qui, il
+      // follower non dice «fuori percorso» finche' non si arriva sul tracciato.
+      fuoriSoloDopoAggancio: !joinedRouteRef.current,
     });
   };
 
@@ -909,7 +920,10 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     let riuscito = false;
     try {
       const route = await fetchWalkingRoute(here, t, language, t.poiName);
-      if (route && route.steps.length > 0 && targetRef.current === t) {
+      // (22/09/2026) `unsubRef`: nel frattempo si puo' essere ARRIVATI (targetRef
+      // resta valorizzato): il percorso nuovo riprenderebbe canale e cruscotto
+      // verso una meta gia' raggiunta.
+      if (route && route.steps.length > 0 && targetRef.current === t && unsubRef.current) {
         riuscito = true;
         setRoute(route);
         stepIdxRef.current = 0;
@@ -1057,7 +1071,11 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     try {
       const here: LatLon = { lat: last.latitude, lon: last.longitude };
       const route = await fetchWalkingRoute(here, t, language, t.poiName);
-      if (!route || route.steps.length === 0 || targetRef.current !== t) return false;
+      // (22/09/2026) Anche qui: arrivati durante il calcolo, niente percorso nuovo.
+      if (!route || route.steps.length === 0 || targetRef.current !== t || !unsubRef.current) return false;
+      // Prima di setRoute: il percorso parte da qui, si e` gia` sul tracciato
+      // (e setRoute lo dice al follower nativo, fuoriSoloDopoAggancio).
+      joinedRouteRef.current = true;
       setRoute(route, true);
       stepIdxRef.current = 0;
       spokenRef.current.clear();
@@ -1067,7 +1085,6 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       lastRecalcRef.current = Date.now();
       recalcBackoffRef.current = 0;
       successiveOffRouteRecalcsRef.current = 0;
-      joinedRouteRef.current = true;
       nearbySinceRef.current = null;
       const phrase = REROUTE_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || REROUTE_PHRASES.en;
       setCurrentInstruction(phrase);
@@ -1370,10 +1387,17 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         //     meno di 60 m: il router ci ha portati dove poteva;
         //  3. "nei paraggi": entro 60 m da 45 secondi — e' un edificio grande
         //     o un GPS che balla, e restare in navigazione per sempre e' peggio.
-        if (joinedRouteRef.current && dDestAir <= NEARBY_M) { if (nearbySinceRef.current == null) nearbySinceRef.current = Date.now(); }
+        // (22/09/2026) La 1 e la 3 sono a LINEA D'ARIA: valgono solo se anche
+        // il residuo LUNGO IL TRACCIATO e` entro NEARBY_M. Sulla via sul retro
+        // dell'isolato, a 40 m dalla porta ma a 120 m di cammino, scattava
+        // «Sei arrivato» davanti a un muro cieco e la navigazione si chiudeva.
+        // Alla porta, a fine tracciato, il residuo e` ~0: l'arrivo normale non
+        // cambia.
+        const vicinoLungoIlTracciato = remaining <= NEARBY_M;
+        if (joinedRouteRef.current && dDestAir <= NEARBY_M && vicinoLungoIlTracciato) { if (nearbySinceRef.current == null) nearbySinceRef.current = Date.now(); }
         else nearbySinceRef.current = null;
         const arrivato = joinedRouteRef.current && (
-          dDestAir <= ARRIVE_DISTANCE_M ||
+          (dDestAir <= ARRIVE_DISTANCE_M && vicinoLungoIlTracciato) ||
           (remaining <= 15 && dDestAir <= NEARBY_M) ||
           (nearbySinceRef.current != null && Date.now() - nearbySinceRef.current >= NEARBY_S * 1000)
         );

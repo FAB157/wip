@@ -26,7 +26,7 @@ import { Capacitor } from '@capacitor/core';
 import { tourService, metri, primaFrase } from '../../services/tourService';
 import { isSpeechActive, speakInstruction } from '../../services/ttsService';
 import { locationService } from '../../services/locationService';
-import { pubblicaPercorsoNativo, ritiraPercorsoNativo, battitoNav, navNativoDisponibile, percorsoNativoAttivo, proprietarioNativo, passiPubblicati, impostaPausaNativa } from '../nav/navNativo';
+import { pubblicaPercorsoNativo, ritiraPercorsoNativo, battitoNav, navNativoDisponibile, percorsoNativoAttivo, proprietarioNativo, passiPubblicati, impostaPausaNativa, riallineamentoInVolo } from '../nav/navNativo';
 
 /**
  * La guida sta parlando? Due canali: ttsService (teaser, navigatore) e
@@ -39,13 +39,23 @@ function guidaSuona(): boolean {
   try { return !!locationService.getAudioState()?.isPlaying; } catch { return false; }
 }
 import { getTranslation, linguaCorrente, type Language } from '../i18n';
-import { SOGLIE } from './tourState';
+import { sogliaArrivo } from './tourState';
 
 const ACCURACY_MAX_M = 50;
 /** Entro questi metri da te (e dal percorso) un POI e` un incontro. */
 const INCONTRO_M = 40;
 /** Oltre la soglia d'arrivo di questi metri = ci si e` allontanati dalla tappa. */
 const LASCIATA_M = 20;
+/**
+ * TAPPA SFIORATA (22/09/2026): la stessa regola del follower nativo. Ci si e`
+ * avvicinati a meno di SFIORATA_M dalla tappa e ora ci si allontana di oltre
+ * SFIORATA_MARGINE_M dal punto piu` vicino → la tappa e` fatta, anche senza
+ * essere entrati nella soglia d'ingresso.
+ */
+const SFIORATA_M = 60;
+const SFIORATA_MARGINE_M = 40;
+/** Il preavviso «fra N metri» solo se la manovra si e` avvicinata almeno di tanto. */
+const AVVICINAMENTO_M = 3;
 
 let avviato = false;
 let giroId: string | null = null;
@@ -56,6 +66,15 @@ let svoltaDettaLontano: string | null = null;
 let svoltaDettaVicino: string | null = null;
 // «Rete assente: segui la linea» detto una volta per episodio di deviazione.
 let avvisatoSenzaRete = false;
+/**
+ * La distanza PIU` GRANDE vista dalla manovra corrente (per chiave): il
+ * preavviso parte solo quando ci si e` avvicinati di AVVICINAMENTO_M (un fix
+ * di ritardo). Una svolta che si allontana — rimasta alle spalle — non si
+ * preannuncia (22/09/2026).
+ */
+let riferimentoSvolta: { chiave: string; metri: number } | null = null;
+/** La distanza minima dalla tappa corrente, sul passo d'arrivo (regola della tappa sfiorata). */
+let minimaTappa: { id: string; metri: number } | null = null;
 /** A questi metri dalla manovra la si dice "a ridosso" (come useWalkingNavigation). */
 const SVOLTA_VICINO_M = 35;
 /** Oltre questi si preannuncia "fra N metri" appena la manovra diventa la prossima. */
@@ -175,7 +194,10 @@ export function avviaGiroDriver(): void {
       if (f !== firmaNativa) {
         // Durante il riallineamento le tappe si chiudono una alla volta:
         // niente consegne a meta`, si riconsegna al fix dopo (come prima).
-        if (!allineandoDalNativo) sincronizzaNativo(linguaUi());
+        // (22/09/2026) Nemmeno con un riallineamento ancora in volo: una
+        // riconsegna cambia l'id, e la risposta del nativo (il progresso fatto
+        // a schermo spento) verrebbe scartata. Riconsegna il fix dopo.
+        if (!allineandoDalNativo && !riallineamentoInVolo()) sincronizzaNativo(linguaUi());
         return;
       }
       const inPausa = tourService.inPausaManuale();
@@ -332,7 +354,7 @@ function onFix(e: Event): void {
     if (Number.isFinite(accuracy) && accuracy > ACCURACY_MAX_M) return;
 
     const giro = tourService.datiGiro()!;
-    if (giro.id !== giroId) { giroId = giro.id; tappaAnnunciata = null; arrivatoA = null; svoltaDettaLontano = null; svoltaDettaVicino = null; }
+    if (giro.id !== giroId) { giroId = giro.id; tappaAnnunciata = null; arrivatoA = null; svoltaDettaLontano = null; svoltaDettaVicino = null; riferimentoSvolta = null; minimaTappa = null; }
 
     const pos = { lat, lon };
     const lingua = linguaUi();
@@ -435,11 +457,19 @@ function onFix(e: Event): void {
         else if (v.istruzione === dettoDalNativo.lontano) svoltaDettaLontano = chiave;
         dettoDalNativo = null;
       }
+      // Il preavviso SOLO IN AVVICINAMENTO (22/09/2026): lasciata una tappa,
+      // la prima manovra della tratta dopo puo` essere gia` alle spalle, e si
+      // sentiva «Fra 90 metri, gira a sinistra» per una svolta che si
+      // allontanava. Si confronta con la distanza piu` grande vista per QUESTA
+      // manovra: un fix di ritardo, come il follower nativo.
+      const rifSvolta = riferimentoSvolta && riferimentoSvolta.chiave === chiave ? riferimentoSvolta.metri : null;
+      const inAvvicinamento = rifSvolta != null && v.metriAllaSvolta < rifSvolta - AVVICINAMENTO_M;
+      riferimentoSvolta = { chiave, metri: rifSvolta == null ? v.metriAllaSvolta : Math.max(rifSvolta, v.metriAllaSvolta) };
       let testo: string | null = null;
       if (v.metriAllaSvolta <= SVOLTA_VICINO_M && svoltaDettaVicino !== chiave) { svoltaDettaVicino = chiave; svoltaDettaLontano = chiave; testo = v.istruzione; }
       // Il preavviso «fra N metri» solo per le svolte, mai per un arrivo (come
       // il follower, che lo fa solo sui passi 'turn').
-      else if (v.metriAllaSvolta > SVOLTA_LONTANO_M && v.manovra?.type !== 'arrive' && svoltaDettaLontano !== chiave) { svoltaDettaLontano = chiave; testo = `${fraMetri(v.metriAllaSvolta, lingua)} ${v.istruzione}`; }
+      else if (v.metriAllaSvolta > SVOLTA_LONTANO_M && inAvvicinamento && v.manovra?.type !== 'arrive' && svoltaDettaLontano !== chiave) { svoltaDettaLontano = chiave; testo = `${fraMetri(v.metriAllaSvolta, lingua)} ${v.istruzione}`; }
       if (testo) {
         const decisione = tourService.chiPuoParlare('navigatore', { guidaInCorso: parlando, metriAllaSvolta: v.metriAllaSvolta, suAttraversamento: v.suAttraversamento });
         if (decisione.azione === 'parla' || decisione.azione === 'abbassa_e_parla') { parla(testo, lingua, decisione.azione === 'abbassa_e_parla', TTL_SVOLTA_MS); dettoQualcosa = true; }
@@ -515,10 +545,35 @@ function onFix(e: Event): void {
     }
 
     // Tappa fatta: ci si era arrivati, ora si e` lontani e la guida tace.
-    if (tappa && arrivatoA === String(tappa.id)) {
+    // (22/09/2026) ALLA SOGLIA VERA DELLA TAPPA + 20 m, non a 100 m fissi: fino
+    // ad allora si navigava la tratta vecchia, ferma sull'arrivo, e le prime
+    // svolte dopo la tappa non si dicevano. La soglia e` quella con cui si e`
+    // arrivati (25 m per una porta dichiarata, 70 m per il centro
+    // dell'edificio): mai meno, o la tappa si chiuderebbe restando li`.
+    // TAPPA SFIORATA (22/09/2026): chi ascolta la guida dalla piazza e riparte
+    // senza entrare nella soglia non la chiudeva mai — il giro restava su
+    // quella tappa e il suo battito zittiva il follower, che invece l'aveva
+    // superata. Stessa regola del follower: sul passo d'arrivo ci si e`
+    // avvicinati a meno di 60 m e ora ci si allontana di oltre 40 m (mai meno
+    // dell'accuratezza del fix) dal punto piu` vicino.
+    if (tappa) {
+      const id = String(tappa.id);
       const p = tappa.ingresso ?? { lat: tappa.lat, lon: tappa.lon };
-      if (metri(pos, p) > SOGLIE.arrivo_m + LASCIATA_M && !parlando) {
+      const dTappa = metri(pos, p);
+      // La minima si tiene solo sul passo d'arrivo della tratta (o su una
+      // tratta senza svolte), come il minDist del follower: passando dietro
+      // l'isolato prima dell'ultima svolta non si chiude la tappa.
+      const sulPassoArrivo = !v.manovra || v.manovra.type === 'arrive';
+      if (!sulPassoArrivo) minimaTappa = null;
+      else if (!minimaTappa || minimaTappa.id !== id) minimaTappa = { id, metri: dTappa };
+      else if (dTappa < minimaTappa.metri) minimaTappa.metri = dTappa;
+      const margine = Math.max(SFIORATA_MARGINE_M, Number.isFinite(accuracy) ? accuracy : 0);
+      const lasciata = arrivatoA === id
+        ? dTappa > sogliaArrivo(tappa.ingresso?.livello) + LASCIATA_M
+        : !!minimaTappa && minimaTappa.id === id && minimaTappa.metri < SFIORATA_M && dTappa > minimaTappa.metri + margine;
+      if (lasciata && !parlando) {
         arrivatoA = null;
+        minimaTappa = null;
         tourService.completaTappa();
       }
     }

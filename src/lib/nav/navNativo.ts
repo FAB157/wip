@@ -38,6 +38,12 @@ export interface PassoNav {
    * meta della tratta e la manovra OSRM grezza (la freccia). Opzionali.
    */
   tappa?: string; manovraTipo?: string; manovraVerso?: string;
+  /**
+   * (22/09/2026, additivo) Metri LUNGO il percorso da questo passo al
+   * seguente. Il follower li usa per metri alla meta, ETA e avanzamento del
+   * cruscotto; assente = linea d'aria fra i passi, come prima.
+   */
+  metriDopo?: number;
 }
 
 /**
@@ -139,12 +145,70 @@ function disponibile(): boolean {
   return !nativoSenzaMetodi && typeof window !== 'undefined' && Capacitor.isNativePlatform();
 }
 
+/**
+ * Douglas–Peucker in METRI su una polilinea [lat, lon]: tiene i punti che
+ * servono perché nessun punto tolto disti più di `tolM` dalla linea che resta
+ * (distanza dal SEGMENTO, non dalla retta: un percorso che torna sui suoi
+ * passi non si appiattisce). Primo e ultimo punto sempre. Proiezione
+ * equirettangolare locale sulla latitudine media: su un percorso a piedi
+ * l'errore è trascurabile. Iterativa: niente ricorsione su migliaia di punti.
+ */
+function semplificaDP(pts: [number, number][], tolM: number): [number, number][] {
+  const n = pts.length;
+  if (n <= 2) return pts.slice();
+  const M_GRADO = 111_320;
+  const latMedia = (pts.reduce((s, p) => s + p[0], 0) / n) * Math.PI / 180;
+  const kx = Math.cos(latMedia) * M_GRADO;
+  const xs = pts.map(p => p[1] * kx);
+  const ys = pts.map(p => p[0] * M_GRADO);
+  const tieni = new Uint8Array(n);
+  tieni[0] = 1; tieni[n - 1] = 1;
+  const tol2 = tolM * tolM;
+  const pila: number[] = [0, n - 1];
+  while (pila.length > 0) {
+    const b = pila.pop()!;
+    const a = pila.pop()!;
+    if (b - a < 2) continue;
+    const ax = xs[a], ay = ys[a];
+    const dx = xs[b] - ax, dy = ys[b] - ay;
+    const len2 = dx * dx + dy * dy;
+    let peggiore = -1, dMax2 = -1;
+    for (let i = a + 1; i < b; i++) {
+      let t = len2 === 0 ? 0 : ((xs[i] - ax) * dx + (ys[i] - ay) * dy) / len2;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const ex = ax + t * dx - xs[i], ey = ay + t * dy - ys[i];
+      const d2 = ex * ex + ey * ey;
+      if (d2 > dMax2) { dMax2 = d2; peggiore = i; }
+    }
+    if (peggiore > 0 && dMax2 > tol2) {
+      tieni[peggiore] = 1;
+      pila.push(a, peggiore, peggiore, b);
+    }
+  }
+  return pts.filter((_, i) => tieni[i] === 1);
+}
+
+/**
+ * SFOLTIRE IL TRACCIATO SENZA TAGLIARE GLI ANGOLI (22/09/2026). Il follower
+ * usa la linea per il «fuori percorso», per la progressione e per
+ * l'aggancio. Prima si teneva un vertice ogni N per indice: in un tratto rado
+ * il vertice d'angolo cadeva fra gli scartati, la corda passava a 100 m
+ * dall'angolo, e a schermo spento il nativo diceva «Sei fuori percorso» a chi
+ * camminava esattamente sulla linea. Ora Douglas–Peucker in metri: 5 m, poi
+ * 10 e 20 se i punti restano troppi; il campionamento per indice resta solo
+ * come ultima difesa. Sotto MAX_PUNTI_LINEA la linea passa com'è, come prima.
+ */
 function decima(linea: [number, number][]): [number, number][] {
   const pulita = (linea || []).filter(p => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]));
   if (pulita.length <= MAX_PUNTI_LINEA) return pulita;
-  const passo = Math.ceil(pulita.length / MAX_PUNTI_LINEA);
-  const out = pulita.filter((_, i) => i % passo === 0);
-  const ultimo = pulita[pulita.length - 1];
+  let semplice = pulita;
+  for (const tolM of [5, 10, 20]) {
+    semplice = semplificaDP(pulita, tolM);
+    if (semplice.length <= MAX_PUNTI_LINEA) return semplice;
+  }
+  const passo = Math.ceil(semplice.length / MAX_PUNTI_LINEA);
+  const out = semplice.filter((_, i) => i % passo === 0);
+  const ultimo = semplice[semplice.length - 1];
   if (out[out.length - 1] !== ultimo) out.push(ultimo);
   return out;
 }
@@ -158,12 +222,12 @@ function inMuto(): boolean {
  * `ok:false` = il nativo l'ha rifiutato (e ha tolto anche quello di prima).
  * L'`id` protegge dalle risposte in ritardo di una consegna ormai superata.
  */
-function consegna(): void {
+function consegna(inPausaForzata: boolean = false): void {
   if (!ultimoJson) return;
   const id = String(ultimoJson.id || '');
   // La pausa di ADESSO, non quella della prima consegna: una riconsegna dopo
   // il muto o dopo un «Termina»+«no» deve trovare il follower nello stato giusto.
-  const routeJson = JSON.stringify({ ...ultimoJson, indice: ultimoIndice, inPausa: pausaCorrente });
+  const routeJson = JSON.stringify({ ...ultimoJson, indice: ultimoIndice, inPausa: pausaCorrente || inPausaForzata });
   ItaintaBackgroundPoi.setNavRoute({ routeJson })
     .then((r) => { if (r?.ok === false && id === idCorrente) { proprietario = null; firmaCorrente = ''; } })
     .catch((e: any) => {
@@ -237,13 +301,21 @@ async function riallineaDalNativo(): Promise<void> {
       // FOTOGRAFIA di quello che aveva fatto. Prima il progresso (i navigatori
       // chiudono le tappe passate), POI la riconsegna — altrimenti al «no»
       // della conferma il giro ripartiva dalla tappa di prima.
-      if (!p?.attivo && p?.terminato === true && stessoId) {
+      const terminato = !p?.attivo && p?.terminato === true && stessoId;
+      if (terminato) {
         window.dispatchEvent(new CustomEvent('wip-nav-nativo-progresso', { detail: dettaglio }));
         // Chi ha ascoltato l'evento può aver già ripubblicato (percorso nuovo):
         // si riconsegna solo quello per cui si è chiesto.
         if (id !== idCorrente) return;
+        // (22/09/2026) Dal punto a cui era arrivato il follower, non da quello
+        // di prima del congelamento.
+        ultimoIndice = Math.max(ultimoIndice, dettaglio.indice);
       }
-      if (!inMuto()) consegna();
+      // Dopo un «Termina» dal cruscotto la riconsegna nasce IN PAUSA: intanto
+      // la pagina chiede conferma (window.confirm blocca il JS), e il follower
+      // non deve riaprire il cruscotto né parlare. Il primo battito dopo la
+      // risposta porta la pausa vera; al «Sì» il percorso si ritira.
+      if (!inMuto()) consegna(terminato);
       return;
     }
     window.dispatchEvent(new CustomEvent('wip-nav-nativo-progresso', { detail: dettaglio }));
@@ -255,7 +327,14 @@ function avviaRiallineamento(): Promise<void> {
   if (!promessaRiallineamento) {
     promessaRiallineamento = riallineaDalNativo()
       .catch(() => { /* già gestito dentro */ })
-      .finally(() => { promessaRiallineamento = null; riallineatoTs = Date.now(); });
+      // Conta come «contatto» solo a pagina VISIBILE (22/09/2026): da
+      // nascosta non segue nessun battito, il nativo resta al comando, e il
+      // primo battito dopo deve poter riallineare di nuovo (le svolte dette
+      // nel frattempo tornerebbero perse, e ripetute).
+      .finally(() => {
+        promessaRiallineamento = null;
+        if (typeof document === 'undefined' || document.visibilityState === 'visible') riallineatoTs = Date.now();
+      });
   }
   return promessaRiallineamento;
 }
@@ -397,6 +476,8 @@ export function pubblicaPercorsoNativo(args: {
   finale: boolean;
   inPausa?: boolean;
   spegniCruscotto?: boolean;
+  /** (21/09/2026) Partenza da un indirizzo lontano: niente «fuori percorso» prima di arrivare sul tracciato. */
+  fuoriSoloDopoAggancio?: boolean;
 }): void {
   if (!disponibile()) return;
   // La tappa singola vince: il giro aspetta che lasci (vedi CanaleNav).
@@ -431,6 +512,7 @@ export function pubblicaPercorsoNativo(args: {
     inPausa: pausaCorrente,
     // Campo additivo: assente = il nativo spegne come prima.
     ...(typeof args.spegniCruscotto === 'boolean' ? { spegniCruscotto: args.spegniCruscotto } : {}),
+    ...(args.fuoriSoloDopoAggancio === true ? { fuoriSoloDopoAggancio: true } : {}),
   };
   // In muto non si consegna (ci pensa allineaMuto quando il muto finisce), ma
   // il percorso di PRIMA va tolto: il nativo non deve dettare quello vecchio.
@@ -478,9 +560,16 @@ export function battitoNav(canale: CanaleNav, indice: number, dettiVicino?: Iter
   const cambiato = nuoviVicino.join(',') !== dettiVicinoJs.join(',') || nuoviLontano.join(',') !== dettiLontanoJs.join(',');
   dettiVicinoJs = nuoviVicino; dettiLontanoJs = nuoviLontano;
   // Una svolta appena detta va comunicata SUBITO, senza aspettare i 2 s.
-  if (!cambiato && Date.now() - ultimoBattitoTs < BATTITO_MIN_MS) return false;
+  // (22/09/2026) Col riallineamento ancora in volo anche i fix «frenati» dai
+  // 2 s restano muti: al disgelo i fix in coda arrivano a raffica, e il
+  // secondo annunciava (o chiudeva la tappa) prima che i «detti» del nativo
+  // tornassero qui.
+  if (!cambiato && Date.now() - ultimoBattitoTs < BATTITO_MIN_MS) return promessaRiallineamento != null;
   return mandaBattito();
 }
+
+/** (22/09/2026) Un riallineamento col nativo è in volo: chi riconsegna aspetta. */
+export function riallineamentoInVolo(): boolean { return promessaRiallineamento != null; }
 
 /**
  * PAUSA DEL GIRO (21/09/2026, REVISIONE 2). In pausa MANUALE il percorso

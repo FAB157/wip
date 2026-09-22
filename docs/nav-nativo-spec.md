@@ -317,6 +317,50 @@ e nativo viaggiano nello stesso pacchetto (`capacitor.config` senza
   volta, al massimo 2 ripetizioni per uscita; `setRoute`/`clear` e il rientro
   (< 40 m) azzerano il conto.
 - **Riascolta**: su un `arrive` non ancora raggiunto NON si dice «Sei arrivato».
+  Il nativo ridice la manovra solo nella tappa singola (`modo` "singola"
+  dell'ultimo stato JS): nel giro «Riascolta» per il JS è la guida della tappa.
+- **Progressione sul tracciato** (la regola «salto per progressione» del JS):
+  alla consegna si calcolano i metri progressivi dei vertici della linea e di
+  ogni passo proiettato su di essa (NaN oltre 50 m). A ogni fix, se chi cammina
+  è sulla linea (≤ 25 m + accuratezza/2) e la PRIMA corrispondenza, cercata da
+  300 m prima del passo corrente fino a 2 km dopo, è oltre il passo di più di
+  40 m, i passi alle spalle (progressivo + 25 m < utente) si contano in silenzio.
+  Mai oltre un `arrive` finché si è entro 45 m (la visita), mai oltre l'ultimo
+  passo. La prima corrispondenza e non la più vicina: su un anello e su un
+  «andata e ritorno» per la stessa strada vince quella più indietro. Serve
+  dopo una pausa (GPS a riposo: in pausa il conto è debole) e dopo i buchi di fix.
+- **«Tra N metri» CONTATO ≠ DETTO**: il preavviso si dice anche se contato in
+  silenzio, se col nativo al comando nessuno l'ha detto davvero.
+- **Nei paraggi** vale solo ininterrotto: un buco di fix > 15 s azzera i 45 s.
+  E solo vicini anche LUNGO IL TRACCIATO (≤ 60 m dalla meta, prima
+  corrispondenza da 300 m prima dell'arrivo, entro 60 m dalla linea), come la
+  tappa singola del JS: una via sul retro dell'isolato non è «nei paraggi».
+  Senza tracciato utile (arrivo a più di 50 m dalla linea) vale la linea d'aria.
+- **Salta**: lasciando una tappa GIÀ RAGGIUNTA (`arrive` con idx in
+  `dettiVicino`) la regola «il passo dopo è più vicino ed entro 40 m» confronta
+  col PRIMO passo dopo `idx` che non sia `depart`: la svolta a pochi metri dalla
+  porta si dice prima di farla, non 45 m dopo. Su un arrivo non ancora
+  raggiunto resta `idx+1`: se la tratta dopo riparte per la stessa strada, la
+  sua prima svolta è l'angolo appena girato per arrivare e si salterebbe la tappa.
+- **«Tra N metri» solo in avvicinamento**: per lo STESSO passo si tiene una
+  distanza di riferimento, che si sposta solo a scatti di ≥ 3 m (in giù o in
+  su); il preavviso parte solo se `d < riferimento - 3`. Chi riparte da una
+  tappa nel verso sbagliato non sente più «Tra 80 metri, gira a sinistra»
+  mentre se ne allontana. (A scatti e non «il fix precedente»: a piedi con un
+  fix ogni 2 s si fanno ~2,8 m e il confronto non scattava quasi mai.)
+- **`metriDopo`** (campo opzionale del passo, metri LUNGO IL PERCORSO fino al
+  passo seguente, da `step.distance`): se c'è, `resto`/`restoTappa` lo usano al
+  posto della linea d'aria fra i due passi — metri, ETA e avanzamento del
+  cruscotto giusti anche sui percorsi tortuosi.
+- **Fuori percorso**: il battito del JS azzera il conto del nativo (col JS vivo
+  è compito suo). Con `"fuoriSoloDopoAggancio": true` nel routeJson (partenza
+  da un indirizzo lontano) il fuori percorso tace finché non si arriva entro
+  60 m dalla linea.
+- **Fotografia di «Termina»**: lo stato di quel momento, `finito` compreso.
+- **Fix vecchi**: oltre 15 s non vanno al follower (Android e iOS). Il JS
+  scarta la raffica di fix arretrati consegnata al disgelo della pagina.
+- **Ridisegno di un tasto**: con l'ultimo fix BUONO visto dal follower.
+  `updateNavBanner(attivo:false)` fa dimenticare l'ultimo stato JS (anche iOS).
 - **iOS, orologio**: `CLOCK_MONOTONIC` (conta anche il sonno, come
   `elapsedRealtime`), non `systemUptime`.
 - **Pagina ricreata**: Android, `load()` del plugin spegne anche il cruscotto

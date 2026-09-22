@@ -345,8 +345,10 @@ export default function App() {
         // (21/09/2026) Azioni ESPLICITE, non un'alternanza: il tasto porta lo
         // stato che MOSTRA. L'interruttore invertiva quello del JS, che poteva
         // essere diverso (pausa automatica da fermi): «Riprendi» metteva in pausa.
-        case 'pausa': tourService.impostaPausa(true); break;
-        case 'riprendi': tourService.impostaPausa(false); break;
+        // (22/09/2026) Non su un giro FINITO: il riallineamento al risveglio
+        // può averlo appena chiuso, e una «pausa» in coda lo riapriva.
+        case 'pausa': if (tourService.vista()?.stato !== 'FINITO') tourService.impostaPausa(true); break;
+        case 'riprendi': if (tourService.vista()?.stato !== 'FINITO') tourService.impostaPausa(false); break;
         case 'riascolta': riascoltaTappa(); break;
         case 'salta': posizioneVeloce((p) => { void tourService.salta(p); }); break;
         case 'ricalcola': posizioneVeloce((p) => { void tourService.ricalcolaDaQui(p); }); break;
@@ -508,7 +510,18 @@ export default function App() {
   // e tasto "Naviga" spariscono dalla mappa, ma tappe, tappe fatte, ordine e
   // scelta d'arrivo restano intatti (anche su localStorage) e tornano identici
   // riaccendendo. Chiudere davvero il giro si fa con la X rossa del cruscotto.
-  useEffect(() => { tourService.sospendi(!isAudioGuideActive); }, [isAudioGuideActive]);
+  useEffect(() => {
+    tourService.sospendi(!isAudioGuideActive);
+    // (22/09/2026) Giro sospeso (cuffie spente, non un percorso su misura): il
+    // giro lascia SUBITO il servizio nativo, prima che syncSettings(false)
+    // lo veda ancora fra i proprietari e lo riavvii in modalità navigatore —
+    // per spegnerlo un attimo dopo, quando l'effetto del cruscotto vede la
+    // vista vuota (notifica che sfarfalla). Prima si spegneva e basta.
+    if (!isAudioGuideActive && !tourService.vista() && servizioGiroRef.current) {
+      servizioGiroRef.current = false;
+      locationService.rilasciaServizioNativoPerNav('giro').catch(() => {});
+    }
+  }, [isAudioGuideActive]);
   // Il tasto "Naviga" della mappa (28/08/2026). La vista del giro e` gia`
   // null quando il giro e` sospeso o non c'e`: basta escludere il giro finito.
   const vistaGiro = useVistaGiro();

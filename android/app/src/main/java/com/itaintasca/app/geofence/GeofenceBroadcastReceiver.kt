@@ -144,7 +144,11 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // teaser, arrivi e guide restano esattamente com'erano. (21/09/2026)
             // La portano anche le svolte del navigatore JS, via
             // `speakText({ttlMs})`; gli altri speakText restano senza.
-            val scadenzaElapsedMs: Long? = null
+            val scadenzaElapsedMs: Long? = null,
+            // (22/09/2026) L'item e` gia` stato rimesso in coda UNA volta dopo
+            // un speak() rifiutato (motore TTS scollegato, vedi
+            // scollegaMotoreTts): al secondo rifiuto si passa oltre, mai un ciclo.
+            val riprovato: Boolean = false
         )
 
         // Player per gli MP3 prefetchati: vive accanto al TTS nella stessa coda
@@ -294,7 +298,13 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // (`activeItem?.audioFile`, non `activeMediaPlayer`: fra l'avvio
             // dell'item e il post che crea il player c'e` una finestra; il post
             // qui sotto arriva dopo quello, sullo stesso looper.)
-            if (item.kind == "nav" && item.scadenzaElapsedMs != null && isSpeaking && activeItem?.audioFile != null) {
+            // (21/09/2026) Anche dietro una voce che l'UTENTE ha messo in pausa
+            // (tasto Pausa della notifica): la svolta si dice, la voce resta
+            // in pausa. Prima le svolte restavano in coda dietro di lei e
+            // scadevano tutte.
+            if (item.kind == "nav" && item.scadenzaElapsedMs != null && isSpeaking &&
+                (activeItem?.audioFile != null || (speechPaused && pausedByUser))
+            ) {
                 Handler(Looper.getMainLooper()).post {
                     if (!diciSopra(appContext, item)) {
                         speechQueue.add(item)
@@ -315,20 +325,26 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
          * dice lo stesso, e l'MP3 resta in pausa.
          */
         private fun diciSopra(appContext: Context, item: SpeechItem): Boolean {
-            val mp = activeMediaPlayer ?: return false
+            val mp = activeMediaPlayer
             if (navSopraId != null || !isSpeaking) return false
             if (speechPaused && !pausedByUser) return false
+            // Senza MP3 si dice sopra solo una voce TTS in pausa per l'utente
+            // (il TTS e` fermo: alla ripresa quella si rilegge da capo, come
+            // sempre). Mai sopra un TTS che sta parlando.
+            if (mp == null && !(speechPaused && pausedByUser)) return false
             val scadenza = item.scadenzaElapsedMs
             if (scadenza != null && android.os.SystemClock.elapsedRealtime() > scadenza) return false
             val am = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             if (am.mode == AudioManager.MODE_IN_CALL || am.mode == AudioManager.MODE_IN_COMMUNICATION) return false
             val id = "NAVSOPRA_${System.currentTimeMillis()}"
             navSopraId = id
-            val suonava = try { mp.isPlaying } catch (_: Exception) { false }
+            val suonava = try { mp?.isPlaying == true } catch (_: Exception) { false }
             // Solo la PRIMA frase decide se l'MP3 va ripreso: quelle
             // concatenate trovano l'MP3 gia` fermo per causa nostra.
             if (!riprendiMp3DopoSopra) riprendiMp3DopoSopra = suonava && !speechPaused
-            if (suonava) {
+            if (mp == null) {
+                // Voce TTS in pausa per l'utente: niente player da fermare.
+            } else if (suonava) {
                 try {
                     // La posizione della pausa normale: la usano sia la ripresa
                     // a svolta finita sia un «Riprendi» dell'utente dopo.
@@ -370,7 +386,16 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
                 val esito = ttsInstance?.speak(speakableText(item.text), TextToSpeech.QUEUE_FLUSH, params, id)
                     ?: TextToSpeech.ERROR
-                if (esito != TextToSpeech.SUCCESS) { chiudiSopra(appContext, id); return@initTtsIfNeeded }
+                if (esito != TextToSpeech.SUCCESS) {
+                    // (22/09/2026) Motore forse scollegato: lo stesso reset della
+                    // coda (scollegaMotoreTts) e la svolta torna in coda UNA
+                    // volta — chiudiSopra la riprende sopra l'MP3 col motore
+                    // nuovo, se non e` scaduta.
+                    scollegaMotoreTts()
+                    if (!item.riprovato) speechQueue.add(item.copy(riprovato = true))
+                    chiudiSopra(appContext, id)
+                    return@initTtsIfNeeded
+                }
             }
             return true
         }
@@ -386,7 +411,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             navSopraId = null
             sopraRunnable?.let { safetyHandler.removeCallbacks(it) }
             sopraRunnable = null
-            if (concatena && isSpeaking && activeMediaPlayer != null) {
+            if (concatena && isSpeaking && (activeMediaPlayer != null || (speechPaused && pausedByUser))) {
                 val adesso = android.os.SystemClock.elapsedRealtime()
                 val prossima = synchronized(this) {
                     speechQueue.firstOrNull { it.kind == "nav" && it.scadenzaElapsedMs != null && adesso <= it.scadenzaElapsedMs }
@@ -622,8 +647,24 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                     broadcastTeaserEvent(appContext, "teaserStarted", next)
 
                     if (!speakTts(appContext, next)) {
-                        Log.e(TAG, "tts.speak() returned error, skipping item")
-                        finishActiveSpeech(appContext, notifyJs = true)
+                        // (22/09/2026) MOTORE SCOLLEGATO? Un aggiornamento dei
+                        // Servizi vocali Google scollega il TextToSpeech per
+                        // sempre: ogni speak() da` ERROR, ttsReady restava true
+                        // e la coda scartava ogni frase (svolte comprese) finche`
+                        // il processo viveva. Si butta l'istanza — la prossima
+                        // initTtsIfNeeded ne crea una nuova — e l'item riprova
+                        // UNA volta (senza «teaserFinished» in mezzo, che fara`
+                        // partire l'autoplay della scheda). Al secondo rifiuto
+                        // si passa oltre, come prima.
+                        if (!next.riprovato) {
+                            Log.e(TAG, "tts.speak() returned error: motore ricreato, l'item riprova una volta")
+                            scollegaMotoreTts()
+                            speechQueue.add(next.copy(riprovato = true))
+                            finishActiveSpeech(appContext, notifyJs = false)
+                        } else {
+                            Log.e(TAG, "tts.speak() returned error, skipping item")
+                            finishActiveSpeech(appContext, notifyJs = true)
+                        }
                         processNextSpeech(appContext)
                         return@initTtsIfNeeded
                     }
@@ -777,8 +818,17 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // TTS: si rilegge da capo (il testo di un teaser e' breve).
             requestFocus(appContext)
             if (ttsInstance == null || !ttsReady || !speakTts(appContext, item)) {
-                Log.w(TAG, "Ripresa TTS fallita per ${item.poiId}, passo oltre")
-                finishActiveSpeech(appContext, notifyJs = true)
+                // (22/09/2026) Come in processNextSpeech: motore forse
+                // scollegato → istanza nuova e l'item riprova UNA volta dalla coda.
+                if (!item.riprovato) {
+                    Log.w(TAG, "Ripresa TTS fallita per ${item.poiId}: motore ricreato, l'item riprova una volta")
+                    scollegaMotoreTts()
+                    speechQueue.add(item.copy(riprovato = true))
+                    finishActiveSpeech(appContext, notifyJs = false)
+                } else {
+                    Log.w(TAG, "Ripresa TTS fallita per ${item.poiId}, passo oltre")
+                    finishActiveSpeech(appContext, notifyJs = true)
+                }
                 processNextSpeech(appContext)
                 return false
             }
@@ -937,6 +987,25 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             processNextSpeech(appContext)
         }
 
+        /**
+         * (22/09/2026) speak() rifiutato da un motore che risultava PRONTO: il
+         * collegamento al servizio TTS e` morto (tipicamente l'aggiornamento
+         * dei Servizi vocali Google). Si butta l'istanza: la prossima
+         * initTtsIfNeeded ne crea una nuova e si ricollega al motore. Solo se
+         * era pronta: un init in corso o gia` fallito non si tocca (il suo
+         * onInit tardivo segnerebbe «pronta» un'istanza che non e` piu` questa).
+         * Sul main, come chi la chiama.
+         */
+        private fun scollegaMotoreTts() {
+            synchronized(this) {
+                if (!ttsReady) return
+                val vecchio = ttsInstance
+                ttsInstance = null
+                ttsReady = false
+                try { vecchio?.shutdown() } catch (_: Exception) { }
+            }
+        }
+
         private fun initTtsIfNeeded(context: Context, onReady: () -> Unit) {
             val appContext = context.applicationContext
             if (ttsInstance != null && ttsReady) {
@@ -985,6 +1054,17 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
          */
         @Volatile
         private var missingVoiceLang: String? = null
+
+        /**
+         * (22/09/2026) La lingua che la coda SA senza voce usabile (l'ultimo
+         * applyTtsConfig l'ha accertato), o null = si può parlare / non si sa
+         * ancora. La legge speakText del plugin: una svolta del navigatore JS
+         * in quella lingua verrebbe scartata qui dentro (processNextSpeech) con
+         * ok:true già restituito, e il JS non ripiegava sulla voce di rete
+         * (Azure). Sola lettura: la regola del 23/08 sulla voce che c'è solo
+         * in rete non cambia.
+         */
+        fun voceMancante(): String? = missingVoiceLang
 
         /** Ultima notifica "voce mancante": una ogni 10 minuti, non una per POI. */
         @Volatile

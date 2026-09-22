@@ -73,6 +73,28 @@ object NavFollower {
     // scaduto) non tornava più finché non si rientrava.
     const val OFFROUTE_RIPETI_MS = 60_000L
     const val OFFROUTE_MAX_RIPETIZIONI = 2
+    // (21/09/2026, REVISIONE 2) «Nei paraggi» vale solo se ininterrotto: un
+    // buco di fix più lungo di così ricomincia il conto dei 45 s.
+    const val NEARBY_BUCO_MS = 15_000L
+    // (21/09/2026, REVISIONE 2) PROGRESSIONE SUL TRACCIATO: se chi cammina
+    // (entro PROGRESS_CROSS_M + accuratezza/2 dalla linea) è già oltre il passo
+    // corrente di più di PROGRESS_M lungo il tracciato, i passi rimasti alle
+    // spalle si contano in silenzio. È la regola del JS («salto per
+    // progressione»): senza, dopo una pausa (GPS a riposo) o un buco di fix
+    // il follower restava indietro, muto per il resto del percorso.
+    const val PROGRESS_M = 40.0
+    const val PROGRESS_PASSATO_M = 25.0
+    const val PROGRESS_CROSS_M = 25.0
+    const val PROGRESS_FINESTRA_M = 2_000.0
+    // (21/09/2026, REVISIONE 2) Partenza da un indirizzo lontano: il «fuori
+    // percorso» vale solo dopo essere arrivati entro questa distanza dal
+    // tracciato (la stessa regola del JS).
+    const val AGGANCIO_M = 60.0
+    // (22/09/2026) Il preavviso «Tra N metri» si dice solo AVVICINANDOSI:
+    // almeno questi metri in meno rispetto alla distanza di riferimento.
+    // Chi ripartiva da una tappa dalla parte sbagliata sentiva «Tra 80
+    // metri, gira a sinistra» mentre se ne allontanava.
+    const val AVVICINA_M = 3.0
 
     private const val RAGGIO_TERRA_M = 6_371_000.0
 
@@ -81,7 +103,10 @@ object NavFollower {
         val lat: Double, val lon: Double, val testo: String, val tipo: String,
         // (18/09/2026 notte) Campi del CRUSCOTTO, tutti opzionali ("" se
         // assenti): nome della meta della tratta e manovra OSRM grezza.
-        val tappa: String = "", val manovraTipo: String = "", val manovraVerso: String = ""
+        val tappa: String = "", val manovraTipo: String = "", val manovraVerso: String = "",
+        // (22/09/2026) Metri LUNGO IL PERCORSO fino al passo seguente (OSRM
+        // step.distance), opzionale: NaN = assente, si usa la linea d'aria.
+        val metriDopo: Double = Double.NaN
     )
 
     /**
@@ -140,6 +165,15 @@ object NavFollower {
     // cruscotto si spegne SOLO se true (default). La tappa singola manda
     // false quando c'è un giro/percorso in corso: il cruscotto dopo è del giro.
     private var spegniCruscotto = true
+    // (21/09/2026, REVISIONE 2) Metri progressivi lungo il tracciato: dei suoi
+    // vertici, e di ogni passo proiettato sul tracciato (NaN se il passo sta
+    // a più di 50 m dalla linea: lì la progressione non si usa).
+    private var lineaCum = DoubleArray(0)
+    private var alongPasso = DoubleArray(0)
+    // (21/09/2026, REVISIONE 2) `fuoriSoloDopoAggancio` del routeJson: il
+    // «fuori percorso» tace finché non si è arrivati sul tracciato.
+    private var fuoriDopoAggancio = false
+    private var agganciato = true
 
     // ── Stato del follower ───────────────────────────────────────────────
     private var idx = 0
@@ -167,6 +201,7 @@ object NavFollower {
     // (21/09/2026, REVISIONE 2) Da quando si è entro NEARBY_M dall'arrivo
     // FINALE (0 = non lo si è). Si azzera in ogni reset.
     private var vicinoFinaleDa = 0L
+    private var ultimoFixFinaleTs = 0L
     private var ultimoDetto = ""
     private var ultimoDettoTs = 0L
     private var ultimoTestoVicino = ""
@@ -175,6 +210,11 @@ object NavFollower {
     // impostano setRoute e OGNI battito, lo azzera clear. Serve al cruscotto
     // per sapere se l'istruzione e il nome ricordati dal JS valgono ancora.
     private var idxJs = 0
+    // (22/09/2026) AVVICINAMENTO al passo corrente, per il preavviso
+    // «lontano»: distanza di riferimento e passo a cui si riferisce (-1 =
+    // nessun valore → non si dice ancora). Si aggiorna solo sui fix buoni.
+    private var dPrec = 0.0
+    private var dPrecIdx = -1
     // (21/09/2026, REVISIONE 2) FOTOGRAFIA di «Termina» dal cruscotto: id,
     // indice e insiemi «davvero» presi un istante prima dello svuotamento.
     // Se al risveglio il JS chiede conferma e l'utente dice «no», riprende
@@ -234,12 +274,16 @@ object NavFollower {
                 // isNull prima di optString: su Android un `null` JSON esce
                 // da optString come la parola "null", e finirebbe detta a voce.
                 val testo = if (o.isNull("testo")) "" else o.optString("testo", "").trim()
+                // (22/09/2026) `metriDopo` vale solo se è un numero finito > 0
+                // (assente, null JSON, testo, 0 o negativo = linea d'aria).
+                val md = o.optDouble("metriDopo", Double.NaN)
                 nuoviPassi.add(
                     Passo(
                         lat, lon, testo, o.optString("tipo", "turn"),
                         tappa = testoOpzionale(o, "tappa"),
                         manovraTipo = testoOpzionale(o, "manovraTipo"),
-                        manovraVerso = testoOpzionale(o, "manovraVerso")
+                        manovraVerso = testoOpzionale(o, "manovraVerso"),
+                        metriDopo = if (!md.isNaN() && !md.isInfinite() && md > 0.0) md else Double.NaN
                     )
                 )
             }
@@ -267,7 +311,10 @@ object NavFollower {
         for (i in n - 2 downTo 0) {
             val a = nuoviPassi[i]
             val b = nuoviPassi[i + 1]
-            val tratto = metri(a.lat, a.lon, b.lat, b.lon)
+            // (22/09/2026) Con `metriDopo` i metri veri lungo il percorso: la
+            // linea d'aria fra due manovre di una mulattiera a tornanti dava
+            // «350 m, ~5 min, 77%» quando ne mancavano 1,5 km.
+            val tratto = if (!a.metriDopo.isNaN()) a.metriDopo else metri(a.lat, a.lon, b.lat, b.lon)
             nuovoResto[i] = tratto + nuovoResto[i + 1]
             nuovoRestoTappa[i] = if (a.tipo == "arrive") 0.0 else tratto + nuovoRestoTappa[i + 1]
         }
@@ -279,15 +326,25 @@ object NavFollower {
 
         passi = nuoviPassi
         linea = nuovaLinea
+        // (21/09/2026, REVISIONE 2) Progressivi per la regola di progressione.
+        val cum = DoubleArray(nuovaLinea.size)
+        for (k in 1 until nuovaLinea.size) {
+            cum[k] = cum[k - 1] + metri(nuovaLinea[k - 1][0], nuovaLinea[k - 1][1], nuovaLinea[k][0], nuovaLinea[k][1])
+        }
+        lineaCum = cum
+        alongPasso = DoubleArray(n) { i -> alongDelPunto(nuoviPassi[i].lat, nuoviPassi[i].lon) }
         routeId = if (root.isNull("id")) "" else root.optString("id", "")
         modelloLontano = if (root.isNull("modelloLontano")) "" else root.optString("modelloLontano", "")
         fraseFuoriPercorso = if (root.isNull("fraseFuoriPercorso")) "" else root.optString("fraseFuoriPercorso", "")
         finale = root.optBoolean("finale", true)
         // (21/09/2026, REVISIONE 2) Campi opzionali: assenti = come prima.
         spegniCruscotto = root.optBoolean("spegniCruscotto", true)
+        fuoriDopoAggancio = root.optBoolean("fuoriSoloDopoAggancio", false)
+        agganciato = !fuoriDopoAggancio
 
         idx = root.optInt("indice", 0).coerceIn(0, nuoviPassi.size - 1)
         idxJs = idx
+        dPrecIdx = -1
         minDist = Double.POSITIVE_INFINITY
         dettiVicino.clear()
         dettiLontano.clear()
@@ -305,6 +362,7 @@ object NavFollower {
         fuoriDettoTs = 0L
         fuoriRipetizioni = 0
         vicinoFinaleDa = 0L
+        ultimoFixFinaleTs = 0L
         fotoTerminato = null
         ultimoDetto = ""
         ultimoDettoTs = 0L
@@ -344,9 +402,12 @@ object NavFollower {
             dettiVicino = dettiVicinoDavvero.sorted(),
             dettiLontano = dettiLontanoDavvero.sorted(),
             nativoAlComando = false,
-            ultimoTestoVicino = "",
-            ultimoTestoLontano = "",
-            finito = false,
+            // Lo stato di QUEL momento (come iOS): `finito` conta — la tappa
+            // singola chiusa a schermo spento e poi «Termina» non deve farsi
+            // ricalcolare al risveglio verso la meta già raggiunta.
+            ultimoTestoVicino = ultimoTestoVicino,
+            ultimoTestoLontano = ultimoTestoLontano,
+            finito = finito,
             terminato = true
         ) else fotoTerminato
         azzera()
@@ -356,6 +417,11 @@ object NavFollower {
     private fun azzera() {
         passi = emptyList()
         linea = emptyList()
+        lineaCum = DoubleArray(0)
+        alongPasso = DoubleArray(0)
+        fuoriDopoAggancio = false
+        agganciato = true
+        ultimoFixFinaleTs = 0L
         resto = DoubleArray(0)
         restoTappa = DoubleArray(0)
         ultimaFirmaCruscotto = ""
@@ -372,6 +438,7 @@ object NavFollower {
         inPausa = false
         spegniCruscotto = true
         idxJs = 0
+        dPrecIdx = -1
         fuoriDa = 0L
         fuoriDetto = false
         fuoriDettoTs = 0L
@@ -423,8 +490,9 @@ object NavFollower {
      * dei fix: a percorso FINITO l'alta frequenza non serve più, quindi vale
      * come "nessun percorso" anche se il JS non ha ancora chiamato clear.
      * (21/09/2026, REVISIONE 2) Nemmeno IN PAUSA: per tutto il pranzo il GPS
-     * restava a HIGH_ACCURACY ogni 2 s. In pausa il follower riceve i fix a
-     * riposo e tiene il conto lo stesso.
+     * restava a HIGH_ACCURACY ogni 2 s. In pausa il follower tace; i fix a
+     * riposo spesso non bastano a contare, e alla ripresa si rimette in pari
+     * per PROGRESSIONE sul tracciato (vedi onFix).
      */
     @Synchronized
     fun haPercorsoAttivo(): Boolean = passi.isNotEmpty() && !finito && !inPausa
@@ -448,6 +516,13 @@ object NavFollower {
         val cambiata = inPausa != pausaJs
         inPausa = pausaJs
         ultimaFirmaCruscotto = ""
+        // (21/09/2026, REVISIONE 2) Col JS vivo il fuori percorso è compito
+        // suo: il conto del nativo riparte da zero al prossimo congelamento
+        // (prima una nuova uscita ereditava le ripetizioni di quella vecchia).
+        fuoriDa = 0L
+        fuoriDetto = false
+        fuoriDettoTs = 0L
+        fuoriRipetizioni = 0
         // Il passo che il JS sta mostrando, anche se non è avanti al nostro.
         if (indice >= 0) idxJs = min(indice, n - 1)
         // Quello che riferisce il JS è stato detto DAVVERO (da lui).
@@ -658,6 +733,36 @@ object NavFollower {
         // già alle spalle e poi più niente (l'indice restava indietro).
         val jsVivo = (nowMs - lastHeartbeat) < HEARTBEAT_STALE_MS || inPausa
 
+        // (21/09/2026, REVISIONE 2) PROGRESSIONE SUL TRACCIATO. Se si è già
+        // oltre il passo corrente di più di PROGRESS_M lungo la linea (e sulla
+        // linea), i passi alle spalle si contano in silenzio: dopo una pausa
+        // col GPS a riposo, o un buco di fix, le regole a linea d'aria qui
+        // sotto non li vedono più e il follower restava indietro e muto.
+        // Si prende la PRIMA corrispondenza lungo la linea, cominciando 300 m
+        // PRIMA del passo (mai la più vicina): su un anello l'arrivo coincide
+        // con la partenza, e su un «andata e ritorno» per la stessa strada il
+        // ritorno passa di fianco a chi sta ancora andando — in entrambi i
+        // casi la corrispondenza più indietro vince e non si salta niente.
+        // Mai oltre un arrivo finché si è alla tappa (la visita), mai oltre
+        // l'ultimo passo.
+        if (linea.size >= 2 && idx < n - 1 && idx < alongPasso.size) {
+            val aIdx = alongPasso[idx]
+            if (!aIdx.isNaN()) {
+                val u = alongUtente(lat, lon, aIdx - 300.0, aIdx + PROGRESS_FINESTRA_M, PROGRESS_CROSS_M + accuracyM / 2.0)
+                if (!u.isNaN() && u > aIdx + PROGRESS_M) {
+                    while (idx < n - 1) {
+                        val a = alongPasso[idx]
+                        if (a.isNaN() || a + PROGRESS_PASSATO_M >= u) break
+                        val pp = passi[idx]
+                        if (pp.tipo == "arrive" && metri(lat, lon, pp.lat, pp.lon) <= LEAVE_STOP_M) break
+                        dettiVicino.add(idx)
+                        dettiLontano.add(idx)
+                        avanza()
+                    }
+                }
+            }
+        }
+
         var out: String? = null
         var tipoOut = ""
         var testoOut = "" // il `testo` del passo che ha generato `out`
@@ -677,8 +782,22 @@ object NavFollower {
                 avanza(); continue
             }
             val d = metri(lat, lon, p.lat, p.lon)
-            if (idx + 1 < n) {
-                val pn = passi[idx + 1]
+            // (22/09/2026) «Salta» guarda il PRIMO passo dopo idx che non sia
+            // una partenza: dopo un arrivo c'è sempre la partenza della tratta
+            // dopo, negli stessi punti, e il confronto non scattava mai — chi
+            // lasciava la tappa verso una svolta a 30 m non la sentiva (l'indice
+            // restava sull'arrivo fino a 45 m). Solo lasciando una tappa GIÀ
+            // RAGGIUNTA: su un arrivo non ancora contato si guarda il passo
+            // subito dopo, come prima. Se la tratta dopo riparte per la stessa
+            // strada dell'andata, la sua prima svolta è l'angolo appena girato
+            // per arrivarci: guardandola si saltava l'arrivo e si diceva «gira»
+            // a chi stava ancora andando verso la tappa.
+            var j = idx + 1
+            if (p.tipo == "arrive" && dettiVicino.contains(idx)) {
+                while (j < n && passi[j].tipo == "depart") j++
+            }
+            if (j < n) {
+                val pn = passi[j]
                 val dn = metri(lat, lon, pn.lat, pn.lon)
                 if (dn < d && dn < SKIP_NEXT_M) { avanza(); continue }
             }
@@ -689,7 +808,20 @@ object NavFollower {
                 // `finale`, oltre ai 25 m: NEI PARAGGI = entro 60 m
                 // ininterrottamente da 45 s (la regola 3 del JS).
                 val eFinale = idx == n - 1 && finale
-                if (eFinale && d <= NEARBY_M) {
+                // Ininterrotto davvero: un buco di fix (pausa, galleria) fa
+                // ricominciare il conto, due fix a minuti di distanza non bastano.
+                if (vicinoFinaleDa != 0L && nowMs - ultimoFixFinaleTs > NEARBY_BUCO_MS) vicinoFinaleDa = 0L
+                ultimoFixFinaleTs = nowMs
+                // (22/09/2026) E vicini anche LUNGO IL TRACCIATO (≤ 60 m dalla
+                // meta), come il JS: una via sul retro dell'isolato a 40 m dalla
+                // porta non è «nei paraggi». Senza tracciato utile si resta alla
+                // sola linea d'aria, come prima.
+                val lungoOk = if (eFinale && d <= NEARBY_M && idx < alongPasso.size && !alongPasso[idx].isNaN()) {
+                    val aFin = alongPasso[idx]
+                    val u = alongUtente(lat, lon, aFin - 300.0, aFin + 10.0, NEARBY_M)
+                    !u.isNaN() && aFin - u <= NEARBY_M
+                } else true
+                if (eFinale && d <= NEARBY_M && lungoOk) {
                     if (vicinoFinaleDa == 0L) vicinoFinaleDa = nowMs
                 } else {
                     vicinoFinaleDa = 0L
@@ -744,6 +876,19 @@ object NavFollower {
                 break
             }
 
+            // (22/09/2026) AVVICINAMENTO: c'è solo se la distanza è scesa di
+            // almeno AVVICINA_M rispetto al riferimento dello stesso passo
+            // (primo fix sul passo = nessun riferimento = non ancora). Il
+            // riferimento si sposta solo quando la distanza cambia di almeno
+            // AVVICINA_M: a piedi con un fix ogni 2 s si fanno ~2,8 m, e un
+            // confronto col solo fix precedente (GPS filtrato, senza rumore)
+            // non avrebbe mai visto l'avvicinamento — preavviso perso.
+            val avvicina = dPrecIdx == idx && d < dPrec - AVVICINA_M
+            if (dPrecIdx != idx || d < dPrec - AVVICINA_M || d > dPrec + AVVICINA_M) {
+                dPrec = d
+                dPrecIdx = idx
+            }
+
             if (d <= NEAR_M && (!dettiVicino.contains(idx) || (!jsVivo && !dettiVicinoDavvero.contains(idx)))) {
                 dettiVicino.add(idx)
                 dettiLontano.add(idx)
@@ -758,13 +903,15 @@ object NavFollower {
                 avanza(); continue
             } else if (!dettiVicino.contains(idx) && minDist < 60.0 && d > minDist + MISSED_MARGIN_M) {
                 avanza(); continue
-            } else if (p.tipo == "turn" && !dettiLontano.contains(idx) && !inPausa &&
+            } else if (p.tipo == "turn" && !inPausa && avvicina &&
+                (!dettiLontano.contains(idx) || (!jsVivo && !dettiLontanoDavvero.contains(idx))) &&
                 d >= FAR_MIN_M && d <= FAR_MAX_M && p.testo.isNotEmpty()
             ) {
-                // (21/09/2026, REVISIONE 2) In pausa il preavviso NON si segna:
-                // per il «lontano» non c'è la regola dei «davvero», e una svolta
-                // contata in silenzio durante la pausa perdeva il «Tra X metri»
-                // alla ripresa.
+                // (21/09/2026, REVISIONE 2) In pausa il preavviso NON si segna.
+                // E CONTATO ≠ DETTO anche qui: un preavviso contato in silenzio
+                // negli 8 s dopo il congelamento (JS creduto vivo, ma non l'ha
+                // detto) lo dice il nativo, se si è ancora fra 50 e 150 m.
+                // (22/09/2026) E solo AVVICINANDOSI (vedi `avvicina`).
                 dettiLontano.add(idx)
                 if (!jsVivo) {
                     dettiLontanoDavvero.add(idx)
@@ -776,8 +923,13 @@ object NavFollower {
             break
         }
 
+        // (21/09/2026, REVISIONE 2) Partenza da un indirizzo lontano: si è
+        // «agganciati» (e il fuori percorso vale) solo arrivati sul tracciato.
+        // Conta anche col JS vivo e in pausa.
+        if (!agganciato && linea.size >= 2 && distanzaDallaLinea(lat, lon) <= AGGANCIO_M) agganciato = true
+
         // FUORI PERCORSO — solo se il nativo è al comando e non ha altro da dire.
-        if (!jsVivo && out == null && linea.size >= 2) {
+        if (!jsVivo && agganciato && out == null && linea.size >= 2) {
             val dl = distanzaDallaLinea(lat, lon)
             if (dl > OFFROUTE_M + accuracyM / 2.0) {
                 if (fuoriDa == 0L) {
@@ -851,6 +1003,65 @@ object NavFollower {
      * l'origine nel punto: a queste scale (decine-centinaia di metri)
      * l'errore è trascurabile. Tracciato ≤ 400 punti: costo irrisorio per fix.
      */
+    /**
+     * (21/09/2026, REVISIONE 2) Metri progressivi lungo il tracciato del punto
+     * (lat, lon) proiettato sul segmento PIÙ VICINO. Per i passi, alla
+     * consegna: NaN se il passo sta a più di 50 m dalla linea (tracciato
+     * mancante o diverso: la progressione lì non si usa).
+     */
+    private fun alongDelPunto(lat: Double, lon: Double): Double {
+        if (linea.size < 2 || lineaCum.size != linea.size) return Double.NaN
+        val kx = Math.toRadians(1.0) * RAGGIO_TERRA_M * cos(Math.toRadians(lat))
+        val ky = Math.toRadians(1.0) * RAGGIO_TERRA_M
+        var best = Double.POSITIVE_INFINITY
+        var along = Double.NaN
+        for (k in 1 until linea.size) {
+            val ax = (linea[k - 1][1] - lon) * kx
+            val ay = (linea[k - 1][0] - lat) * ky
+            val dx = (linea[k][1] - lon) * kx - ax
+            val dy = (linea[k][0] - lat) * ky - ay
+            val len2 = dx * dx + dy * dy
+            val t = if (len2 <= 0.0) 0.0 else (-(ax * dx + ay * dy) / len2).coerceIn(0.0, 1.0)
+            val px = ax + t * dx
+            val py = ay + t * dy
+            val dist = sqrt(px * px + py * py)
+            if (dist < best) {
+                best = dist
+                along = lineaCum[k - 1] + t * (lineaCum[k] - lineaCum[k - 1])
+            }
+        }
+        return if (best <= 50.0) along else Double.NaN
+    }
+
+    /**
+     * (21/09/2026, REVISIONE 2) Metri progressivi di chi cammina, fra `da` e
+     * `a` lungo il tracciato: la PRIMA corrispondenza in avanti entro
+     * `maxCross` metri dalla linea (non la più vicina — vedi onFix, l'anello).
+     * NaN se non si è sulla linea in quella finestra.
+     */
+    private fun alongUtente(lat: Double, lon: Double, da: Double, a: Double, maxCross: Double): Double {
+        if (linea.size < 2 || lineaCum.size != linea.size) return Double.NaN
+        val kx = Math.toRadians(1.0) * RAGGIO_TERRA_M * cos(Math.toRadians(lat))
+        val ky = Math.toRadians(1.0) * RAGGIO_TERRA_M
+        for (k in 1 until linea.size) {
+            if (lineaCum[k] < da) continue
+            if (lineaCum[k - 1] > a) break
+            val ax = (linea[k - 1][1] - lon) * kx
+            val ay = (linea[k - 1][0] - lat) * ky
+            val dx = (linea[k][1] - lon) * kx - ax
+            val dy = (linea[k][0] - lat) * ky - ay
+            val len2 = dx * dx + dy * dy
+            val t = if (len2 <= 0.0) 0.0 else (-(ax * dx + ay * dy) / len2).coerceIn(0.0, 1.0)
+            val px = ax + t * dx
+            val py = ay + t * dy
+            if (sqrt(px * px + py * py) <= maxCross) {
+                val along = lineaCum[k - 1] + t * (lineaCum[k] - lineaCum[k - 1])
+                if (along >= da) return along
+            }
+        }
+        return Double.NaN
+    }
+
     private fun distanzaDallaLinea(lat: Double, lon: Double): Double {
         val kx = Math.toRadians(1.0) * RAGGIO_TERRA_M * cos(Math.toRadians(lat))
         val ky = Math.toRadians(1.0) * RAGGIO_TERRA_M

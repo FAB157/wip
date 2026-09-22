@@ -621,6 +621,9 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
     @objc func updateNavBanner(_ call: CAPPluginCall) {
         let attivo = call.getBool("attivo") ?? false
         if !attivo {
+            // (21/09/2026, REVISIONE 2) Il cruscotto del JS è spento: il suo
+            // ultimo stato non vale più per il follower (come Android).
+            NavFollower.shared.dimenticaCruscottoJs()
             // (21/09/2026) Anche la CHIUSURA sul main, come l'avvio qui sotto:
             // sulla coda del bridge poteva passare DAVANTI a un avvio già
             // accodato sul main (true poi false in pochi ms al risveglio), e
@@ -911,6 +914,13 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         // sbagliata. Assente = non scade mai, cioè teaser, arrivi e guide
         // restano come prima.
         let ttlMs = call.getDouble("ttlMs") ?? 0
+        // (22/09/2026) Svolta del navigatore senza la voce della lingua
+        // installata: la coda la scarterebbe, e con ok:true il JS non
+        // ripiegava sulla sua voce. Come Android: ok:false, il JS ripiega.
+        let kind = call.getString("kind") ?? "nav"
+        if kind == "nav" && !SpeechQueue.isVoiceAvailable(prefs.string(forKey: "language") ?? "it") {
+            return call.resolve(["ok": false, "reason": "voice_not_installed"])
+        }
         SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
             text: text,
             isGem: false,

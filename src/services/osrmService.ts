@@ -33,7 +33,7 @@ export interface RouteStep {
   instruction: string;
   /** Coordinata del punto di manovra. */
   location: LatLon;
-  /** Distanza (m) del segmento che porta a questa manovra. */
+  /** Distanza (m) da questa manovra alla SEGUENTE (OSRM step.distance: il tratto che parte qui). */
   distance: number;
   maneuverType: string;
   maneuverModifier?: string;

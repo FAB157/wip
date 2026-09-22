@@ -1514,12 +1514,18 @@ class LocationService {
     return this.starting;
   }
 
+  /** Ritardo abituale dei fix nativi (vedi handlePosition, raffica al risveglio). */
+  private ritardoAbitualeMs = Infinity;
+  private primoArretratoTs = 0;
+
   private async startWatchingInterno(highAccuracy: boolean) {
     // stopWatching e' async (clearWatch nativo): senza await il nuovo watch
     // partiva PRIMA che il vecchio fosse chiuso, e il watchId vecchio veniva
     // sovrascritto — il watch precedente non si poteva piu' fermare.
     await this.stopWatching();
     this.isHighAccuracy = highAccuracy;
+    this.ritardoAbitualeMs = Infinity;
+    this.primoArretratoTs = 0;
 
     const handlePosition = async (position: any, isNative: boolean = false) => {
       // @capacitor/geolocation restituisce { coords: {...}, timestamp } come il
@@ -1554,6 +1560,32 @@ class LocationService {
         accuracy: Number.isFinite(coords.accuracy) && coords.accuracy > 0 ? coords.accuracy : 50,
         timestamp: position?.timestamp || position?.time || now,
       };
+      // RAFFICA DI FIX ARRETRATI AL RISVEGLIO (21/09/2026). A pagina congelata
+      // il sistema accumula le posizioni e al disgelo le consegna tutte
+      // insieme: il navigatore le elaborava prima del riallineamento col
+      // follower nativo e ridiceva svolte ormai alle spalle. Si scartano i fix
+      // piu' vecchi di 15 s rispetto al ritardo ABITUALE (il minimo recente,
+      // non l'eta' assoluta: su Android l'ora del fix puo' venire dal GNSS e
+      // un orologio di sistema spostato a mano farebbe scartare tutto). Se
+      // i fix «vecchi» continuano ad arrivare per oltre 10 s non e' una
+      // raffica ma un orologio cambiato: si ricalibra e si accettano.
+      if (isNative) {
+        const ritardo = now - update.timestamp;
+        if (Number.isFinite(ritardo)) {
+          // Il ritardo abituale si aggiorna solo coi fix ACCETTATI: se lo
+          // spostassero anche quelli scartati, ogni fix vecchio lo alzerebbe
+          // di 0,1 s e la coda della raffica rientrerebbe sotto la soglia.
+          const abituale = Math.min(this.ritardoAbitualeMs + 100, ritardo);
+          if (ritardo - abituale > 15_000) {
+            if (this.primoArretratoTs === 0) this.primoArretratoTs = now;
+            if (now - this.primoArretratoTs < 10_000) return;
+            this.ritardoAbitualeMs = ritardo;
+          } else {
+            this.ritardoAbitualeMs = abituale;
+          }
+          this.primoArretratoTs = 0;
+        }
+      }
       this.lastLocation = update;
       this.listeners.forEach(l => l(update));
 
@@ -2562,6 +2594,12 @@ class LocationService {
     try {
       const { LocalNotifications } = await import('@capacitor/local-notifications');
       await LocalNotifications.cancel({ notifications: [{ id: LocationService.NAV_NOTIFICATION_ID }] });
+      // (21/09/2026) Su iOS `cancel` toglie solo le notifiche PENDENTI: quella
+      // della svolta e` gia` consegnata e restava sulla lock screen a
+      // navigazione finita (Live Activities disattivate). Su Android e` innocuo.
+      await LocalNotifications.removeDeliveredNotifications({
+        notifications: [{ id: LocationService.NAV_NOTIFICATION_ID, title: '', body: '' }] as any,
+      }).catch(() => { /* niente da togliere */ });
     } catch { /* plugin assente o gia' cancellata */ }
   }
 

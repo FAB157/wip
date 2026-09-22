@@ -1128,6 +1128,22 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
             }
             return
         }
+        val kind = call.getString("kind") ?: "nav"
+        // (22/09/2026) Svolta del navigatore con la voce della lingua dell'app
+        // GIÀ NOTA come mancante: la coda la scarterebbe (processNextSpeech,
+        // regola del 23/08) dopo aver risposto ok:true, e il JS non ripiegava
+        // sulla voce di rete — navigazione muta a schermo acceso. Si risponde
+        // ok:false e il JS parla con Azure. Solo kind "nav" e solo se la coda
+        // l'ha già accertato per QUESTA lingua: nel dubbio si accoda come prima.
+        if (kind == "nav") {
+            val muta = com.itaintasca.app.geofence.GeofenceBroadcastReceiver.voceMancante()
+            val lingua = prefs.getString("language", "it") ?: "it"
+            if (muta != null && muta == lingua) {
+                ret.put("ok", false)
+                ret.put("reason", "voice_not_installed")
+                return call.resolve(ret)
+            }
+        }
         return try {
             com.itaintasca.app.geofence.GeofenceBroadcastReceiver.enqueue(
                 context,
@@ -1137,7 +1153,7 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                     isItinerary = false,
                     poiId = call.getString("poiId"),
                     priority = call.getInt("priority") ?: 0,
-                    kind = call.getString("kind") ?: "nav",
+                    kind = kind,
                     // (21/09/2026, REVISIONE 2) `ttlMs` opzionale: la frase
                     // scade adesso+ttl, come le svolte del follower. Il JS lo
                     // manda (20000) SOLO per le svolte del navigatore: una

@@ -434,6 +434,14 @@ export function tappaDaPoi(p: any): TappaGiro {
   };
 }
 
+/** Un passo del giro per il follower nativo (vedi passiPerNativo e lib/nav/navNativo.PassoNav). */
+type PassoPerNativo = {
+  lat: number; lon: number; testo: string; tipo: 'depart' | 'turn' | 'arrive';
+  tappa?: string; manovraTipo?: string; manovraVerso?: string;
+  /** Metri lungo il percorso fino al passo seguente (step.distance), se noti. */
+  metriDopo?: number;
+};
+
 class TourService {
   private giro: GiroInCorso | null = null;
   private stato: StatoCorrente = { stato: 'IN_CAMMINO', tappaCorrente: 0, da: 0 };
@@ -1553,7 +1561,7 @@ class TourService {
 
   passiPerNativo(fraseArrivo: string): {
     firma: string;
-    passi: { lat: number; lon: number; testo: string; tipo: 'depart' | 'turn' | 'arrive'; tappa?: string; manovraTipo?: string; manovraVerso?: string }[];
+    passi: PassoPerNativo[];
     linea: [number, number][];
     indice: number;
   } | null {
@@ -1562,7 +1570,9 @@ class TourService {
     if (!giro || !firma) return null;
     const tratte: any[] = Array.isArray(giro.tratte) ? giro.tratte : [];
     const da = Math.max(0, this.stato.tappaCorrente);
-    const passi: { lat: number; lon: number; testo: string; tipo: 'depart' | 'turn' | 'arrive'; tappa?: string; manovraTipo?: string; manovraVerso?: string }[] = [];
+    const passi: PassoPerNativo[] = [];
+    const valido = (p: { lat: number; lon: number } | null | undefined): p is { lat: number; lon: number } =>
+      !!p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon));
     for (let j = da; j < tratte.length; j++) {
       const steps: any[] = Array.isArray(tratte[j]?.steps) ? tratte[j].steps : [];
       const iTappa = giro.ordine?.[j];
@@ -1582,6 +1592,8 @@ class TourService {
       // campo del cruscotto: `nomeTappa` resta vuota per la voce (altrimenti
       // «Sei arrivato a Ritorno al punto di partenza»).
       const etichettaTappa = nomeTappa || (iTappa == null ? getTranslation('tour_ritorno_partenza', (this.lingua || 'it').toUpperCase() as Language) : '');
+      const testoArrivo = arrivoParlato ? `${fraseArrivo} ${nomeTappa}`.trim() : '';
+      const primoDellaTratta = passi.length;
       for (const s of steps) {
         const l = s?.maneuver?.location;
         if (!Array.isArray(l) || l.length < 2) continue;
@@ -1591,19 +1603,111 @@ class TourService {
         // tappa + manovra grezza: a schermo spento il cruscotto (notifica /
         // Live Activity) lo ridisegna il follower, e gli servono il nome
         // della meta di QUESTA tratta e la freccia.
-        const extra = { tappa: etichettaTappa, manovraTipo: String(s?.maneuver?.type || ''), manovraVerso: String(s?.maneuver?.modifier || '') };
+        // `metriDopo` (22/09/2026): i metri LUNGO IL PERCORSO fino al passo
+        // seguente (step.distance): il cruscotto a schermo spento li usa al
+        // posto della linea d'aria. Solo se e` un numero vero.
+        const dopo = Number(s?.distance);
+        const extra = {
+          tappa: etichettaTappa,
+          manovraTipo: String(s?.maneuver?.type || ''),
+          manovraVerso: String(s?.maneuver?.modifier || ''),
+          ...(Number.isFinite(dopo) && dopo > 0 ? { metriDopo: dopo } : {}),
+        };
         if (tipoOsrm === 'depart') passi.push({ lat, lon, testo: '', tipo: 'depart', ...extra });
-        else if (tipoOsrm === 'arrive') passi.push({ lat, lon, testo: arrivoParlato ? `${fraseArrivo} ${nomeTappa}`.trim() : '', tipo: 'arrive', ...extra });
+        else if (tipoOsrm === 'arrive') passi.push({ lat, lon, testo: testoArrivo, tipo: 'arrive', ...extra });
         else passi.push({ lat, lon, testo: istruzionePerStep(s, this.lingua, nomeTappa || undefined) || '', tipo: 'turn', ...extra });
+      }
+      // OGNI TRATTA HA ESATTAMENTE UN ARRIVO (22/09/2026). La tratta «linea
+      // retta» (nessun percorso pedonale: `steps` vuoti) non ne aveva, e quelle
+      // servite da ORS/Geoapify hanno solo passi di cammino: a schermo spento il
+      // follower passava alla tratta dopo senza fermarsi alla tappa, e al
+      // risveglio il giro — che chiude una tappa per ogni arrivo superato —
+      // restava indietro. Senza arrivo, l'ultimo passo diventa l'arrivo sulla
+      // tappa (la porta, se la sappiamo); una tratta senza passi ha una
+      // partenza vuota dal punto di prima e l'arrivo. Il JS naviga i passi
+      // OSRM veri: gli indici della tratta corrente non cambiano.
+      const dellaTratta = passi.slice(primoDellaTratta);
+      if (!dellaTratta.some(p => p.tipo === 'arrive')) {
+        const metaTappa = tappaJ ? (tappaJ.ingresso ?? { lat: tappaJ.lat, lon: tappaJ.lon }) : (iTappa == null ? this.metaAnello(giro) : null);
+        const ultimo = dellaTratta.length > 0 ? dellaTratta[dellaTratta.length - 1] : null;
+        const dove = valido(metaTappa) ? { lat: Number(metaTappa.lat), lon: Number(metaTappa.lon) } : (ultimo ? { lat: ultimo.lat, lon: ultimo.lon } : null);
+        if (dove) {
+          const arrivo: PassoPerNativo = { ...dove, testo: testoArrivo, tipo: 'arrive', tappa: etichettaTappa, manovraTipo: 'arrive', manovraVerso: '' };
+          if (ultimo && ultimo.tipo !== 'depart') passi[passi.length - 1] = arrivo;
+          else if (ultimo) passi.push(arrivo);
+          else {
+            // Il punto di prima: la fine della tratta precedente, la tappa
+            // precedente, o la partenza del giro.
+            const tPrima = j > 0 ? giro.tappe?.[giro.ordine?.[j - 1] as number] : null;
+            const primaTappa = tPrima ? (tPrima.ingresso ?? { lat: tPrima.lat, lon: tPrima.lon }) : null;
+            const prima = passi.length > 0 ? passi[passi.length - 1] : (valido(primaTappa) ? primaTappa : (valido(giro.partenzaCorrente) ? giro.partenzaCorrente : null));
+            const lunga = Number(tratte[j]?.distance);
+            if (prima) passi.push({
+              lat: Number(prima.lat), lon: Number(prima.lon), testo: '', tipo: 'depart', tappa: etichettaTappa, manovraTipo: 'depart', manovraVerso: '',
+              ...(Number.isFinite(lunga) && lunga > 0 ? { metriDopo: lunga } : {}),
+            });
+            passi.push(arrivo);
+          }
+        }
       }
     }
     if (passi.length < 2) return null;
+    // SOLO LA STRADA ANCORA DA FARE (22/09/2026). La linea consegnata al
+    // follower era l'intero giro, tratte gia` fatte comprese: chi ripartiva da
+    // una tappa tornando sui propri passi restava «sul percorso» e non sentiva
+    // mai «Sei fuori percorso». Si parte dal vertice in cui comincia la tratta
+    // corrente (lo stesso inizio che usa scostamentoDalPercorso).
+    const geo: [number, number][] = Array.isArray(giro.geometria) ? giro.geometria : [];
     return {
       firma,
       passi,
-      linea: Array.isArray(giro.geometria) ? giro.geometria : [],
+      linea: geo.length >= 2 ? geo.slice(this.inizioTrattaInGeometria()) : geo,
       indice: Math.min(this.indicePerNativo(), passi.length - 1),
     };
+  }
+
+  /**
+   * Il vertice di `geometria` da cui comincia la tratta corrente (22/09/2026).
+   * Si cerca in avanti da poco prima dell'ultimo aggancio (come
+   * scostamentoDalPercorso) il primo vertice entro 5 m dalla partenza della
+   * tratta, altrimenti il piu` vicino: su un anello lo stesso punto puo`
+   * ripassare piu` avanti, e conta il primo. Se in quella finestra non c'e`
+   * niente entro 30 m, la partenza e` gia` alle spalle dell'aggancio: si
+   * comincia dall'inizio della finestra (15 vertici prima dell'aggancio).
+   * Si calcola una volta per tratta (cambia con la tappa o con la geometria).
+   */
+  private inizioTratta: { geo: unknown; tappa: number; i: number } | null = null;
+  private inizioTrattaInGeometria(): number {
+    const g = this.giro?.geometria;
+    if (!this.giro || !Array.isArray(g) || g.length < 2) return 0;
+    const tc = Math.max(0, this.stato.tappaCorrente);
+    const c = this.inizioTratta;
+    if (c && c.geo === g && c.tappa === tc) return c.i;
+    let i0 = 0;
+    const partenza = this.partenzaDellaTratta(tc);
+    if (partenza) {
+      const da = Math.max(0, Math.min(this.ultimoIndiceSnap, g.length - 2) - 15);
+      let min = Infinity, idx = 0;
+      for (let i = da; i < g.length; i++) {
+        const d = metri(partenza, { lat: g[i][0], lon: g[i][1] });
+        if (d < min) { min = d; idx = i; }
+        if (d <= 5) break;
+      }
+      i0 = Math.min(min <= 30 ? idx : da, g.length - 2);
+    }
+    this.inizioTratta = { geo: g, tappa: tc, i: i0 };
+    return i0;
+  }
+
+  /** Dove comincia la tratta `tc`: la sua prima manovra, altrimenti la tappa di prima o la partenza. */
+  private partenzaDellaTratta(tc: number): { lat: number; lon: number } | null {
+    const g = this.giro;
+    if (!g) return null;
+    const l = g.tratte?.[tc]?.steps?.[0]?.maneuver?.location;
+    if (Array.isArray(l) && l.length >= 2 && Number.isFinite(Number(l[0])) && Number.isFinite(Number(l[1]))) return { lat: Number(l[1]), lon: Number(l[0]) };
+    const t = tc > 0 ? g.tappe?.[g.ordine?.[tc - 1] as number] : null;
+    const p = t ? (t.ingresso ?? { lat: t.lat, lon: t.lon }) : (g.partenzaCorrente ?? null);
+    return p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon)) ? { lat: Number(p.lat), lon: Number(p.lon) } : null;
   }
 
   private aggiornaPasso(pos: { lat: number; lon: number }) {
@@ -2465,7 +2569,11 @@ class TourService {
     if (!g || g.length < 2) return 0;
     const cos = Math.cos((pos.lat * Math.PI) / 180) || 1;
     const px = pos.lon * cos, py = pos.lat;
-    const da = Math.max(0, Math.min(this.ultimoIndiceSnap, g.length - 2) - 15);
+    // (22/09/2026) Mai prima dell'inizio della tratta corrente: la finestra
+    // tornava indietro di 15 vertici a ogni fix, dentro la tratta gia` fatta, e
+    // chi ripartiva da una tappa tornando sui propri passi restava «sul
+    // percorso» (lo stesso inizio della linea consegnata al follower).
+    const da = Math.max(this.inizioTrattaInGeometria(), Math.max(0, Math.min(this.ultimoIndiceSnap, g.length - 2) - 15));
     let min = Infinity, idx = this.ultimoIndiceSnap;
     for (let i = da; i + 1 < g.length; i++) {
       const ax = g[i][1] * cos, ay = g[i][0], bx = g[i + 1][1] * cos, by = g[i + 1][0];

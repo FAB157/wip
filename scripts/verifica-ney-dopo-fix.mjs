@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-/** Trova POI reali MAI arricchiti in due citta' diverse, per il collaudo multilingua. */
 import fs from 'fs';
 import path from 'path';
 const env = {};
@@ -14,14 +13,12 @@ for (const f of ['.env', '.env.local']) {
 const supabaseUrl = env.SUPABASE_URL || env.VITE_SUPABASE_URL;
 const supabaseServiceKey = env.SUPABASE_SERVICE_ROLE_KEY;
 const headers = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
-
-async function cerca(nome, lat, lon, d) {
-  const r = await fetch(`${supabaseUrl}/rest/v1/shared_pois?lat=gte.${lat - d}&lat=lte.${lat + d}&lon=gte.${lon - d}&lon=lte.${lon + d}&category=eq.monumenti&description_short=is.null&select=id,name,lat,lon&limit=3`, { headers });
-  console.log(nome, ':', await r.json());
-}
+const id = 'bc-merimee-PA00088649';
 
 async function main() {
-  await cerca('Madrid', 40.4168, -3.7038, 0.03);
-  await cerca('Monaco di Baviera', 48.1351, 11.5820, 0.03);
+  const sp = await (await fetch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${id}&select=id,description_short,description_long,description_lang,audio_script`, { headers })).json();
+  console.log('shared_pois:', JSON.stringify(sp, null, 2).slice(0, 800));
+  const pd = await (await fetch(`${supabaseUrl}/rest/v1/poi_details?poi_id=eq.${id}&select=poi_id,language,summary,enriched`, { headers })).json();
+  console.log('poi_details:', pd);
 }
 main().catch(e => { console.error('ERRORE', e); process.exit(1); });

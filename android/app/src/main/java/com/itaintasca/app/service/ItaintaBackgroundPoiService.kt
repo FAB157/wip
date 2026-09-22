@@ -1098,6 +1098,12 @@ class ItaintaBackgroundPoiService : Service() {
      */
     private fun seguiNavigatore(location: Location) {
         try {
+            // (21/09/2026, REVISIONE 2) Un fix VECCHIO (consegnato a lotti dopo
+            // un riposo del GPS, o arretrato) non guida nessuno: si scarta,
+            // come fa gia' iOS (oltre 15 s). Solo qui: radar e teaser restano
+            // com'erano.
+            val etaFixMs = (SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos) / 1_000_000L
+            if (etaFixMs > 15_000L) { syncNavRate(); return }
             // Un fix senza accuratezza dichiarata non si puo' giudicare: si
             // passa un valore oltre MAX_ACC_M cosi' il follower lo scarta.
             val acc = if (location.hasAccuracy()) location.accuracy.toDouble() else 9999.0

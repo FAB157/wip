@@ -937,8 +937,19 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 // (18/09/2026 notte) Il tasto deve RISPONDERE: ridisegno
                 // subito con `inPausa` aggiornato, senza aspettare il fix
                 // dopo (da fermi non arriva). Col JS vivo `cruscotto` dà nil
-                // e il banner lo ridisegna lui.
-                self.ridisegnaCruscottoNav(self.ultimaPosizioneNota, forza: true)
+                // e il banner lo ridisegna lui. (21/09/2026, REVISIONE 2)
+                // Con l'ultimo fix BUONO visto dal follower (≤ 60 m), come
+                // Android: `ultimaPosizioneNota` può essere un fix da 100 m o
+                // non valido, e `forza` salta il controllo di precisione.
+                if let buono = NavFollower.shared.ultimoFixBuono() {
+                    self.ridisegnaCruscottoNav(
+                        CLLocation(
+                            coordinate: CLLocationCoordinate2D(latitude: buono.lat, longitude: buono.lon),
+                            altitude: 0, horizontalAccuracy: 10, verticalAccuracy: -1, timestamp: Date()
+                        ),
+                        forza: true
+                    )
+                }
             case "termina":
                 // (21/09/2026, REVISIONE 2) Fotografia del progresso prima di
                 // svuotare: al «no» della conferma il JS la riprende.
@@ -950,7 +961,12 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 // innocuo (la seconda non trova l'attività).
                 DispatchQueue.main.async { LiveActivityNav.shared.termina() }
             case "riascolta":
-                guard let frase = NavFollower.shared.ripeti() else { return }
+                // (21/09/2026, REVISIONE 2) Nel GIRO «Riascolta» per il JS vuol
+                // dire rifare la guida della tappa, non la svolta: il nativo
+                // ridice la manovra solo nella navigazione a tappa singola
+                // (come Android, dove nel giro il tasto non c'è).
+                guard NavFollower.shared.modoCruscotto() == "singola",
+                      let frase = NavFollower.shared.ripeti() else { return }
                 SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
                     text: frase,
                     isGem: false,
@@ -2659,6 +2675,25 @@ final class NavFollower {
     /// Uguale in NavFollower.kt.
     private static let offrouteRipetiMs: Double = 60_000
     private static let offrouteRipetizioniMax = 2
+    /// (21/09/2026, REVISIONE 2) «Nei paraggi» vale solo se ininterrotto: un
+    /// buco di fix più lungo di così ricomincia il conto dei 45 s.
+    private static let nearbyBucoMs: Double = 15_000
+    /// (21/09/2026, REVISIONE 2) PROGRESSIONE SUL TRACCIATO (la regola del JS,
+    /// «salto per progressione»): se chi cammina, sulla linea, è già oltre il
+    /// passo corrente di più di 40 m lungo il tracciato, i passi alle spalle
+    /// si contano in silenzio. Senza, dopo una pausa (GPS a riposo) o un buco
+    /// di fix il follower restava indietro e muto. Uguale in NavFollower.kt.
+    private static let progressM: Double = 40
+    private static let progressPassatoM: Double = 25
+    private static let progressCrossM: Double = 25
+    private static let progressFinestraM: Double = 2_000
+    /// (21/09/2026, REVISIONE 2) Partenza da un indirizzo lontano: il «fuori
+    /// percorso» vale solo arrivati entro 60 m dal tracciato (regola del JS).
+    private static let aggancioM: Double = 60
+    /// (22/09/2026) Il preavviso «lontano» si dice solo AVVICINANDOSI alla
+    /// svolta: la distanza deve essere calata di almeno 3 m rispetto al fix
+    /// precedente sullo stesso passo. Uguale in NavFollower.kt.
+    private static let avvicinamentoM: Double = 3
 
     /// OROLOGIO MONOTONO (ms da un istante fisso) per battito, doppioni e
     /// «fuori percorso». La data di sistema può saltare (cambio di fuso,
@@ -2685,6 +2720,11 @@ final class NavFollower {
         let tappa: String
         let manovraTipo: String
         let manovraVerso: String
+        /// (22/09/2026) `metriDopo` facoltativo: metri LUNGO IL PERCORSO fino
+        /// al passo seguente (numero finito > 0), per resto/restoTappa del
+        /// cruscotto al posto della linea d'aria fra i due passi, che su un
+        /// tratto curvo sottostimava metri e minuti. nil = linea d'aria.
+        let metriDopo: Double?
     }
 
     private struct Punto {
@@ -2742,6 +2782,26 @@ final class NavFollower {
     /// RIPETUTO in questa uscita dal tracciato.
     private var fuoriDettoTs: Double = 0
     private var fuoriRipetizioni = 0
+    /// Ultimo fix valutato sull'arrivo: un buco più lungo di `nearbyBucoMs`
+    /// ricomincia il conto dei 45 s «nei paraggi».
+    private var ultimoFixFinaleTs: Double = 0
+    /// Metri progressivi lungo il tracciato: dei suoi vertici, e di ogni passo
+    /// proiettato sulla linea (nan se il passo è a più di 50 m dalla linea).
+    private var lineaCum: [Double] = []
+    private var alongPasso: [Double] = []
+    /// `fuoriSoloDopoAggancio` del routeJson: il «fuori percorso» tace finché
+    /// chi è partito da un indirizzo lontano non arriva sul tracciato.
+    private var fuoriDopoAggancio = false
+    private var agganciato = true
+    /// Ultimo fix buono (≤ 60 m) visto da onFix: per il ridisegno immediato
+    /// dei tasti pausa/riprendi, come Android.
+    private var ultimaLatBuona = Double.nan
+    private var ultimaLonBuona = Double.nan
+    /// (22/09/2026) Distanza del fix buono precedente dal passo `dPrecIdx`:
+    /// serve a dire il preavviso «lontano» solo in avvicinamento. nan / -1 =
+    /// nessun valore per il passo corrente (non si dice ancora).
+    private var dPrec = Double.nan
+    private var dPrecIdx = -1
 
     /// (21/09/2026, REVISIONE 2) FOTOGRAFIA scattata dal tasto «Termina» del
     /// cruscotto prima di svuotare il follower: al «Termina» in ritardo
@@ -2802,11 +2862,39 @@ final class NavFollower {
         // «Riprendi» dalla lock screen trovava il follower vuoto).
         inPausa = percorso.inPausa
         spegniCruscotto = percorso.spegniCruscotto
+        fuoriDopoAggancio = percorso.fuoriSoloDopoAggancio
+        agganciato = !fuoriDopoAggancio
         idx = min(max(percorso.indice, 0), percorso.passi.count - 1)
         idxJs = idx
         lastHeartbeat = Self.orologioMs()
         calcolaRestiSottoLock()
+        calcolaProgressiviSottoLock()
         return true
+    }
+
+    /// (21/09/2026, REVISIONE 2) L'ultimo fix buono visto da onFix, per il
+    /// ridisegno immediato dei tasti. nil se non ce n'è ancora uno.
+    func ultimoFixBuono() -> (lat: Double, lon: Double)? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !ultimaLatBuona.isNaN, !ultimaLonBuona.isNaN else { return nil }
+        return (lat: ultimaLatBuona, lon: ultimaLonBuona)
+    }
+
+    /// (21/09/2026, REVISIONE 2) Il `modo` dell'ultimo stato del cruscotto
+    /// mandato dal JS ("giro", "percorso", "singola"; "" se non c'è).
+    func modoCruscotto() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return ultimoJs["modo"] as? String ?? ""
+    }
+
+    /// (21/09/2026, REVISIONE 2) updateNavBanner con `attivo: false`: il JS ha
+    /// spento il cruscotto, il suo ultimo stato non vale più (come Android).
+    func dimenticaCruscottoJs() {
+        lock.lock()
+        defer { lock.unlock() }
+        ultimoJs = [:]
     }
 
     /// clearNavRoute (e il load() del plugin).
@@ -2904,6 +2992,13 @@ final class NavFollower {
         let pausaCambiata = inPausa != pausaJs
         inPausa = pausaJs
         cruscottoFirma = ""
+        // (21/09/2026, REVISIONE 2) Col JS vivo il fuori percorso è compito
+        // suo: il conto del nativo riparte da zero al prossimo congelamento
+        // (una nuova uscita ereditava le ripetizioni di quella vecchia).
+        fuoriDa = 0
+        fuoriDetto = false
+        fuoriDettoTs = 0
+        fuoriRipetizioni = 0
         // Quello che riferisce il JS è stato detto DAVVERO (da lui).
         for i in vicino where i >= 0 && i < n {
             dettiVicino.insert(i)
@@ -3188,6 +3283,39 @@ final class NavFollower {
         // niente frasi, niente «davvero», niente `finito`, niente fuori
         // percorso. Uguale in NavFollower.kt.
         let jsVivo = (nowMs - lastHeartbeat) < Self.heartbeatStaleMs || inPausa
+        // L'ultimo fix buono, per il ridisegno immediato dei tasti.
+        ultimaLatBuona = lat
+        ultimaLonBuona = lon
+
+        // (21/09/2026, REVISIONE 2) PROGRESSIONE SUL TRACCIATO. Già oltre il
+        // passo corrente di più di 40 m lungo la linea (e sulla linea): i
+        // passi alle spalle si contano in silenzio. Si prende la PRIMA
+        // corrispondenza cominciando 300 m PRIMA del passo, mai la più
+        // vicina: su un anello l'arrivo coincide con la partenza, e su un
+        // «andata e ritorno» il ritorno passa di fianco a chi sta ancora
+        // andando — la corrispondenza più indietro vince e non si salta nulla.
+        // Mai oltre un arrivo finché si è alla tappa, mai oltre l'ultimo passo.
+        // Uguale in NavFollower.kt.
+        if linea.count >= 2, idx < n - 1, idx < alongPasso.count {
+            let aIdx = alongPasso[idx]
+            if !aIdx.isNaN {
+                let u = alongUtente(lat: lat, lon: lon, da: aIdx - 300,
+                                    a: aIdx + Self.progressFinestraM,
+                                    maxCross: Self.progressCrossM + accuracy / 2)
+                if !u.isNaN && u > aIdx + Self.progressM {
+                    while idx < n - 1 {
+                        let a = alongPasso[idx]
+                        if a.isNaN || a + Self.progressPassatoM >= u { break }
+                        let pp = passi[idx]
+                        if pp.tipo == "arrive" && Self.metri(lat, lon, pp.lat, pp.lon) <= Self.leaveStopM { break }
+                        dettiVicino.insert(idx)
+                        dettiLontano.insert(idx)
+                        avanzaSottoLock()
+                    }
+                }
+            }
+        }
+
         var out: String?
         var tipoOut = ""
         var testoPasso = ""
@@ -3209,14 +3337,40 @@ final class NavFollower {
             let d = Self.metri(lat, lon, p.lat, p.lon)
             // La manovra DOPO è più vicina di questa, ed è qui: questa è
             // andata (scorciatoia, fix persi in galleria).
-            if idx + 1 < n {
-                let dn = Self.metri(lat, lon, passi[idx + 1].lat, passi[idx + 1].lon)
+            // (22/09/2026) «Dopo» = il primo passo successivo che NON sia una
+            // partenza: dopo un arrivo del giro viene la partenza della tratta
+            // nuova, nello stesso punto dell'arrivo, e il confronto con lei
+            // non scattava mai — lasciando la tappa verso una svolta a meno
+            // di 40 m l'indice restava sull'arrivo. Si avanza di uno come
+            // prima: la partenza la salta il giro dopo. Solo lasciando una
+            // tappa GIÀ RAGGIUNTA: se la tratta dopo riparte per la stessa
+            // strada dell'andata, la sua prima svolta è l'angolo appena girato
+            // per arrivarci, e guardandola prima dell'arrivo si saltava la
+            // tappa. Uguale in NavFollower.kt.
+            var kDopo = idx + 1
+            if p.tipo == "arrive" && dettiVicino.contains(idx) {
+                while kDopo < n && passi[kDopo].tipo == "depart" { kDopo += 1 }
+            }
+            if kDopo < n {
+                let dn = Self.metri(lat, lon, passi[kDopo].lat, passi[kDopo].lon)
                 if dn < d && dn < Self.skipNextM {
                     avanzaSottoLock()
                     continue
                 }
             }
             minDist = min(minDist, d)
+            // (22/09/2026) AVVICINAMENTO: la distanza da QUESTO passo al fix
+            // buono precedente (solo se era lo stesso passo). Letta prima di
+            // sovrascriverla; i fix scartati più su non la toccano.
+            // Il riferimento si sposta solo a scatti di almeno 3 m (in giù o in
+            // su): a piedi con un fix ogni 2 s si fanno ~2,8 m, e il confronto
+            // col SOLO fix precedente non avrebbe quasi mai visto
+            // l'avvicinamento. Uguale in NavFollower.kt.
+            let inAvvicinamento = dPrecIdx == idx && d < dPrec - Self.avvicinamentoM
+            if dPrecIdx != idx || d < dPrec - Self.avvicinamentoM || d > dPrec + Self.avvicinamentoM {
+                dPrec = d
+                dPrecIdx = idx
+            }
 
             if p.tipo == "arrive" {
                 // (21/09/2026, REVISIONE 2) L'ARRIVO FINALE (solo l'ultimo
@@ -3226,8 +3380,22 @@ final class NavFollower {
                 // massimo e il cruscotto acceso fino all'apertura dell'app, e
                 // poi sentiva «Sei fuori percorso». Uguale in NavFollower.kt.
                 let eFinale = idx == n - 1 && finale
-                // NEI PARAGGI: entro 60 m ininterrottamente da 45 s.
-                if eFinale && d <= Self.nearbyM {
+                // NEI PARAGGI: entro 60 m ininterrottamente da 45 s. Davvero
+                // ininterrotto: un buco di fix (pausa, galleria) ricomincia il
+                // conto, due fix a minuti di distanza non bastano.
+                if vicinoFinaleDa > 0 && nowMs - ultimoFixFinaleTs > Self.nearbyBucoMs { vicinoFinaleDa = 0 }
+                ultimoFixFinaleTs = nowMs
+                // (22/09/2026) E vicini anche LUNGO IL TRACCIATO (≤ 60 m dalla
+                // meta), come il JS: una via sul retro dell'isolato a 40 m dalla
+                // porta non è «nei paraggi». Senza tracciato utile si resta alla
+                // sola linea d'aria, come prima. Uguale in NavFollower.kt.
+                var lungoOk = true
+                if eFinale && d <= Self.nearbyM && idx < alongPasso.count && !alongPasso[idx].isNaN {
+                    let aFin = alongPasso[idx]
+                    let u = alongUtente(lat: lat, lon: lon, da: aFin - 300, a: aFin + 10, maxCross: Self.nearbyM)
+                    lungoOk = !u.isNaN && aFin - u <= Self.nearbyM
+                }
+                if eFinale && d <= Self.nearbyM && lungoOk {
                     if vicinoFinaleDa == 0 { vicinoFinaleDa = nowMs }
                 } else {
                     vicinoFinaleDa = 0
@@ -3312,11 +3480,17 @@ final class NavFollower {
                         d > minDist + Self.missedMarginM {
                 avanzaSottoLock() // sfiorata senza entrare nei 30 m, e ora ci si allontana
                 continue
-            } else if p.tipo == "turn" && !inPausa && !dettiLontano.contains(idx) &&
+            } else if p.tipo == "turn" && !inPausa && inAvvicinamento &&
+                        (!dettiLontano.contains(idx) || (!jsVivo && !dettiLontanoDavvero.contains(idx))) &&
                         d >= Self.farMinM && d <= Self.farMaxM && !p.testo.isEmpty {
-                // (21/09/2026, REVISIONE 2) `!inPausa`: il preavviso contato
-                // in silenzio durante la pausa andrebbe perso alla ripresa (per
-                // il «lontano» non c'è la regola dei «davvero»).
+                // (21/09/2026, REVISIONE 2) In pausa il preavviso NON si segna.
+                // E CONTATO ≠ DETTO anche qui: un preavviso contato in silenzio
+                // negli 8 s dopo il congelamento (JS creduto vivo, ma non l'ha
+                // detto) lo dice il nativo, se si è ancora fra 50 e 150 m.
+                // (22/09/2026) Solo in AVVICINAMENTO (`inAvvicinamento`): fermi
+                // o allontanandosi (appena lasciata una tappa, svolta alle
+                // spalle) «Tra 100 metri, gira…» era un'indicazione sbagliata.
+                // Un fix di ritardo: senza il valore precedente non si dice.
                 dettiLontano.insert(idx)
                 if !jsVivo {
                     dettiLontanoDavvero.insert(idx)
@@ -3331,9 +3505,16 @@ final class NavFollower {
             break
         }
 
+        // (21/09/2026, REVISIONE 2) Partenza da un indirizzo lontano: si è
+        // «agganciati» (e il fuori percorso vale) solo arrivati sul tracciato.
+        // Conta anche col JS vivo e in pausa. Uguale in NavFollower.kt.
+        if !agganciato && linea.count >= 2 && distanzaDalTracciato(lat: lat, lon: lon) <= Self.aggancioM {
+            agganciato = true
+        }
+
         // FUORI PERCORSO: solo se tocca al nativo, non c'è già una frase in
         // questo fix e il JS ha mandato un tracciato.
-        if !jsVivo && out == nil && linea.count >= 2 {
+        if !jsVivo && agganciato && out == nil && linea.count >= 2 {
             let dl = distanzaDalTracciato(lat: lat, lon: lon)
             if dl > Self.offrouteM + accuracy / 2 {
                 if fuoriDa == 0 {
@@ -3412,8 +3593,15 @@ final class NavFollower {
         spegniCruscotto = true
         idxJs = 0
         vicinoFinaleDa = 0
+        ultimoFixFinaleTs = 0
         fuoriDettoTs = 0
         fuoriRipetizioni = 0
+        lineaCum = []
+        alongPasso = []
+        fuoriDopoAggancio = false
+        agganciato = true
+        dPrec = Double.nan
+        dPrecIdx = -1
         // Cruscotto: via i resti e la firma del percorso tolto. `ultimoJs`
         // resta: è lo stato del BANNER, non del percorso (in muto il JS toglie
         // e riconsegna il percorso senza rimandare il banner).
@@ -3429,16 +3617,86 @@ final class NavFollower {
     /// lui stesso un arrivo; uguale a `resto[i]` se davanti non ce ne sono).
     /// Una passata sola all'indietro, fatta a setRoute: a ogni fix restano
     /// due letture d'array.
+    /// (22/09/2026) Il tratto fra i e i+1 è `metriDopo` del passo i quando il
+    /// JS lo manda (metri lungo il percorso), altrimenti la linea d'aria come
+    /// prima. Uguale in NavFollower.kt.
     private func calcolaRestiSottoLock() {
         let n = passi.count
         resto = Array(repeating: 0, count: n)
         restoTappa = Array(repeating: 0, count: n)
         guard n > 1 else { return }
         for i in stride(from: n - 2, through: 0, by: -1) {
-            let tratto = Self.metri(passi[i].lat, passi[i].lon, passi[i + 1].lat, passi[i + 1].lon)
+            let tratto: Double = passi[i].metriDopo
+                ?? Self.metri(passi[i].lat, passi[i].lon, passi[i + 1].lat, passi[i + 1].lon)
             resto[i] = resto[i + 1] + tratto
             restoTappa[i] = passi[i].tipo == "arrive" ? 0 : restoTappa[i + 1] + tratto
         }
+    }
+
+    /// (21/09/2026, REVISIONE 2) Metri progressivi per la regola di
+    /// progressione: dei vertici del tracciato e di ogni passo proiettato
+    /// sulla linea (nan se il passo è a più di 50 m dalla linea). A setRoute.
+    private func calcolaProgressiviSottoLock() {
+        lineaCum = Array(repeating: 0, count: linea.count)
+        if linea.count >= 2 {
+            for k in 1..<linea.count {
+                lineaCum[k] = lineaCum[k - 1] + Self.metri(linea[k - 1].lat, linea[k - 1].lon, linea[k].lat, linea[k].lon)
+            }
+        }
+        alongPasso = passi.map { alongDelPunto(lat: $0.lat, lon: $0.lon) }
+    }
+
+    /// Proiezione del punto sul segmento k-1→k in un piano locale centrato
+    /// sul punto: (distanza dalla linea, frazione t del segmento).
+    private func proiettaSulSegmento(_ k: Int, lat: Double, lon: Double) -> (dist: Double, t: Double) {
+        let metriPerGradoLat = 111_320.0
+        let metriPerGradoLon = 111_320.0 * cos(lat * .pi / 180)
+        let ax: Double = (linea[k - 1].lon - lon) * metriPerGradoLon
+        let ay: Double = (linea[k - 1].lat - lat) * metriPerGradoLat
+        let dx: Double = (linea[k].lon - lon) * metriPerGradoLon - ax
+        let dy: Double = (linea[k].lat - lat) * metriPerGradoLat - ay
+        let lung2: Double = dx * dx + dy * dy
+        var t = 0.0
+        if lung2 > 0 {
+            t = min(1, max(0, -(ax * dx + ay * dy) / lung2))
+        }
+        let px: Double = ax + t * dx
+        let py: Double = ay + t * dy
+        return (dist: (px * px + py * py).squareRoot(), t: t)
+    }
+
+    /// Metri progressivi del punto proiettato sul segmento PIÙ VICINO; nan se
+    /// il punto sta a più di 50 m dalla linea. Uguale in NavFollower.kt.
+    private func alongDelPunto(lat: Double, lon: Double) -> Double {
+        guard linea.count >= 2, lineaCum.count == linea.count else { return .nan }
+        var migliore = Double.infinity
+        var along = Double.nan
+        for k in 1..<linea.count {
+            let pr = proiettaSulSegmento(k, lat: lat, lon: lon)
+            if pr.dist < migliore {
+                migliore = pr.dist
+                along = lineaCum[k - 1] + pr.t * (lineaCum[k] - lineaCum[k - 1])
+            }
+        }
+        return migliore <= 50 ? along : .nan
+    }
+
+    /// Metri progressivi di chi cammina fra `da` e `a` lungo il tracciato: la
+    /// PRIMA corrispondenza entro `maxCross` metri dalla linea (non la più
+    /// vicina: vedi onFix). nan se non si è sulla linea in quella finestra.
+    /// Uguale in NavFollower.kt.
+    private func alongUtente(lat: Double, lon: Double, da: Double, a: Double, maxCross: Double) -> Double {
+        guard linea.count >= 2, lineaCum.count == linea.count else { return .nan }
+        for k in 1..<linea.count {
+            if lineaCum[k] < da { continue }
+            if lineaCum[k - 1] > a { break }
+            let pr = proiettaSulSegmento(k, lat: lat, lon: lon)
+            if pr.dist <= maxCross {
+                let along = lineaCum[k - 1] + pr.t * (lineaCum[k] - lineaCum[k - 1])
+                if along >= da { return along }
+            }
+        }
+        return .nan
     }
 
     /// avanza() della specifica: mai oltre l'ultimo passo.
@@ -3529,9 +3787,10 @@ final class NavFollower {
         let modelloLontano: String
         let fraseFuoriPercorso: String
         let finale: Bool
-        /// (21/09/2026, REVISIONE 2) Opzionali: assenti = false / true.
+        /// (21/09/2026, REVISIONE 2) Opzionali: assenti = false / true / false.
         let inPausa: Bool
         let spegniCruscotto: Bool
+        let fuoriSoloDopoAggancio: Bool
     }
 
     /// I numeri del JSON arrivano come NSNumber (interi o decimali): si
@@ -3559,6 +3818,9 @@ final class NavFollower {
         for grezzo in passiGrezzi {
             guard let lat = numero(grezzo["lat"]), let lon = numero(grezzo["lon"]),
                   abs(lat) <= 90, abs(lon) <= 180 else { return nil }
+            // (22/09/2026) `metriDopo`: solo un numero finito > 0, altrimenti
+            // nil (linea d'aria). `numero` scarta già booleani e non finiti.
+            let metriDopoGrezzo: Double = numero(grezzo["metriDopo"]) ?? 0
             // Il testo resta COM'È (niente trim): `ultimoTesto*` di
             // getNavProgress lo restituisce al JS, che lo confronta col suo.
             passi.append(Passo(
@@ -3567,7 +3829,8 @@ final class NavFollower {
                 tipo: grezzo["tipo"] as? String ?? "turn",
                 tappa: grezzo["tappa"] as? String ?? "",
                 manovraTipo: grezzo["manovraTipo"] as? String ?? "",
-                manovraVerso: grezzo["manovraVerso"] as? String ?? ""
+                manovraVerso: grezzo["manovraVerso"] as? String ?? "",
+                metriDopo: metriDopoGrezzo > 0 ? metriDopoGrezzo : nil
             ))
         }
 
@@ -3592,7 +3855,8 @@ final class NavFollower {
             fraseFuoriPercorso: radice["fraseFuoriPercorso"] as? String ?? "",
             finale: radice["finale"] as? Bool ?? true,
             inPausa: radice["inPausa"] as? Bool ?? false,
-            spegniCruscotto: radice["spegniCruscotto"] as? Bool ?? true
+            spegniCruscotto: radice["spegniCruscotto"] as? Bool ?? true,
+            fuoriSoloDopoAggancio: radice["fuoriSoloDopoAggancio"] as? Bool ?? false
         )
     }
 }
