@@ -892,12 +892,21 @@ export default function PoiDetailSheet({
       // 2. Se non abbiamo l'audio in cache, ma il POI ha già una descrizione arricchita nel DB principale
       const isAlreadyEnriched = poi.description_long || (poi.description && poi.description.length > 80) || (poi.description_ai && poi.description_ai.length > 80);
 
-      // La scorciatoia vale SOLO in italiano: i campi del POI sono in
-      // italiano, e per le altre lingue si prosegue fino a /api/poi/details
-      // che li restituisce tradotti (23/08/2026). Il testo qui sotto resta
-      // comunque visibile subito come segnaposto.
+      // ANTEPRIMA ISTANTANEA, MAI LA VERSIONE FINALE (22/09/2026, segnalazione
+      // del committente: pin, schede e audioguide uscivano nella lingua
+      // sbagliata). Fino a ieri, con l'app in italiano, questo blocco
+      // MOSTRAVA e METTEVA IN CACHE `poi.description_long` come se fosse per
+      // forza italiano e si FERMAVA (return) — ma quel campo su shared_pois
+      // è scritto dalla PRIMA persona che ha arricchito il luogo, in
+      // qualunque lingua stesse usando (o da uno script di sfondo mondiale):
+      // un POI arricchito in spagnolo restava mostrato "in italiano" per
+      // sempre. Ora si mostra solo come segnaposto immediato (niente cache,
+      // niente return): l'esecuzione prosegue sempre fino a /api/poi/details,
+      // che ora conosce la lingua vera del testo (description_lang, vedi
+      // traduciCampiPoi in server.ts) e lo corregge quando serve — è quella
+      // risposta, non questa, a finire in cache.
       if (isAlreadyEnriched && linguaIt) {
-        console.log("[DetailSheet] Initializing from pre-loaded POI details:", poi.name);
+        console.log("[DetailSheet] Anteprima da POI pre-caricato (in attesa di conferma dal server):", poi.name);
         const desc = poi.description_long || poi.description_ai || poi.description || "";
 
         const wikiPayload = {
@@ -919,18 +928,11 @@ export default function PoiDetailSheet({
         setTripData(tripPayload);
         // setDisplayedText(desc); // Removed to allow typewriter effect to run
 
-        setCachedPoiDetails(chiaveScheda(poi.id), {
-          wikiData: wikiPayload,
-          tripData: tripPayload,
-          generatedText: null
-        });
-
         setIsLoading(false);
         // Testo già pronto, ma se manca la foto la si cerca in background
         // (vedi provaFotoMancante sopra): l'utente vede subito il testo e la
         // foto compare quando arriva, senza bloccare l'apertura della scheda.
         if (!wikiPayload.thumbnail) void provaFotoMancante(poi);
-        return;
       } else if (poi.description || poi.description_short || poi.description_ai) {
         const shortDesc = poi.description_short || poi.description_ai || poi.description || "";
         setWikiData({

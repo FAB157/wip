@@ -19292,6 +19292,88 @@ ${description}
     return null;
   }
 
+  // TRADUZIONE DEI CAMPI DI UN POI NELLA LINGUA DELL'UTENTE (22/09/2026,
+  // segnalazione del committente: pin, schede e audioguide uscivano nella
+  // lingua SBAGLIATA — non quella dell'utente). Causa: description_short/
+  // description_long/description_ai/audio_script su shared_pois sono colonne
+  // UNICHE per POI, senza lingua propria. Le scrive la PRIMA persona (o script
+  // di sfondo) che arricchisce il luogo, in QUALUNQUE lingua stesse usando in
+  // quel momento — e il guard "scrivi solo se vuoto" impedisce a chiunque
+  // altro di correggerle dopo. Prima di oggi /api/poi/details indovinava
+  // "probabilmente non italiano" con un'euristica sul testo (sembraItaliano),
+  // valida SOLO quando l'utente e` italiano: un utente spagnolo che leggeva
+  // un POI scritto in italiano (o in inglese) non veniva mai corretto.
+  //
+  // Da oggi `/api/poi/enrich` e `/api/poi/enrich-stream` scrivono anche
+  // `description_lang` (colonna nuova, migration 20260922140000): la lingua
+  // VERA in cui quei campi sono stati scritti. Con quella nota, qui basta un
+  // confronto — mai piu` un'euristica — e la funzione serve sia alla scheda
+  // (`/api/poi/details`) sia al colpo di cache di `/api/poi/enrich-stream`
+  // (STEP 0), che PRIMA restituiva la riga grezza senza guardare affatto la
+  // lingua richiesta. Sulle righe vecchie (`description_lang` NULL) resta il
+  // vecchio ripiego euristico, cosi` la correzione arriva comunque.
+  //
+  // Cache-first come /api/atlante/traduci: una traduzione per (poi, lingua)
+  // si paga una volta sola (api_cache, chiave `poidesc_<lang>_<id>`), poi e`
+  // gratis per tutti — ospiti compresi (leggono la cache, non generano: vedi
+  // puoGenerare qui sotto, stessa regola "ospiti no" di ogni altra rotta).
+  async function traduciCampiPoi(poi: any, langRaw: string, req: any): Promise<any> {
+    const linguaScritta = String(poi?.description_lang || '').toLowerCase().slice(0, 2);
+    const testoDaControllare = String(poi?.description_long || poi?.description_short || '');
+    // Ripiego SOLO se la lingua vera non e` nota (righe scritte prima di oggi).
+    const contenutoNonItaliano = !linguaScritta && langRaw === 'it' && testoDaControllare.length >= 30 && !sembraItaliano(testoDaControllare);
+    const serveTradurre = linguaScritta
+      ? linguaScritta !== langRaw
+      : (['en', 'fr', 'es', 'de', 'ru', 'zh'].includes(langRaw) || contenutoNonItaliano);
+    if (!serveTradurre) return poi;
+    const campi = ['description_short', 'description_long', 'full_description', 'description_ai', 'audio_script', 'practical_info'];
+    const chiave = `poidesc_${langRaw}_${poi.id}`;
+    try {
+      const c = await getFromCache(chiave);
+      let tradotti: any = null;
+      if (typeof c?.text_content === 'string' && c.text_content.trim()) {
+        try { tradotti = JSON.parse(c.text_content); } catch { /* cache sporca: si ritraduce */ }
+      }
+      if (!tradotti) {
+        const sorgente: Record<string, string> = {};
+        for (const k of campi) {
+          const v = poi[k];
+          // Cap per campo: DeepSeek tronca a 8192 token di output e gpt-oss
+          // spende i primi token nel reasoning — testi enormi uscirebbero
+          // mutilati in silenzio.
+          if (typeof v === 'string' && v.trim().length >= 20) sorgente[k] = v.slice(0, 2500);
+        }
+        // La rotta resta pubblica (scheda POI anche da anonimo), ma la
+        // TRADUZIONE AI su cache miss si fa solo per un utente loggato e
+        // sotto tetto; l'ospite riceve l'originale (mai peggio di prima).
+        if (Object.keys(sorgente).length > 0 && await puoGenerare(req)) {
+          const ai = await callUniversalAi(
+            'groq',
+            [
+              { role: 'system', content: `Traduci in ${nomeLingua(langRaw)} i testi descrittivi di un luogo, campo per campo. Rispondi SOLO con JSON con le STESSE chiavi ricevute. NON tradurre i nomi propri (luoghi, persone, monumenti). Mantieni registro e lunghezza dell'originale, nessuna aggiunta.` },
+              { role: 'user', content: JSON.stringify(sorgente) },
+            ],
+            { response_format: { type: 'json_object' }, temperature: 0.2, max_tokens: 6000 },
+            'poi_details_i18n', supabaseUrl, supabaseServiceKey, null,
+          );
+          try { tradotti = JSON.parse(String(ai.data || '').replace(/```json|```/g, '').trim()); } catch { /* si serve l'originale */ }
+          if (tradotti && typeof tradotti === 'object' && Object.keys(tradotti).length) {
+            saveToCache(chiave, 'poi_details_i18n', JSON.stringify(tradotti));
+          } else tradotti = null;
+        }
+      }
+      if (tradotti) {
+        for (const k of campi) {
+          if (typeof tradotti[k] === 'string' && tradotti[k].trim()) poi[k] = tradotti[k].trim();
+        }
+      }
+    } catch (e: any) {
+      // Traduzione fallita: si risponde con l'originale, mai con un buco.
+      console.warn('[traduciCampiPoi] fallita:', e?.message);
+    }
+    return poi;
+  }
+
   // ── GET /api/poi/details — legge i dati arricchiti dal DB (generati dal trigger) ──
   app.get("/api/poi/details", async (req, res) => {
     try {
@@ -19369,71 +19451,12 @@ ${description}
         } catch (e) {}
       }
 
-      // ── DESCRIZIONI NELLA LINGUA DELL'UTENTE (23/08/2026) ──
-      // shared_pois porta i testi in una lingua sola (di solito italiano): un
-      // utente EN/FR/ES/DE/RU/ZH leggeva la scheda in italiano. Con ?lang= si
-      // traduce ON THE FLY una volta sola per (poi, lingua) — get-or-create in
-      // api_cache, stesso schema di /api/atlante/traduci — e si restituiscono
-      // gli STESSI campi JSON: il client non cambia forma.
+      // ── DESCRIZIONI NELLA LINGUA DELL'UTENTE (23/08/2026, rifatta 22/09/2026) ──
+      // Vedi `traduciCampiPoi` qui sopra: ora confronta poi.description_lang
+      // (scritta da /api/poi/enrich e /api/poi/enrich-stream) invece di
+      // indovinare — stessa cache per (poi, lingua) di prima.
       const langRaw = String((req.query as any).lang || 'it').toLowerCase().slice(0, 2);
-      // BUGFIX 26/08/2026: si assumeva shared_pois SEMPRE in italiano, quindi
-      // per un utente IT la traduzione non scattava mai — un POI arricchito
-      // in fast-mode (che salta la sintesi AI, vedi /api/poi/enrich mode
-      // "short") può avere description_short salvata nella lingua trovata su
-      // Wikipedia (es. inglese per un parco argentino), e restava tale per
-      // sempre: il guard anti-sovrascrittura impedisce a un enrichment
-      // successivo di correggerla nel DB. Qui si corregge SOLO in lettura
-      // (mai un PATCH): euristica economica prima di spendere una chiamata
-      // AI, per non gravare col traffico IT (la maggioranza dell'app).
-      const testoDaControllare = String(poi.description_long || poi.description_short || '');
-      const contenutoNonItaliano = langRaw === 'it' && testoDaControllare.length >= 30 && !sembraItaliano(testoDaControllare);
-      if (['en', 'fr', 'es', 'de', 'ru', 'zh'].includes(langRaw) || contenutoNonItaliano) {
-        const campi = ['description_short', 'description_long', 'full_description', 'description_ai', 'practical_info'];
-        const chiave = `poidesc_${langRaw}_${poi.id}`;
-        try {
-          const c = await getFromCache(chiave);
-          let tradotti: any = null;
-          if (typeof c?.text_content === 'string' && c.text_content.trim()) {
-            try { tradotti = JSON.parse(c.text_content); } catch { /* cache sporca: si ritraduce */ }
-          }
-          if (!tradotti) {
-            const sorgente: Record<string, string> = {};
-            for (const k of campi) {
-              const v = poi[k];
-              // Cap per campo: DeepSeek tronca a 8192 token di output e
-              // gpt-oss spende i primi token nel reasoning — testi enormi
-              // uscirebbero mutilati in silenzio.
-              if (typeof v === 'string' && v.trim().length >= 20) sorgente[k] = v.slice(0, 2500);
-            }
-            // Audit SEC-01: la rotta è pubblica (scheda POI anche da anonimo)
-            // e resta tale, ma la TRADUZIONE AI su cache miss si fa solo per
-            // un utente loggato e sotto tetto; l'anonimo riceve l'originale.
-            if (Object.keys(sorgente).length > 0 && await puoGenerare(req)) {
-              const ai = await callUniversalAi(
-                'groq',
-                [
-                  { role: 'system', content: `Traduci in ${nomeLingua(langRaw)} i testi descrittivi di un luogo, campo per campo. Rispondi SOLO con JSON con le STESSE chiavi ricevute. NON tradurre i nomi propri (luoghi, persone, monumenti). Mantieni registro e lunghezza dell'originale, nessuna aggiunta.` },
-                  { role: 'user', content: JSON.stringify(sorgente) },
-                ],
-                { response_format: { type: 'json_object' }, temperature: 0.2, max_tokens: 6000 },
-                'poi_details_i18n', supabaseUrl, supabaseServiceKey, null,
-              );
-              try { tradotti = JSON.parse(String(ai.data || '').replace(/```json|```/g, '').trim()); } catch { /* si serve l'originale */ }
-              if (tradotti && typeof tradotti === 'object' && Object.keys(tradotti).length) {
-                saveToCache(chiave, 'poi_details_i18n', JSON.stringify(tradotti));
-              } else tradotti = null;
-            }
-          }
-          if (tradotti) {
-            for (const k of campi) {
-              if (typeof tradotti[k] === 'string' && tradotti[k].trim()) poi[k] = tradotti[k].trim();
-            }
-          }
-        } catch (e: any) {
-          // Traduzione fallita: si risponde con l'originale, mai con un buco.
-          console.warn('[/api/poi/details] i18n fallita:', e?.message);
-        }
-      }
+      await traduciCampiPoi(poi, langRaw, req);
 
       return res.json({
         ...poi,
@@ -30306,7 +30329,7 @@ app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => 
         const breveLocale = rigaDatiScheda ? `${rigaDatiScheda}.` : '';
         if (breveLocale && rigaNota && !rigaNota.description_short) {
           await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(String(id))}&description_short=is.null`,
-            { description_short: breveLocale, enrichment_source: 'dati_strutturati', updated_at: new Date().toISOString() }, { headers: svcW, timeout: 6000 }).catch(() => {});
+            { description_short: breveLocale, description_lang: String(lang || 'it').toLowerCase().slice(0, 2), enrichment_source: 'dati_strutturati', updated_at: new Date().toISOString() }, { headers: svcW, timeout: 6000 }).catch(() => {});
         }
         return res.json({
           description_short: breveLocale, description_long: "", extract: breveLocale, thumbnail: foto, pageUrl: "",
@@ -30788,6 +30811,12 @@ ${materialePerAi || "Nessuna fonte trovata"}
           content.description_long = jsonResponse.description_long;
           content.description_ai = jsonResponse.description_long;
         }
+        // LINGUA VERA della scheda (22/09/2026, vedi traduciCampiPoi): senza
+        // questa colonna un POI arricchito oggi in spagnolo veniva letto come
+        // "italiano" da chiunque altro. Scritta insieme al testo, mai da sola.
+        if (content.description_short || content.description_long) {
+          content.description_lang = String(lang || 'it').toLowerCase().slice(0, 2);
+        }
         // BUGFIX 06/09/2026: `!existing?.image_url` da solo non bastava — un
         // POI con un vecchio link `source.unsplash.com` (servizio dismesso,
         // vedi findFallbackPhoto sopra) ha GIA' un image_url non vuoto, quindi
@@ -31204,7 +31233,7 @@ ${materialePerAi || "Nessuna fonte trovata"}
       let dbPoiId: string | null = null;
       let existingImage: string | null = null;
       try {
-        const selectFields = "id,description_short,description_long,description_ai,audio_script,is_gem,image_url,photo_url";
+        const selectFields = "id,description_short,description_long,description_ai,description_lang,audio_script,is_gem,image_url,photo_url";
         for (const candidate of [idStr, cleanId]) {
           if (!candidate) continue;
           const r = await axios.get(
@@ -31220,13 +31249,19 @@ ${materialePerAi || "Nessuna fonte trovata"}
             existingImage = storedImg && !String(storedImg).includes('source.unsplash.com') ? storedImg : null;
             const cachedLong = row.description_long || row.description_ai;
             if (cachedLong && String(cachedLong).length > 80) {
+              // LINGUA DELL'UTENTE (22/09/2026): questo colpo di cache
+              // restituiva la riga grezza senza mai guardare `lang` — un POI
+              // arricchito in una lingua usciva identico per chiunque altro
+              // lo aprisse dopo, in qualunque lingua avesse l'app. Stessa
+              // traduzione cache-first di /api/poi/details (traduciCampiPoi).
+              await traduciCampiPoi(row, String(lang || 'it').toLowerCase().slice(0, 2), req);
               console.log(`[enrich-stream] Cache HIT su shared_pois per ${candidate} — nessuna chiamata LLM`);
               res.setHeader("Content-Type", "text/event-stream");
               res.setHeader("Cache-Control", "no-cache");
               res.setHeader("Connection", "keep-alive");
               const payload = {
-                description_short: row.description_short || String(cachedLong).substring(0, 200),
-                description_long: cachedLong,
+                description_short: row.description_short || String(row.description_long || cachedLong).substring(0, 200),
+                description_long: row.description_long || cachedLong,
                 audio_script: row.audio_script || null,
                 is_gem: row.is_gem ?? false,
                 image_url: existingImage,
@@ -31296,7 +31331,7 @@ ${materialePerAi || "Nessuna fonte trovata"}
       // Salva sulla riga i testi composti dai dati (solo se la riga esiste e i campi sono vuoti: mai sovrascrivere).
       const salvaTestoDaiDati = async (short: string, long: string) => {
         if (!dbPoiId || !short) return;
-        const campi: any = { description_short: short, enrichment_source: 'dati_strutturati', updated_at: new Date().toISOString() };
+        const campi: any = { description_short: short, description_lang: String(lang || 'it').toLowerCase().slice(0, 2), enrichment_source: 'dati_strutturati', updated_at: new Date().toISOString() };
         if (long && long.length > short.length + 10) { campi.description_long = long; campi.description_ai = long; }
         await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(dbPoiId)}&description_short=is.null`, campi, { headers: reqHeaders, timeout: 6000 })
           .catch((e: any) => console.warn('[enrich-stream] salvataggio testo dai dati fallito:', e?.message));
@@ -31462,6 +31497,7 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
           patch.description_long = parsed.description_long || parsed.description_short;
           patch.description_ai = parsed.description_long || parsed.description_short;
           patch.description_short = parsed.description_short || String(parsed.description_long).substring(0, 200);
+          patch.description_lang = String(lang || 'it').toLowerCase().slice(0, 2);
           patch.audio_script = parsed.audio_script || null;
           // Stessa regola di /api/poi/enrich (1/9/2026): una localita' non
           // diventa gemma per giudizio del modello.
@@ -33925,17 +33961,35 @@ ${testo}`;
     return out;
   };
 
-  /** Manovre Valhalla (numeriche) → tipo/modificatore OSRM (testuali). */
+  /**
+   * Manovre Valhalla (numeriche) → tipo/modificatore OSRM (testuali).
+   * (21/09/2026) Riallineata all'enumerazione ufficiale di Valhalla (0 kNone,
+   * 1 kStart, 2 kStartRight, 3 kStartLeft, 4-6 kDestination*, 7 kBecomes,
+   * 8 kContinue, 9 kSlightRight, 10 kRight, 11 kSharpRight, 12 kUturnRight,
+   * 13 kUturnLeft, 14 kSharpLeft, 15 kLeft, 16 kSlightLeft, 17 kRampStraight,
+   * 18 kRampRight, 19 kRampLeft, 20 kExitRight, 21 kExitLeft, 22 kStayStraight,
+   * 23 kStayRight, 24 kStayLeft, 25 kMerge, 26 kRoundaboutEnter,
+   * 27 kRoundaboutExit, 37 kMergeRight, 38 kMergeLeft). Era sfasata di uno dal
+   * 9 al 17: «gira a destra» diventava «mantieni la destra», la svolta stretta
+   * a sinistra «fai inversione», l'inversione a destra «gira a destra».
+   */
   const VALHALLA_MANEUVER: Record<number, { type: string; modifier?: string }> = {
     1: { type: 'depart' }, 2: { type: 'depart' }, 3: { type: 'depart' },
     4: { type: 'arrive' }, 5: { type: 'arrive' }, 6: { type: 'arrive' },
-    8: { type: 'continue' }, 9: { type: 'continue' },
-    10: { type: 'turn', modifier: 'slight right' }, 11: { type: 'turn', modifier: 'right' },
-    12: { type: 'turn', modifier: 'sharp right' },
-    13: { type: 'turn', modifier: 'uturn' }, 14: { type: 'turn', modifier: 'uturn' },
-    15: { type: 'turn', modifier: 'sharp left' }, 16: { type: 'turn', modifier: 'left' },
-    17: { type: 'turn', modifier: 'slight left' },
+    7: { type: 'continue' }, 8: { type: 'continue' },
+    9: { type: 'turn', modifier: 'slight right' }, 10: { type: 'turn', modifier: 'right' },
+    11: { type: 'turn', modifier: 'sharp right' },
+    12: { type: 'turn', modifier: 'uturn' }, 13: { type: 'turn', modifier: 'uturn' },
+    14: { type: 'turn', modifier: 'sharp left' }, 15: { type: 'turn', modifier: 'left' },
+    16: { type: 'turn', modifier: 'slight left' },
+    17: { type: 'continue' },
+    18: { type: 'turn', modifier: 'slight right' }, 19: { type: 'turn', modifier: 'slight left' },
+    20: { type: 'turn', modifier: 'slight right' }, 21: { type: 'turn', modifier: 'slight left' },
+    22: { type: 'continue' },
+    23: { type: 'turn', modifier: 'slight right' }, 24: { type: 'turn', modifier: 'slight left' },
+    25: { type: 'continue' },
     26: { type: 'roundabout' }, 27: { type: 'exit roundabout' },
+    37: { type: 'turn', modifier: 'slight right' }, 38: { type: 'turn', modifier: 'slight left' },
   };
 
   /** Forma OSRM: e' il contratto con il client, non un dettaglio interno. */
@@ -34013,11 +34067,15 @@ ${testo}`;
       nome: 'openrouteservice', attiva: !!process.env.ORS_API_KEY, scale: true,
       // Gestore indipendente da FOSSGIS: e' la riserva che copre il rischio
       // organizzativo, non solo quello tecnico. Piano gratuito a quota.
-      run: async (a, b, _lang, opz) => {
+      run: async (a, b, lang, opz) => {
         // Profilo `wheelchair` = niente scale, pendenze e marciapiedi adatti.
         const profilo = opz?.evitaScale ? 'wheelchair' : 'foot-walking';
+        // (21/09/2026) La LINGUA delle istruzioni: senza, ORS rispondeva in
+        // inglese e la voce italiana (tedesca, russa…) leggeva «turn right
+        // onto Via Roma». Solo le lingue dell'app, tutte supportate da ORS.
+        const lingueOrs = ['it', 'en', 'fr', 'es', 'de', 'ru', 'zh'];
         const r = await axios.post(`https://api.openrouteservice.org/v2/directions/${profilo}/geojson`,
-          { coordinates: [a, b] },
+          lingueOrs.includes(lang) ? { coordinates: [a, b], language: lang } : { coordinates: [a, b] },
           { headers: { Authorization: process.env.ORS_API_KEY, 'Content-Type': 'application/json' }, timeout: 8000 });
         const f = r.data?.features?.[0];
         if (!f) return null;
@@ -34035,10 +34093,11 @@ ${testo}`;
     },
     {
       nome: 'geoapify', attiva: !!process.env.GEOAPIFY_API_KEY, scale: false,
-      run: async (a, b) => {
+      run: async (a, b, lang) => {
+        // (21/09/2026) `lang`: senza, le istruzioni arrivavano in inglese.
         const r = await axios.get('https://api.geoapify.com/v1/routing', {
           params: { waypoints: `${a[1]},${a[0]}|${b[1]},${b[0]}`, mode: 'walk', details: 'instruction_details',
-            apiKey: process.env.GEOAPIFY_API_KEY }, timeout: 8000 });
+            lang, apiKey: process.env.GEOAPIFY_API_KEY }, timeout: 8000 });
         const f = r.data?.features?.[0];
         if (!f) return null;
         const coords: [number, number][] = (f.geometry?.coordinates?.[0] || f.geometry?.coordinates || []) as any;

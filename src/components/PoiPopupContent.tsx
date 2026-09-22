@@ -324,13 +324,16 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
       // Mostra subito i dati iniziali (anche vuoti)
       if (isMounted) { setData({ ...baseData }); setLoading(false); }
 
-      // Se ha già tutto (img + desc lunga), cachea e stop — ma SOLO in
-      // italiano: nelle altre lingue la descrizione lunga del POI e' quella
-      // italiana e serve il passaggio dal server che la traduce.
-      if (linguaUi === 'it' && immediateImage && immediateDesc && (poi.description_long || poi.full_description)) {
-        setCachedPoiDetails(chiavePopup(poi.id), baseData);
-        return;
-      }
+      // (22/09/2026, segnalazione del committente: pin nella lingua
+      // sbagliata) PRIMA qui si assumeva che con l'app in italiano
+      // `poi.description_long` fosse per forza italiano, e ci si fermava:
+      // il popup restava scritto nella lingua di chi aveva arricchito quel
+      // luogo per primo, MAI ricontrollata. `baseData` resta l'anteprima
+      // istantanea (già mostrata sopra) ma non si mette più in cache né si
+      // interrompe qui: si prosegue SEMPRE fino allo STEP 1
+      // (/api/poi/details), che ora conosce la lingua vera del testo
+      // (description_lang, vedi traduciCampiPoi in server.ts) e lo corregge
+      // quando serve — solo quella risposta finisce in cache.
 
       // ── UTILITY: stop qui. La card leggera non ha bisogno né di
       // /api/poi/details (le utility non stanno in shared_pois) né dello
