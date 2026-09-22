@@ -12,13 +12,15 @@ export const LINGUA_PAESE = {
   RU: 'ru', BY: 'ru', KZ: 'ru', KG: 'ru',
   CN: 'zh', TW: 'zh', MO: 'zh',
 };
-const ORDINE = ['it', 'en', 'es', 'fr', 'de'];
+// (22/09/2026 sera, committente: «fallo per tutte le 7 lingue») Tutte e sette le lingue
+// dell'app per ogni citta', la lingua del posto per prima (fase 0), poi le altre in ordine.
+const ORDINE = ['it', 'en', 'es', 'fr', 'de', 'ru', 'zh'];
 export function lingueCitta(iso) {
   const out = [];
   const locale = LINGUA_PAESE[String(iso || '').toUpperCase()];
   if (locale) out.push(locale);
-  for (const l of ORDINE) { if (out.length >= 4) break; if (!out.includes(l)) out.push(l); }
-  return out.slice(0, 4);
+  for (const l of ORDINE) { if (!out.includes(l)) out.push(l); }
+  return out;
 }
 // Raggio in km dalla popolazione: le metropoli sono larghe, i paesi no.
 export const raggioKm = (pop) => pop >= 3_000_000 ? 10 : pop >= 1_000_000 ? 7 : pop >= 300_000 ? 5 : 3;

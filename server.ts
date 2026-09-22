@@ -3782,6 +3782,10 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   }
   /** Come cancelloGenerazione ma SENZA rispondere: la rotta degrada da sé. */
   async function puoGenerare(req: any): Promise<boolean> {
+    // (22/09/2026) Il lavoratore di sfondo col segreto di infrastruttura vale come
+    // `background-script`, esattamente come in requireAuth: serve al
+    // pre-arricchimento delle citta' che traduce le schede (/api/poi/traduci).
+    if (SCRIPT_SHARED_SECRET && req.headers?.['x-script-secret'] === SCRIPT_SHARED_SECRET) { req.userId = 'background-script'; return true; }
     let uid: string | null = null;
     try { uid = await verifyUserToken(req); } catch { uid = null; }
     if (!uid) return false;
@@ -19365,6 +19369,10 @@ ${description}
     const serveTradurre = linguaScritta
       ? linguaScritta !== langRaw
       : (['en', 'fr', 'es', 'de', 'ru', 'zh'].includes(langRaw) || contenutoNonItaliano);
+    // `lingua_testo` (22/09/2026 sera): la lingua in cui il testo ESCE davvero,
+    // cosi' il client non mette in cache una scheda nella lingua sbagliata
+    // (ospite, o traduzione fallita) come se fosse quella giusta.
+    poi.lingua_testo = serveTradurre ? (linguaScritta || (contenutoNonItaliano ? 'xx' : 'it')) : langRaw;
     if (!serveTradurre) return poi;
     const campi = ['description_short', 'description_long', 'full_description', 'description_ai', 'audio_script', 'practical_info'];
     const chiave = `poidesc_${langRaw}_${poi.id}`;
@@ -19386,7 +19394,9 @@ ${description}
         // La rotta resta pubblica (scheda POI anche da anonimo), ma la
         // TRADUZIONE AI su cache miss si fa solo per un utente loggato e
         // sotto tetto; l'ospite riceve l'originale (mai peggio di prima).
-        if (Object.keys(sorgente).length > 0 && await puoGenerare(req)) {
+        const puo = Object.keys(sorgente).length > 0 && await puoGenerare(req);
+        if (Object.keys(sorgente).length > 0 && !puo) console.warn(`[traduciCampiPoi] ${poi.id} → ${langRaw}: niente traduzione (${req?.headers?.authorization ? 'token non valido o tetto' : 'ospite'})`);
+        if (puo) {
           const ai = await callUniversalAi(
             'groq',
             [
@@ -19396,7 +19406,7 @@ ${description}
             { response_format: { type: 'json_object' }, temperature: 0.2, max_tokens: 6000 },
             'poi_details_i18n', supabaseUrl, supabaseServiceKey, null,
           );
-          try { tradotti = JSON.parse(String(ai.data || '').replace(/```json|```/g, '').trim()); } catch { /* si serve l'originale */ }
+          try { tradotti = JSON.parse(String(ai.data || '').replace(/```json|```/g, '').trim()); } catch { console.warn(`[traduciCampiPoi] ${poi.id} → ${langRaw}: risposta AI non JSON (${ai?.engine || '?'})`); }
           if (tradotti && typeof tradotti === 'object' && Object.keys(tradotti).length) {
             saveToCache(chiave, 'poi_details_i18n', JSON.stringify(tradotti));
           } else tradotti = null;
@@ -19406,6 +19416,7 @@ ${description}
         for (const k of campi) {
           if (typeof tradotti[k] === 'string' && tradotti[k].trim()) poi[k] = tradotti[k].trim();
         }
+        poi.lingua_testo = langRaw;
         // Ogni traduzione appena fatta e` una nuova "descrizione creata in
         // quella lingua": va salvata anche lei (vedi la nota sopra la funzione).
         if (poi.id) void salvaPoiDetailsPerLingua(String(poi.id), langRaw, { summary: poi.description_short, wiki_extract: poi.description_long });
@@ -19416,6 +19427,44 @@ ${description}
     }
     return poi;
   }
+
+  // ── POST /api/poi/traduci — SOLO per il lavoratore di sfondo (22/09/2026) ──
+  // Pre-arricchimento del mondo (committente: «non e' meglio fare 1 lingua e
+  // tradurre tutte le altre da quella?»): un pin si genera UNA volta, nella
+  // lingua del posto, e le altre sei lingue si traducono da quel testo con la
+  // stessa traduciCampiPoi che usa l'app quando apri un luogo in un'altra
+  // lingua (cache in api_cache + riga in poi_details per ogni lingua). Niente
+  // ricerca di fonti, una chiamata leggera per lingua: i fatti restano quelli
+  // della fonte, i nomi propri non si traducono. Body: { id, lingue: ['en',…] }.
+  app.post("/api/poi/traduci", rateLimiter, async (req, res) => {
+    try {
+      if (!SCRIPT_SHARED_SECRET || req.headers['x-script-secret'] !== SCRIPT_SHARED_SECRET) return res.status(403).json({ error: 'solo lavoratore di sfondo' });
+      const id = String(req.body?.id || '').trim();
+      const lingue = [...new Set((Array.isArray(req.body?.lingue) ? req.body.lingue : []).map((l: any) => String(l || '').toLowerCase().slice(0, 2)).filter((l: string) => /^[a-z]{2}$/.test(l)))].slice(0, 7);
+      if (!id || !lingue.length) return res.status(400).json({ error: 'id e lingue obbligatori' });
+      const svc = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+      const r = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(id)}&select=id,description_short,description_long,description_ai,full_description,audio_script,practical_info,description_lang&limit=1`, { headers: svc, timeout: 8000 });
+      const riga = r.data?.[0];
+      if (!riga) return res.status(404).json({ error: 'POI non trovato' });
+      if (!String(riga.description_short || riga.description_long || '').trim()) return res.json({ id, nessun_testo: true, fatte: [], vuote: lingue });
+      const fatte: string[] = [], vuote: string[] = [];
+      for (const lang of lingue) {
+        // Copia per lingua: traduciCampiPoi muta l'oggetto che riceve.
+        const copia = { ...riga };
+        const prima = String(copia.description_short || copia.description_long || '');
+        await traduciCampiPoi(copia, lang, req);
+        const dopo = String(copia.description_short || copia.description_long || '');
+        const lingua = String(riga.description_lang || '').toLowerCase().slice(0, 2);
+        // Stessa lingua del testo originale: gia' «tradotta» per definizione, la si salva com'e'.
+        if (lingua === lang) { void salvaPoiDetailsPerLingua(id, lang, { summary: riga.description_short, wiki_extract: riga.description_long }); fatte.push(lang); continue; }
+        if (dopo && dopo !== prima) fatte.push(lang); else vuote.push(lang);
+      }
+      return res.json({ id, fatte, vuote });
+    } catch (e: any) {
+      console.error('[/api/poi/traduci]', e?.message);
+      return res.status(500).json({ error: e?.message });
+    }
+  });
 
   // ── GET /api/poi/details — legge i dati arricchiti dal DB (generati dal trigger) ──
   app.get("/api/poi/details", async (req, res) => {
@@ -19436,7 +19485,9 @@ ${description}
       // `address,city,poi_type` (19/09/2026): i DATI per la scheda dei POI senza
       // testo. Colonne verificate sul database prima di aggiungerle — un nome
       // sbagliato qui fa fallire la query e la rotta risponde 404 a TUTTI.
-      const selectFields = "id,name,category,lat,lon,description_ai,description_short,description_long,full_description,audio_script,practical_info,technical_data,image_url,photo_url,image_source,image_attribution,image_license,is_gem,status,alert_radius,geofence_radius,source,address,city,poi_type";
+      // description_lang (22/09/2026 sera): senza, traduciCampiPoi non sapeva
+      // MAI la lingua vera del testo su questa rotta e tirava a indovinare.
+      const selectFields = "id,name,category,lat,lon,description_ai,description_short,description_long,full_description,audio_script,practical_info,technical_data,image_url,photo_url,image_source,image_attribution,image_license,is_gem,status,alert_radius,geofence_radius,source,address,city,poi_type,description_lang";
       const reqHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, "Content-Type": "application/json" };
       let foundData: any[] | null = null;
 

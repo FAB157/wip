@@ -1,10 +1,13 @@
-// DRIVER DA FILE PER LE CITTA' (22/09/2026, committente: «lingue 4 e gemme 100») — gira sul droplet 104, senza accesso
-// al database, come driver-arricchimento-file.mjs (20/09) da cui deriva. Legge la lista di scratch/esporta-lista-citta.mjs
-// (una riga per pin × lingua, campo `lang`, `fase` 0 = lingua principale della citta', 1-3 = le altre) e fa lavorare IL
-// SERVER DI PRODUZIONE (/api/poi/enrich e, con --audio, /api/poi/audioguide) col segreto di infrastruttura, nella lingua
-// della riga. Le righe delle altre lingue di un pin uscito «senza fonte» nella lingua principale si SALTANO: la fonte non
-// dipende dalla lingua, e si risparmiano tre ricerche a vuoto. Ripartibile: la posizione sta in <lista>.stato.json.
-//   node driver-citta.mjs --lista=/root/citta/lista-citta.jsonl [--lavoratori=5] [--pausa=1500] [--audio]
+// DRIVER DA FILE PER TUTTI I PIN CULTURALI (22/09/2026, committente: «tutti i POI culturali iniziando dalle gemme»,
+// «1 lingua e tradurre tutte le altre da quella», «fallo per tutte le 7 lingue») — gira sul droplet 104, senza accesso
+// al database, come driver-arricchimento-file.mjs (20/09) da cui deriva. Legge la lista di scripts/lista-tutti-culturali.mjs
+// (UNA riga per pin: `lang` = lingua in cui generare o gia' scritta, `altre` = le lingue da tradurre, `solo_traduci` =
+// il testo c'e' gia', si traduce soltanto) e fa lavorare IL SERVER DI PRODUZIONE col segreto di infrastruttura:
+//   1. /api/poi/enrich nella lingua `lang` (salvo `solo_traduci`);
+//   2. se il pin ha un testo, /api/poi/traduci per le lingue `altre` (una chiamata, tutte le lingue);
+//   3. con --audio, /api/poi/audioguide nella lingua `lang` (le altre si generano alla prima richiesta dal testo tradotto).
+// Ripartibile: la posizione sta in <lista>.stato.json.
+//   node driver-citta.mjs --lista=/root/citta/lista-tutti-culturali.jsonl [--lavoratori=5] [--pausa=1500] [--audio]
 import fs from 'fs';
 const A = process.argv.slice(2);
 const arg = (k, d) => { const x = A.find(a => a.startsWith(`--${k}=`)); return x ? x.slice(k.length + 3) : d; };
@@ -15,7 +18,7 @@ const SEG = (fs.existsSync(ENVF) ? fs.readFileSync(ENVF, 'utf8') : '').match(/^S
 const B = process.env.WIP_BASE || 'https://www.wip.guide';
 if (!LISTA || !SEG) { console.log('mancano --lista o SCRIPT_SHARED_SECRET in /root/citta/.env'); process.exit(1); }
 const righe = fs.readFileSync(LISTA, 'utf8').split('\n').filter(Boolean);
-let stato = { pos: 0, ok: 0, conFoto: 0, audio: 0, errori: 0, esiti: {}, senzaFonte: {} };
+let stato = { pos: 0, ok: 0, conFoto: 0, audio: 0, tradotte: 0, errori: 0, esiti: {} };
 try { stato = { ...stato, ...JSON.parse(fs.readFileSync(STATO, 'utf8')) }; } catch {}
 const salva = () => fs.writeFileSync(STATO, JSON.stringify(stato));
 const pausa = (ms) => new Promise(r => setTimeout(r, ms));
@@ -32,21 +35,27 @@ async function post(p, body, ms = 200000) {
 }
 async function una(p) {
   const lang = String(p.lang || 'it').toLowerCase().slice(0, 2);
-  // Altre lingue di un pin senza fonte: si salta (la fonte non cambia con la lingua).
-  if (Number(p.fase) > 0 && stato.senzaFonte[p.id]) { stato.esiti.saltato = (stato.esiti.saltato || 0) + 1; return 'saltato'; }
-  const e = await post('/api/poi/enrich', { id: p.id, name: p.name, lat: p.lat, lon: p.lon, category: p.category, subCategory: p.poi_type, wikidata: p.wikidata || undefined, wikipedia: p.wikipedia_url || undefined, lang, mode: 'full' });
-  let esito = 'errore';
-  if (e.s === 200) {
-    const lunga = String(e.d?.description_long || ''), breve = String(e.d?.description_short || e.d?.extract || '');
-    esito = lunga.length >= 300 ? 'testo' : breve.length >= 30 ? 'breve' : e.d?.solo_dati ? 'solo_dati' : 'senza_fonte';
-    if (esito === 'senza_fonte' && Number(p.fase) === 0) stato.senzaFonte[p.id] = true;
-    if (e.d?.thumbnail) stato.conFoto++;
-    if (AUDIO && lunga.length >= 600) { const a = await post('/api/poi/audioguide', { poiId: p.id, lang, character: 'nicky' }); if (a.s === 200 && a.d?.text) stato.audio++; }
-  } else stato.errori++;
+  const altre = (p.altre || []).filter((l) => l !== lang);
+  let esito = 'errore', haTesto = !!p.solo_traduci;
+  if (!p.solo_traduci) {
+    const e = await post('/api/poi/enrich', { id: p.id, name: p.name, lat: p.lat, lon: p.lon, category: p.category, subCategory: p.poi_type, wikidata: p.wikidata || undefined, wikipedia: p.wikipedia_url || undefined, lang, mode: 'full' });
+    if (e.s === 200) {
+      const lunga = String(e.d?.description_long || ''), breve = String(e.d?.description_short || e.d?.extract || '');
+      esito = lunga.length >= 300 ? 'testo' : breve.length >= 30 ? 'breve' : e.d?.solo_dati ? 'solo_dati' : 'senza_fonte';
+      haTesto = esito === 'testo' || esito === 'breve';
+      if (e.d?.thumbnail) stato.conFoto++;
+      if (AUDIO && lunga.length >= 600) { const a = await post('/api/poi/audioguide', { poiId: p.id, lang, character: 'nicky' }); if (a.s === 200 && a.d?.text) stato.audio++; }
+    } else { stato.errori++; stato.esiti.errore = (stato.esiti.errore || 0) + 1; return 'errore'; }
+  } else esito = 'solo_traduci';
+  // Le altre lingue: una chiamata sola, dal testo appena scritto (o gia' presente).
+  if (haTesto && altre.length) {
+    const t = await post('/api/poi/traduci', { id: p.id, lingue: altre }, 120000);
+    if (t.s === 200) stato.tradotte += (t.d?.fatte || []).length; else stato.errori++;
+  }
   stato.esiti[esito] = (stato.esiti[esito] || 0) + 1;
   return esito;
 }
-console.log(`${new Date().toISOString()} lista ${LISTA}: ${righe.length} righe (pin × lingua), riparto da ${stato.pos} — lavoratori ${LAV}, pausa ${PAUSA} ms${AUDIO ? ', con audioguida' : ''}`);
+console.log(`${new Date().toISOString()} lista ${LISTA}: ${righe.length} pin, riparto da ${stato.pos} — lavoratori ${LAV}, pausa ${PAUSA} ms${AUDIO ? ', con audioguida' : ''}`);
 let male = 0;
 while (stato.pos < righe.length) {
   const lotto = righe.slice(stato.pos, stato.pos + LAV * 4).map(x => JSON.parse(x));
@@ -56,10 +65,10 @@ while (stato.pos < righe.length) {
       const p = coda.shift(); const esito = await una(p);
       male = esito === 'errore' ? male + 1 : 0;
       if (male >= 8) { console.log(`${new Date().toISOString()} troppi errori di fila: pausa di 5 minuti`); await pausa(300000); male = 0; }
-      if (esito !== 'saltato') await pausa(PAUSA);
+      await pausa(PAUSA);
     }
   }));
   stato.pos += lotto.length; salva();
-  if (stato.pos % 40 < LAV * 4) console.log(`${new Date().toISOString()} ${stato.pos}/${righe.length} — ${JSON.stringify(stato.esiti)} foto ${stato.conFoto} audio ${stato.audio} errori ${stato.errori}`);
+  if (stato.pos % 40 < LAV * 4) console.log(`${new Date().toISOString()} ${stato.pos}/${righe.length} — ${JSON.stringify(stato.esiti)} foto ${stato.conFoto} audio ${stato.audio} tradotte ${stato.tradotte} errori ${stato.errori}`);
 }
-console.log(`${new Date().toISOString()} lista finita: ${JSON.stringify({ ...stato, senzaFonte: Object.keys(stato.senzaFonte).length })}`);
+console.log(`${new Date().toISOString()} lista finita: ${JSON.stringify(stato)}`);

@@ -154,8 +154,14 @@ function isHeritageAtlasPoi(poi: any): boolean {
 }
 
 export default function PoiPopupContent({ poi, onGuideClick, language, setMarkers, modalitaGiro, onClose }: PoiPopupContentProps) {
-  const [data, setData] = useState<any>(getCachedPoiDetails(poi.id));
-  const [loading, setLoading] = useState(!getCachedPoiDetails(poi.id));
+  // (22/09/2026 sera) Stato iniziale dalla cache DELLA LINGUA: prima si
+  // leggeva la chiave nuda (= italiano) per chiunque, e con l'app in francese
+  // il fumetto partiva mostrando la versione italiana messa in cache da
+  // un'altra apertura.
+  const linguaIniziale = String(language || 'IT').toLowerCase().slice(0, 2);
+  const chiaveIniziale = linguaIniziale === 'it' ? String(poi.id) : `${poi.id}::${linguaIniziale.toUpperCase()}`;
+  const [data, setData] = useState<any>(getCachedPoiDetails(chiaveIniziale));
+  const [loading, setLoading] = useState(!getCachedPoiDetails(chiaveIniziale));
   const [expanded, setExpanded] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [audioPlaying, setAudioPlaying] = useState(false);
@@ -299,8 +305,15 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
       const immediateImage = migliorFoto(poi) || null;
       // Fuori dall'italiano il teaser per-lingua (gia' sul filo della RPC)
       // batte i campi description_* di shared_pois, che sono in italiano.
+      // (22/09/2026 sera) Fuori dall'italiano l'anteprima e' SOLO il teaser
+      // nella lingua della UI: i campi description_* della riga sono nella
+      // lingua di chi ha arricchito per primo (di solito italiano) e mostrarli
+      // «per un attimo» e' esattamente il pin in italiano che il committente
+      // ha visto con l'app in spagnolo. Meglio vuoto fino alla risposta.
+      const linguaRiga = String((poi as any).description_lang || '').toLowerCase().slice(0, 2);
+      const anteprimaCoerente = linguaUi === 'it' ? !linguaRiga || linguaRiga === 'it' : linguaRiga === linguaUi;
       const immediateDesc = (linguaUi !== 'it' && teaserUi(poi))
-        || poi.description_short || poi.description_ai || poi.description || null;
+        || (anteprimaCoerente ? (poi.description_short || poi.description_ai || poi.description || null) : null);
 
       const baseData: any = {
         imageUrl: immediateImage,
@@ -370,8 +383,13 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
       try {
         // ── STEP 1: Cerca in shared_pois via /api/poi/details ──────────
         if (poi.id) {
+          // COL TOKEN (22/09/2026 sera, Pariser Platz in italiano con l'app in
+          // spagnolo): senza Bearer il server ci vedeva come OSPITE e, per la
+          // regola «ospiti solo cache», non traduceva mai su cache miss — il
+          // pin restava nella lingua di chi aveva arricchito il luogo.
           const dbRes = await fetch(
-            getApiUrl(`/api/poi/details?id=${encodeURIComponent(String(poi.id))}&lat=${poi.lat}&lon=${poi.lon}&lang=${linguaUi}`)
+            getApiUrl(`/api/poi/details?id=${encodeURIComponent(String(poi.id))}&lat=${poi.lat}&lon=${poi.lon}&lang=${linguaUi}`),
+            { headers: await bearerHeaders() }
           ).catch(() => null);
 
           if (dbRes?.ok) {
@@ -405,7 +423,13 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
                 website: dbData.practical_info?.match(/Web: ([^\s|]+)/)?.[1] || null,
                 isGroqEnriched: false,
               };
-              if (isMounted) { setData(enriched); setCachedPoiDetails(chiavePopup(poi.id), enriched); }
+              // In cache SOLO se il testo e' davvero nella lingua della UI
+              // (`lingua_testo` dal server): da ospite, o se la traduzione e'
+              // fallita, il testo mostrato e' quello originale e non deve
+              // diventare «la versione francese» per il resto della sessione.
+              const linguaTesto = String(dbData.lingua_testo || '').toLowerCase().slice(0, 2);
+              const coerente = !linguaTesto || linguaTesto === linguaUi;
+              if (isMounted) { setData(enriched); if (coerente) setCachedPoiDetails(chiavePopup(poi.id), enriched); }
               // Se ha dati nel DB, stop — CACHE FIRST: non usiamo Groq se abbiamo già qualcosa
               if (hasDesc) return;
             }

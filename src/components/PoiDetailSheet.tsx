@@ -1134,7 +1134,14 @@ export default function PoiDetailSheet({
                     setTripData(tripPayload);
                     if (hasTechData) setTechnicalData(techPayload);
                     if (storedAudioScript) setGeneratedText(storedAudioScript);
-                    setCachedPoiDetails(chiaveScheda(poi.id), { wikiData: wikiPayload, tripData: tripPayload, generatedText: storedAudioScript, technicalData: hasTechData ? techPayload : undefined });
+                    // In cache SOLO se il testo e' nella lingua della UI
+                    // (`lingua_testo` dal server, 22/09/2026 sera): una
+                    // traduzione mancata non deve diventare «la scheda in
+                    // spagnolo» per il resto della sessione.
+                    const linguaTesto = String(dbData.lingua_testo || '').toLowerCase().slice(0, 2);
+                    if (!linguaTesto || linguaTesto === String(language || 'IT').toLowerCase().slice(0, 2)) {
+                      setCachedPoiDetails(chiaveScheda(poi.id), { wikiData: wikiPayload, tripData: tripPayload, generatedText: storedAudioScript, technicalData: hasTechData ? techPayload : undefined });
+                    }
                     setIsLoading(false);
                   }
                   return; // ✅ Dati DB trovati

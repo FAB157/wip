@@ -36,7 +36,10 @@ const distKm = (a, b, c, d) => { const R = 6371, x = (c - a) * Math.PI / 180, y 
 const salta = /^(iti-|ai_|vision-|viator-|tq-|gyg-|tm-|tiqets-|ocm-|ov-)/;
 const perCitta = new Map();
 let letti = 0, assegnati = 0;
-for (const r of fs.readFileSync('scratch/lista-culturali.jsonl', 'utf8').split(/\r?\n/)) {
+// A flusso, riga per riga: il file e' 284 MB (1,1 milioni di pin) e il PC ha poca memoria.
+const readline = await import('node:readline');
+const righeFile = readline.createInterface({ input: fs.createReadStream('scratch/lista-culturali.jsonl'), crlfDelay: Infinity });
+for await (const r of righeFile) {
   if (!r) continue;
   const p = JSON.parse(r); letti++;
   if (salta.test(String(p.id)) || /\b(car ?park|parking|parcheggio|supercharger|q-park)\b/i.test(String(p.name))) continue;
