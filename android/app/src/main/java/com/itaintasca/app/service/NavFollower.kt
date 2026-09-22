@@ -61,6 +61,18 @@ object NavFollower {
     const val OFFROUTE_MS = 20_000L
     const val BACK_ON_ROUTE_M = 40.0
     const val DEDUPE_MS = 20_000L
+    // (21/09/2026, REVISIONE 2) ARRIVO FINALE NEI PARAGGI: entro 60 m
+    // ininterrottamente da 45 s — la regola 3 del JS. Solo i 25 m non
+    // bastavano: chi entrava da un altro lato, o col GPS in tasca a 30-50 m,
+    // non chiudeva mai (GPS al massimo e cruscotto acceso fino all'app).
+    const val NEARBY_M = 60.0
+    const val NEARBY_MS = 45_000L
+    // (21/09/2026, REVISIONE 2) FUORI PERCORSO RIDETTO: se si è ancora fuori
+    // 60 s dopo l'ultima volta si ridice, al massimo 2 ripetizioni per uscita.
+    // Detto una volta sola, un avviso finito in coda dietro a una guida (e
+    // scaduto) non tornava più finché non si rientrava.
+    const val OFFROUTE_RIPETI_MS = 60_000L
+    const val OFFROUTE_MAX_RIPETIZIONI = 2
 
     private const val RAGGIO_TERRA_M = 6_371_000.0
 
@@ -106,7 +118,15 @@ object NavFollower {
         val dettiLontano: List<Int>,
         val nativoAlComando: Boolean,
         val ultimoTestoVicino: String,
-        val ultimoTestoLontano: String
+        val ultimoTestoLontano: String,
+        // (21/09/2026, REVISIONE 2) `finito`: l'arrivo finale l'ha chiuso il
+        // nativo a schermo spento — al risveglio il JS deve chiudere anche lui,
+        // senza ridirlo (prima ricalcolava verso la meta già raggiunta).
+        // `terminato`: il follower l'ha svuotato il tasto «Termina» del
+        // cruscotto; i campi sopra sono la fotografia presa prima (vedi
+        // terminaDalBanner).
+        val finito: Boolean = false,
+        val terminato: Boolean = false
     )
 
     // ── Percorso ─────────────────────────────────────────────────────────
@@ -116,6 +136,10 @@ object NavFollower {
     private var modelloLontano = ""
     private var fraseFuoriPercorso = ""
     private var finale = true
+    // (21/09/2026, REVISIONE 2) All'arrivo finale col nativo al comando il
+    // cruscotto si spegne SOLO se true (default). La tappa singola manda
+    // false quando c'è un giro/percorso in corso: il cruscotto dopo è del giro.
+    private var spegniCruscotto = true
 
     // ── Stato del follower ───────────────────────────────────────────────
     private var idx = 0
@@ -136,10 +160,27 @@ object NavFollower {
     private var lastHeartbeat = 0L
     private var fuoriDa = 0L
     private var fuoriDetto = false
+    // (21/09/2026, REVISIONE 2) Quando il «fuori percorso» è stato detto
+    // l'ultima volta e quante volte è stato RIDETTO in questa uscita.
+    private var fuoriDettoTs = 0L
+    private var fuoriRipetizioni = 0
+    // (21/09/2026, REVISIONE 2) Da quando si è entro NEARBY_M dall'arrivo
+    // FINALE (0 = non lo si è). Si azzera in ogni reset.
+    private var vicinoFinaleDa = 0L
     private var ultimoDetto = ""
     private var ultimoDettoTs = 0L
     private var ultimoTestoVicino = ""
     private var ultimoTestoLontano = ""
+    // (21/09/2026, REVISIONE 2) Il passo che il JS stava MOSTRANDO: lo
+    // impostano setRoute e OGNI battito, lo azzera clear. Serve al cruscotto
+    // per sapere se l'istruzione e il nome ricordati dal JS valgono ancora.
+    private var idxJs = 0
+    // (21/09/2026, REVISIONE 2) FOTOGRAFIA di «Termina» dal cruscotto: id,
+    // indice e insiemi «davvero» presi un istante prima dello svuotamento.
+    // Se al risveglio il JS chiede conferma e l'utente dice «no», riprende
+    // prima il progresso fatto a schermo spento, poi riconsegna. La
+    // cancellano setRoute, il clear del JS e il load() del plugin.
+    private var fotoTerminato: Progress? = null
 
     // ── Cruscotto a schermo spento (18/09/2026 notte) ────────────────────
     private var resto = DoubleArray(0)
@@ -242,18 +283,29 @@ object NavFollower {
         modelloLontano = if (root.isNull("modelloLontano")) "" else root.optString("modelloLontano", "")
         fraseFuoriPercorso = if (root.isNull("fraseFuoriPercorso")) "" else root.optString("fraseFuoriPercorso", "")
         finale = root.optBoolean("finale", true)
+        // (21/09/2026, REVISIONE 2) Campi opzionali: assenti = come prima.
+        spegniCruscotto = root.optBoolean("spegniCruscotto", true)
 
         idx = root.optInt("indice", 0).coerceIn(0, nuoviPassi.size - 1)
+        idxJs = idx
         minDist = Double.POSITIVE_INFINITY
         dettiVicino.clear()
         dettiLontano.clear()
         dettiVicinoDavvero.clear()
         dettiLontanoDavvero.clear()
         finito = false
-        inPausa = false
+        // (21/09/2026, REVISIONE 2) Il follower può NASCERE in pausa: in pausa
+        // MANUALE il JS non ritira più il percorso (il follower vuoto non
+        // poteva obbedire a «Riprendi» dalla lock screen), lo riconsegna con
+        // inPausa:true.
+        inPausa = root.optBoolean("inPausa", false)
         lastHeartbeat = nowMs
         fuoriDa = 0L
         fuoriDetto = false
+        fuoriDettoTs = 0L
+        fuoriRipetizioni = 0
+        vicinoFinaleDa = 0L
+        fotoTerminato = null
         ultimoDetto = ""
         ultimoDettoTs = 0L
         ultimoTestoVicino = ""
@@ -261,9 +313,47 @@ object NavFollower {
         return true
     }
 
-    /** Toglie il percorso. Il servizio, accorgendosene, torna alla cadenza GPS normale. */
+    /**
+     * Toglie il percorso. Il servizio, accorgendosene, torna alla cadenza GPS
+     * normale. È il clear del JS (clearNavRoute), del load() del plugin e di
+     * una consegna rifiutata: butta anche la fotografia di «Termina».
+     */
     @Synchronized
     fun clear() {
+        azzera()
+        fotoTerminato = null
+    }
+
+    /**
+     * (21/09/2026, REVISIONE 2) Il tasto «Termina» del cruscotto: prima una
+     * FOTOGRAFIA di id, indice e insiemi «davvero», poi il follower si svuota
+     * come con clear. Finché non arrivano setRoute, il clear del JS o il
+     * load() del plugin, getNavProgress restituisce la fotografia con
+     * attivo=false e terminato=true: al «Termina» in ritardo seguito da «no»
+     * il JS riprende il progresso fatto a schermo spento prima di riconsegnare
+     * (prima riconsegnava dall'indice vecchio, verso tappe già visitate).
+     * Senza percorso non si fotografa niente (un secondo tocco non cancella
+     * la fotografia del primo).
+     */
+    @Synchronized
+    fun terminaDalBanner() {
+        val foto = if (passi.isNotEmpty()) Progress(
+            attivo = false,
+            id = routeId,
+            indice = idx,
+            dettiVicino = dettiVicinoDavvero.sorted(),
+            dettiLontano = dettiLontanoDavvero.sorted(),
+            nativoAlComando = false,
+            ultimoTestoVicino = "",
+            ultimoTestoLontano = "",
+            finito = false,
+            terminato = true
+        ) else fotoTerminato
+        azzera()
+        fotoTerminato = foto
+    }
+
+    private fun azzera() {
         passi = emptyList()
         linea = emptyList()
         resto = DoubleArray(0)
@@ -280,8 +370,13 @@ object NavFollower {
         dettiLontanoDavvero.clear()
         finito = false
         inPausa = false
+        spegniCruscotto = true
+        idxJs = 0
         fuoriDa = 0L
         fuoriDetto = false
+        fuoriDettoTs = 0L
+        fuoriRipetizioni = 0
+        vicinoFinaleDa = 0L
         ultimoDetto = ""
         ultimoDettoTs = 0L
         ultimoTestoVicino = ""
@@ -293,51 +388,68 @@ object NavFollower {
      * «Termina» e «Riascolta» arrivano al servizio, che li inoltra al JS: ma a
      * schermo spento il JS è congelato e li vedrà solo al risveglio. Nel
      * frattempo chi parla è questo follower, quindi deve obbedire da solo.
-     * Col JS vivo è innocuo: in pausa il JS ritira il percorso (clear azzera
-     * anche la pausa) e alla ripresa lo riconsegna (setRoute la azzera).
-     *  - pausa/riprendi: stesso tasto, quindi si alterna;
+     * (21/09/2026, REVISIONE 2) In pausa MANUALE il JS non ritira più il
+     * percorso: lo tiene qui IN PAUSA (routeJson/battito `inPausa`).
+     *  - pausa / riprendi: azioni ESPLICITE e idempotenti, mai un'alternanza.
+     *    L'interruttore invertiva lo stato del follower e non quello mostrato:
+     *    durante la pausa AUTOMATICA del giro (ferma da 3 min, percorso non
+     *    ritirato) «Riprendi» metteva in pausa il follower, che taceva;
      *  - riascolta: ridà la manovra corrente, solo se il nativo è al comando.
      */
     private var inPausa = false
 
+    /** Pausa esplicita. true = lo stato è cambiato (il GPS va riadeguato). */
     @Synchronized
-    fun alternaPausa() { if (passi.isNotEmpty()) inPausa = !inPausa }
+    fun impostaPausa(v: Boolean): Boolean {
+        if (passi.isEmpty() || inPausa == v) return false
+        inPausa = v
+        return true
+    }
 
     @Synchronized
     fun ripeti(nowMs: Long): String? {
         if (passi.isEmpty() || finito || inPausa) return null
         if ((nowMs - lastHeartbeat) < HEARTBEAT_STALE_MS) return null // JS vivo: risponde lui
-        val testo = passi[idx].testo
-        return testo.ifEmpty { null }
+        val p = passi[idx]
+        // (21/09/2026, REVISIONE 2) Su un arrivo NON ancora raggiunto il suo
+        // testo è «Sei arrivato a X»: detto a 300 m dalla meta inganna chi
+        // cammina. Meglio niente (l'azione va al JS, se è vivo).
+        if (p.tipo == "arrive" && !dettiVicino.contains(idx)) return null
+        return p.testo.ifEmpty { null }
     }
 
     /**
      * C'è un percorso da seguire? Lo legge il servizio per decidere la cadenza
      * dei fix: a percorso FINITO l'alta frequenza non serve più, quindi vale
      * come "nessun percorso" anche se il JS non ha ancora chiamato clear.
+     * (21/09/2026, REVISIONE 2) Nemmeno IN PAUSA: per tutto il pranzo il GPS
+     * restava a HIGH_ACCURACY ogni 2 s. In pausa il follower riceve i fix a
+     * riposo e tiene il conto lo stesso.
      */
     @Synchronized
-    fun haPercorsoAttivo(): Boolean = passi.isNotEmpty() && !finito
+    fun haPercorsoAttivo(): Boolean = passi.isNotEmpty() && !finito && !inPausa
 
     /**
      * Battito del JS: «sono vivo, parlo io, e sono arrivato fin qui».
      * Gli insiemi si UNISCONO (mai sostituiti: quello che il nativo ha già
      * contato resta); l'indice va solo in avanti. Senza percorso: no-op.
+     * Ritorna true se la pausa è cambiata (il servizio riadegua il GPS).
      */
     @Synchronized
-    fun heartbeat(indice: Int, vicino: List<Int>, lontano: List<Int>, nowMs: Long) {
+    fun heartbeat(indice: Int, vicino: List<Int>, lontano: List<Int>, nowMs: Long, pausaJs: Boolean = false): Boolean {
         val n = passi.size
-        if (n == 0) return
+        if (n == 0) return false
         lastHeartbeat = nowMs
-        // (18/09/2026 notte, dalla revisione) SE IL JS BATTE, NON È IN PAUSA:
-        // in pausa il JS ritira il percorso e i battiti smettono. Una pausa
-        // presa dal tasto a schermo spento può non arrivargli mai (App.tsx
-        // scarta le azioni più vecchie di 60 s): senza questa riga restava
-        // attiva qui, e al successivo schermo spento il navigatore taceva a
-        // giro in corso. Firma azzerata: al prossimo congelamento il primo
-        // ridisegno del cruscotto non va saltato perché «uguale a prima».
-        inPausa = false
+        // (21/09/2026, REVISIONE 2) IL BATTITO PORTA LA PAUSA DEL JS (assente
+        // = false), al posto di «il battito toglie la pausa» del 18/09: in
+        // pausa manuale il percorso ora resta qui e il JS vivo continua a
+        // battere, con inPausa:true. Firma azzerata: al prossimo congelamento
+        // il primo ridisegno del cruscotto non va saltato perché «uguale a prima».
+        val cambiata = inPausa != pausaJs
+        inPausa = pausaJs
         ultimaFirmaCruscotto = ""
+        // Il passo che il JS sta mostrando, anche se non è avanti al nostro.
+        if (indice >= 0) idxJs = min(indice, n - 1)
         // Quello che riferisce il JS è stato detto DAVVERO (da lui).
         for (i in vicino) if (i in 0 until n) { dettiVicino.add(i); dettiVicinoDavvero.add(i) }
         for (i in lontano) if (i in 0 until n) { dettiLontano.add(i); dettiLontanoDavvero.add(i) }
@@ -345,11 +457,15 @@ object NavFollower {
             idx = min(indice, n - 1)
             minDist = Double.POSITIVE_INFINITY
         }
+        return cambiata
     }
 
     @Synchronized
     fun progress(nowMs: Long): Progress {
         val attivo = passi.isNotEmpty()
+        // (21/09/2026, REVISIONE 2) Svuotato da «Termina» sul cruscotto: la
+        // fotografia presa prima, con attivo=false e terminato=true.
+        if (!attivo) fotoTerminato?.let { return it }
         return Progress(
             attivo = attivo,
             id = routeId,
@@ -360,7 +476,9 @@ object NavFollower {
             // Senza percorso nessuno è "al comando": false, non un battito scaduto.
             nativoAlComando = attivo && (nowMs - lastHeartbeat) >= HEARTBEAT_STALE_MS,
             ultimoTestoVicino = ultimoTestoVicino,
-            ultimoTestoLontano = ultimoTestoLontano
+            ultimoTestoLontano = ultimoTestoLontano,
+            finito = finito,
+            terminato = false
         )
     }
 
@@ -434,6 +552,10 @@ object NavFollower {
         val n = passi.size
         if (n == 0 || finito) return null
         if ((nowMs - lastHeartbeat) < HEARTBEAT_STALE_MS) return null // JS vivo: il cruscotto è suo
+        // (21/09/2026, REVISIONE 2) In pausa il cruscotto non si ridisegna a
+        // ogni fix: resta quello «In pausa» del JS. Solo il ridisegno immediato
+        // di un tasto (pausa/riprendi) passa.
+        if (inPausa && !subito) return null
         if (!subito && ultimoCruscottoTs != 0L && nowMs - ultimoCruscottoTs < 3000L) return null
         if (idx >= resto.size || idx >= restoTappa.size) return null
 
@@ -442,12 +564,24 @@ object NavFollower {
         val rimTappa = d + restoTappa[idx]
         val rimTotale = d + resto[idx]
 
-        var nomeTappa = ""
+        var nomeTappaPasso = ""
         for (k in idx until n) {
-            if (passi[k].tipo == "arrive") { nomeTappa = passi[k].tappa; break }
+            if (passi[k].tipo == "arrive") { nomeTappaPasso = passi[k].tappa; break }
         }
-        if (nomeTappa.isEmpty()) nomeTappa = jsNomeTappa
-        val istruzione = if (p.testo.isNotEmpty()) p.testo else jsIstruzione
+        // (21/09/2026, REVISIONE 2) L'ultimo stato del JS vale solo per il
+        // passo che il JS stava mostrando. Se fra quel passo e il nostro c'è un
+        // arrivo, la tappa è un'altra: niente nome né istruzione di ripiego
+        // (mostravano una svolta di una tratta prima, o il nome e la foto di
+        // una tappa già visitata sulla tratta di rientro). Un'istruzione senza
+        // testo più avanti del JS resta vuota: restano metri e nome.
+        val arrivoSuperato = (idxJs until idx).any { it in 0 until n && passi[it].tipo == "arrive" }
+        var nomeTappa = nomeTappaPasso
+        if (nomeTappa.isEmpty() && !arrivoSuperato) nomeTappa = jsNomeTappa
+        val istruzione = when {
+            p.testo.isNotEmpty() -> p.testo
+            idx <= idxJs -> jsIstruzione
+            else -> ""
+        }
 
         // Firma anti-raffica, la stessa del JS: sotto i 100 m scatta ogni 10 m.
         val scatto = if (d < 100.0) (d / 10.0).roundToInt() else 100 + (d / 50.0).roundToInt()
@@ -487,8 +621,11 @@ object NavFollower {
             // (dalla revisione) La tappa è cambiata rispetto all'ultimo stato
             // del JS: la foto che il servizio ricorda è quella della tappa
             // PRECEDENTE. «Nessuna foto è meglio della foto sbagliata».
-            tappaCambiata = nomeTappa.isNotBlank() && jsNomeTappa.isNotBlank() &&
-                nomeTappa.trim() != jsNomeTappa.trim()
+            // (21/09/2026, REVISIONE 2) Anche con un arrivo superato, e il
+            // confronto sul nome DEL PASSO, prima del ripiego sul JS (dopo il
+            // ripiego i due nomi coincidevano sempre).
+            tappaCambiata = arrivoSuperato || (nomeTappaPasso.isNotBlank() && jsNomeTappa.isNotBlank() &&
+                nomeTappaPasso.trim() != jsNomeTappa.trim())
         )
     }
 
@@ -512,9 +649,14 @@ object NavFollower {
         // L'ultimo fix buono si ricorda anche in pausa: serve al ridisegno
         // immediato del cruscotto quando si tocca «pausa»/«riprendi».
         if (n > 0 && accuracyM <= MAX_ACC_M) { ultimaLat = lat; ultimaLon = lon }
-        if (n == 0 || finito || inPausa) return null
+        if (n == 0 || finito) return null
         if (accuracyM > MAX_ACC_M) return null
-        val jsVivo = (nowMs - lastHeartbeat) < HEARTBEAT_STALE_MS
+        // (21/09/2026, REVISIONE 2) IN PAUSA SI TACE MA SI TIENE IL CONTO,
+        // come col JS vivo: niente frasi, niente «davvero», niente `finito`,
+        // niente fuori percorso. Prima in pausa onFix usciva subito: chi
+        // camminava in pausa oltre due svolte, alla ripresa sentiva una svolta
+        // già alle spalle e poi più niente (l'indice restava indietro).
+        val jsVivo = (nowMs - lastHeartbeat) < HEARTBEAT_STALE_MS || inPausa
 
         var out: String? = null
         var tipoOut = ""
@@ -543,14 +685,35 @@ object NavFollower {
             minDist = min(minDist, d)
 
             if (p.tipo == "arrive") {
+                // (21/09/2026, REVISIONE 2) Solo per l'ULTIMO arrivo con
+                // `finale`, oltre ai 25 m: NEI PARAGGI = entro 60 m
+                // ininterrottamente da 45 s (la regola 3 del JS).
+                val eFinale = idx == n - 1 && finale
+                if (eFinale && d <= NEARBY_M) {
+                    if (vicinoFinaleDa == 0L) vicinoFinaleDa = nowMs
+                } else {
+                    vicinoFinaleDa = 0L
+                }
+                val neiParaggi = eFinale && vicinoFinaleDa != 0L && nowMs - vicinoFinaleDa >= NEARBY_MS
                 // Da dire se mai contato, OPPURE contato in silenzio (JS creduto
                 // vivo) e ora il nativo è al comando senza che nessuno l'abbia detto.
-                if (d <= ARRIVE_M && (!dettiVicino.contains(idx) || (!jsVivo && !dettiVicinoDavvero.contains(idx)))) {
+                if ((d <= ARRIVE_M || neiParaggi) && (!dettiVicino.contains(idx) || (!jsVivo && !dettiVicinoDavvero.contains(idx)))) {
                     dettiVicino.add(idx)
                     if (!jsVivo) {
                         dettiVicinoDavvero.add(idx)
                         if (p.testo.isNotEmpty()) { out = p.testo; tipoOut = "vicino"; testoOut = p.testo }
                     }
+                } else if (eFinale && !dettiVicino.contains(idx) && minDist < 60.0 &&
+                    d > minDist + maxOf(MISSED_MARGIN_M, accuracyM)
+                ) {
+                    // (21/09/2026, REVISIONE 2) ARRIVO FINALE SFIORATO: ci si è
+                    // avvicinati (< 60 m) e ora ci si allontana → contato SENZA
+                    // dirlo (non va nei «davvero»). Margine mai sotto
+                    // l'accuratezza: un salto GPS non chiude prima dell'arrivo.
+                    // Senza, chi non entrava nei 25 m teneva il GPS al massimo e
+                    // il cruscotto acceso fino all'app, e poi sentiva «fuori
+                    // percorso» uscendo dal museo.
+                    dettiVicino.add(idx)
                 }
                 if (dettiVicino.contains(idx) && idx == n - 1 && finale) {
                     // Arrivo finale: si CHIUDE solo col nativo al comando
@@ -558,7 +721,11 @@ object NavFollower {
                     // JS vivo non si chiude qui: arriva lui e ritira il
                     // percorso; se invece si è appena congelato, al primo fix
                     // col battito scaduto l'arrivo lo dice e lo chiude il nativo.
-                    if (!jsVivo) { spegniDaDire = true; finito = true }
+                    // Un'unica strada di chiusura, anche per paraggi e sfiorato.
+                    // (21/09/2026, REVISIONE 2) `finito` sempre; il cruscotto si
+                    // spegne solo se il JS l'ha chiesto (spegniCruscotto): con un
+                    // giro in corso il cruscotto dopo la tappa singola è del giro.
+                    if (!jsVivo) { if (spegniCruscotto) spegniDaDire = true; finito = true }
                 } else if (dettiVicino.contains(idx) && d > LEAVE_STOP_M && idx + 1 < n) {
                     avanza(); continue
                 } else if (!dettiVicino.contains(idx) && idx + 1 < n &&
@@ -591,9 +758,13 @@ object NavFollower {
                 avanza(); continue
             } else if (!dettiVicino.contains(idx) && minDist < 60.0 && d > minDist + MISSED_MARGIN_M) {
                 avanza(); continue
-            } else if (p.tipo == "turn" && !dettiLontano.contains(idx) &&
+            } else if (p.tipo == "turn" && !dettiLontano.contains(idx) && !inPausa &&
                 d >= FAR_MIN_M && d <= FAR_MAX_M && p.testo.isNotEmpty()
             ) {
+                // (21/09/2026, REVISIONE 2) In pausa il preavviso NON si segna:
+                // per il «lontano» non c'è la regola dei «davvero», e una svolta
+                // contata in silenzio durante la pausa perdeva il «Tra X metri»
+                // alla ripresa.
                 dettiLontano.add(idx)
                 if (!jsVivo) {
                     dettiLontanoDavvero.add(idx)
@@ -613,11 +784,23 @@ object NavFollower {
                     fuoriDa = nowMs
                 } else if (nowMs - fuoriDa > OFFROUTE_MS && !fuoriDetto) {
                     fuoriDetto = true
+                    fuoriDettoTs = nowMs
+                    if (fraseFuoriPercorso.isNotBlank()) out = fraseFuoriPercorso
+                } else if (fuoriDetto && fuoriRipetizioni < OFFROUTE_MAX_RIPETIZIONI &&
+                    nowMs - fuoriDettoTs > OFFROUTE_RIPETI_MS
+                ) {
+                    // (21/09/2026, REVISIONE 2) Ancora fuori 60 s dopo l'ultima
+                    // volta: si ridice (al massimo 2 ripetizioni per uscita).
+                    fuoriRipetizioni++
+                    fuoriDettoTs = nowMs
                     if (fraseFuoriPercorso.isNotBlank()) out = fraseFuoriPercorso
                 }
             } else if (dl < BACK_ON_ROUTE_M) {
                 fuoriDa = 0L
                 fuoriDetto = false
+                // Rientrati: la prossima uscita riparte col suo conto.
+                fuoriDettoTs = 0L
+                fuoriRipetizioni = 0
             }
         }
 

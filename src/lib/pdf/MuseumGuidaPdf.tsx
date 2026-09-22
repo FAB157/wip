@@ -18,7 +18,7 @@
  */
 import React from 'react';
 import { Document, Page, Text, View, Image } from '@react-pdf/renderer';
-import { PDF_C, pdfStili as S, pulisci, PiedePagina } from './base.js';
+import { PDF_C, pdfStili as S, pulisci, PiedePagina, FotoConTesto, type MisureFoto } from './base.js';
 import type { MuseumVisit, ArtworkGuide, MuseumMap } from '../museumVisit.js';
 
 export interface MuseumPdfEtichette {
@@ -36,16 +36,25 @@ export interface MuseumPdfProps {
   immaginiMappe?: Record<number, string>;
   /** Data URL della foto di ogni tappa (`tappa.foto`), stesso indice grezzo di `opere`. */
   immaginiTappe?: Record<number, string>;
+  /** Larghezza e altezza di ogni foto di tappa: servono a mostrarla INTERA (vedi FotoIntera). */
+  misureTappe?: Record<number, MisureFoto>;
   /** Data URL della foto del museo (venue_photo), per la copertina; assente = copertina senza foto. */
   copertina?: string;
 }
 
+// LA COPERTINA E' UNA PAGINA (20/09/2026, visto sul PDF del Duomo di Milano:
+// foto a pagina 1, titolo da solo a pagina 2). Con `height: '100%'` foto e
+// titolo misuravano ESATTAMENTE il foglio e il motore, al primo arrotondamento,
+// spingeva il secondo alla pagina dopo. Misure esplicite, un punto sotto il
+// foglio A4 (595.28 × 841.89).
+const COPERTINA_L = 595.28;
+const COPERTINA_H = 840;
 const Copertina: React.FC<{ titolo: string; foto?: string }> = ({ titolo, foto }) => {
   const dim = titolo.length > 44 ? 26 : titolo.length > 26 ? 30 : 36;
   return (
     <Page size="A4" style={{ backgroundColor: PDF_C.navy, padding: 0 }} bookmark={{ title: titolo }}>
-      {foto ? <Image src={foto} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: 0.32 }} /> : null}
-      <View style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', paddingTop: 30 * 2.835, paddingHorizontal: 18 * 2.835, paddingBottom: 16 * 2.835, justifyContent: 'space-between' }}>
+      {foto ? <Image src={foto} style={{ position: 'absolute', left: 0, top: 0, width: COPERTINA_L, height: COPERTINA_H, objectFit: 'cover', opacity: 0.32 }} /> : null}
+      <View style={{ position: 'absolute', left: 0, top: 0, width: COPERTINA_L, height: COPERTINA_H, paddingTop: 30 * 2.835, paddingHorizontal: 18 * 2.835, paddingBottom: 16 * 2.835, justifyContent: 'space-between' }}>
         <View>
           <Text style={{ fontFamily: 'Helvetica-Bold', fontSize: dim, color: PDF_C.bianco, lineHeight: 1.1, marginBottom: 14 }}>{titolo}</Text>
         </View>
@@ -64,9 +73,25 @@ const Copertina: React.FC<{ titolo: string; foto?: string }> = ({ titolo, foto }
   );
 };
 
-const Tappa: React.FC<{ tappa: any; numero: number; g?: ArtworkGuide; et: MuseumPdfEtichette; foto?: string }> = ({ tappa, numero, g, et, foto }) => (
-  <View style={{ marginBottom: 8 }} wrap={false}>
-    <View minPresenceAhead={60}>
+const Tappa: React.FC<{ tappa: any; numero: number; g?: ArtworkGuide; et: MuseumPdfEtichette; foto?: string; misure?: MisureFoto; banda?: string }> = ({ tappa, numero, g, et, foto, misure, banda }) => {
+  // LA FOTO STA A FIANCO DEL TESTO, INTERA E PICCOLA, come in un libro
+  // (20/09/2026, committente: «le foto non devono essere a pagina intera,
+  // solo la copertina»; «se sono orizzontali le metti orizzontali ma ridotte,
+  // se sono verticali in verticale e il testo accanto — tutto armonico»).
+  // La regola e il perche' del TESTO CHE SCORRE (niente blocco indivisibile:
+  // mezza pagina bianca e titoli sovrapposti nel PDF del Duomo) stanno in
+  // base.tsx › FotoConTesto.
+  // La fascia della sala sta DENTRO il blocco unito (fascia + titolo + foto):
+  // come elemento a se' restava sola in fondo alla pagina, staccata dall'opera
+  // (collaudo 20/09/2026; `minPresenceAhead` in questa versione di react-pdf
+  // non tratteneva nulla).
+  const intestazione = (
+    <View>
+      {banda ? (
+        <View style={S.bandaGiorno}>
+          <Text style={S.bandaGiornoTitolo}>{banda}</Text>
+        </View>
+      ) : null}
       <Text style={[S.h3, { marginTop: 0, marginBottom: 1 }]}>
         {tappa.soloCollezione ? '' : `${numero}. `}{pulisci(tappa.nome)}{tappa.preferita ? ' *' : ''}
       </Text>
@@ -80,23 +105,27 @@ const Tappa: React.FC<{ tappa: any; numero: number; g?: ArtworkGuide; et: Museum
       ) : null}
       {tappa.soloCollezione ? <Text style={[S.sans, S.piccolo, { marginTop: 1 }]}>{et.soloCollezione}</Text> : null}
     </View>
-    {foto ? <Image src={foto} style={{ width: '100%', maxHeight: 62 * 2.835, objectFit: 'cover', borderRadius: 4, marginTop: 4 }} /> : null}
-    {tappa.perche ? <Text style={[S.paragrafo, { marginTop: 3, marginBottom: 0 }]}>{pulisci(tappa.perche)}</Text> : null}
-    {g?.testo ? <Text style={[S.paragrafo, { marginTop: 3, marginBottom: 0 }]}>{pulisci(g.testo)}</Text> : null}
-    {g?.daGuardare?.length ? (
-      <View style={[S.riquadro, { marginTop: 4 }]} wrap={false}>
-        <Text style={S.riquadroTitolo}>{et.guardaAnche}</Text>
-        {g.daGuardare.map((d, k) => <Text key={k} style={{ fontSize: 8.5, marginTop: k ? 1.5 : 0 }}>· {pulisci(d)}</Text>)}
-      </View>
-    ) : null}
-    {g?.curiosita ? (
-      <View style={[S.riquadroOro, { marginTop: 4 }]} wrap={false}>
-        <Text style={S.riquadroTitolo}>{et.curiosita}</Text>
-        <Text style={{ fontSize: 8.5 }}>{pulisci(g.curiosita)}</Text>
-      </View>
-    ) : null}
-  </View>
-);
+  );
+  // Il testo dell'opera: la riga base della tappa e il racconto della scheda, in un flusso solo.
+  const testo = [tappa.perche, g?.testo].filter(Boolean).map((x: any) => pulisci(x)).join('\n');
+  return (
+    <View style={{ marginBottom: 8 }}>
+      <FotoConTesto intestazione={intestazione} foto={foto} misure={misure} testo={testo} stileTesto={[S.paragrafo, { marginBottom: 0 }]} />
+      {g?.daGuardare?.length ? (
+        <View style={[S.riquadro, { marginTop: 4 }]} wrap={false}>
+          <Text style={S.riquadroTitolo}>{et.guardaAnche}</Text>
+          {g.daGuardare.map((d, k) => <Text key={k} style={{ fontSize: 8.5, marginTop: k ? 1.5 : 0 }}>· {pulisci(d)}</Text>)}
+        </View>
+      ) : null}
+      {g?.curiosita ? (
+        <View style={[S.riquadroOro, { marginTop: 4 }]} wrap={false}>
+          <Text style={S.riquadroTitolo}>{et.curiosita}</Text>
+          <Text style={{ fontSize: 8.5 }}>{pulisci(g.curiosita)}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+};
 
 const PiantaConLegenda: React.FC<{ mappa: MuseumMap; immagine?: string; et: MuseumPdfEtichette; indiceLabel: string }> = ({ mappa, immagine, et, indiceLabel }) => {
   if (!immagine) return null;
@@ -115,7 +144,7 @@ const PiantaConLegenda: React.FC<{ mappa: MuseumMap; immagine?: string; et: Muse
   );
 };
 
-export default function MuseumGuidaPdf({ visit, opere, mappe, etichette: et, immaginiMappe, immaginiTappe, copertina }: MuseumPdfProps) {
+export default function MuseumGuidaPdf({ visit, opere, mappe, etichette: et, immaginiMappe, immaginiTappe, misureTappe, copertina }: MuseumPdfProps) {
   const titolo = pulisci(visit.venue?.name) || 'WIP';
   const tappe = visit.guide?.tappe || [];
   const conSala = tappe.filter((x: any) => String(x.dove || '').trim()).length;
@@ -158,17 +187,7 @@ export default function MuseumGuidaPdf({ visit, opere, mappe, etichette: et, imm
           const numero = tappe.slice(0, i + 1).filter((x: any) => !x.soloCollezione).length;
           return (
             <React.Fragment key={`${i}-${tappa.nome}`}>
-              {apreSala ? (
-                <View style={S.bandaGiorno} minPresenceAhead={80}>
-                  <Text style={S.bandaGiornoTitolo}>{pulisci(salaQui)}</Text>
-                </View>
-              ) : null}
-              {primaSenzaSala ? (
-                <View style={S.bandaGiorno} minPresenceAhead={80}>
-                  <Text style={S.bandaGiornoTitolo}>{et.ancheCollezione}</Text>
-                </View>
-              ) : null}
-              <Tappa tappa={tappa} numero={numero} g={opere[i]} et={et} foto={immaginiTappe?.[i]} />
+              <Tappa tappa={tappa} numero={numero} g={opere[i]} et={et} foto={immaginiTappe?.[i]} misure={misureTappe?.[i]} banda={apreSala ? pulisci(salaQui) : primaSenzaSala ? et.ancheCollezione : undefined} />
             </React.Fragment>
           );
         })}

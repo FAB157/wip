@@ -5,6 +5,7 @@
  */
 
 import { supabase } from '../lib/supabase';
+import { chiediConsensoAi } from '../lib/aiConsent';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { Capacitor } from '@capacitor/core';
 import { registraDownload } from '../lib/downloadsRegistry';
@@ -27,7 +28,18 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-export async function saveBlobAsFile(blob: Blob, filename: string): Promise<boolean> {
+/**
+ * `archivio` (20/09/2026): quando il file e' un PDF «stampato» (itinerario,
+ * Guida Premium, guida museo) se ne tiene una copia in pdfArchivio, cosi'
+ * «I miei download» lo ritrova nella cartella giusta. Senza, nessuna copia.
+ */
+export async function saveBlobAsFile(blob: Blob, filename: string, archivio?: { tipo: 'itinerario' | 'guida' | 'museo'; nome: string }): Promise<boolean> {
+  if (archivio) {
+    try {
+      const { archiviaPdf } = await import('../lib/pdfArchivio');
+      await archiviaPdf(archivio.tipo, archivio.nome, filename, blob);
+    } catch { /* best-effort */ }
+  }
   if (Capacitor.isNativePlatform()) {
     try {
       const { Filesystem, Directory } = await import('@capacitor/filesystem');
@@ -238,6 +250,9 @@ export async function generatePremiumGuide(
     return cached;
   }
 
+  // Consenso AI (22/09/2026): itinerario e dedica scritta dall'utente vanno a un modello esterno.
+  if (!(await chiediConsensoAi())) throw new Error('CONSENSO_AI_NEGATO');
+
   // 2. Call server endpoint (quota check + Groq + Unsplash are server-side)
   const response = await fetch('/api/premium-guide/generate', {
     method: 'POST',
@@ -322,7 +337,7 @@ export async function downloadGuideAsPdf(
       const { generaPdfGuida } = await import('../lib/pdf/generaPdf');
       const blob = await generaPdfGuida(dati.content, dati.mediaManifest || {}, dati.language || 'IT');
       if (blob) {
-        const saved = await saveBlobAsFile(blob, filename);
+        const saved = await saveBlobAsFile(blob, filename, { tipo: 'guida', nome: String(dati.content.guida_titolo || filename.replace(/\.pdf$/i, '')) });
         return saved ? blob : null;
       }
     } catch (e) {
@@ -414,7 +429,7 @@ export async function downloadGuideAsPdf(
     // Il PDF viene renderizzato UNA volta sola: il vecchio codice rifaceva
     // l'intero rendering html2canvas una seconda volta per il download.
     const pdfBlob: Blob = await html2pdf().set(opt).from(element).outputPdf('blob');
-    const saved = await saveBlobAsFile(pdfBlob, filename);
+    const saved = await saveBlobAsFile(pdfBlob, filename, { tipo: 'guida', nome: String(dati?.content?.guida_titolo || filename.replace(/\.pdf$/i, '')) });
     return saved ? pdfBlob : null;
   } catch (err) {
     console.error('[PremiumGuide] PDF generation failed:', err);

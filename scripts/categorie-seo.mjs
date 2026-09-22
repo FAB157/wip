@@ -38,6 +38,16 @@ export const CATEGORIE = [
   'house_museum', 'museum_ship',
 
   // ── Monumenti e patrimonio costruito a grana fine ──
+  // `memorial` (targhe openplaques, 50.961 righe), `train_station` (32.324) e
+  // `dam` (4.163) sono state tolte da qui il 17/09/2026: Search Console ne
+  // aveva scoperte 332.280 senza indicizzarne quasi nessuna (14.700 su
+  // 447.500), e il campione mostrato da Google era in gran parte proprio
+  // queste tre — targhe con nome tipo "Black plaque № 18595" e pochissimo
+  // testo unico, stazioni e dighe che superano i 100 caratteri di soglia
+  // senza essere davvero interessanti. Restano nell'app (la mappa e le
+  // audioguide non dipendono da questa lista), escono solo da sitemap e
+  // "luoghi vicini": un sito con centinaia di migliaia di pagine deboli
+  // penalizza anche quelle buone.
   'monument', 'castle', 'ruins', 'archaeological_site', 'archaeological_park',
   'artwork', 'attraction', 'square', 'bridge', 'fountain', 'theatre',
   'opera_house', 'palace', 'tower', 'skyscraper', 'cemetery', 'library',
@@ -46,7 +56,7 @@ export const CATEGORIE = [
   'villa', 'domus', 'harbour', 'pier', 'shipyard', 'mine', 'quarry', 'saltworks',
   'chimney', 'funicular', 'rack_railway', 'amphitheatre', 'roman_baths',
   'roman_theatre', 'roman_circus', 'roman_villa', 'triumphal_arch', 'obelisk',
-  'mausoleum', 'market_hall', 'train_station', 'dam', 'prison', 'memorial',
+  'mausoleum', 'market_hall', 'prison',
   'sculpture', 'university', 'town_hall', 'coastal_tower', 'racetrack',
   'racecourse', 'ski_jump', 'war_cemetery', 'concentration_camp', 'archive',
   'radio_telescope', 'hydro_plant',

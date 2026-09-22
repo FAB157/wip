@@ -21,7 +21,9 @@
 // ottobre") e si dice sempre di verificare sul sito ufficiale. È la stessa
 // onestà che il tema "fioriture" applica alle sbocciature.
 
-import { FOOD_FESTIVALS_WORLD } from './foodFestivalsWorld';
+// `.js` obbligatorio: il server carica questo file in ESM puro (vedi
+// libraryDescriptors.ts, 19/09/2026); senza estensione il catalogo non parte.
+import { FOOD_FESTIVALS_WORLD } from './foodFestivalsWorld.js';
 
 export type FestivalKind =
   | 'tartufo' | 'vino' | 'birra' | 'formaggio' | 'olio' | 'cioccolato'

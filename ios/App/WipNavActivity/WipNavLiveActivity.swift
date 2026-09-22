@@ -152,7 +152,27 @@ private struct WipNavTasto: View {
         .frame(width: lato, height: lato)
     }
 
+    /// (21/09/2026, REVISIONE 2) «Salta» e «Ricalcola» il navigatore nativo
+    /// non li sa fare (non calcola percorsi): con l'intent il tocco restava
+    /// sulla lock screen e a schermo spento non succedeva nulla. Sono SEMPRE
+    /// un Link, anche su iOS 17: aprono l'app (con lo sblocco) e AppDelegate
+    /// consegna l'azione al JS, fresca, per la stessa strada di iOS 16.
+    private var apreLApp: Bool {
+        azione == WipNavAzione.salta || azione == WipNavAzione.ricalcola
+    }
+
     var body: some View {
+        if apreLApp, let url = WipNavLink.url(azione) {
+            Link(destination: url) { faccia }
+        } else {
+            tastoSullaLockScreen
+        }
+    }
+
+    /// Pausa/riprendi, riascolta e termina: dal iOS 17 un Button con App
+    /// Intent (il tocco resta sulla lock screen), prima un Link.
+    @ViewBuilder
+    private var tastoSullaLockScreen: some View {
         if #available(iOS 17.0, *) {
             Button(intent: WipNavAzioneIntent(azione: azione)) { faccia }
                 .buttonStyle(.plain)
@@ -174,7 +194,10 @@ private struct WipNavTasti: View {
     var lato: CGFloat = 40
 
     private var azioni: [(String, String)] {
-        let pausa = (WipNavAzione.pausa, stato.eInPausa ? "play.fill" : "pause.fill")
+        // (21/09/2026) In pausa il tasto porta «riprendi», fuori «pausa»:
+        // azioni esplicite, mai un'alternanza (vedi WipNavAzione.riprendi).
+        let pausa = (stato.eInPausa ? WipNavAzione.riprendi : WipNavAzione.pausa,
+                     stato.eInPausa ? "play.fill" : "pause.fill")
         let riascolta = (WipNavAzione.riascolta, "arrow.counterclockwise")
         let salta = (WipNavAzione.salta, "forward.end.fill")
         let ricalcola = (WipNavAzione.ricalcola, "arrow.triangle.2.circlepath")

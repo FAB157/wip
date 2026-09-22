@@ -26,7 +26,7 @@ import { Capacitor } from '@capacitor/core';
 import { tourService, metri, primaFrase } from '../../services/tourService';
 import { isSpeechActive, speakInstruction } from '../../services/ttsService';
 import { locationService } from '../../services/locationService';
-import { pubblicaPercorsoNativo, ritiraPercorsoNativo, battitoNav, navNativoDisponibile, percorsoNativoAttivo, proprietarioNativo, passiPubblicati } from '../nav/navNativo';
+import { pubblicaPercorsoNativo, ritiraPercorsoNativo, battitoNav, navNativoDisponibile, percorsoNativoAttivo, proprietarioNativo, passiPubblicati, impostaPausaNativa } from '../nav/navNativo';
 
 /**
  * La guida sta parlando? Due canali: ttsService (teaser, navigatore) e
@@ -60,6 +60,15 @@ let avvisatoSenzaRete = false;
 const SVOLTA_VICINO_M = 35;
 /** Oltre questi si preannuncia "fra N metri" appena la manovra diventa la prossima. */
 const SVOLTA_LONTANO_M = 80;
+/**
+ * LE SVOLTE SCADONO (21/09/2026, revisione 2 del navigatore a schermo spento).
+ * Sul telefono la frase va nella coda vocale nativa, che e` sequenziale: dietro
+ * un teaser, una guida o una telefonata un «Gira a destra» usciva minuti dopo,
+ * a svolta passata — un'indicazione sbagliata, non solo in ritardo. Come le
+ * frasi del follower nativo, dopo 20 s in coda si butta. SOLO svolte e
+ * preavvisi: incontri, arrivi, ricalcolo e fuori percorso restano senza.
+ */
+const TTL_SVOLTA_MS = 20000;
 
 /** "Fra 120 metri," nella lingua della UI (da i18n, come tutto il resto). */
 function fraMetri(m: number, lingua: string): string {
@@ -96,12 +105,13 @@ function drenaCoda(): void {
  * trattato come `parla` e il ducking restava sulla carta.
  */
 let duckingAttivo = false;
-function parla(testo: string, lingua: string, abbassa = false): void {
+function parla(testo: string, lingua: string, abbassa = false, ttlMs?: number): void {
   if (abbassa) {
     duckingAttivo = true;
     try { locationService.setDucking(true); } catch { /* solo web */ }
   }
-  speakInstruction(testo, lingua);
+  // `ttlMs` solo per le svolte (vedi TTL_SVOLTA_MS): tutto il resto come prima.
+  speakInstruction(testo, lingua, undefined, ttlMs ? { ttlMs } : undefined);
 }
 /**
  * Ripete a voce la svolta corrente del giro (tasto 🔊 della card blu in
@@ -146,11 +156,32 @@ export function avviaGiroDriver(): void {
   window.addEventListener('wip-nav-nativo-progresso', (e: Event) => {
     try { allineaAlNativo((e as CustomEvent).detail || {}); } catch { /* al peggio una svolta ripetuta */ }
   });
-  // Pausa e «Termina» ritirano il percorso dal nativo SUBITO (dalla
-  // revisione), non al fix GPS successivo: col telefono gia` in tasca quel
-  // fix la pagina congelata non lo vede piu`, e il follower restava col
-  // percorso di un giro chiuso.
-  tourService.ascolta(() => { if (firmaNativa && !tourService.firmaPerNativo()) ritiraNativoSeMio(); });
+  // «Termina» ritira il percorso dal nativo SUBITO (dalla revisione), non al
+  // fix GPS successivo: col telefono gia` in tasca quel fix la pagina
+  // congelata non lo vede piu`, e il follower restava col percorso di un giro
+  // chiuso.
+  // LA PAUSA NON LO RITIRA PIU` (21/09/2026, revisione 2). Ritirato in pausa,
+  // il follower restava vuoto e «Riprendi» dalla lock screen non trovava
+  // niente da riprendere: navigatore muto per tutto il tratto a schermo
+  // spento. Ora in pausa manuale il percorso resta al follower IN PAUSA (tace
+  // ma tiene il conto, GPS a riposo) e la pausa viaggia da sola
+  // (impostaPausaNativa, con un battito subito): la firma non cambia.
+  // E se la firma ricompare o cambia (ripresa, salto, ricalcolo) si riconsegna
+  // SUBITO: a pagina nascosta il fix dopo puo` non arrivare piu`.
+  tourService.ascolta(() => {
+    try {
+      const f = tourService.firmaPerNativo();
+      if (!f) { ritiraNativoSeMio(); return; }
+      if (f !== firmaNativa) {
+        // Durante il riallineamento le tappe si chiudono una alla volta:
+        // niente consegne a meta`, si riconsegna al fix dopo (come prima).
+        if (!allineandoDalNativo) sincronizzaNativo(linguaUi());
+        return;
+      }
+      const inPausa = tourService.inPausaManuale();
+      if (inPausa !== pausaConsegnata) { pausaConsegnata = inPausa; impostaPausaNativa('giro', inPausa); }
+    } catch { /* al peggio si riconsegna al prossimo fix */ }
+  });
   window.addEventListener('wip-speech-ended', onSpeechEnded);
   window.addEventListener('wip-audio-stopped', () => drenaCoda());
   // «RICALCOLA DA QUI» (03/09/2026): l'esito lo dice il driver, a voce,
@@ -183,27 +214,52 @@ export function avviaGiroDriver(): void {
 let firmaNativa: string | null = null;
 /** Cosa ha detto il nativo mentre la pagina era congelata: si consuma al primo fix da svegli. */
 let dettoDalNativo: { vicino: string; lontano: string } | null = null;
+/**
+ * LA LISTA CONSEGNATA, FOTOGRAFATA (21/09/2026, revisione 2): da che tappa
+ * parte e su quali tratte. Al risveglio la stessa tappa veniva chiusa due
+ * volte — una dal JS (ci si era allontanati) e una dal riallineamento, che
+ * contava gli arrivi dall'inizio della lista senza sapere cosa il JS aveva
+ * gia` chiuso: si saltava la tappa dopo senza averla vista.
+ */
+let tappaConsegnata = 0;
+let tratteConsegnate: any[] | null = null;
+/** La pausa manuale gia` detta al nativo (null = nessun percorso del giro consegnato). */
+let pausaConsegnata: boolean | null = null;
+/** allineaAlNativo sta chiudendo tappe: l'ascoltatore non riconsegna a meta`. */
+let allineandoDalNativo = false;
 
 function ritiraNativoSeMio(): void {
   if (!firmaNativa) return;
   firmaNativa = null;
+  pausaConsegnata = null;
   ritiraPercorsoNativo('giro'); // il canale ignora chi non e` il proprietario
 }
 
-function sincronizzaNativo(lingua: string): void {
-  if (!navNativoDisponibile()) return;
+/**
+ * Consegna/riconsegna e battito. Ritorna true se il battito ha scoperto un
+ * buco (pagina appena scongelata) e ha avviato il riallineamento col nativo:
+ * in quel fix non si annuncia nulla (vedi onFix).
+ */
+function sincronizzaNativo(lingua: string): boolean {
+  if (!navNativoDisponibile()) return false;
   const firma = tourService.firmaPerNativo();
-  if (!firma) { ritiraNativoSeMio(); return; }
+  if (!firma) { ritiraNativoSeMio(); return false; }
   // Mentre c'e` una navigazione a tappa singola il canale e` suo: niente
   // lavoro a vuoto. Quando lascia, qui sotto si riconsegna da soli.
-  if (proprietarioNativo() === 'tappa') { firmaNativa = null; return; }
+  if (proprietarioNativo() === 'tappa') { firmaNativa = null; return false; }
   if (firma !== firmaNativa || !percorsoNativoAttivo('giro')) {
     const dati = tourService.passiPerNativo(getTranslation('tour_sei_arrivato', lingua.toUpperCase() as Language));
-    if (!dati) { ritiraNativoSeMio(); return; }
+    if (!dati) { ritiraNativoSeMio(); return false; }
     firmaNativa = dati.firma;
-    pubblicaPercorsoNativo({ canale: 'giro', firma: dati.firma, passi: dati.passi, indice: dati.indice, linea: dati.linea, lingua, finale: true });
+    // Lettura sincrona: lo stesso stato da cui passiPerNativo parte (`da`).
+    tappaConsegnata = tourService.vista()?.tappaCorrente ?? 0;
+    tratteConsegnate = tourService.datiGiro()?.tratte ?? null;
+    // In pausa manuale il follower nasce in pausa (revisione 2): tace ma
+    // tiene il conto, e «Riprendi» dalla lock screen lo riaccende.
+    pausaConsegnata = tourService.inPausaManuale();
+    pubblicaPercorsoNativo({ canale: 'giro', firma: dati.firma, passi: dati.passi, indice: dati.indice, linea: dati.linea, lingua, finale: true, inPausa: pausaConsegnata });
   }
-  battitoNav('giro', tourService.indicePerNativo());
+  return battitoNav('giro', tourService.indicePerNativo());
 }
 
 /**
@@ -216,20 +272,44 @@ function sincronizzaNativo(lingua: string): void {
  */
 function allineaAlNativo(d: any): void {
   if (!firmaNativa || d?.canale !== 'giro' || !String(d?.id || '').startsWith(`${firmaNativa}#`)) return;
+  // (21/09/2026) Dopo la consegna c'e` stato un ricalcolo, un salto o
+  // un'esclusione (tourService sostituisce l'array delle tratte): gli indici
+  // del nativo non valgono sulle tratte nuove. Il prossimo fix riconsegna.
+  if (tourService.datiGiro()?.tratte !== tratteConsegnate) return;
   const passi = passiPubblicati();
   const indice = Math.max(0, Math.min(Number(d.indice) || 0, passi.length - 1));
-  // Per INDICE, non per ultimo testo detto: «Gira a destra» ricorre, e
-  // l'ultimo testo del nativo puo` essere di venti minuti prima. Conta solo se
-  // la manovra su cui il nativo e` ADESSO l'ha gia` detta lui.
-  const testoOra = String(passi[indice]?.testo || '');
-  dettoDalNativo = {
-    vicino: Array.isArray(d.dettiVicino) && d.dettiVicino.includes(indice) ? testoOra : '',
-    lontano: Array.isArray(d.dettiLontano) && d.dettiLontano.includes(indice) ? testoOra : '',
-  };
+  // L'ARRIVO FINALE DETTO DAL NATIVO (21/09/2026, revisione 2). Il nativo non
+  // va oltre l'ultimo passo: contando solo gli arrivi ALLE SUE SPALLE l'ultima
+  // tappa (o il rientro dell'anello) restava aperta, e allo sblocco lontano
+  // dalla meta il giro la dava «a 800 m» e ricalcolava all'indietro. Con
+  // `finito` l'ultimo arrivo conta: si chiude la tappa, o il rientro.
+  const finale = d.finito === true && indice === passi.length - 1 && passi[indice]?.tipo === 'arrive';
   let arrivi = 0, dopoUltimoArrivo = 0;
-  for (let k = 0; k < indice; k++) if (passi[k]?.tipo === 'arrive') { arrivi++; dopoUltimoArrivo = k + 1; }
-  for (let n = 0; n < arrivi && tourService.inCorso(); n++) tourService.completaTappa();
-  tourService.allineaPassoDaNativo(indice - dopoUltimoArrivo);
+  for (let k = 0; k < (finale ? indice + 1 : indice); k++) if (passi[k]?.tipo === 'arrive') { arrivi++; dopoUltimoArrivo = k + 1; }
+  // Tappe gia` chiuse dal JS DOPO la consegna (ci si era allontanati, o un
+  // riallineamento precedente con la stessa lista): non si sommano a quelle
+  // del nativo. Cosi` un secondo riallineamento non chiude piu` niente.
+  const giaChiuse = Math.max(0, (tourService.vista()?.tappaCorrente ?? tappaConsegnata) - tappaConsegnata);
+  const inPari = giaChiuse <= arrivi;
+  if (inPari) {
+    // Per INDICE, non per ultimo testo detto: «Gira a destra» ricorre, e
+    // l'ultimo testo del nativo puo` essere di venti minuti prima. Conta solo se
+    // la manovra su cui il nativo e` ADESSO l'ha gia` detta lui.
+    const testoOra = String(passi[indice]?.testo || '');
+    dettoDalNativo = {
+      vicino: Array.isArray(d.dettiVicino) && d.dettiVicino.includes(indice) ? testoOra : '',
+      lontano: Array.isArray(d.dettiLontano) && d.dettiLontano.includes(indice) ? testoOra : '',
+    };
+  }
+  allineandoDalNativo = true;
+  try {
+    // `tappaAttuale()`: inCorso() resta vero anche a FINITO, e l'arrivo del
+    // rientro non e` una tappa da completare.
+    for (let n = giaChiuse; n < arrivi && tourService.inCorso() && tourService.tappaAttuale(); n++) tourService.completaTappa();
+    if (finale) {
+      if (tourService.inCorso() && !tourService.tappaAttuale()) tourService.concludiRientro();
+    } else if (inPari) tourService.allineaPassoDaNativo(indice - dopoUltimoArrivo);
+  } finally { allineandoDalNativo = false; }
 }
 
 function linguaUi(): string {
@@ -282,7 +362,12 @@ function onFix(e: Event): void {
     if (!v) return;
     // Il follower nativo: percorso consegnato (o riconsegnato se e` cambiato)
     // e battito «sono vivo, le svolte le dico io».
-    sincronizzaNativo(lingua);
+    // IL FIX CHE SCOPRE IL BUCO NON PARLA (21/09/2026, revisione 2): il
+    // riallineamento col nativo e` asincrono, e nello stesso fix il blocco 0b
+    // ripeteva la svolta che il nativo aveva appena detto (e il JS poteva
+    // chiudere una tappa che il riallineamento chiudeva di nuovo). Si salta
+    // questo campione: al prossimo il JS e` gia` in pari.
+    if (sincronizzaNativo(lingua)) return;
     const tappa = tourService.tappaAttuale();
 
     // UNA SOLA VOCE PER FIX, in ordine di precedenza: istruzione del
@@ -329,8 +414,20 @@ function onFix(e: Event): void {
     //     direttore audio come tutto il resto: non parla sopra la guida.
     //     `suAttraversamento` viene dalla manovra OSRM (tourService): a
     //     ridosso di un attraversamento il direttore tace.
-    if (v.istruzione && v.metriAllaSvolta != null && v.stato !== 'ALL_INGRESSO' && v.stato !== 'GUIDA_IN_CORSO' && v.stato !== 'IN_PAUSA' && v.stato !== 'FINITO') {
-      const chiave = `${giro.id}:${v.tappaCorrente}:${v.istruzione}`;
+    //     L'ARRIVO A UNA TAPPA NON E` UNA SVOLTA (21/09/2026, revisione 2):
+    //     lo dice il blocco 1 (tappe senza guida) o, sul telefono, il geofence
+    //     («Sei arrivato a X. <teaser>») — come fa il follower nativo. Prima
+    //     qui si sentiva due volte, o «Fra 200 metri, Sei arrivato a X». Sul
+    //     web (niente geofence) le tappe con guida restano com'erano; il
+    //     rientro dell'anello (nessuna tappa) pure.
+    const arrivoTappa = !!tappa && v.manovra?.type === 'arrive' && (tappa.senzaGuida === true || Capacitor.isNativePlatform());
+    if (!arrivoTappa && v.istruzione && v.metriAllaSvolta != null && v.stato !== 'ALL_INGRESSO' && v.stato !== 'GUIDA_IN_CORSO' && v.stato !== 'IN_PAUSA' && v.stato !== 'FINITO') {
+      // La chiave e` PER MANOVRA (indice nella lista del nativo), non per
+      // testo (21/09/2026): due «Gira a destra» di fila senza nome di via
+      // avevano la stessa chiave, la seconda taceva e il battito la dava al
+      // nativo per detta. La regola del nativo: una frase per manovra.
+      const iNativo = tourService.indicePerNativo();
+      const chiave = `${giro.id}:${v.tappaCorrente}:${iNativo}:${v.istruzione}`;
       // Appena svegli dopo lo schermo spento: la svolta che il nativo ha gia`
       // detto non si ripete. Una volta sola, poi si torna alla regola normale.
       if (dettoDalNativo) {
@@ -340,17 +437,18 @@ function onFix(e: Event): void {
       }
       let testo: string | null = null;
       if (v.metriAllaSvolta <= SVOLTA_VICINO_M && svoltaDettaVicino !== chiave) { svoltaDettaVicino = chiave; svoltaDettaLontano = chiave; testo = v.istruzione; }
-      else if (v.metriAllaSvolta > SVOLTA_LONTANO_M && svoltaDettaLontano !== chiave) { svoltaDettaLontano = chiave; testo = `${fraMetri(v.metriAllaSvolta, lingua)} ${v.istruzione}`; }
+      // Il preavviso «fra N metri» solo per le svolte, mai per un arrivo (come
+      // il follower, che lo fa solo sui passi 'turn').
+      else if (v.metriAllaSvolta > SVOLTA_LONTANO_M && v.manovra?.type !== 'arrive' && svoltaDettaLontano !== chiave) { svoltaDettaLontano = chiave; testo = `${fraMetri(v.metriAllaSvolta, lingua)} ${v.istruzione}`; }
       if (testo) {
         const decisione = tourService.chiPuoParlare('navigatore', { guidaInCorso: parlando, metriAllaSvolta: v.metriAllaSvolta, suAttraversamento: v.suAttraversamento });
-        if (decisione.azione === 'parla' || decisione.azione === 'abbassa_e_parla') { parla(testo, lingua, decisione.azione === 'abbassa_e_parla'); dettoQualcosa = true; }
+        if (decisione.azione === 'parla' || decisione.azione === 'abbassa_e_parla') { parla(testo, lingua, decisione.azione === 'abbassa_e_parla', TTL_SVOLTA_MS); dettoQualcosa = true; }
         else if (decisione.azione === 'accoda') tourService.accodaVoce('navigatore', testo);
         else if (decisione.azione === 'taci' && v.suAttraversamento) { svoltaDettaVicino = null; svoltaDettaLontano = null; }
       }
       // Al follower nativo si dice anche COSA si e` gia` annunciato di questa
       // manovra: se la pagina viene congelata un attimo dopo, non la ripete.
       if (firmaNativa) {
-        const iNativo = tourService.indicePerNativo();
         battitoNav('giro', iNativo, svoltaDettaVicino === chiave ? [iNativo] : [], svoltaDettaLontano === chiave ? [iNativo] : []);
       }
     }
@@ -377,9 +475,27 @@ function onFix(e: Event): void {
           // 'it' — con la minuscola l'arrivo alle tappe senza guida usciva
           // sempre in inglese.
           const arrivo = `${getTranslation('tour_sei_arrivato', lingua.toUpperCase() as Language)} ${nome}`;
-          const d = tourService.chiPuoParlare('navigatore', { guidaInCorso: parlando, metriAllaSvolta: null, suAttraversamento: v.suAttraversamento });
-          if (d.azione === 'parla' || d.azione === 'abbassa_e_parla') { parla(arrivo, lingua, d.azione === 'abbassa_e_parla'); dettoQualcosa = true; }
-          else if (d.azione === 'accoda') tourService.accodaVoce('navigatore', arrivo);
+          // (21/09/2026, revisione 2) NON dal direttore come 'navigatore': qui
+          // lo stato e` sempre ALL_INGRESSO, e all'ingresso il direttore
+          // risponde sempre 'taci' — l'arrivo alle tappe di un percorso su
+          // misura, a pagina viva, non si sentiva mai. Si dice, o si accoda se
+          // la guida parla o si e` su un attraversamento.
+          if (v.suAttraversamento || guidaSuona()) tourService.accodaVoce('navigatore', arrivo);
+          else {
+            parla(arrivo, lingua);
+            dettoQualcosa = true;
+            // Riferito al follower («contato non e` detto»): se la pagina si
+            // congela subito dopo, entro i 25 m non lo ripete. Il passo
+            // 'arrive' si cerca in avanti: all'ingresso il passo corrente puo`
+            // essere ancora l'ultima svolta.
+            if (firmaNativa) {
+              const ps = passiPubblicati();
+              const i0 = tourService.indicePerNativo();
+              let k = i0;
+              while (k < ps.length - 1 && ps[k]?.tipo !== 'arrive') k++;
+              battitoNav('giro', i0, [k], [k]);
+            }
+          }
         }
       }
       // Sul telefono l'arrivo lo dichiara il servizio nativo (geofence +

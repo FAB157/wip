@@ -13,13 +13,81 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="WIP" />
     <meta name="theme-color" content="#1e3a8a" />
-    <title>WIP</title>
+
+    <!-- SEO (12/09/2026): la home era solo <title>WIP</title>, senza
+         description né dati strutturati — indicizzata (Search Console:
+         "La pagina è indicizzata") ma con uno snippet vuoto e nulla da
+         far leggere a un motore o a un crawler che non esegue JavaScript
+         (molti bot delle AI non lo fanno: il <div id="root"> qui sotto è
+         vuoto finché React non parte). L'italiano resta la lingua
+         dichiarata (lang="it" sull'html, contenuto reale in italiano nel
+         noscript): per le altre 6 lingue dell'app non esistono URL propri
+         della home (la lingua è una preferenza in localStorage, non un
+         percorso), quindi niente hreflang finto — si dichiara comunque la
+         copertura linguistica reale con og:locale:alternate. Copy allineato
+         a public/scopri/index.html (stessa promessa, stesso claim "oltre 9
+         milioni di luoghi in 196 paesi" già validato per il marketing). -->
+    <title>WIP · World in Pocket — L'audioguida che parte da sola, in 196 paesi</title>
+    <meta name="description" content="WIP racconta oltre 9 milioni di luoghi in 196 paesi con un'audioguida geolocalizzata che parte da sola quando arrivi, a piedi o in auto, anche offline. Musei, chiese, monumenti, natura: gratis per iniziare, in 7 lingue." />
+    <meta name="keywords" content="audioguida, audioguida gratis, audioguida offline, audioguida musei, guida turistica, guida di viaggio, navigatore turistico, itinerario di viaggio, itinerari personalizzati, cosa vedere, app da viaggio, geolocalizzazione turistica, WIP, World in Pocket" />
+    <meta name="author" content="WIP · World in Pocket" />
+    <link rel="canonical" href="https://www.wip.guide/" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="WIP · World in Pocket" />
+    <meta property="og:url" content="https://www.wip.guide/" />
+    <meta property="og:title" content="WIP · World in Pocket — L'audioguida che parte da sola" />
+    <meta property="og:description" content="Oltre 9 milioni di luoghi in 196 paesi. Il posto ti racconta la sua storia da solo, mentre passi: a piedi, in auto, anche offline. In 7 lingue." />
+    <meta property="og:image" content="https://www.wip.guide/scopri/og-image.jpg" />
+    <meta property="og:locale" content="it_IT" />
+    <meta property="og:locale:alternate" content="en_US" />
+    <meta property="og:locale:alternate" content="fr_FR" />
+    <meta property="og:locale:alternate" content="es_ES" />
+    <meta property="og:locale:alternate" content="de_DE" />
+    <meta property="og:locale:alternate" content="ru_RU" />
+    <meta property="og:locale:alternate" content="zh_CN" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="WIP · World in Pocket — L'audioguida che parte da sola" />
+    <meta name="twitter:description" content="Oltre 9 milioni di luoghi in 196 paesi. Audioguida geolocalizzata, gratis per iniziare, in 7 lingue." />
+    <meta name="twitter:image" content="https://www.wip.guide/scopri/og-image.jpg" />
+
     <link rel="icon" type="image/png" href="/icon.png" />
     <link rel="apple-touch-icon" href="/icon.png" />
+
+    <!-- Dati strutturati: un motore (o una AI che risponde citando fonti)
+         capisce cos'è WIP anche senza eseguire il bundle React. -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "MobileApplication",
+      "name": "WIP · World in Pocket",
+      "url": "https://www.wip.guide/",
+      "applicationCategory": "TravelApplication",
+      "operatingSystem": "Android, iOS, Web",
+      "description": "Audioguida geolocalizzata di oltre 9 milioni di luoghi in 196 paesi: parte da sola quando arrivi, a piedi o in auto, anche offline. Disponibile in 7 lingue.",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+      "inLanguage": ["it", "en", "fr", "es", "de", "ru", "zh"],
+      "publisher": { "@type": "Organization", "name": "WIP · World in Pocket", "url": "https://www.wip.guide/" }
+    }
+    </script>
   </head>
   <body>
     <div id="root"></div>
+    <!-- Contenuto reale per chi non esegue JavaScript: crawler classici e la
+         maggior parte dei bot delle AI (non fanno rendering di React). Senza
+         questo, quei visitatori vedevano una pagina bianca. -->
+    <noscript>
+      <div style="max-width:640px;margin:40px auto;padding:0 20px;font:16px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;color:#1f2937">
+        <h1>WIP · World in Pocket</h1>
+        <p>WIP è l'audioguida geolocalizzata di oltre 9 milioni di luoghi in 196 paesi. Il posto ti racconta la sua storia da solo, quando arrivi: a piedi, in auto, anche offline. Musei, chiese, monumenti e natura, gratis per iniziare, in 7 lingue (italiano, inglese, francese, spagnolo, tedesco, russo, cinese).</p>
+        <p>Scopri WIP su <a href="https://www.wip.guide/scopri">wip.guide/scopri</a> o scarica l'app per Android su <a href="https://play.google.com/store/apps/details?id=com.itaintasca.app">Google Play</a>.</p>
+      </div>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

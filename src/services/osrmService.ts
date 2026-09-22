@@ -4,7 +4,7 @@
 // =====================================================================
 
 import type { LatLon } from '../lib/geo';
-import { getApiUrl } from '../lib/api';
+import { getApiUrl, apiFetch } from '../lib/api';
 
 // Base OSRM per il routing PEDONALE, condivisa da TUTTI i consumatori
 // (osrmService, routeEngine, NavigatorEngine, PlanScreen): un'unica costante.
@@ -247,7 +247,11 @@ export async function fetchWalkingRoute(
     // il server prova cinque fonti in serie (6+7+8+8+8 s) e il client mollava
     // mentre la prima era ancora in corso — le quattro riserve non venivano mai
     // raggiunte (verificato il 22/08/2026). 45 s copre l'intera catena.
-    const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
+    // apiFetch, non fetch (21/09/2026): dal 10/09 la rotta esige il Bearer
+    // (audit SEC-01) e la fetch nuda prendeva 401 — il WIP Nav a piedi verso
+    // una meta sola non partiva per nessuno, loggato o no. apiFetch mette il
+    // token e, per l'ospite, propone il login invece di fallire in silenzio.
+    const res = await apiFetch(url, undefined, 45000);
     if (!res.ok) return null;
     const data = await res.json();
     const route = data?.routes?.[0];

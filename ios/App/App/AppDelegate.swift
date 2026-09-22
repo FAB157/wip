@@ -72,6 +72,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     }
 
     func applicationWillTerminate(_ application: UIApplication) {
+        // (21/09/2026) App chiusa dal selettore: il navigatore (follower e JS)
+        // muore col processo, e dopo una chiusura forzata iOS non la rilancia
+        // per la posizione — nessun `riaggancia` potrebbe più sistemarla. Si
+        // chiude SUBITO il cruscotto del navigatore invece di lasciarlo sulla
+        // lock screen per ore, fermo sull'ultima svolta. Attesa massima ~2 s,
+        // mai sul MainActor (vedi LiveActivityNav.chiudiTutteAllaChiusura).
+        LiveActivityNav.shared.chiudiTutteAllaChiusura()
     }
 
     func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {

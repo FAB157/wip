@@ -203,6 +203,26 @@ export const TRAD_GIRO: Record<string, Partial<Record<Language, string>>> = {
     RU: 'от вашего местоположения до последней точки',
     ZH: '从你所在地到最后一站',
   },
+  // Con «Solo il giro, dalla 1ª tappa» le due righe qui sopra dicevano il
+  // falso («da dove sei…») mentre il percorso partiva dalla prima tappa.
+  gr_anello_dalla_prima: {
+    IT: 'ad anello dalla 1ª tappa',
+    EN: 'loop from stop 1',
+    FR: 'en boucle depuis l’étape 1',
+    ES: 'circular desde la parada 1',
+    DE: 'Rundweg ab Station 1',
+    RU: 'кольцом от точки 1',
+    ZH: '从第1站环形往返',
+  },
+  gr_dalla_prima_all_ultima: {
+    IT: 'dalla 1ª all’ultima tappa',
+    EN: 'from stop 1 to the last stop',
+    FR: 'de l’étape 1 à la dernière',
+    ES: 'desde la parada 1 hasta la última',
+    DE: 'von Station 1 bis zur letzten',
+    RU: 'от точки 1 до последней',
+    ZH: '从第1站到最后一站',
+  },
   gr_wipnav_ordina: {
     IT: 'WIP Nav mette le tappe nell’ordine che fa camminare meno',
     EN: 'WIP Nav orders the stops so you walk the least',

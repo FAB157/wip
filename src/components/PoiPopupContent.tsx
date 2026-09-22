@@ -359,6 +359,11 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
         return;
       }
 
+      // (19/09/2026) COMMERCIALI DI OVERTURE: «nessuna prosa, solo dati». Se il
+      // server lo segnala (`solo_dati`), al posto del testo va la riga dei dati
+      // — via · citta` — e l'AI non si chiama. Il tipo lo mostra gia` il
+      // sottotitolo; telefono, sito e orari hanno i loro tasti.
+      let rigaDati = "";
       try {
         // ── STEP 1: Cerca in shared_pois via /api/poi/details ──────────
         if (poi.id) {
@@ -401,6 +406,23 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
               // Se ha dati nel DB, stop — CACHE FIRST: non usiamo Groq se abbiamo già qualcosa
               if (hasDesc) return;
             }
+
+            if (dbData?.solo_dati) {
+              rigaDati = String(dbData.riga_dati || "").trim() || [dbData.address, dbData.city].map((x: any) => String(x || "").trim()).filter(Boolean).join(" · ");
+              const soloDati: any = {
+                ...baseData,
+                imageUrl: immediateImage || hasImg || null,
+                image_attribution: dbData.image_attribution || (poi as any).image_attribution || null,
+                description: rigaDati,
+                address: dbData.address || (poi as any).address || null,
+                isGroqEnriched: false,
+              };
+              if (isMounted) { setData(soloDati); setLoading(false); setCachedPoiDetails(chiavePopup(poi.id), soloDati); }
+              // Con la foto gia` presente non resta niente da chiedere. Senza,
+              // si prosegue: il server, per questi POI, non genera testo ma
+              // cerca la foto dalla strada (una volta, poi se lo ricorda).
+              if (soloDati.imageUrl) return;
+            }
           }
         }
 
@@ -415,7 +437,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
 
         // ── STEP 3: Groq on-the-fly (SOLO GROQ IN STREAMING) ──────────
         // L'utente vuole SOLO Groq. Niente fetch "fast" da Wikipedia intermedio.
-        const preGroqData = { ...baseData, subtext };
+        const preGroqData = { ...baseData, subtext, ...(rigaDati ? { description: rigaDati } : {}) };
         if (isMounted) setData({ ...preGroqData });
 
         try {
@@ -470,15 +492,20 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
               const reader = streamRes.body.getReader();
               const decoder = new TextDecoder("utf-8");
               let accumulatedJson = "";
-              
+              // Buffer di riga (come PlanScreen): i chunk HTTP non coincidono
+              // con gli eventi SSE, e senza `stream: true` una lettera
+              // accentata a cavallo di due chunk usciva corrotta.
+              let bufferRighe = "";
+
               while (true) {
                  if (!isMounted) break;
                  const { done, value } = await reader.read();
                  if (done) break;
                  resetStreamWatchdog();
-                 const chunkStr = decoder.decode(value);
-                 const lines = chunkStr.split("\n");
-                 
+                 bufferRighe += decoder.decode(value, { stream: true });
+                 const lines = bufferRighe.split("\n");
+                 bufferRighe = lines.pop() ?? "";
+
                  for (const line of lines) {
                     if (line.startsWith("data: ")) {
                        const dataStr = line.substring(6);
@@ -549,6 +576,19 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
                     if (!groqData.imageUrl) groqData.imageUrl = foundImage;
                  }
                  
+                 // (19/09/2026) Risposte SENZA testo: «solo dati» (commerciali di
+                 // Overture) e «nessuna fonte». Non e` un errore: resta cio` che
+                 // c'era — la riga dei dati, o niente — e si mostra la foto se
+                 // il server ne ha trovata una. Mai l'etichetta «AI»: non ha
+                 // scritto nessuno.
+                 if (parsedFinal.solo_dati || parsedFinal.nessuna_fonte) {
+                    groqData.isGroqEnriched = false;
+                    if (!groqData.description) {
+                       // (21/09/2026) Mai vuota: la riga dei dati veri (tipo · via · citta`) anche per i luoghi senza fonte.
+                       groqData.description = String(parsedFinal.riga_dati || "").trim() || [parsedFinal.address, parsedFinal.city].map((x: any) => String(x || "").trim()).filter(Boolean).join(" · ");
+                    }
+                    if (isMounted) { setData({...groqData}); setCachedPoiDetails(chiavePopup(poi.id), groqData); }
+                 }
                  if (parsedFinal.description_long || parsedFinal.description_short) {
                     groqData.description = parsedFinal.description_short || parsedFinal.description_long;
                     groqData.descriptionLong = parsedFinal.description_long;

@@ -21,10 +21,16 @@ import fs from 'fs';
 import path from 'path';
 import * as mupdf from 'mupdf';
 
+// SEMINA_DIR (12/09/2026): il percorso del progetto NON è fisso — sul
+// droplet è /root/semina-musei, in locale la cartella corrente. Un
+// percorso Windows hardcoded qui rendeva questo script muto sul droplet:
+// il file non si trovava, il catch vuoto lasciava env={} e ogni chiamata
+// Supabase partiva con SB=undefined ("undefined/rest/v1/...").
+const BASE_DIR = process.env.SEMINA_DIR || '.';
 const env = {};
 for (const f of ['.env', '.env.local']) {
   try {
-    for (const l of fs.readFileSync(path.join('C:/progetti/itainta', f), 'utf8').split(/\r?\n/)) {
+    for (const l of fs.readFileSync(path.join(BASE_DIR, f), 'utf8').split(/\r?\n/)) {
       const m = l.match(/^([A-Z0-9_]+)\s*=\s*(.*)$/);
       if (m) env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
     }

@@ -22,7 +22,10 @@ import { reportTrigger } from '../lib/geofencing/telemetry';
 import { puntoArrivo } from '../lib/puntoArrivo';
 import { getTranslation, type Language } from '../lib/i18n';
 import { getGemmeVicine } from '../services/poiRepository';
-import { pubblicaPercorsoNativo, ritiraPercorsoNativo, battitoNav, type PassoNav } from '../lib/nav/navNativo';
+import { pubblicaPercorsoNativo, ritiraPercorsoNativo, battitoNav, segnaCruscottoTappa, nativoAlComando, type PassoNav } from '../lib/nav/navNativo';
+// Solo per sapere se c'e` un giro che riprende il cruscotto quando questa
+// navigazione lascia (21/09/2026). Nessun ciclo: tourService non importa hook.
+import { tourService } from '../services/tourService';
 
 export type NavState = 'idle' | 'routing' | 'navigating' | 'arrived';
 
@@ -147,6 +150,33 @@ const GIRATI_PHRASES: Record<string, string> = {
   ru: 'Развернитесь: маршрут начинается позади вас',
   zh: '请转身：路线从您身后开始',
 };
+
+// SCADENZA DELLE SVOLTE IN CODA (21/09/2026, navigatore a schermo spento):
+// le frasi di svolta e i preavvisi entrano nella coda vocale nativa con una
+// scadenza di 20 s, come quelle del follower. Dietro una guida, un teaser o
+// una telefonata un «gira a destra» detto dopo la svolta e` SBAGLIATO.
+// L'arrivo, il ricalcolo e «girati» non scadono, come prima.
+const NAV_TTL_MS = 20000;
+// Quanto aspetta la tappa singola, lasciando il cruscotto a un giro in corso,
+// prima di rilasciare il SUO posto nel servizio nativo: il giro lo riprende
+// al ridisegno (App.tsx) e si iscrive come proprietario. Senza l'attesa il
+// servizio si spegneva un attimo prima, e a schermo spento (Android 12+)
+// il giro non poteva piu` riaccenderlo dal background.
+const PASSAGGIO_SERVIZIO_MS = 3000;
+
+/**
+ * C'e` un giro/percorso che riprende il cruscotto quando questa navigazione
+ * lascia? Stessa condizione con cui App.tsx lo disegna (vista, non finito,
+ * con una meta). Allora la tappa singola NON lo spegne (su iOS una Live
+ * Activity chiusa dal background non si riapre) e il follower nativo non lo
+ * spegne al suo arrivo finale.
+ */
+function giroRiprendeIlCruscotto(): boolean {
+  try {
+    const v = tourService.vista();
+    return !!v && v.stato !== 'FINITO' && !!v.nomeTappa;
+  } catch { return false; }
+}
 
 // PRONUNCIA LOCALE DELLE VIE (08/09/2026): la voce TTS della lingua
 // dell'UTENTE che legge "Rue de la Paix" o "Hauptstraße" storpia il nome, e
@@ -370,6 +400,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   // L'arrivo l'ha gia` annunciato il nativo a schermo spento: al risveglio il
   // ramo «arrivato» chiude la navigazione ma non lo ridice.
   const arrivoDettoDalNativoRef = useRef(false);
+  // La chiusura per arrivo (vedi chiudiPerArrivo): in un ref perche' la
+  // chiama anche l'ascoltatore qui sotto, montato una volta sola.
+  const chiudiPerArrivoRef = useRef<(t: NavTarget, r: WalkingRoute, dalNativo: boolean) => void>(() => {});
   useEffect(() => {
     const allinea = (e: Event) => {
       const d = (e as CustomEvent).detail || {};
@@ -385,6 +418,14 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       (d.dettiLontano || []).forEach((i: number) => preannouncedRef.current.add(i));
       const ultimo = routeRef.current.steps.length - 1;
       if ((d.dettiVicino || []).includes(ultimo)) arrivoDettoDalNativoRef.current = true;
+      // L'ARRIVO FINALE L'HA CHIUSO IL NATIVO (21/09/2026): a schermo spento
+      // il follower ha detto «Sei arrivato» e ha chiuso. Prima qui si alzava
+      // solo un flag, e chi sbloccava il telefono lontano dalla meta (dopo la
+      // visita) sentiva «Percorso ricalcolato» verso il posto gia` visitato.
+      // Si chiude adesso, SENZA ridire l'arrivo. Solo a navigazione in corso.
+      if (d.finito === true && targetRef.current && unsubRef.current) {
+        chiudiPerArrivoRef.current(targetRef.current, routeRef.current, true);
+      }
     };
     window.addEventListener('wip-nav-nativo-progresso', allinea);
     return () => window.removeEventListener('wip-nav-nativo-progresso', allinea);
@@ -435,6 +476,15 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   // niente. Stessa firma-throttle del giro: si riscrive solo quando cambia
   // qualcosa che si legge, non a ogni fix GPS.
   const bannerFirmaRef = useRef('');
+  // IL CRUSCOTTO E IL SERVIZIO SI SPENGONO SOLO SE LI HA PRESI QUESTA
+  // NAVIGAZIONE (21/09/2026). Prima ogni stop mandava `attivo:false` e
+  // rilasciava il servizio: anche uno stop SENZA navigazione in corso (lo
+  // lancia PlanScreen quando parte un giro) spegneva cruscotto e servizio
+  // appena accesi dal giro.
+  const cruscottoMioRef = useRef(false);
+  // Contatore delle navigazioni avviate: un rilascio rinviato (passaggio del
+  // cruscotto al giro) non deve togliere il posto a una navigazione nuova.
+  const navGenRef = useRef(0);
   const aggiornaBannerNav = (
     t: NavTarget,
     istruzione: string | null,
@@ -461,6 +511,10 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     if (firma === bannerFirmaRef.current) return;
     bannerFirmaRef.current = firma;
     const totale = routeTotalRef.current;
+    // Il cruscotto (tasti compresi) e` di questa navigazione finche' non lascia:
+    // il giro, se c'e`, non lo scrive e non lo spegne (navNativo).
+    cruscottoMioRef.current = true;
+    segnaCruscottoTappa(true);
     // Gli stessi campi separati del giro: li impagina la Live Activity iOS.
     locationService.updateNavBanner(titolo, righe.join('\n'), true, {
       nomeTappa: nome,
@@ -483,20 +537,58 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       minutiRimanenti: etaSec != null && etaSec >= 0 ? etaSec / 60 : -1,
     }).catch(() => {});
   };
-  const spegniBannerNav = () => {
+  /**
+   * `dopoLaVoce` (21/09/2026): solo all'arrivo — il servizio acceso per il
+   * navigatore si spegne dopo che la coda ha detto «Sei arrivato» (vedi
+   * locationService.rilasciaServizioNativoPerNav). Cruscotto e percorso
+   * nativo si spengono comunque subito.
+   */
+  const spegniBannerNav = (dopoLaVoce = false) => {
     bannerFirmaRef.current = '';
     // Navigazione finita o annullata: anche il follower nativo la lascia
     // (solo il PROPRIO percorso: quello del giro non si tocca).
     ritiraPercorsoNativo('tappa');
+    // Il posto di 'tappa' nel servizio si lascia SEMPRE (no-op se non c'era):
+    // anche uno stop durante l'attesa di assicuraServizioNativoPerNav, a
+    // cruscotto mai acceso, deve toglierlo, o il servizio resta acceso.
+    // Se nel frattempo parte una navigazione NUOVA (stop e subito «Naviga»),
+    // il posto 'tappa' e` gia` suo: un rilascio in ritardo non lo tocca.
+    const gen = navGenRef.current;
+    const rilascia = () => {
+      if (navGenRef.current !== gen) return;
+      locationService.rilasciaServizioNativoPerNav('tappa', { dopoLaVoce }).catch(() => {});
+    };
+    const mio = cruscottoMioRef.current;
+    cruscottoMioRef.current = false;
+    if (!mio) { rilascia(); return; }
+    // Il cruscotto torna libero, a meno che una navigazione nuova non l'abbia
+    // gia` ripreso (il suo primo banner rimette cruscottoMioRef a true).
+    const libera = () => {
+      if (cruscottoMioRef.current) return;
+      segnaCruscottoTappa(false);
+      window.dispatchEvent(new CustomEvent('wip-cruscotto-tappa-libero'));
+    };
+    // UN GIRO IN CORSO RIPRENDE IL CRUSCOTTO (21/09/2026): niente
+    // `attivo:false` — su iOS chiudeva la Live Activity del giro, che dal
+    // background non si riapre — e niente servizio spento sotto al giro. Il
+    // giro ridisegna appena riceve l'evento; il posto di 'tappa' nel servizio
+    // si lascia poco dopo, quando il giro si e` gia` iscritto.
+    if (giroRiprendeIlCruscotto()) {
+      libera();
+      setTimeout(rilascia, PASSAGGIO_SERVIZIO_MS);
+      return;
+    }
     // attivo=false: su Android la notifica del servizio torna al testo del
     // radar, su iOS si chiude la Live Activity, e la notifica locale di
     // ripiego viene cancellata (lo fa updateNavBanner stesso).
     // Prima si spegne il banner, POI (se era stato acceso solo per questa
     // navigazione) il servizio nativo: nell'ordine inverso la notifica del
-    // servizio sparirebbe con il cruscotto ancora scritto sopra.
+    // servizio sparirebbe con il cruscotto ancora scritto sopra. L'evento
+    // 'wip-cruscotto-tappa-libero' parte DOPO lo spegnimento, cosi' un giro
+    // che ridisegna non viene cancellato da questo `attivo:false`.
     locationService.updateNavBanner('', '', false)
       .catch(() => {})
-      .finally(() => { locationService.rilasciaServizioNativoPerNav().catch(() => {}); });
+      .finally(() => { libera(); rilascia(); });
   };
 
   /**
@@ -509,16 +601,18 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   const parlaManovra = (step: { instruction: string; maneuverType: string; maneuverModifier?: string; name?: string }) => {
     const locale = linguaLocale(targetRef.current?.country);
     const utente = String(language || 'it').toLowerCase().slice(0, 2);
+    // Le svolte scadono in coda dopo 20 s (NAV_TTL_MS); l'arrivo no.
+    const scadenza = String(step.maneuverType || '').toLowerCase() === 'arrive' ? undefined : { ttlMs: NAV_TTL_MS };
     if (step.name && locale && locale !== utente) {
       // Frase SENZA il nome (la variante generica) + nome via, in UNA sola
       // chiamata (FIX WIPNAV-2): due chiamate separate si cancellavano a
       // vicenda (speakInstruction fa cancel() prima di parlare), e si
       // sentiva solo il nome della via, mai l'istruzione della manovra.
       const senzaNome = translateManeuver(step.maneuverType, step.maneuverModifier, language, targetRef.current?.poiName, undefined, undefined);
-      speakInstruction(`${senzaNome} ${step.name}`, language);
+      speakInstruction(`${senzaNome} ${step.name}`, language, undefined, scadenza);
       return;
     }
-    speakInstruction(step.instruction, language);
+    speakInstruction(step.instruction, language, undefined, scadenza);
   };
 
   const releaseWakeLock = () => {
@@ -532,6 +626,54 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       if (wl?.request) wakeLockRef.current = await wl.request('screen');
     } catch { /* non supportato o negato: si continua senza */ }
   };
+
+  /**
+   * ARRIVO: chiude la navigazione. Un solo punto (21/09/2026) per i due modi
+   * di arrivare: dal fix GPS di questo hook (`dalNativo` false, come sempre:
+   * vibrazione e «Sei arrivato a X») e dal follower nativo che l'ha gia`
+   * detto a schermo spento (`dalNativo` true: si chiude in silenzio, e
+   * 'wip-nav-arrived' porta `daNativo` — l'arrivo e la guida li ha gia`
+   * gestiti il nativo, niente scheda in autoplay mezz'ora dopo).
+   */
+  const chiudiPerArrivo = (t: NavTarget, r: WalkingRoute, dalNativo: boolean) => {
+    nearbySinceRef.current = null;
+    setState('arrived');
+    setProgress(1);
+    setCurrentManeuver({ type: 'arrive' });
+    setGemmaVicina(null);
+    if (!dalNativo) void vibraManovra('straight');
+    // A destinazione il cruscotto si chiude: Live Activity/notifica via. Il
+    // servizio acceso per il navigatore invece si spegne solo dopo che la
+    // coda ha detto «Sei arrivato» (21/09/2026: prima lo stop la troncava).
+    spegniBannerNav(true);
+    releaseWakeLock();
+    if (dalNativo) {
+      arrivoDettoDalNativoRef.current = false;
+    } else {
+      const arriveStep = r.steps[r.steps.length - 1];
+      const arrivePhrase = arriveStep?.instruction ||
+        (ARRIVE_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || ARRIVE_PHRASES.en)
+          .replace('{name}', t.poiName || '').trim();
+      // Su nativo l'annuncio entra nella coda TTS dei teaser marcato come
+      // 'arrival' col poiId: così il teaser del POI parte SUBITO DOPO senza
+      // sovrapporsi (unica coda), e solo allora scatta la logica normale
+      // dell'audioguida. Su web (o se la coda non lo prende in carico)
+      // si ricade sul percorso di sempre.
+      // A schermo spento l'arrivo l'ha gia` detto il follower nativo: al
+      // risveglio si chiude la navigazione senza ripeterlo.
+      if (arrivoDettoDalNativoRef.current) arrivoDettoDalNativoRef.current = false;
+      else void speakArrivalNative(arrivePhrase, t.poiId != null ? String(t.poiId) : undefined)
+        .then(taken => { if (!taken) speakInstruction(arrivePhrase, language); });
+    }
+    window.dispatchEvent(
+      new CustomEvent('wip-nav-arrived', {
+        detail: { poiId: t.poiId, poiName: t.poiName, dayIndex: t.dayIndex, stopIndex: t.stopIndex, ...(dalNativo ? { daNativo: true } : {}) },
+      }),
+    );
+    unsubRef.current?.();
+    unsubRef.current = null;
+  };
+  chiudiPerArrivoRef.current = chiudiPerArrivo;
 
   // FIX WIPNAV-9: tiene gemmaVicinaRef sincronizzato con lo stato ad ogni
   // render, cosi' cercaGemmaVicina (chiamata dalla subscription GPS di lunga
@@ -606,11 +748,31 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       }
       return { ...base, testo: s.instruction || '', tipo: 'turn' as const };
     });
+    // FONTI DI RISERVA SENZA ARRIVO (21/09/2026): ORS e Geoapify danno tutti i
+    // passi come 'continue', e il follower non riceveva mai un 'arrive' — non
+    // chiudeva mai la navigazione (GPS al massimo, cruscotto acceso). L'ULTIMO
+    // passo diventa l'arrivo, alla fine del tracciato e con la stessa frase
+    // d'arrivo di questo hook. Gli indici non cambiano.
+    if (passi.length > 0 && !passi.some(p => p.tipo === 'arrive')) {
+      const k = passi.length - 1;
+      const fine = g.length > 0 ? g[g.length - 1] : null;
+      passi[k] = {
+        ...passi[k],
+        ...(fine && Number.isFinite(fine[0]) && Number.isFinite(fine[1]) ? { lat: fine[0], lon: fine[1] } : {}),
+        tipo: 'arrive',
+        testo: (ARRIVE_PHRASES[l2] || ARRIVE_PHRASES.en).replace('{name}', nomeMeta).trim(),
+        manovraTipo: 'arrive',
+        manovraVerso: '',
+      };
+    }
     arrivoDettoDalNativoRef.current = false;
     pubblicaPercorsoNativo({
       canale: 'tappa',
       firma: `tappa:${targetRef.current?.lat},${targetRef.current?.lon}:${Math.round(route.distance)}:${route.steps.length}:${Date.now()}`,
       passi, indice: 0, linea: g, lingua: l2, finale: true,
+      // Con un giro in corso il cruscotto, dopo l'arrivo, e` del giro: il
+      // follower non lo spegne (21/09/2026, vedi giroRiprendeIlCruscotto).
+      spegniCruscotto: !giroRiprendeIlCruscotto(),
     });
   };
 
@@ -935,8 +1097,19 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     const h = (e: Event) => {
       if (!targetRef.current) return;
       const a = String((e as CustomEvent).detail?.action || '');
-      if (a === 'termina') stopNavigation();
-      else if (a === 'riascolta') repeatInstruction();
+      if (a === 'termina') { stopNavigation(); return; }
+      // Solo a navigazione IN CORSO (21/09/2026): dopo l'arrivo targetRef
+      // resta valorizzato, e un «ricalcola»/«riascolta» arrivato tardi
+      // riaccendeva cruscotto e follower verso una meta gia` raggiunta.
+      if (!unsubRef.current) return;
+      if (a === 'riascolta') {
+        // Col nativo al comando (schermo spento) la svolta l'ha gia` ridetta
+        // il follower al tocco (21/09/2026). Su iOS l'azione arriva comunque
+        // anche qui, al risveglio: ridirla era un doppione. Su Android il
+        // servizio non la inoltra quando l'ha detta lui (spec, REVISIONE 2).
+        if (Capacitor.getPlatform() === 'ios' && nativoAlComando()) return;
+        repeatInstruction();
+      }
       else if (a === 'ricalcola') void recalculateRoute();
     };
     window.addEventListener('wip-nav-banner-action', h);
@@ -954,6 +1127,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       // revisione): se questa navigazione fallisce (rete assente) il JS resta
       // fermo, e a schermo spento il nativo dettava il percorso abbandonato.
       ritiraPercorsoNativo('tappa');
+      navGenRef.current += 1;
 
       setState('routing');
       targetRef.current = target;
@@ -979,6 +1153,43 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       // cancellava l'origine scelta dopo 2 fix.
       joinedRouteRef.current = !originOverride;
 
+      // LA LIVE ACTIVITY SI APRE AL TOCCO (21/09/2026, iOS). Il primo banner
+      // partiva dopo il fix fresco, il calcolo del percorso e l'avvio del
+      // servizio: chi metteva subito il telefono in tasca lo chiedeva dal
+      // background, dove iOS rifiuta di aprire una Live Activity, e per tutto
+      // il tratto a schermo spento non c'era cruscotto. Qui l'app e` di certo
+      // in primo piano: si apre subito col solo nome della meta e «Prosegui»;
+      // i banner veri dopo sono aggiornamenti, ammessi anche dal background.
+      // Non su Android: a servizio spento il plugin rifiuta e partirebbe una
+      // notifica locale.
+      if (Capacitor.getPlatform() === 'ios' && typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        const prosegui = getTranslation('nav_proceed', String(language || 'IT').toUpperCase() as Language);
+        const nome = target.poiName || '';
+        cruscottoMioRef.current = true;
+        segnaCruscottoTappa(true);
+        bannerFirmaRef.current = '';
+        locationService.updateNavBanner(nome, prosegui, true, {
+          nomeTappa: nome, indiceTappa: 1, tappeTotali: 1, metriAllaTappa: -1,
+          istruzione: prosegui, metriAllaSvolta: -1, metriRimanenti: -1, eta: '',
+          nomeProssima: '', foto: '', manovraTipo: '', manovraVerso: '',
+          progresso: -1, metriTotali: 0, inPausa: false, modo: 'singola', minutiRimanenti: -1,
+        }).catch(() => {});
+      }
+
+      // POSIZIONE APPROSSIMATIVA (21/09/2026, Android): con i fix a 2 km il
+      // navigatore resterebbe muto per tutto il cammino. Si chiede la precisa
+      // e, se resta negata, si avvisa invece di partire in silenzio. Solo con
+      // origine GPS: con un indirizzo di partenza il percorso non ne dipende.
+      if (!originOverride) {
+        const precisa = await locationService.verificaPosizionePrecisaPerNav();
+        if (targetRef.current !== target) return;
+        if (!precisa) {
+          spegniBannerNav();
+          setState('idle');
+          return;
+        }
+      }
+
       // Origine esplicita (es. "Indirizzo personalizzato" dal modal WIP Nav):
       // prima veniva sempre ignorata e si partiva comunque dal GPS.
       let last = locationService.getLastLocation();
@@ -1002,6 +1213,8 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       // ripiegava su target→target (percorso degenere di 0 m, "sei arrivato"
       // immediato). Meglio rifiutare con un messaggio chiaro.
       if (!originOverride && !last) {
+        // Il cruscotto provvisorio (iOS) non resta appeso (21/09/2026).
+        spegniBannerNav();
         setState('idle');
         notify(NO_GPS_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || NO_GPS_PHRASES.en);
         return;
@@ -1016,7 +1229,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       if (targetRef.current !== target) return;
       if (!route || route.steps.length === 0) {
         // Prima l'avvio falliva in SILENZIO (overlay che spariva senza alcun
-        // feedback): ora avvisiamo l'utente e torniamo a idle.
+        // feedback): ora avvisiamo l'utente e torniamo a idle. Il cruscotto
+        // provvisorio (iOS) non resta appeso (21/09/2026).
+        spegniBannerNav();
         setState('idle');
         notify(ROUTE_FAIL_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || ROUTE_FAIL_PHRASES.en);
         return;
@@ -1041,7 +1256,8 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       // spento la WebView si congela con il navigatore dentro. Vedi
       // locationService.assicuraServizioNativoPerNav. Si aspetta: il primo
       // banner deve trovare il servizio gia` acceso.
-      try { await locationService.assicuraServizioNativoPerNav(); } catch { /* si va avanti col ripiego */ }
+      // 'tappa': il servizio ha due proprietari (con il giro), vedi locationService.
+      try { await locationService.assicuraServizioNativoPerNav('tappa'); } catch { /* si va avanti col ripiego */ }
       if (targetRef.current !== target) return;
       bannerFirmaRef.current = '';
       aggiornaBannerNav(target, first?.instruction ?? null, null, Math.round(route.distance), etaIniziale,
@@ -1132,6 +1348,15 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         // ricalcolo e arrivo tornano attivi.
         if (!joinedRouteRef.current && nearest.dist <= 60) joinedRouteRef.current = true;
 
+        // Battito per il follower nativo: «sono vivo, le svolte le dico io».
+        // Se trova il nativo al comando da ≥ 8 s (21/09/2026) in questo fix non
+        // si annuncia NULLA: il nativo ha appena parlato, e i suoi «detti»
+        // arrivano solo col riallineamento appena partito — senza, la stessa
+        // svolta (o l'arrivo) si sentiva due volte a pochi secondi. Distanza ed
+        // ETA sono gia` aggiornate; al fix dopo si riparte allineati. Sta
+        // PRIMA dell'arrivo apposta: anche «Sei arrivato» puo` averlo detto lui.
+        if (battitoNav('tappa', stepIdxRef.current, spokenRef.current, preannouncedRef.current)) return;
+
         // Fuori rotta → ricalcolo automatico (solo se già sul percorso)
         if (joinedRouteRef.current) maybeRecalc(here, nearest.dist);
 
@@ -1153,39 +1378,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
           (nearbySinceRef.current != null && Date.now() - nearbySinceRef.current >= NEARBY_S * 1000)
         );
         if (arrivato) {
-          nearbySinceRef.current = null;
-          setState('arrived');
-          setProgress(1);
-          setCurrentManeuver({ type: 'arrive' });
-          setGemmaVicina(null);
-          void vibraManovra('straight');
-          // A destinazione il cruscotto si chiude: Live Activity/notifica via.
-          spegniBannerNav();
-          releaseWakeLock();
-          const arriveStep = r.steps[r.steps.length - 1];
-          const arrivePhrase = arriveStep?.instruction ||
-            (ARRIVE_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || ARRIVE_PHRASES.en)
-              .replace('{name}', t.poiName || '').trim();
-          // Su nativo l'annuncio entra nella coda TTS dei teaser marcato come
-          // 'arrival' col poiId: così il teaser del POI parte SUBITO DOPO senza
-          // sovrapporsi (unica coda), e solo allora scatta la logica normale
-          // dell'audioguida. Su web (o se la coda non lo prende in carico)
-          // si ricade sul percorso di sempre.
-          // A schermo spento l'arrivo l'ha gia` detto il follower nativo: al
-          // risveglio si chiude la navigazione senza ripeterlo.
-          if (arrivoDettoDalNativoRef.current) arrivoDettoDalNativoRef.current = false;
-          else void speakArrivalNative(arrivePhrase, t.poiId != null ? String(t.poiId) : undefined)
-            .then(taken => { if (!taken) speakInstruction(arrivePhrase, language); });
-          window.dispatchEvent(
-            new CustomEvent('wip-nav-arrived', { detail: { poiId: t.poiId, poiName: t.poiName, dayIndex: t.dayIndex, stopIndex: t.stopIndex } }),
-          );
-          unsubRef.current?.();
-          unsubRef.current = null;
+          chiudiPerArrivo(t, r, false);
           return;
         }
-
-        // Battito per il follower nativo: «sono vivo, le svolte le dico io».
-        battitoNav('tappa', stepIdxRef.current, spokenRef.current, preannouncedRef.current);
 
         // Avanzamento sui waypoint + lettura manovra entro 30 m
         let idx = stepIdxRef.current;
@@ -1264,7 +1459,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
               const modello = PREANNOUNCE_PHRASES[l2] || PREANNOUNCE_PHRASES.en;
               // L'istruzione in minuscola iniziale dentro la frase ("Tra 120 metri, gira a destra").
               const istr = step.instruction ? step.instruction.charAt(0).toLowerCase() + step.instruction.slice(1) : '';
-              speakInstruction(modello.replace('{m}', String(metri)).replace('{i}', istr), language);
+              speakInstruction(modello.replace('{m}', String(metri)).replace('{i}', istr), language, undefined, { ttlMs: NAV_TTL_MS });
             }
             setCurrentInstruction(step.instruction);
             setCurrentManeuver({ type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
@@ -1338,14 +1533,11 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   useEffect(() => () => {
     unsubRef.current?.();
     // Smontaggio a navigazione attiva: il banner non deve restare appeso.
-    // Solo se QUESTA navigazione era in corso — non si tocca quello del giro.
-    if (targetRef.current) {
-      bannerFirmaRef.current = '';
-      ritiraPercorsoNativo('tappa');
-      locationService.updateNavBanner('', '', false)
-        .catch(() => {})
-        .finally(() => { locationService.rilasciaServizioNativoPerNav().catch(() => {}); });
-    }
+    // Solo se il cruscotto era di QUESTA navigazione — non si tocca quello
+    // del giro (21/09/2026: prima bastava targetRef, che resta valorizzato
+    // anche dopo l'arrivo, e un secondo `attivo:false` chiudeva il cruscotto
+    // del giro). spegniBannerNav usa solo ref: la chiusura del primo render va bene.
+    spegniBannerNav();
     unsubRef.current = null;
     releaseWakeLock();
     emitRoute([], false);

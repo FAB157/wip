@@ -38,8 +38,9 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         // .consegnaFixAlNavigatore): «gira a destra» pronunciato due minuti
         // dopo, perché davanti in coda c'era una guida, è un'indicazione
         // sbagliata. Epoch ms; nil = non scade mai, cioè TUTTI gli item di
-        // prima (teaser, arrivi, guide, speakText del JS): per loro non
-        // cambia nulla.
+        // prima (teaser, arrivi, guide): per loro non cambia nulla.
+        // (21/09/2026) La portano anche le svolte del navigatore JS, via
+        // `speakText({ttlMs})`; gli altri speakText restano senza.
         var scadenzaMs: Double? = nil
     }
 
@@ -84,6 +85,29 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     /// ri-armare con lo stesso valore dopo un'interruzione).
     private var currentWatchdogS: TimeInterval = 45
     private var watchdogTimer: Timer?
+
+    /// LA SVOLTA SOPRA LA GUIDA MP3 (21/09/2026, verifica del navigatore a
+    /// schermo spento). La coda è sequenziale: una guida completa di 3-4
+    /// minuti (MP3 del Day Pass, accodata all'arrivo a una tappa) teneva
+    /// dietro di sé tutte le svolte del navigatore, che scadevano dopo 20 s —
+    /// si ripartiva verso la tappa dopo senza sentire nulla. A schermo acceso
+    /// succede già il contrario: la guida del JS si mette in pausa per la
+    /// svolta (AUD-01). Qui si fa lo stesso: una frase del navigatore CON
+    /// SCADENZA che arriva mentre suona l'MP3 della coda mette in pausa l'MP3,
+    /// si dice con il sintetizzatore (libero durante l'MP3) e l'MP3 riprende
+    /// dal punto esatto. Teaser, guide lette dal TTS e item senza scadenza non
+    /// cambiano: aspettano il loro turno come prima.
+    /// `utteranceSopra` = la frase in corso sopra l'MP3 (nil = nessuna).
+    private var utteranceSopra: AVSpeechUtterance?
+    /// Scadenza della frase sopra: dopo una telefonata non si riprende una
+    /// svolta ormai superata.
+    private var scadenzaSopra: Double?
+    /// L'MP3 stava suonando quando la svolta l'ha interrotto (se l'utente
+    /// l'aveva in pausa dalla lock screen, resta in pausa anche dopo).
+    private var riprendiMp3DopoSopra = false
+    /// Stop globale arrivato mentre la frase sopra parlava: il suo didCancel
+    /// non deve riprendere nulla.
+    private var sopraAnnullata = false
 
     /// Callback eventi verso il plugin (teaserStarted/teaserFinished), stesso
     /// payload di broadcastTeaserEvent Android: {poiId, kind}.
@@ -132,10 +156,106 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
 
     func enqueue(_ item: SpeechItem) {
         DispatchQueue.main.async {
+            // Svolta del navigatore mentre suona l'MP3 della guida: sopra,
+            // non dietro (vedi `utteranceSopra`). Se c'è già una frase sopra,
+            // questa aspetta in coda e la prende chiudiSopra appena finisce.
+            if item.kind == "nav", item.scadenzaMs != nil, self.isSpeaking,
+               self.audioPlayer != nil, !self.pausedForInterruption,
+               self.utteranceSopra == nil, self.diciSopra(item) {
+                return
+            }
             self.queue.append(item)
             self.potaCoda()
             self.processNext()
         }
+    }
+
+    /// Sul main. Dice `item` sopra l'MP3 attivo, messo in pausa; false se non
+    /// si può (scaduta, testo vuoto, voce non installata): il chiamante la
+    /// accoda come sempre.
+    private func diciSopra(_ item: SpeechItem) -> Bool {
+        guard let player = audioPlayer else { return false }
+        if let scadenza = item.scadenzaMs, scadenza < nowMs() { return false }
+        let testo = Self.speakableText(item.text)
+        guard !testo.isEmpty else { return false }
+        let userLang = prefs.string(forKey: "language") ?? "it"
+        guard let voice = Self.installedVoice(for: userLang) else { return false }
+        // Solo la PRIMA frase decide se l'MP3 va ripreso: quelle concatenate
+        // trovano l'MP3 già in pausa per causa nostra.
+        if utteranceSopra == nil && !riprendiMp3DopoSopra {
+            riprendiMp3DopoSopra = player.isPlaying
+        }
+        if player.isPlaying {
+            player.pause()
+            pubblicaNowPlaying(rate: 0)
+        }
+        activateAudioSession()
+        // Stesso avviso sonoro di ogni frase della coda.
+        AudioServicesPlaySystemSound(1007)
+        let utterance = AVSpeechUtterance(string: testo)
+        let scelta = Self.voiceForLanguage(userLang, character: prefs.string(forKey: "guideCharacter"))
+        let prefisso = String(Self.regionalCode(for: userLang).prefix(2))
+        utterance.voice = (scelta?.language.hasPrefix(prefisso) == true) ? scelta : voice
+        utterance.volume = 1.0
+        utteranceSopra = utterance
+        scadenzaSopra = item.scadenzaMs
+        synthesizer.speak(utterance)
+        // Rete di sicurezza sulla frase (non sull'MP3, che è fermo): se il
+        // delegate non arriva, il watchdog la chiude e l'MP3 riparte.
+        armWatchdog(seconds: Self.watchdogTimeout(forTextLength: testo.count))
+        return true
+    }
+
+    /// Sul main, dai delegate del sintetizzatore. True se `utterance` era la
+    /// frase sopra l'MP3 (gestita qui: NON va chiuso l'item attivo).
+    private func chiudiSopra(_ utterance: AVSpeechUtterance) -> Bool {
+        guard let sopra = utteranceSopra, sopra === utterance else { return false }
+        utteranceSopra = nil
+        scadenzaSopra = nil
+        if sopraAnnullata {
+            // Stop globale: l'MP3 è già chiuso, niente da riprendere.
+            sopraAnnullata = false
+            riprendiMp3DopoSopra = false
+            if !isSpeaking { processNext(); deactivateAudioSessionIfIdle() }
+            return true
+        }
+        // Altre svolte arrivate nel frattempo, ancora valide: anche loro sopra.
+        let ora = nowMs()
+        if isSpeaking, audioPlayer != nil, !pausedForInterruption,
+           let i = queue.firstIndex(where: { (el: SpeechItem) -> Bool in
+               guard el.kind == "nav", let scadenza = el.scadenzaMs else { return false }
+               return scadenza >= ora
+           }) {
+            let prossima = queue.remove(at: i)
+            if diciSopra(prossima) { return true }
+        }
+        let riprendi = riprendiMp3DopoSopra
+        riprendiMp3DopoSopra = false
+        if isSpeaking, let player = audioPlayer {
+            if riprendi && !pausedForInterruption {
+                activateAudioSession()
+                if player.play() { pubblicaNowPlaying(rate: 1) }
+            }
+            let residuo = max(0, player.duration - player.currentTime)
+            armWatchdog(seconds: Self.watchdogTimeout(forMp3Duration: residuo))
+            // Svolta finita durante una telefonata: il timeout giusto (quello
+            // dell'MP3) resta impostato per la ripresa, ma il watchdog non
+            // corre finché dura la chiamata (come in handleInterruptionBegan).
+            if pausedForInterruption { cancelWatchdog() }
+        } else {
+            // L'MP3 è stato chiuso mentre la svolta parlava (POI superato):
+            // la coda, ferma durante la frase, riparte adesso; a coda vuota
+            // riparte anche la guida JS che avevamo fermato (vedi
+            // finishActiveSpeech, che durante la svolta l'ha lasciata ferma).
+            processNext()
+            if !isSpeaking && queue.isEmpty && pausedJsPlayer {
+                pausedJsPlayer = false
+                let jsPlayer = WipBackgroundAudioPlugin.shared
+                DispatchQueue.main.async { jsPlayer?.resumeAfterSpeechIfNeeded() }
+            }
+            deactivateAudioSessionIfIdle()
+        }
+        return true
     }
 
     /// Sfratta i MENO prioritari finché la coda rientra nel tetto: prima i
@@ -159,6 +279,12 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     func stopSpeaking() {
         DispatchQueue.main.async {
             self.queue.removeAll()
+            // Una svolta detta sopra l'MP3 si ferma con tutto il resto; il suo
+            // didCancel (sopraAnnullata) non riprende niente.
+            if self.utteranceSopra != nil {
+                self.sopraAnnullata = true
+                self.synthesizer.stopSpeaking(at: .immediate)
+            }
             if let player = self.audioPlayer {
                 // AVAudioPlayer.stop() non chiama il delegate: chiudiamo noi.
                 player.stop()
@@ -212,7 +338,9 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     }
 
     private func processNext() {
-        guard !isSpeaking else { return }
+        // Mentre una svolta parla sopra l'MP3 il sintetizzatore è occupato:
+        // la coda riparte da chiudiSopra.
+        guard !isSpeaking, utteranceSopra == nil else { return }
         guard prefs.bool(forKey: "isServiceActive") else {
             queue.removeAll()
             return
@@ -383,13 +511,21 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     /// pausa)? Da leggere sul main (i remote command arrivano lì).
     var hasActiveMp3: Bool { audioPlayer != nil }
     /// L'MP3 sta suonando adesso? Sul main.
-    var isMp3Playing: Bool { audioPlayer?.isPlaying == true }
+    /// Durante una svolta detta sopra conta come «in riproduzione» l'MP3 che
+    /// ripartirà a svolta finita: il tasto unico play/pausa delle cuffie deve
+    /// metterlo in pausa, non farlo ripartire.
+    var isMp3Playing: Bool {
+        audioPlayer?.isPlaying == true || (utteranceSopra != nil && riprendiMp3DopoSopra)
+    }
 
     /// Pausa dell'MP3 da Lock Screen / Control Center. Il watchdog resta
     /// armato di proposito: una pausa dimenticata per un quarto d'ora chiude
     /// l'item e libera la coda, invece di restare muti a oltranza.
     func pauseSpeaking() {
         DispatchQueue.main.async {
+            // Pausa toccata mentre una svolta parla sopra l'MP3 (già fermo):
+            // finita la svolta l'MP3 resta in pausa.
+            if self.utteranceSopra != nil { self.riprendiMp3DopoSopra = false; return }
             guard let player = self.audioPlayer, player.isPlaying else { return }
             player.pause()
             self.pubblicaNowPlaying(rate: 0)
@@ -400,6 +536,9 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     /// ri-arma sul tempo che resta, non su quello già passato.
     func continueSpeaking() {
         DispatchQueue.main.async {
+            // Play toccato durante una svolta sopra l'MP3: si riprende a
+            // svolta finita, mai due voci insieme.
+            if self.utteranceSopra != nil { self.riprendiMp3DopoSopra = true; return }
             guard let player = self.audioPlayer, !player.isPlaying else { return }
             self.activateAudioSession()
             guard player.play() else { return }
@@ -421,7 +560,7 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     }
 
     private func deactivateAudioSessionIfIdle() {
-        guard queue.isEmpty, !isSpeaking else { return }
+        guard queue.isEmpty, !isSpeaking, utteranceSopra == nil else { return }
         // (AUD-01) La sessione è condivisa con il player JS: se sta suonando
         // (o sta per riprendere dopo la nostra pausa) non gli si spegne la
         // sessione sotto i piedi.
@@ -512,6 +651,11 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
             // Il sistema non garantisce la ripresa (es. priorità andata a
             // un'altra app): chiudi l'item corrente in modo pulito e prosegui
             // con la coda, mai bloccata in attesa di un resume che non arriva.
+            // Una svolta sopra l'MP3, ferma a metà, si chiude con lui.
+            if utteranceSopra != nil {
+                sopraAnnullata = true
+                synthesizer.stopSpeaking(at: .immediate)
+            }
             finishActiveSpeech(notifyJs: true)
             processNext()
             deactivateAudioSessionIfIdle()
@@ -519,8 +663,26 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         }
         activateAudioSession()
         if synthesizer.isPaused {
+            // (21/09/2026) Una frase del navigatore rimasta ferma dietro una
+            // telefonata non si riprende se è scaduta: «gira a destra» detto
+            // cinque minuti dopo è un'indicazione sbagliata. Il didCancel
+            // chiude la frase (o la svolta sopra l'MP3, che poi riparte).
+            let scadenza = utteranceSopra != nil ? scadenzaSopra : activeItem?.scadenzaMs
+            if let s = scadenza, s < nowMs() {
+                // Rete di sicurezza anche qui: se il didCancel non arrivasse,
+                // il watchdog chiude comunque.
+                armWatchdog()
+                synthesizer.stopSpeaking(at: .immediate)
+                return
+            }
             synthesizer.continueSpeaking()
             armWatchdog()
+        } else if utteranceSopra != nil {
+            // La svolta sopra non era in pausa: il suo delegate farà ripartire
+            // l'MP3, qui non si tocca nulla (salvo riarmare il watchdog,
+            // cancellato all'inizio della chiamata).
+            armWatchdog()
+            return
         } else if let player = audioPlayer {
             player.play()
             armWatchdog()
@@ -556,6 +718,17 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     /// stato, invece di chiamare finishActiveSpeech due volte sull'item
     /// sbagliato.
     private func handleWatchdogTimeout() {
+        // Il watchdog armato da diciSopra riguarda la svolta, non l'MP3 (fermo
+        // e sano): si chiude solo la frase, e l'MP3 riparte da chiudiSopra.
+        if let sopra = utteranceSopra {
+            print("[SpeechQueue] watchdog: la svolta sopra l'MP3 non ha finito, la chiudo")
+            if synthesizer.isSpeaking || synthesizer.isPaused {
+                synthesizer.stopSpeaking(at: .immediate)
+            } else {
+                _ = chiudiSopra(sopra)
+            }
+            return
+        }
         guard isSpeaking else { return }
         print("[SpeechQueue] watchdog: nessun completamento entro \(Int(currentWatchdogS))s, sblocco la coda")
         pausedForInterruption = false
@@ -581,7 +754,9 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     }
 
     private func finishActiveSpeech(notifyJs: Bool) {
-        cancelWatchdog()
+        // Durante una svolta sopra l'MP3 il watchdog armato è quello della
+        // svolta: resta, è l'unica rete se il suo delegate non arrivasse.
+        if utteranceSopra == nil { cancelWatchdog() }
         pausedForInterruption = false
         let item = activeItem
         activeItem = nil
@@ -612,7 +787,9 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         // Differito di un giro di main: i chiamanti proseguono con
         // processNext + deactivateAudioSessionIfIdle, e la ripresa (che
         // riattiva la sessione per conto suo) deve venire DOPO, non in mezzo.
-        if pausedJsPlayer && queue.isEmpty {
+        // Con una svolta ancora in corso sopra l'MP3 appena chiuso la guida JS
+        // aspetta: la fa ripartire chiudiSopra, a svolta finita.
+        if pausedJsPlayer && queue.isEmpty && utteranceSopra == nil {
             pausedJsPlayer = false
             DispatchQueue.main.async { jsPlayer?.resumeAfterSpeechIfNeeded() }
         }
@@ -631,11 +808,22 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     // MARK: - AVSpeechSynthesizerDelegate
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        DispatchQueue.main.async { self.onUtteranceFinished() }
+        DispatchQueue.main.async {
+            // La svolta detta sopra l'MP3 non è l'item attivo: non lo chiude.
+            if self.chiudiSopra(utterance) { return }
+            // Un item MP3 non usa mai il sintetizzatore: con l'MP3 attivo
+            // questo è l'eco tardivo di una svolta già chiusa (dal watchdog).
+            if self.audioPlayer != nil { return }
+            self.onUtteranceFinished()
+        }
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        DispatchQueue.main.async { self.onUtteranceFinished() }
+        DispatchQueue.main.async {
+            if self.chiudiSopra(utterance) { return }
+            if self.audioPlayer != nil { return }
+            self.onUtteranceFinished()
+        }
     }
 
     // MARK: - AVAudioPlayerDelegate (MP3 prefetchati)

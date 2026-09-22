@@ -114,133 +114,252 @@ export function getRitmoTimingRule(ritmo: string): string {
 // VIATOR API — Sandbox endpoint con mappa destinazioni MONDIALE
 // ==========================================
 
-// Mappa mondiale delle principali destinazioni ai destinationId di Viator
-// Fonte: Viator API taxonomy. Chiave = nome normalizzato (lowercase, senza accenti).
+// Mappa mondiale delle principali destinazioni ai destinationId di Viator.
+// Chiave = nome normalizzato (minuscolo, senza accenti né punteggiatura).
+//
+// NON SI SCRIVE A MANO (19/09/2026). La mappa di prima era inventata: 178 voci
+// su 186 sbagliate, verificate contro /partner/destinations — «roma» puntava
+// alla Slovenia, «pisa» a Londra, «londra» a New York, «praga» all'Oman, e
+// metà degli id non esistevano (Milano 5061 → zero prodotti). Da quando esiste
+// questa funzione Viator dava tour di un altro paese oppure niente. Il blocco
+// qui sotto è generato da `scratch/rigenera-mappa-viator.mjs`, che cerca ogni
+// nome nell'elenco UFFICIALE: per aggiungere una città si aggiunge il nome
+// allo script e lo si rilancia, mai un numero qui. Chi manca dalla mappa non è
+// un problema: lo risolve la ricerca dinamica in resolveDestinationId.
 const VIATOR_DESTINATION_MAP: Record<string, number> = {
   // ── ITALIA ──
-  "roma": 734, "rome": 734,
-  "firenze": 657, "florence": 657,
-  "venezia": 773, "venice": 773,
-  "milano": 5061, "milan": 5061, // Corretto da 525 (Amsterdam) a 5061 (Milano Lombardy)
-  "napoli": 531, "naples": 531,
-  "torino": 769, "turin": 769,
-  "bologna": 606,
-  "palermo": 24757,
-  "genova": 658, "genoa": 658,
-  "verona": 776, "pisa": 737, "siena": 749,
-  "catania": 24769, "bari": 24787,
-  "amalfi": 4816, "costiera amalfitana": 4816, "amalfi coast": 4816,
-  "cinque terre": 4889,
-  "como": 22422, "lago di como": 22422, "lake como": 22422,
-  "sorrento": 4820, "positano": 23101,
-  "ravenna": 24824, "lucca": 24797, "perugia": 24823, "assisi": 24764,
-  "orvieto": 24814, "pompei": 4819, "pompeii": 4819,
-  "capri": 4817, "taormina": 24842, "matera": 24800, "lecce": 24795,
-  "toscana": 4835, "tuscany": 4835,
-  "sicilia": 4833, "sicily": 4833,
-  "sardegna": 4832, "sardinia": 4832,
-  "puglia": 23097, "apulia": 23097,
-  
+  "rome": 511, "roma": 511, // Rome (CITY)
+  "florence": 519, "firenze": 519, // Florence (CITY)
+  "venice": 522, "venezia": 522, // Venice (CITY)
+  "milan": 512, "milano": 512, // Milan (CITY)
+  "naples": 22381, "napoli": 22381, // Naples (CITY)
+  "turin": 802, "torino": 802, // Turin (CITY)
+  "bologna": 791, // Bologna (CITY)
+  "palermo": 4815, // Palermo (CITY)
+  "genoa": 805, "genova": 805, // Genoa (CITY)
+  "verona": 945, // Verona (CITY)
+  "pisa": 520, // Pisa (CITY)
+  "siena": 944, // Siena (CITY)
+  "catania": 22664, // Catania (CITY)
+  "bari": 4226, // Bari (CITY)
+  "amalfi": 33601, // Amalfi (CITY)
+  "amalfi coast": 946, "costiera amalfitana": 946, // Amalfi Coast (REGION)
+  "cinque terre": 22149, // Cinque Terre (CITY)
+  "lake como": 26113, "lago di como": 26113, "como": 26113, // Lake Como (CITY)
+  "sorrento": 947, // Sorrento (CITY)
+  "positano": 33602, // Positano (CITY)
+  "ravenna": 4236, // Ravenna (CITY)
+  "lucca": 22436, // Lucca (CITY)
+  "perugia": 22034, // Perugia (CITY)
+  "assisi": 27667, // Assisi (CITY)
+  "orvieto": 22810, // Orvieto (CITY)
+  "pompeii": 24336, "pompei": 24336, // Pompeii (CITY)
+  "capri": 4223, // Capri (CITY)
+  "taormina": 4237, // Taormina (CITY)
+  "matera": 22632, // Matera (CITY)
+  "lecce": 22769, // Lecce (CITY)
+  "tuscany": 206, "toscana": 206, // Tuscany (REGION)
+  "sicily": 205, "sicilia": 205, // Sicily (REGION)
+  "sardinia": 24293, "sardegna": 24293, // Sardinia (REGION)
+  "puglia": 5538, "apulia": 5538, // Puglia (REGION)
+  "chianti": 26111, // Chianti (CITY)
+  "trieste": 4239, // Trieste (CITY)
+  "olbia": 4231, // Olbia (CITY)
+  "padua": 23521, "padova": 23521, // Padua (CITY)
+  "lake garda": 27338, "lago di garda": 27338, // Lake Garda (CITY)
+  "la spezia": 29856, // La Spezia (CITY)
+  "cagliari": 4229, // Cagliari (CITY)
+  "alghero": 4222, // Alghero (CITY)
+  "syracuse": 22435, "siracusa": 22435, // Syracuse (CITY)
+  "bergamo": 27538, // Bergamo (CITY)
+  "trento": 29399, // Trento (CITY)
+  "bolzano": 29398, // Bolzano (CITY)
+  "rimini": 30027, // Rimini (CITY)
+  "parma": 27234, // Parma (CITY)
+  "modena": 25818, // Modena (CITY)
+  "ferrara": 27187, // Ferrara (CITY)
+  "arezzo": 22631, // Arezzo (CITY)
+  "san gimignano": 29096, // San Gimignano (CITY)
+  "montepulciano": 27742, // Montepulciano (CITY)
+  "tropea": 33165, // Tropea (CITY)
   // ── EUROPA ──
-  "parigi": 479, "paris": 479,
-  "londra": 687, "london": 687,
-  "barcellona": 562, "barcelona": 562,
-  "madrid": 510,
-  "amsterdam": 525,
-  "berlino": 573, "berlin": 573,
-  "monaco": 530, "munich": 530, "munchen": 530,
-  "vienna": 780, "wien": 780,
-  "praga": 745, "prague": 745, "praha": 745,
-  "budapest": 618,
-  "lisbona": 538, "lisbon": 538, "lisboa": 538,
-  "porto": 4248,
-  "dublino": 644, "dublin": 644,
-  "edimburgo": 645, "edinburgh": 645,
-  "atene": 551, "athens": 551,
-  "santorini": 4509, "mykonos": 4513,
-  "istanbul": 678,
-  "cracovia": 23139, "krakow": 23139,
-  "varsavia": 23140, "warsaw": 23140,
-  "zurigo": 790, "zurich": 790,
-  "ginevra": 660, "geneva": 660,
-  "bruxelles": 615, "brussels": 615,
-  "bruges": 4891,
-  "copenaghen": 634, "copenhagen": 634,
-  "stoccolma": 758, "stockholm": 758,
-  "oslo": 4246,
-  "helsinki": 4239,
-  "nizza": 534, "nice": 534,
-  "marsiglia": 517, "marseille": 517,
-  "lione": 505, "lyon": 505,
-  "siviglia": 748, "seville": 748,
-  "valencia": 771,
-  "granada": 665,
-  "malaga": 23111,
-  "dubrovnik": 4890,
-  "spalato": 23124, "split": 23124,
-  "salisburgo": 742, "salzburg": 742,
-  "mosca": 527, "moscow": 527,
-  "san pietroburgo": 4257, "saint petersburg": 4257,
-  "reykjavik": 21944,
-  
+  "paris": 479, "parigi": 479, // Paris (CITY)
+  "london": 737, "londra": 737, // London (CITY)
+  "barcelona": 562, "barcellona": 562, // Barcelona (CITY)
+  "madrid": 566, // Madrid (CITY)
+  "amsterdam": 525, // Amsterdam (CITY)
+  "berlin": 488, "berlino": 488, // Berlin (CITY)
+  "munich": 487, "monaco di baviera": 487, "munchen": 487, // Munich (CITY)
+  "vienna": 454, "wien": 454, // Vienna (CITY)
+  "prague": 462, "praga": 462, "praha": 462, // Prague (CITY)
+  "budapest": 499, // Budapest (CITY)
+  "lisbon": 538, "lisbona": 538, "lisboa": 538, // Lisbon (CITY)
+  "porto": 26879, "oporto": 26879, // Porto (CITY)
+  "dublin": 503, "dublino": 503, // Dublin (CITY)
+  "edinburgh": 739, "edimburgo": 739, // Edinburgh (CITY)
+  "athens": 496, "atene": 496, // Athens (CITY)
+  "santorini": 959, // Santorini (CITY)
+  "mykonos": 958, // Mykonos (CITY)
+  "istanbul": 585, // Istanbul (CITY)
+  "krakow": 529, "cracovia": 529, // Krakow (CITY)
+  "warsaw": 528, "varsavia": 528, // Warsaw (CITY)
+  "zurich": 577, "zurigo": 577, // Zurich (CITY)
+  "geneva": 578, "ginevra": 578, // Geneva (CITY)
+  "brussels": 458, "bruxelles": 458, // Brussels (CITY)
+  "bruges": 4836, // Bruges (CITY)
+  "copenhagen": 463, "copenaghen": 463, // Copenhagen (CITY)
+  "stockholm": 907, "stoccolma": 907, // Stockholm (CITY)
+  "oslo": 902, // Oslo (CITY)
+  "helsinki": 803, // Helsinki (CITY)
+  "nice": 478, "nizza": 478, // Nice (CITY)
+  "marseille": 485, "marsiglia": 485, // Marseille (CITY)
+  "lyon": 829, "lione": 829, // Lyon (CITY)
+  "seville": 556, "siviglia": 556, "sevilla": 556, // Seville (CITY)
+  "valencia": 811, // Valencia (CITY)
+  "granada": 4853, // Granada (CITY)
+  "malaga": 956, // Malaga (CITY)
+  "dubrovnik": 904, // Dubrovnik (CITY)
+  "split": 4185, "spalato": 4185, // Split (CITY)
+  "salzburg": 451, "salisburgo": 451, // Salzburg (CITY)
+  "reykjavik": 905, // Reykjavik (CITY)
+  "monaco": 948, "principato di monaco": 948, "monte carlo": 948, // Monaco (COUNTRY)
+  "bordeaux": 468, // Bordeaux (CITY)
+  "strasbourg": 5502, "strasburgo": 5502, // Strasbourg (CITY)
+  "hamburg": 777, "amburgo": 777, // Hamburg (CITY)
+  "cologne": 923, "colonia": 923, "koln": 923, // Cologne (CITY)
+  "frankfurt": 489, "francoforte": 489, // Frankfurt (CITY)
+  "lucerne": 576, "lucerna": 576, // Lucerne (CITY)
+  "interlaken": 5011, // Interlaken (CITY)
+  "innsbruck": 5173, // Innsbruck (CITY)
+  "bilbao": 4485, // Bilbao (CITY)
+  "palma de mallorca": 60462, "palma di maiorca": 60462, // Palma de Mallorca (CITY)
+  "tenerife": 5404, // Tenerife (CITY)
+  "ibiza": 4217, // Ibiza (CITY)
+  "madeira": 5392, // Madeira (REGION)
+  "faro": 23402, // Faro (CITY)
+  "sintra": 50861, // Sintra (CITY)
+  "tallinn": 4147, // Tallinn (CITY)
+  "riga": 4480, // Riga (CITY)
+  "vilnius": 5479, // Vilnius (CITY)
+  "ljubljana": 5257, "lubiana": 5257, // Ljubljana (CITY)
+  "zagreb": 5391, "zagabria": 5391, // Zagreb (CITY)
+  "belgrade": 22817, "belgrado": 22817, // Belgrade (CITY)
+  "bucharest": 22134, "bucarest": 22134, // Bucharest (CITY)
+  "sofia": 5630, // Sofia (CITY)
+  "valletta": 4142, "la valletta": 4142, // Valletta (CITY)
+  "rhodes": 4272, "rodi": 4272, // Rhodes (CITY)
+  "corfu": 4279, // Corfu (CITY)
+  "heraklion": 961, // Heraklion (CITY)
+  "chania": 4251, // Chania (CITY)
+  "thessaloniki": 23853, "salonicco": 23853, // Thessaloniki (CITY)
+  "bergen": 4318, // Bergen (CITY)
+  "tromso": 4362, // Tromso (CITY)
+  "rovaniemi": 22130, // Rovaniemi (CITY)
+  "gothenburg": 4280, "goteborg": 4280, // Gothenburg (CITY)
+  "manchester": 4056, // Manchester (CITY)
+  "liverpool": 940, // Liverpool (CITY)
+  "bath": 27175, // Bath (CITY)
+  "oxford": 5537, // Oxford (CITY)
+  "cambridge": 22327, // Cambridge (CITY)
+  "glasgow": 740, // Glasgow (CITY)
+  "belfast": 738, // Belfast (CITY)
+  "cork": 22039, // Cork (CITY)
+  "galway": 5156, // Galway (CITY)
+  "antwerp": 764, "anversa": 764, // Antwerp (CITY)
+  "rotterdam": 4211, // Rotterdam (CITY)
+  "luxembourg": 21797, "lussemburgo": 21797, // Luxembourg (COUNTRY)
   // ── AMERICHE ──
-  "new york": 712, "nyc": 712,
-  "los angeles": 695,
-  "san francisco": 651,
-  "las vegas": 684,
-  "miami": 662,
-  "chicago": 623,
-  "washington": 656, "washington dc": 656,
-  "boston": 610,
-  "new orleans": 711,
-  "hawaii": 672, "honolulu": 672, "maui": 4254,
-  "cancun": 620,
-  "citta del messico": 524, "mexico city": 524, "ciudad de mexico": 524,
-  "rio de janeiro": 4249,
-  "buenos aires": 5476,
-  "lima": 4245,
-  "bogota": 22208,
-  "cartagena": 22205,
-  "cusco": 4256,
-  "san jose": 22199, // Costa Rica
-  "nassau": 4240, // Bahamas
-  "punta cana": 22231,
-  "montego bay": 4244, // Jamaica
-  
-  // ── ASIA & OCEANIA ──
-  "tokyo": 766,
-  "kyoto": 4802,
-  "osaka": 4804,
-  "bangkok": 563,
-  "singapore": 752, "singapura": 752,
-  "hong kong": 674,
-  "shanghai": 4266,
-  "pechino": 568, "beijing": 568,
-  "bali": 4799, "ubud": 22024,
-  "kuala lumpur": 4241,
-  "hanoi": 22178, "ho chi minh": 22188,
-  "seoul": 4254,
-  "delhi": 634, "new delhi": 634,
-  "mumbai": 4260,
-  "jaipur": 4231,
-  "dubai": 643,
-  "abu dhabi": 4210,
-  "doha": 22281,
-  "sydney": 762,
-  "melbourne": 4216,
-  "auckland": 4235,
-  "queenstown": 4252,
-  
-  // ── AFRICA & MEDIO ORIENTE ──
-  "il cairo": 619, "cairo": 619,
-  "marrakech": 4251,
-  "fez": 4225,
-  "casablanca": 22338,
-  "cape town": 21910, "citta del capo": 21910,
-  "johannesburg": 22361,
-  "nairobi": 23212,
-  "gerusalemme": 670, "jerusalem": 670,
-  "tel aviv": 22156,
+  "new york city": 687, "new york": 687, "nyc": 687, // New York City (CITY)
+  "los angeles": 645, // Los Angeles (CITY)
+  "san francisco": 651, // San Francisco (CITY)
+  "las vegas": 684, // Las Vegas (CITY)
+  "miami": 662, // Miami (CITY)
+  "chicago": 673, // Chicago (CITY)
+  "washington dc": 657, "washington": 657, // Washington DC (CITY)
+  "boston": 678, // Boston (CITY)
+  "new orleans": 675, // New Orleans (CITY)
+  "oahu": 672, "honolulu": 672, "hawaii": 672, // Oahu (CITY)
+  "maui": 671, // Maui (CITY)
+  "orlando": 663, // Orlando (CITY)
+  "san diego": 736, // San Diego (CITY)
+  "seattle": 704, // Seattle (CITY)
+  "toronto": 623, // Toronto (CITY)
+  "vancouver": 616, // Vancouver (CITY)
+  "montreal": 625, // Montreal (CITY)
+  "quebec city": 626, "quebec": 626, // Quebec City (CITY)
+  "niagara falls around": 773, "niagara falls": 773, "cascate del niagara": 773, // Niagara Falls & Around (CITY)
+  "cancun": 631, // Cancun (CITY)
+  "mexico city": 628, "citta del messico": 628, "ciudad de mexico": 628, // Mexico City (CITY)
+  "playa del carmen": 5501, // Playa del Carmen (CITY)
+  "tulum": 23012, // Tulum (CITY)
+  "rio de janeiro": 712, // Rio de Janeiro (CITY)
+  "sao paulo": 5112, "san paolo": 5112, // Sao Paulo (CITY)
+  "buenos aires": 901, // Buenos Aires (CITY)
+  "mendoza": 931, // Mendoza (CITY)
+  "bariloche": 938, // Bariloche (CITY)
+  "ushuaia": 933, // Ushuaia (CITY)
+  "santiago": 713, // Santiago (CITY)
+  "lima": 928, // Lima (CITY)
+  "cusco": 937, "cuzco": 937, // Cusco (CITY)
+  "bogota": 4560, // Bogotá (CITY)
+  "cartagena": 4276, // Cartagena (CITY)
+  "medellin": 4563, // Medellín (CITY)
+  "quito": 735, // Quito (CITY)
+  "la paz": 5027, // La Paz (CITY)
+  "san jose": 25463, // San Jose (CITY)
+  "nassau": 420, // Nassau (CITY)
+  "punta cana": 794, // Punta Cana (CITY)
+  "montego bay": 432, // Montego Bay (CITY)
+  "panama city": 950, "panama": 950, // Panama City (CITY)
+  // ── ASIA E OCEANIA ──
+  "tokyo": 334, // Tokyo (CITY)
+  "kyoto": 332, // Kyoto (CITY)
+  "osaka": 333, // Osaka (CITY)
+  "hiroshima": 4661, // Hiroshima (CITY)
+  "bangkok": 343, // Bangkok (CITY)
+  "phuket": 349, // Phuket (CITY)
+  "chiang mai": 5267, // Chiang Mai (CITY)
+  "singapore": 60449, "singapura": 60449, // Singapore (CITY)
+  "shanghai": 325, // Shanghai (CITY)
+  "beijing": 321, "pechino": 321, // Beijing (CITY)
+  "xian": 326, "xi an": 326, // Xian (CITY)
+  "bali": 50944, // Bali (VILLAGE)
+  "ubud": 5467, // Ubud (CITY)
+  "kuala lumpur": 335, // Kuala Lumpur (CITY)
+  "hanoi": 351, // Hanoi (CITY)
+  "ho chi minh city": 352, "ho chi minh": 352, "saigon": 352, // Ho Chi Minh City (CITY)
+  "hoi an": 5229, // Hoi An (CITY)
+  "siem reap": 5480, // Siem Reap (CITY)
+  "seoul": 973, // Seoul (CITY)
+  "new delhi": 804, "delhi": 804, "nuova delhi": 804, // New Delhi (CITY)
+  "mumbai": 953, "bombay": 953, // Mumbai (CITY)
+  "jaipur": 4627, // Jaipur (CITY)
+  "agra": 4547, // Agra (CITY)
+  "kathmandu": 5109, // Kathmandu (CITY)
+  "colombo": 4619, // Colombo (CITY)
+  "dubai": 828, // Dubai (CITY)
+  "abu dhabi": 4474, // Abu Dhabi (CITY)
+  "doha": 4453, // Doha (CITY)
+  "sydney": 4413, // Sydney (CITY)
+  "melbourne": 384, // Melbourne (CITY)
+  "cairns the tropical north": 754, "cairns": 754, // Cairns & the Tropical North (CITY)
+  "auckland": 391, // Auckland (CITY)
+  "queenstown": 407, // Queenstown (CITY)
+  // ── AFRICA E MEDIO ORIENTE ──
+  "cairo": 782, "il cairo": 782, // Cairo (CITY)
+  "luxor": 826, // Luxor (CITY)
+  "marrakech": 5408, "marrakesh": 5408, // Marrakech (CITY)
+  "fez": 22151, "fes": 22151, // Fez (CITY)
+  "casablanca": 4396, // Casablanca (CITY)
+  "cape town": 318, "citta del capo": 318, // Cape Town (CITY)
+  "johannesburg": 314, // Johannesburg (CITY)
+  "nairobi": 5280, // Nairobi (CITY)
+  "zanzibar": 5590, // Zanzibar (REGION)
+  "jerusalem": 921, "gerusalemme": 921, // Jerusalem (CITY)
+  "tel aviv": 920, // Tel Aviv (CITY)
+  "amman": 5503, // Amman (CITY)
+  "petra": 24520, // Petra (CITY)
+  "tunis": 30157, "tunisi": 30157, // Tunis (CITY)
 };
 
 // Host valutato AL MOMENTO DELLA CHIAMATA, non all'import: nel bundle di
@@ -248,20 +367,61 @@ const VIATOR_DESTINATION_MAP: Record<string, number> = {
 // server.ts esegua dotenv.config(), quindi una costante qui leggerebbe sempre
 // un process.env vuoto e finirebbe sulla sandbox — che con una chiave di
 // produzione risponde 401 "Invalid API Key" (visto sul droplet il 18/08/2026).
-const viatorApiHost = () => (process.env.VIATOR_PRODUCTION === 'true' ? "api.viator.com" : "api.sandbox.viator.com");
+//
+// VALORE TOLLERANTE E RIPIEGO SUL 401 (19/09/2026). Il confronto secco
+// `=== 'true'` bastava a spegnere Viator: misurato in produzione, 0 esperienze
+// a Milano, Roma e Parigi in 260 ms, mentre la stessa chiave in locale ne dà
+// migliaia. Un «True», un «1» o un a-capo in coda al valore su Vercel (capita
+// con `echo true | vercel env add`) mandavano tutto sulla sandbox, che alla
+// chiave vera risponde 401 — e ogni chiamante trasforma l'errore in lista
+// vuota, quindi nessuno se ne accorgeva. Ora il valore si legge con
+// tolleranza, e se l'host scelto risponde 401/403 si prova l'altro UNA volta:
+// quello che funziona resta in memoria per le chiamate successive.
+const VIATOR_HOST_PROD = "api.viator.com";
+const VIATOR_HOST_SANDBOX = "api.sandbox.viator.com";
+let viatorHostProvato: string | null = null;
+const viatorApiHost = () => {
+  if (viatorHostProvato) return viatorHostProvato;
+  const v = String(process.env.VIATOR_PRODUCTION ?? '').trim().toLowerCase();
+  return ['true', '1', 'yes', 'si', 'on'].includes(v) ? VIATOR_HOST_PROD : VIATOR_HOST_SANDBOX;
+};
+async function viatorPost(path: string, payload: any, config: any): Promise<any> {
+  const primo = viatorApiHost();
+  try {
+    return await axios.post(`https://${primo}${path}`, payload, config);
+  } catch (err: any) {
+    const stato = err?.response?.status;
+    if (stato !== 401 && stato !== 403) throw err;
+    const altro = primo === VIATOR_HOST_PROD ? VIATOR_HOST_SANDBOX : VIATOR_HOST_PROD;
+    const res = await axios.post(`https://${altro}${path}`, payload, config);
+    if (viatorHostProvato !== altro) {
+      console.warn(`[Viator] ${primo} ha risposto ${stato}, ${altro} funziona: uso ${altro}. Controllare VIATOR_PRODUCTION nelle variabili d'ambiente.`);
+      viatorHostProvato = altro;
+    }
+    return res;
+  }
+}
 
 async function resolveDestinationId(cityName: string, apiKey: string): Promise<number | null> {
   if (!cityName) return null;
-  const normalized = cityName.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  
-  // 1. Cerca match esatto nella mappa locale
+  // Stessa normalizzazione con cui lo script genera le chiavi della mappa.
+  const normalized = cityName.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+
+  // 1. Match esatto nella mappa locale
   if (VIATOR_DESTINATION_MAP[normalized]) return VIATOR_DESTINATION_MAP[normalized];
-  
-  // 2. Cerca match parziale
-  for (const [key, id] of Object.entries(VIATOR_DESTINATION_MAP)) {
-    if (normalized.includes(key) || key.includes(normalized)) return id;
-  }
-  
+
+  // 2. Solo la parte prima della virgola (\u00abMilano, citt\u00e0 metropolitana di
+  //    Milano, Italia\u00bb \u2192 \u00abmilano\u00bb), sempre a match ESATTO. Il vecchio
+  //    \u00abcontiene, in un verso o nell'altro\u00bb era una fabbrica di errori:
+  //    \u00abBariloche\u00bb contiene \u00abbari\u00bb, \u00abLimassol\u00bb contiene \u00ablima\u00bb, \u00abPorto Alegre\u00bb
+  //    e \u00abPortofino\u00bb contengono \u00abporto\u00bb, e il verso opposto mandava \u00abSan\u00bb su
+  //    San Jos\u00e9. Tutto il resto lo risolve la ricerca dinamica qui sotto, che
+  //    chiede a Viator invece di indovinare.
+  const primaDellaVirgola = cityName.split(",")[0].toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  if (primaDellaVirgola && VIATOR_DESTINATION_MAP[primaDellaVirgola]) return VIATOR_DESTINATION_MAP[primaDellaVirgola];
+
   // 3. Fallback intelligente: ricerca dinamica tramite API Viator Freetext / Locations
   console.log(`[Viator] Città '${cityName}' non nella mappa statica. Eseguo ricerca dinamica...`);
   try {
@@ -276,7 +436,7 @@ async function resolveDestinationId(cityName: string, apiKey: string): Promise<n
       currency: "EUR",
       pagination: { start: 1, count: 5 }
     };
-    const res = await axios.post(`https://${viatorApiHost()}/partner/search/freetext`, payload, {
+    const res = await viatorPost(`/partner/search/freetext`, payload, {
       headers: {
         "exp-api-key": apiKey,
         "Accept": "application/json;version=2.0",
@@ -287,16 +447,24 @@ async function resolveDestinationId(cityName: string, apiKey: string): Promise<n
     });
     
     // Controlla se la ricerca freetext ha trovato destinazioni
-    if (res.data && res.data.destinations && res.data.destinations.length > 0) {
-      const bestDest = res.data.destinations[0];
-      if (bestDest.destinationId) {
-         console.log(`[Viator] Ricerca dinamica: '${cityName}' mappata al destinationId ${bestDest.destinationId} (${bestDest.name})`);
-         return bestDest.destinationId;
+    // La risposta vera è `destinations.results[]` con il campo `id`
+    // (verificato il 19/09/2026: «Milan» → {id: 512, name: "Milano"}). Il
+    // codice leggeva `destinations[]` e `destinationId`: non trovava MAI
+    // niente, e ogni città fuori dalla mappa statica finiva sul freetext dei
+    // prodotti, che ignora il luogo. Si leggono entrambe le forme.
+    const elencoDest = Array.isArray(res.data?.destinations?.results) ? res.data.destinations.results
+      : Array.isArray(res.data?.destinations) ? res.data.destinations : [];
+    if (elencoDest.length > 0) {
+      const bestDest = elencoDest[0];
+      const idDest = Number(bestDest.id ?? bestDest.destinationId);
+      if (Number.isFinite(idDest) && idDest > 0) {
+         console.log(`[Viator] Ricerca dinamica: '${cityName}' mappata al destinationId ${idDest} (${bestDest.name})`);
+         return idDest;
       }
     }
     
     // In alternativa, tentiamo l'API /locations/search (se supportata dal sandbox v2)
-    const locRes = await axios.post(`https://${viatorApiHost()}/partner/locations/search`, {
+    const locRes = await viatorPost(`/partner/locations/search`, {
       locations: [{ locationName: cityName }]
     }, {
       headers: {
@@ -370,7 +538,7 @@ export async function searchViatorFreetext(term: string, lang: string = 'it', co
   const apiKey = process.env.VIATOR_API_KEY || process.env.VITE_VIATOR_API_KEY;
   if (!apiKey || !term) return [];
   try {
-    const res = await axios.post(`https://${viatorApiHost()}/partner/search/freetext`, {
+    const res = await viatorPost(`/partner/search/freetext`, {
       searchTerm: term,
       searchTypes: [{ searchType: "PRODUCTS", pagination: { start: 1, count: Math.min(50, Math.max(1, count)) } }],
       currency: "EUR",
@@ -425,7 +593,7 @@ export async function searchViatorExperiences(lat: number, lng: number, radiusKm
         currency: "EUR",
         pagination: { start: 1, count: quanti }
       };
-      const freeRes = await axios.post(`https://${viatorApiHost()}/partner/search/freetext`, freePayload, {
+      const freeRes = await viatorPost(`/partner/search/freetext`, freePayload, {
         headers: {
           "exp-api-key": apiKey,
           "Accept": "application/json;version=2.0",
@@ -460,7 +628,7 @@ export async function searchViatorExperiences(lat: number, lng: number, radiusKm
       currency: "EUR"
     };
 
-    const prodRes = await axios.post(`https://${viatorApiHost()}/partner/products/search`, prodPayload, {
+    const prodRes = await viatorPost(`/partner/products/search`, prodPayload, {
       headers: {
         "exp-api-key": apiKey,
         "Accept": "application/json;version=2.0",

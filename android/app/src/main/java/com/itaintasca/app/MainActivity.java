@@ -9,6 +9,7 @@ import android.view.WindowManager;
 import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 import com.itaintasca.app.plugin.ItaintaBackgroundPoiPlugin;
+import com.itaintasca.app.service.ItaintaBackgroundPoiService;
 import com.itaintasca.app.service.ServiceWatchdog;
 import java.util.regex.Pattern;
 import org.json.JSONObject;
@@ -16,9 +17,16 @@ import org.json.JSONObject;
 public class MainActivity extends BridgeActivity {
     private static final String TAG = "MainActivity";
     private static final Pattern SAFE_ID = Pattern.compile("^[A-Za-z0-9_:.-]{1,80}$");
+    /** (21/09/2026) Segno sull'intent: tasto del cruscotto gia' consegnato al JS. */
+    private static final String EXTRA_NAV_CONSEGNATA = "wipNavConsegnata";
+    /** (21/09/2026) Activity ricreata (rotazione, processo ripristinato): il suo intent e' vecchio. */
+    private boolean ricreata = false;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Prima di super.onCreate: BridgeActivity.load() passa l'intent di
+        // avvio a onNewIntent gia' dentro super.onCreate.
+        ricreata = savedInstanceState != null;
         registerPlugin(ItaintaBackgroundPoiPlugin.class);
         // Senza questa registrazione il plugin audio non esiste a runtime e ogni
         // chiamata a WipBackgroundAudio fallisce con "not implemented":
@@ -52,6 +60,9 @@ public class MainActivity extends BridgeActivity {
 
     private void handleIntent(Intent intent) {
         if (intent == null) return;
+
+        // --- 0. Tasti «Salta» / «Ricalcola» del cruscotto (21/09/2026) ---
+        if (consegnaAzioneNav(intent)) return;
 
         // --- 1. Check-in logic (sequential itinerary) ---
         if ("ACTION_CHECKIN".equals(intent.getAction())) {
@@ -109,6 +120,55 @@ public class MainActivity extends BridgeActivity {
                 getBridge().getWebView().evaluateJavascript(js, null);
             });
         }
+    }
+
+    /**
+     * (21/09/2026, REVISIONE 2) TASTI «SALTA» E «RICALCOLA» DEL CRUSCOTTO. Il
+     * nativo non li sa fare (non calcola percorsi) e a schermo spento non
+     * facevano nulla: ora la notifica apre l'app con un PendingIntent di
+     * Activity (dalla lock screen il sistema chiede lo sblocco) e l'azione
+     * arriva al JS FRESCA, col ts di adesso, come `navBannerAction` — lo stesso
+     * evento degli altri tasti. Una sola strada: plugin vivo → broadcast al
+     * suo ricevitore (che la trattiene finche' il listener JS non c'e');
+     * plugin non vivo → annotata, la consegna il suo load(). Mai tutte e due.
+     * Nessun ricaricamento della WebView: onNewIntent passa solo ai plugin.
+     *
+     * @return true se l'intent era un tasto del cruscotto (consegnato o scartato).
+     */
+    private boolean consegnaAzioneNav(Intent intent) {
+        String a = intent.getAction();
+        final String azione;
+        if (ItaintaBackgroundPoiService.ACTION_NAV_SKIP.equals(a)) azione = "salta";
+        else if (ItaintaBackgroundPoiService.ACTION_NAV_RECALC.equals(a)) azione = "ricalcola";
+        else return false;
+        // BridgeActivity.load() (dentro super.onCreate) e poi onCreate passano
+        // lo STESSO intent di avvio: si consegna una volta sola.
+        if (intent.getBooleanExtra(EXTRA_NAV_CONSEGNATA, false)) return true;
+        intent.putExtra(EXTRA_NAV_CONSEGNATA, true);
+        // L'intent di avvio di un'Activity ricreata o riaperta dalle recenti e'
+        // il tocco di allora, non uno nuovo: non si ripete.
+        boolean diAvvio = intent == getIntent();
+        if ((diAvvio && ricreata) || (intent.getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) {
+            return true;
+        }
+        long ts = System.currentTimeMillis();
+        try {
+            if (ItaintaBackgroundPoiPlugin.getVivo()) {
+                Intent evento = new Intent("com.itaintasca.POI_EVENT");
+                evento.setPackage(getPackageName());
+                evento.putExtra("event", "navBannerAction");
+                evento.putExtra("data1", "{\"action\":\"" + azione + "\",\"ts\":" + ts + "}");
+                sendBroadcast(evento);
+            } else {
+                getSharedPreferences("ItaintaPrefs", MODE_PRIVATE).edit()
+                        .putString(ItaintaBackgroundPoiService.PREF_PENDING_NAV_ACTION, azione)
+                        .putLong(ItaintaBackgroundPoiService.PREF_PENDING_NAV_ACTION_TS, ts)
+                        .apply();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Tasto del cruscotto «" + azione + "» non consegnato", e);
+        }
+        return true;
     }
 
     private void creaCanaleNotifiche() {

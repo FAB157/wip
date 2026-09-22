@@ -325,7 +325,9 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
      */
     suspend fun fetchPoiAudioText(poiId: String): String? = withContext(Dispatchers.IO) {
         val url = "${BuildConfig.SUPABASE_URL}/rest/v1/shared_pois?id=eq.$poiId" +
-            "&select=audio_script,description_long,description_ai,description"
+            // (20/09/2026) `description` NON esiste su shared_pois: con quella
+            // colonna la query dava 400 e questo ripiego tornava SEMPRE null.
+            "&select=audio_script,description_long,description_ai,description_short"
         val request = Request.Builder()
             .url(url)
             .get()
@@ -338,7 +340,7 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
                 val arr = JSONArray(response.body?.string() ?: "[]")
                 if (arr.length() == 0) return@withContext null
                 val row = arr.getJSONObject(0)
-                for (key in listOf("audio_script", "description_long", "description_ai", "description")) {
+                for (key in listOf("audio_script", "description_long", "description_ai", "description_short")) {
                     if (!row.isNull(key)) {
                         val v = row.optString(key, "")
                         if (v.isNotBlank()) return@withContext v

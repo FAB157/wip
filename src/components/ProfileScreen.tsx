@@ -61,6 +61,7 @@ import PriceList from './PriceList';
 import DayPassCard from './DayPassCard';
 import FreeFeaturesModal from './FreeFeaturesModal';
 import DownloadsScreen from './DownloadsScreen';
+import { useRaccontoViaggio } from './RaccontoViaggio';
 import RainGuaranteeCard from './RainGuaranteeCard';
 import { PilgrimCertificateAction } from './PilgrimWaysSheet';
 import ProminentDisclosure from './ProminentDisclosure';
@@ -494,40 +495,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
   };
 
   // ── Diario post-viaggio (ondata 5): racconto AI dalle tappe reali ──────
-  const [tripStory, setTripStory] = useState<{ titolo: string; story: string } | null>(null);
-  const [storyLoadingId, setStoryLoadingId] = useState<string | null>(null);
-  const generateTripStory = async (itineraryDb: any) => {
-    const giorniRaw = itineraryDb?.dati_itinerario?.giorni || [];
-    const giorni = giorniRaw.map((g: any, i: number) => ({
-      giorno: g.giorno || i + 1,
-      tappe: (g.tappe || []).map((t: any) => t.titolo_tappa || t.nome).filter(Boolean),
-    })).filter((g: any) => g.tappe.length > 0);
-    if (giorni.length === 0) { notify(getTranslation('pf_story_no_stops', language)); return; }
-    setStoryLoadingId(itineraryDb.id);
-    try {
-      // apiFetch: Bearer automatico (rotta a login obbligatorio) + timeout.
-      const res = await apiFetch(getApiUrl('/api/trip-story'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ titolo: itineraryDb.titolo, giorni, lang: language }),
-      }, 90000);
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.story) throw new Error(data?.error || 'generazione fallita');
-      setTripStory({ titolo: itineraryDb.titolo || getTranslation('pf_nostro_viaggio', language), story: data.story });
-    } catch (e: any) {
-      notify(getTranslation('pf_story_fail', language).replace('{x}', e?.message || getTranslation('pf_riprova', language)));
-    } finally {
-      setStoryLoadingId(null);
-    }
-  };
-  const shareTripStory = async () => {
-    if (!tripStory) return;
-    const text = `${tripStory.titolo}\n\n${tripStory.story}\n\n— raccontato da WIP · wip.guide`;
-    try {
-      if (navigator.share) await navigator.share({ text });
-      else { await navigator.clipboard.writeText(text); notify(getTranslation('pf_story_copied', language)); }
-    } catch { /* condivisione annullata */ }
-  };
+  // Dal 20/09/2026 la logica vive in RaccontoViaggio.tsx: lo stesso tasto sta
+  // anche sulle voci di «I miei download».
+  const { genera: generateTripStory, inCorsoId: storyLoadingId, modale: modaleRacconto } = useRaccontoViaggio(language);
 
   // "start" = distanza di arrivo/inizio guida: un solo controllo che scrive
   // sia walkTrigger che carTrigger (ognuno con il proprio clamp).
@@ -1517,6 +1487,16 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                           itinerari-cammino COMPLETATI (si nasconde da sé) */}
                       <PilgrimCertificateAction itinerary={itineraryDb} />
                       <div className="flex mt-auto pt-2 gap-2 flex-wrap">
+                        {/* (20/09/2026) Da qui l'itinerario non si poteva APRIRE:
+                            c'erano racconto, calendario e Maps, ma per rivederlo
+                            bisognava andare a cercarlo nel Piano. Stesso evento
+                            di «I miei download». */}
+                        <button
+                          onClick={() => window.dispatchEvent(new CustomEvent('wip-apri-download', { detail: { tipo: 'itinerario', id: itineraryDb.id } }))}
+                          className="px-4 py-2 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary/90 transition-colors"
+                        >
+                          {getTranslation('resume_btn', language)}
+                        </button>
                         <button
                           onClick={() => generateTripStory(itineraryDb)}
                           disabled={storyLoadingId === itineraryDb.id}
@@ -1539,6 +1519,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                           // senza tappe il bottone è disabilitato, non un
                           // finto link con href="#".
                           let mapsUrl: string | null = null;
+                          let appleMapsUrl: string | null = null;
                           try {
                             const firstDay = itineraryDb.dati_itinerario?.giorni?.[0];
                             const tappe = firstDay?.tappe || [];
@@ -1550,9 +1531,16 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                               const last = tappe[tappe.length - 1];
                               const waypoints = tappe.slice(0, -1).map((t: any) => encodeURIComponent(point(t))).join('|');
                               mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(point(last))}${waypoints ? `&waypoints=${waypoints}` : ''}&travelmode=driving`;
+                              // Mappe di Apple (13/09/2026, App Review Guideline 4):
+                              // stesso limite di PlanScreen, niente waypoint
+                              // intermedi — solo l'ultima tappa, dichiarato
+                              // nell'etichetta quando ce n'è più di una.
+                              appleMapsUrl = `https://maps.apple.com/?daddr=${encodeURIComponent(point(last))}&dirflg=d`;
                             }
                           } catch { /* dati itinerario malformati */ }
+                          const tappeMultiple = (itineraryDb.dati_itinerario?.giorni?.[0]?.tappe?.length || 0) > 1;
                           return mapsUrl ? (
+                            <>
                             <a
                               href={mapsUrl}
                               target="_blank"
@@ -1561,6 +1549,17 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                             >
                               {getTranslation('pf_apri_in_maps', language)} <ChevronRight className="w-4 h-4" />
                             </a>
+                            {Capacitor.getPlatform() === 'ios' && appleMapsUrl && (
+                              <a
+                                href={appleMapsUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="w-full text-center py-3.5 bg-white text-gray-900 border border-gray-300 font-black text-[11px] uppercase tracking-widest rounded-[1.25rem] hover:bg-gray-50 active:scale-95 transition-all flex items-center justify-center gap-2"
+                              >
+                                {getTranslation(tappeMultiple ? 'open_apple_maps_solo_arrivo' : 'open_apple_maps', language)}
+                              </a>
+                            )}
+                            </>
                           ) : (
                             <span className="w-full text-center py-3.5 bg-gray-100 text-gray-400 font-black text-[11px] uppercase tracking-widest rounded-[1.25rem] flex items-center justify-center gap-2 cursor-not-allowed">
                               {getTranslation('pf_no_tappe', language)}
@@ -1766,30 +1765,6 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                           <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_geo_desc', language)}</p>
                         </div>
                       </div>
-                    </div>
-                  </div>
-
-                  {/* Come ottenere Punti XP */}
-                  <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-[2rem] p-6 border border-indigo-100 shadow-sm mt-6">
-                    <h4 className="font-black text-indigo-900 flex items-center gap-2 mb-4">
-                      {getTranslation('pf_come_xp', language)}
-                    </h4>
-                    {/* Solo le sorgenti XP realmente implementate (gamification.ts):
-                        la vecchia tabella prometteva 6 voci di cui 4 inesistenti
-                        e 2 con valori doppi rispetto al codice. */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl shadow-sm border border-indigo-50/50">
-                        <span className="text-xs font-bold text-gray-700 flex items-center gap-2">{getTranslation('pf_xp_ascolto', language)}</span>
-                        <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">+10 XP</span>
-                      </div>
-                      <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl shadow-sm border border-indigo-50/50">
-                        <span className="text-xs font-bold text-gray-700 flex items-center gap-2">{getTranslation('pf_xp_vision', language)}</span>
-                        <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">+5 XP</span>
-                      </div>
-                      <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl shadow-sm border border-indigo-50/50">
-                        <span className="text-xs font-bold text-gray-700 flex items-center gap-2">{getTranslation('pf_xp_trivia', language)}</span>
-                        <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">{getTranslation('pf_xp_bonus', language)}</span>
-                      </div>
                       <div className="flex items-start gap-3 bg-white px-4 py-3 rounded-2xl shadow-sm border border-emerald-50/50">
                         <Download className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
                         <div>
@@ -1817,6 +1792,30 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                           <h5 className="text-xs font-black text-gray-800 mb-0.5">{getTranslation('pf_gratis_diario', language)}</h5>
                           <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_diario_desc', language)}</p>
                         </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Come ottenere Punti XP */}
+                  <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-[2rem] p-6 border border-indigo-100 shadow-sm mt-6">
+                    <h4 className="font-black text-indigo-900 flex items-center gap-2 mb-4">
+                      {getTranslation('pf_come_xp', language)}
+                    </h4>
+                    {/* Solo le sorgenti XP realmente implementate (gamification.ts):
+                        la vecchia tabella prometteva 6 voci di cui 4 inesistenti
+                        e 2 con valori doppi rispetto al codice. */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl shadow-sm border border-indigo-50/50">
+                        <span className="text-xs font-bold text-gray-700 flex items-center gap-2">{getTranslation('pf_xp_ascolto', language)}</span>
+                        <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">+10 XP</span>
+                      </div>
+                      <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl shadow-sm border border-indigo-50/50">
+                        <span className="text-xs font-bold text-gray-700 flex items-center gap-2">{getTranslation('pf_xp_vision', language)}</span>
+                        <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">+5 XP</span>
+                      </div>
+                      <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl shadow-sm border border-indigo-50/50">
+                        <span className="text-xs font-bold text-gray-700 flex items-center gap-2">{getTranslation('pf_xp_trivia', language)}</span>
+                        <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">{getTranslation('pf_xp_bonus', language)}</span>
                       </div>
                     </div>
                   </div>
@@ -2573,7 +2572,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                 </div>
               </div>
               )}
-              
+
               <div className="bg-white p-6 rounded-3xl border border-outline-variant/10 shadow-sm">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
@@ -2988,7 +2987,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
             >
               {/* "I MIEI DOWNLOAD" (08/09/2026): l'area unica di tutto cio' che
                   l'utente ha scaricato — include il vecchio pannello zone. */}
-              <DownloadsScreen language={language} />
+              <DownloadsScreen language={language} onApriAscolti={() => setActiveTab('cronologia')} />
             </motion.div>
           )}
 
@@ -3210,25 +3209,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       )}
 
       {/* Racconto post-viaggio (ondata 5) */}
-      {tripStory && (
-        <div className="fixed inset-0 z-[1350] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setTripStory(null)}>
-          <div className="w-full max-w-lg bg-white rounded-3xl p-6 space-y-4 shadow-2xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="flex items-start justify-between gap-3">
-              <h3 className="font-black text-primary text-lg leading-tight">📖 {tripStory.titolo}</h3>
-              <button onClick={() => setTripStory(null)} className="p-1 text-gray-400 hover:text-gray-600 shrink-0">✕</button>
-            </div>
-            <div className="flex-1 overflow-y-auto text-[15px] leading-relaxed text-gray-700 whitespace-pre-line italic border-l-4 border-amber-200 pl-4">
-              {tripStory.story}
-            </div>
-            <button
-              onClick={shareTripStory}
-              className="w-full py-3 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest"
-            >
-              {getTranslation('pf_condividi_racconto', language)}
-            </button>
-          </div>
-        </div>
-      )}
+      {modaleRacconto}
 
       {isFreeFeaturesOpen && (
         <FreeFeaturesModal onClose={() => setIsFreeFeaturesOpen(false)} />

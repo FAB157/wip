@@ -51,6 +51,7 @@ import PoiRadarPanel from "./components/PoiRadarPanel";
 import TourBanner from "./components/TourBanner";
 import NavigationOverlay from "./components/NavigationOverlay";
 import { ripetiIstruzioneGiro } from "./lib/tour/giroDriver";
+import { riallineaSeScongelato, cruscottoDellaTappa, proprietarioNativo } from "./lib/nav/navNativo";
 import { useVistaGiro, useBozzaGiro } from "./lib/tour/useGiro";
 import { tourService } from "./services/tourService";
 import { avviaGiroDriver } from "./lib/tour/giroDriver";
@@ -66,6 +67,7 @@ import AgentControls from "./components/AgentControls";
 import DayPassOfferModal from "./components/DayPassOfferModal";
 import ToastHost from "./components/ToastHost";
 import AiConsentHost from "./components/AiConsentHost";
+import { chiediConsensoAi, haConsensoAi } from "./lib/aiConsent";
 import { useFeatureFlag } from "./lib/featureFlags";
 import { record as recordNotification } from "./lib/notificationCenter";
 
@@ -332,6 +334,57 @@ export default function App() {
     if (!Capacitor.isNativePlatform()) return;
     let vivo = true;
     let handle: { remove: () => Promise<void> | void } | null = null;
+    // LE AZIONI DEL GIRO SI APPLICANO DOPO IL RIALLINEAMENTO (21/09/2026,
+    // revisione 2). Allo sblocco l'azione rimasta in coda arrivava PRIMA che
+    // il JS riprendesse dal follower nativo il cammino fatto a schermo spento:
+    // una «Pausa» faceva perdere le tappe gia` fatte e il giro guidava verso
+    // quelle di prima. In fila, nell'ordine dei tocchi.
+    let catena: Promise<void> = Promise.resolve();
+    const applicaAzioneGiro = (action: string, vecchio: boolean) => {
+      switch (action) {
+        // (21/09/2026) Azioni ESPLICITE, non un'alternanza: il tasto porta lo
+        // stato che MOSTRA. L'interruttore invertiva quello del JS, che poteva
+        // essere diverso (pausa automatica da fermi): «Riprendi» metteva in pausa.
+        case 'pausa': tourService.impostaPausa(true); break;
+        case 'riprendi': tourService.impostaPausa(false); break;
+        case 'riascolta': riascoltaTappa(); break;
+        case 'salta': posizioneVeloce((p) => { void tourService.salta(p); }); break;
+        case 'ricalcola': posizioneVeloce((p) => { void tourService.ricalcolaDaQui(p); }); break;
+        case 'termina': {
+          const chiudi = () => { tourService.termina(); setGiroInCorso(false); };
+          if (!vecchio) { chiudi(); break; }
+          const chiedi = () => {
+            if (!tourService.inCorso()) return;
+            const L = linguaCorrente();
+            const domanda = tourService.vista()?.modo === 'percorso'
+              ? getTranslation('pc_termina_conferma', L)
+              : `${getTranslation('tour_termina', L)}?`;
+            // Senza finestra di conferma non si chiude: nel dubbio il giro resta.
+            if (typeof window.confirm === 'function' && window.confirm(domanda)) chiudi();
+            else {
+              // «No» (21/09/2026): il nativo al tocco ha GIA` chiuso il
+              // cruscotto (Live Activity finita, notifica tornata quella del
+              // servizio). Si ridisegna da capo, a pagina visibile; il
+              // percorso al follower lo riconsegna navNativo.
+              firmaBannerRef.current = '';
+              setRidisegnaBanner(n => n + 1);
+            }
+          };
+          // La domanda a pagina VISIBILE: consegnata a una pagina ancora
+          // nascosta, la finestra bloccherebbe il JS senza nessuno a rispondere.
+          if (document.visibilityState === 'visible') chiedi();
+          else {
+            const quandoVisibile = () => {
+              if (document.visibilityState !== 'visible') return;
+              document.removeEventListener('visibilitychange', quandoVisibile);
+              chiedi();
+            };
+            document.addEventListener('visibilitychange', quandoVisibile);
+          }
+          break;
+        }
+      }
+    };
     ItaintaBackgroundPoi.addListener('navBannerAction', (d: { action?: string; data?: string; ts?: number | string }) => {
       // Android manda il JSON in `data` (il ponte servizio → plugin e` uno
       // solo per tutti gli eventi); iOS il campo `action` diretto.
@@ -344,11 +397,11 @@ export default function App() {
       if (!action) return;
       // Un evento trattenuto (retainUntilConsumed) e consegnato dopo un
       // minuto non e` piu` un tocco: non si salta una tappa a sorpresa.
-      // TRANNE «pausa» (18/09/2026, navigatore a schermo spento): a pagina
-      // congelata il follower nativo ha GIA` obbedito a quel tasto — scartarla
-      // qui lasciava il giro in cammino nel JS e in pausa nel nativo.
-      // Pausa/riprendi si alternano: applicarle tutte, in ordine, riporta il JS
-      // dove l'utente ha lasciato il nativo, ed e` un gesto che si disfa.
+      // TRANNE «pausa» e «riprendi» (18/09/2026, navigatore a schermo spento;
+      // «riprendi» esplicito dal 21/09): a pagina congelata il follower nativo
+      // ha GIA` obbedito a quel tasto — scartarla qui lasciava il JS e il
+      // nativo in due stati diversi. Sono azioni esplicite: applicarle tutte,
+      // in ordine, riporta il JS dove l'utente ha lasciato il nativo.
       // «TERMINA» IN RITARDO NON SI ESEGUE ALLA CIECA: e` DISTRUTTIVO, e un
       // tocco per sbaglio sulla schermata di blocco chiuderebbe anche un
       // percorso su misura gia` PAGATO (ricrearlo si ripaga). Con un giro in
@@ -358,39 +411,23 @@ export default function App() {
       // (pagina viva, < 60 s) vale come sempre, senza domande.
       // «Salta» e «ricalcola» in ritardo si scartano: a sorpresa sono un danno.
       const vecchio = Number.isFinite(ts) && ts > 0 && Date.now() - ts > 60_000;
-      if (vecchio && action !== 'pausa' && action !== 'termina') return;
+      if (vecchio && action !== 'pausa' && action !== 'riprendi' && action !== 'termina') return;
+      // IL CRUSCOTTO HA UN PROPRIETARIO (21/09/2026, revisione 2): finche` la
+      // navigazione a tappa singola e` attiva, cruscotto e tasti sono SUOI,
+      // anche con un giro in corso. Prima ogni tasto andava al giro: «Termina»
+      // sulla card della farmacia chiudeva il percorso su misura PAGATO e la
+      // navigazione verso la farmacia continuava.
+      if (cruscottoDellaTappa()) {
+        if (vecchio && action === 'termina') return;
+        window.dispatchEvent(new CustomEvent('wip-nav-banner-action', { detail: { action } }));
+        return;
+      }
       if (tourService.inCorso()) {
-        switch (action) {
-          case 'pausa': tourService.impostaPausa(!tourService.vista()?.inPausa); break;
-          case 'riascolta': riascoltaTappa(); break;
-          case 'salta': posizioneVeloce((p) => { void tourService.salta(p); }); break;
-          case 'ricalcola': posizioneVeloce((p) => { void tourService.ricalcolaDaQui(p); }); break;
-          case 'termina': {
-            const chiudi = () => { tourService.termina(); setGiroInCorso(false); };
-            if (!vecchio) { chiudi(); break; }
-            const chiedi = () => {
-              if (!tourService.inCorso()) return;
-              const L = linguaCorrente();
-              const domanda = tourService.vista()?.modo === 'percorso'
-                ? getTranslation('pc_termina_conferma', L)
-                : `${getTranslation('tour_termina', L)}?`;
-              // Senza finestra di conferma non si chiude: nel dubbio il giro resta.
-              if (typeof window.confirm === 'function' && window.confirm(domanda)) chiudi();
-            };
-            // La domanda a pagina VISIBILE: consegnata a una pagina ancora
-            // nascosta, la finestra bloccherebbe il JS senza nessuno a rispondere.
-            if (document.visibilityState === 'visible') chiedi();
-            else {
-              const quandoVisibile = () => {
-                if (document.visibilityState !== 'visible') return;
-                document.removeEventListener('visibilitychange', quandoVisibile);
-                chiedi();
-              };
-              document.addEventListener('visibilitychange', quandoVisibile);
-            }
-            break;
-          }
-        }
+        catena = catena
+          .then(() => riallineaSeScongelato())
+          .catch(() => { /* senza riallineamento si applica lo stesso, come prima */ })
+          .then(() => { if (tourService.inCorso()) applicaAzioneGiro(action, vecchio); })
+          .catch(() => { /* un'azione fallita non ferma le seguenti */ });
         return;
       }
       // Navigazione a tappa singola (gratis, si rifa` con un tocco): un
@@ -575,6 +612,12 @@ export default function App() {
   // fermo sull'ultimo stato per sempre.
   const firmaBannerRef = useRef<string>('');
   const bannerAttivoRef = useRef<boolean>(false);
+  // Il giro ha acceso il servizio nativo per il SUO cruscotto (proprietario
+  // 'giro', 21/09/2026): va rilasciato a fine giro anche se il giro e` finito
+  // mentre il cruscotto era della tappa singola (lì l'effetto non spegne nulla).
+  const servizioGiroRef = useRef<boolean>(false);
+  // Ridisegno forzato del cruscotto del giro, senza aspettare il fix dopo.
+  const [ridisegnaBanner, setRidisegnaBanner] = useState(0);
   // SCHERMO SPENTO (18/09/2026): mentre la pagina era congelata il cruscotto
   // l'ha ridisegnato il follower nativo, col SUO titolo («nome · 300 m»). Al
   // risveglio (evento di lib/nav/navNativo) si azzera la firma: il prossimo
@@ -583,12 +626,39 @@ export default function App() {
   useEffect(() => {
     const azzera = () => { firmaBannerRef.current = ''; };
     window.addEventListener('wip-nav-nativo-progresso', azzera);
-    return () => window.removeEventListener('wip-nav-nativo-progresso', azzera);
+    // LA TAPPA SINGOLA HA LASCIATO IL CRUSCOTTO (21/09/2026, revisione 2).
+    // Con un giro in corso lo lascia acceso (su iOS una Live Activity chiusa
+    // dal background non si riapre) e il giro lo riprende SUBITO, da capo,
+    // sulla stessa notifica/Live Activity; se il giro non c'e` piu`,
+    // `bannerAttivoRef` non resta vero per sempre.
+    const libero = () => { firmaBannerRef.current = ''; bannerAttivoRef.current = false; setRidisegnaBanner(n => n + 1); };
+    window.addEventListener('wip-cruscotto-tappa-libero', libero);
+    // PAGINA RICREATA CON UN PERCORSO NATIVO ORFANO (21/09/2026, iOS: la
+    // WebView ricaricata dopo la morte del processo WebContent non richiama
+    // load() del plugin). navNativo l'ha gia` svuotato; qui si chiude il
+    // cruscotto che il follower orfano aggiornava (o quello ripreso da
+    // riaggancia() a freddo) — solo se non c'e` nessuno a cui appartiene.
+    const orfano = () => {
+      if (tourService.inCorso() || proprietarioNativo() !== null || cruscottoDellaTappa()) return;
+      locationService.updateNavBanner('', '', false).catch(() => {});
+    };
+    window.addEventListener('wip-nav-nativo-orfano', orfano);
+    return () => {
+      window.removeEventListener('wip-nav-nativo-progresso', azzera);
+      window.removeEventListener('wip-cruscotto-tappa-libero', libero);
+      window.removeEventListener('wip-nav-nativo-orfano', orfano);
+    };
   }, []);
   useEffect(() => {
+    // IL CRUSCOTTO E` DELLA TAPPA SINGOLA finche` e` attiva (21/09/2026,
+    // revisione 2): il giro non lo sovrascrive e non lo spegne. Lo riprende da
+    // capo quando lei lascia ('wip-cruscotto-tappa-libero', qui sopra).
+    if (cruscottoDellaTappa()) { firmaBannerRef.current = ''; return; }
     // IN PAUSA IL CRUSCOTTO RESTA (03/09/2026): prima spariva, e dalla lock
     // screen non c'era modo di riprendere. Ora dice «In pausa» col tasto play.
     if (!vistaGiro || vistaGiro.stato === 'FINITO' || !vistaGiro.nomeTappa) {
+      const eraMio = servizioGiroRef.current;
+      servizioGiroRef.current = false;
       if (bannerAttivoRef.current) {
         bannerAttivoRef.current = false;
         firmaBannerRef.current = '';
@@ -596,8 +666,8 @@ export default function App() {
         // misura a cuffie spente, 03/09/2026): vedi useWalkingNavigation.
         locationService.updateNavBanner('', '', false)
           .catch(() => {})
-          .finally(() => { locationService.rilasciaServizioNativoPerNav().catch(() => {}); });
-      }
+          .finally(() => { if (eraMio) locationService.rilasciaServizioNativoPerNav('giro').catch(() => {}); });
+      } else if (eraMio) locationService.rilasciaServizioNativoPerNav('giro').catch(() => {});
       return;
     }
     const L = linguaCorrente();
@@ -657,9 +727,14 @@ export default function App() {
     // percorso su misura a cuffie spente non ne avrebbe uno, e senza
     // servizio il cruscotto a display spento non esiste. Con le cuffie
     // accese non fa nulla. Vedi locationService.assicuraServizioNativoPerNav.
-    if (primaVolta) locationService.assicuraServizioNativoPerNav().catch(() => {}).finally(invia);
+    // (21/09/2026) Col proprietario 'giro': il servizio si spegne solo quando
+    // lasciano sia il giro sia la tappa singola.
+    if (primaVolta) {
+      servizioGiroRef.current = true;
+      locationService.assicuraServizioNativoPerNav('giro').catch(() => {}).finally(invia);
+    }
     else invia();
-  }, [vistaGiro]);
+  }, [vistaGiro, ridisegnaBanner]);
 
   // Località predefinita del profilo. Prima era una costante con un setter
   // vuoto: "Usa posizione attuale" e la ricerca città confermavano ma non
@@ -823,6 +898,11 @@ export default function App() {
   // flusso di pagamento/pass, niente logica nuova.
   useEffect(() => {
     const handleNavArrived = (e: any) => {
+      // (21/09/2026) Arrivo annunciato dal follower nativo a schermo spento e
+      // riferito al risveglio (`daNativo`): lì il geofence nativo ha già dato
+      // arrivo e guida. Aprire adesso la scheda in autoPlay la farebbe partire
+      // magari mezz'ora dopo e lontano. PlanScreen segna comunque la tappa.
+      if (e?.detail?.daNativo) return;
       const poiId = e?.detail?.poiId;
       if (!poiId || isSyntheticStopId(poiId)) return;
       // Stesso dedupe e stesso cooldown degli altri dispatcher (trigger web,
@@ -969,7 +1049,19 @@ export default function App() {
         // Le guide/audiolibri vivono nell'Archivio del Piano.
         setMountedTabs(prev => prev.has("plan") ? prev : new Set(prev).add("plan"));
         setActiveTab('plan');
-        setTimeout(() => window.dispatchEvent(new CustomEvent('wip-apri-archivio')), 300);
+        if (d.id) {
+          // (20/09/2026) Con l'hash la guida si APRE, nel suo visualizzatore:
+          // prima il tocco portava alla lista, dove andava ricercata.
+          const detail: any = { hash: String(d.id), handled: false };
+          let tentativi = 0;
+          const spara = () => {
+            window.dispatchEvent(new CustomEvent('wip-apri-guida-premium', { detail }));
+            if (!detail.handled && ++tentativi < 40) setTimeout(spara, 300);
+          };
+          setTimeout(spara, 50);
+        } else {
+          setTimeout(() => window.dispatchEvent(new CustomEvent('wip-apri-archivio')), 300);
+        }
       } else if (tipo === 'museo') {
         // Un museo scaricato (pacchettoMuseo.ts): riapre la visita
         // dall'ARCHIVIO offline in Vision (CameraScreen consuma la richiesta
@@ -1019,6 +1111,24 @@ export default function App() {
       } catch {}
     })();
     return () => { cancelled = true; };
+  }, [permissionsGranted]);
+
+  // CONSENSO AI AL PRIMO AVVIO (22/09/2026, sesto rifiuto Apple 5.1.1(i)/5.1.2(i)
+  // sulla build 190, «we continued to notice»). La finestra esisteva gia', ma
+  // compariva solo quando si toccava chat, AI Scan o itinerari: il revisore
+  // (iPad) non ci e' passato e ha concluso che il permesso non viene chiesto.
+  // Ora la richiesta arriva UNA volta, subito dopo i permessi di sistema e prima
+  // di qualunque funzione, cosi' nessun invio puo' precederla. Il «no» resta non
+  // ricordato (aiConsent.ts): le singole funzioni richiedono al bisogno.
+  useEffect(() => {
+    if (!permissionsGranted) return;
+    if (haConsensoAi()) return;
+    try { if (localStorage.getItem('wip_ai_consent_asked_v1') === 'true') return; } catch {}
+    const timer = window.setTimeout(() => {
+      try { localStorage.setItem('wip_ai_consent_asked_v1', 'true'); } catch {}
+      void chiediConsensoAi();
+    }, 900);
+    return () => window.clearTimeout(timer);
   }, [permissionsGranted]);
 
   const handleToggleAudioGuide = useCallback((active: boolean) => {
@@ -1099,6 +1209,14 @@ export default function App() {
     // Le audioguide acquistate sono PERSONALI: la cache dei POI posseduti non
     // deve sopravvivere al cambio utente (29/08/2026).
     try { azzeraPoiPosseduti(); } catch { /* niente */ }
+
+    // Il service worker tiene per 24 ore le risposte di Supabase
+    // ('supabase-cache', vite.config.ts) e le indicizza per URL, non per
+    // utente: senza rete l'account successivo poteva riavere una risposta
+    // dell'uscente. Le tile e gli MP3 stanno in altre cache e restano.
+    try {
+      if (typeof caches !== 'undefined') caches.delete('supabase-cache').catch(() => {});
+    } catch { /* Cache API non disponibile */ }
 
     wipeLocalUserData();
   }, [language]);
@@ -1327,9 +1445,15 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.user?.id]);
   useEffect(() => {
-    const apri = () => {
+    const apri = (e: Event) => {
+      // (20/09/2026) La notifica dice DOVE sta la cosa pronta e il tocco porta
+      // li': cartella «Guide Premium» per una guida, «Itinerari» altrimenti
+      // (dati.tipo arriva dal server, generazionePronta).
+      const dati = (e as CustomEvent).detail || {};
+      try { sessionStorage.setItem('wip_apri_archivio', String(dati.tipo || '') === 'guida' ? 'guide' : 'itinerari'); } catch { /* niente */ }
+      setMountedTabs(prev => prev.has("plan") ? prev : new Set(prev).add("plan"));
       setActiveTab('plan');
-      // PlanScreen legge l'evento e apre «I miei itinerari» (guide comprese).
+      // PlanScreen legge l'evento (e la chiave qui sopra) e apre l'archivio.
       setTimeout(() => window.dispatchEvent(new CustomEvent('wip-apri-archivio')), 300);
     };
     window.addEventListener('wip-notifica-apri', apri);

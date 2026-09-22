@@ -10,6 +10,7 @@ import { locationService, parseDuetLines } from '../../services/locationService'
 import { speakAudioguide } from '../../services/ttsService';
 import { getApiUrl, apiFetch } from '../../lib/api';
 import { notify } from '../../lib/toast';
+import { chiediConsensoAi } from '../../lib/aiConsent';
 import { avviaAscolto, voceDisponibile, type SessioneVoce } from '../../lib/voceInput';
 
 export type GuideRegister = 'standard' | 'breve' | 'bambini' | 'duetto';
@@ -222,6 +223,9 @@ export default function PoiAudioPlayer({
   const doAsk = async (testoParlato?: string) => {
     const q = (testoParlato ?? askQuestion).trim();
     if (q.length < 3 || askBusy) return;
+    // Consenso AI di terze parti (App Store 5.1.2(i), 22/09/2026): la domanda
+    // scritta o dettata dall'utente va a un modello esterno.
+    if (!(await chiediConsensoAi())) return;
     setAskBusy(true);
     setAskAnswer('');
     try {

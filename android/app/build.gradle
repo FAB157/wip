@@ -83,14 +83,16 @@ android {
             // ma mai USATO: l'APK/AAB di release usciva firmato con la chiave di
             // debug (o non firmato), quindi rifiutato dal Play Store e non
             // aggiornabile sopra un'installazione esistente.
-            // Se keystore.properties non c'è (CI, altra macchina) si ricade
-            // sulla firma di debug: la build passa, ma l'artefatto NON è
-            // pubblicabile — da qui l'avviso in console.
+            // Se keystore.properties non c'è (CI, altra macchina) la firma
+            // ricade su quella di debug, ma la build di release FALLISCE
+            // (vedi taskGraph.whenReady in fondo al file): prima bastava un
+            // avviso in console, che in un log di Gradle non legge nessuno, e
+            // ne usciva un AAB non pubblicabile. Chi vuole davvero una release
+            // firmata debug lo dice: -PallowDebugSignedRelease=true
             if (keystorePropertiesFile.exists()) {
                 signingConfig signingConfigs.release
             } else {
                 signingConfig signingConfigs.debug
-                logger.warn("ATTENZIONE: android/keystore.properties assente: la build di release sara' firmata con la chiave di DEBUG e non e' pubblicabile sul Play Store.")
             }
         }
         debug {
@@ -147,6 +149,27 @@ dependencies {
 }
 
 apply from: 'capacitor.build.gradle'
+
+// RELEASE SENZA FIRMA VERA = ERRORE. Si guarda il grafo dei task, non la
+// configurazione: la sync di Android Studio, le build di debug e i test
+// passano anche senza keystore; si ferma solo chi sta davvero impacchettando
+// un APK/AAB di release (packageRelease, packageReleaseBundle, signReleaseBundle).
+def firmaReleaseMancante = !keystorePropertiesFile.exists() &&
+        !(project.findProperty('allowDebugSignedRelease') ?: 'false').toString().toBoolean()
+def percorsoApp = project.path
+gradle.taskGraph.whenReady { grafo ->
+    if (!firmaReleaseMancante) return
+    def impacchetta = grafo.allTasks.find {
+        it.project.path == percorsoApp && it.name ==~ /(package|sign)Release(Bundle)?/
+    }
+    if (impacchetta != null) {
+        throw new GradleException(
+            "android/keystore.properties assente: '${impacchetta.name}' produrrebbe una release firmata con la chiave di DEBUG, " +
+            "non pubblicabile sul Play Store e non aggiornabile sopra un'installazione esistente. " +
+            "Rimetti keystore.properties, oppure (solo per una prova) aggiungi -PallowDebugSignedRelease=true"
+        )
+    }
+}
 
 try {
     def servicesJSON = file('google-services.json')

@@ -14,10 +14,14 @@ import fs from 'fs';
 import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 
+// SEMINA_DIR (16/09/2026): stesso bug di mappe-pdf-rasterizza.mjs — un
+// percorso Windows hardcoded rendeva lo script muto sul droplet (env={},
+// "Nessuna GEMINI_API_KEY nel .env" anche quando la chiave c'era davvero).
+const BASE_DIR = process.env.SEMINA_DIR || '.';
 const env = {};
 for (const f of ['.env', '.env.local']) {
   try {
-    for (const l of fs.readFileSync(path.join('C:/progetti/itainta', f), 'utf8').split(/\r?\n/)) {
+    for (const l of fs.readFileSync(path.join(BASE_DIR, f), 'utf8').split(/\r?\n/)) {
       const m = l.match(/^([A-Z0-9_]+)\s*=\s*(.*)$/);
       if (m) env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
     }
@@ -38,7 +42,7 @@ async function chiediGemini(testo, mime, b64) {
   for (let t = 0; t < clients.length; t++) {
     const client = clients[(giro++) % clients.length];
     try {
-      const res = await client.models.generateContent({ model: 'gemini-3.5-flash-lite', contents: [{ role: 'user', parts: [{ text: testo }, { inlineData: { mimeType: mime, data: b64 } }] }], config: { responseMimeType: 'application/json' } });
+      const res = await client.models.generateContent({ model: 'gemini-3.5-flash', contents: [{ role: 'user', parts: [{ text: testo }, { inlineData: { mimeType: mime, data: b64 } }] }], config: { responseMimeType: 'application/json' } });
       const j = jsonDa(res?.text); if (j) return j;
     } catch (e) { console.log(`     gemini (chiave ${t + 1}): ${String(e?.message || e).slice(0, 100)}`); await dormi(2000); }
   }

@@ -10,7 +10,7 @@ import {
   memo,
 } from "react";
 import { createPortal } from "react-dom";
-import { getApiUrl } from "../lib/api";
+import { getApiUrl, apiFetch } from "../lib/api";
 import {
   CATEGORY_COLORS,
   CATEGORY_EMOJIS,
@@ -491,8 +491,16 @@ function CachedTiles({ url, attribution }: { url: string; attribution: string })
  * e il satellite rimasto acceso dalla volta prima non ripartiva.
  * Il perche' delle scelte (fonte, quote, etichette) sta accanto a
  * `satelliteActive` in MapArea.
+ *
+ * CONTEGGIO TILE (18/09/2026): quando `usaChiave` e' vero, ogni tile
+ * caricata consuma il tetto gratuito da 2M/mese della chiave ArcGIS — il
+ * server lo sa solo se il client glielo dice. Non un invio per tile (100
+ * tile in una schermata = 100 richieste inutili): si accumula in un ref e
+ * si manda un totale ogni 20 tile o ogni 15 secondi, quel che arriva prima,
+ * e un'ultima volta allo smontaggio con `sendBeacon` (sopravvive alla
+ * chiusura della pagina, un `fetch` normale no).
  */
-function SfondoSatellite({ urlFoto, urlEtichette }: { urlFoto: string; urlEtichette: string }) {
+function SfondoSatellite({ urlFoto, urlEtichette, usaChiave }: { urlFoto: string; urlEtichette: string; usaChiave: boolean }) {
   const map = useMap();
   useEffect(() => {
     const foto = L.tileLayer(
@@ -507,13 +515,42 @@ function SfondoSatellite({ urlFoto, urlEtichette }: { urlFoto: string; urlEtiche
       },
     );
     const etichette = L.tileLayer(urlEtichette, { zIndex: 4, maxNativeZoom: 20, maxZoom: 22 });
+
+    let accumulate = 0;
+    const invia = (finale = false) => {
+      if (accumulate === 0) return;
+      const corpo = JSON.stringify({ count: accumulate });
+      accumulate = 0;
+      try {
+        if (finale && navigator.sendBeacon) {
+          navigator.sendBeacon(getApiUrl('/api/maps/satellite-tile-usage'), new Blob([corpo], { type: 'application/json' }));
+        } else {
+          fetch(getApiUrl('/api/maps/satellite-tile-usage'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: corpo, keepalive: finale }).catch(() => {});
+        }
+      } catch { /* un conteggio perso non deve rompere la mappa */ }
+    };
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const onTileLoad = () => {
+      accumulate++;
+      if (accumulate >= 20) invia();
+    };
+    if (usaChiave) {
+      foto.on('tileload', onTileLoad);
+      timer = setInterval(() => invia(), 15000);
+    }
+
     foto.addTo(map);
     etichette.addTo(map);
     return () => {
+      if (usaChiave) {
+        foto.off('tileload', onTileLoad);
+        if (timer) clearInterval(timer);
+        invia(true);
+      }
       map.removeLayer(foto);
       map.removeLayer(etichette);
     };
-  }, [map, urlFoto, urlEtichette]);
+  }, [map, urlFoto, urlEtichette, usaChiave]);
   return null;
 }
 
@@ -817,6 +854,51 @@ function isIndoorPoi(p: Poi): boolean {
 // Escape minimo per i popup HTML dei marker servizi (nomi da OSM)
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+/**
+ * FUMETTI DEI LIVELLI SEMPRE PIENI (21/09/2026, committente: «deve essere tutto arricchito — le schede solo dei POI culturali,
+ * il resto la schedina»). I punti dei livelli (gusto, sentieri, ciclabili, shopping, lusso, neve, spiagge) aprono un fumetto
+ * statico: nome e, quando c'e', una riga. All'apertura qui si chiede alla stessa rotta dell'app la versione VELOCE
+ * (`fast`, niente modello): testo breve da una fonte o riga dei dati veri, e foto del luogo. Si aggiunge in fondo al
+ * fumetto. `salva:false` per i punti che NON sono in shared_pois (neve, spiagge): nessuna riga nuova, cache sul server.
+ * Una sola richiesta per punto e per sessione; ospiti: il server risponde 401 e il fumetto resta com'e'.
+ */
+const cacheFumetti = new Map<string, { testo: string; foto: string } | null>();
+function arricchisciFumetto(
+  marker: L.Marker,
+  p: { id: string; name: string; lat: number; lon: number; category?: string; poiType?: string; testo?: string; salva?: boolean },
+  language: string,
+) {
+  const chiave = `${p.id}|${language}`;
+  marker.on('popupopen', async (ev: any) => {
+    const radice = ev?.popup?.getElement?.()?.querySelector?.('.leaflet-popup-content > div') as HTMLElement | null;
+    if (!radice || radice.querySelector('[data-wip-arricchito]')) return;
+    const box = document.createElement('div');
+    box.setAttribute('data-wip-arricchito', '1');
+    box.style.cssText = 'margin-top:6px;';
+    radice.appendChild(box);
+    const disegna = (r: { testo: string; foto: string } | null) => {
+      if (!r || !box.isConnected) return;
+      const gia = String(p.testo || '').trim();
+      const testo = r.testo && r.testo.trim() !== gia ? r.testo : '';
+      box.innerHTML = `${r.foto ? `<img src="${escapeHtml(r.foto)}" alt="" loading="lazy" referrerpolicy="no-referrer" style="display:block;width:100%;max-height:120px;object-fit:cover;border-radius:6px;margin-bottom:5px;" onerror="this.remove()">` : ''}${testo ? `<div style="font-size:11px;color:#374151;line-height:1.35;">${escapeHtml(testo.length > 260 ? testo.slice(0, 257) + '…' : testo)}</div>` : ''}`;
+      ev.popup.update?.();
+    };
+    if (cacheFumetti.has(chiave)) { disegna(cacheFumetti.get(chiave) || null); return; }
+    try {
+      const r = await apiFetch(getApiUrl('/api/poi/enrich'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: p.id, name: p.name, lat: p.lat, lon: p.lon, category: p.category, subCategory: p.poiType, lang: language, fast: true, mode: 'short', ...(p.salva === false ? { salva: false } : {}) }),
+      }, 25000);
+      if (!r.ok) { cacheFumetti.set(chiave, null); return; }
+      const j = await r.json();
+      const esito = { testo: String(j?.description_short || j?.riga_dati || '').trim(), foto: String(j?.thumbnail || '').trim() };
+      cacheFumetti.set(chiave, esito);
+      disegna(esito);
+    } catch { /* rete assente: il fumetto resta com'era */ }
+  });
 }
 
 import PoiPopupContent from "./PoiPopupContent";
@@ -1652,7 +1734,7 @@ function MapArea({
         className: `wip-${category}-marker`,
         ...cerchioMarkerOpts(),
       });
-      L.marker([Number(p.lat), Number(p.lon)], { icon })
+      const mk = L.marker([Number(p.lat), Number(p.lon)], { icon })
         .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
           <div style="font-size:12px;font-weight:700;color:#111827;">${emoji} ${escapeHtml(p.name || '')}</div>
           <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(p.description_short || '')}</div>
@@ -1660,6 +1742,7 @@ function MapArea({
           ${p.contact_phone ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;">${escapeHtml(p.contact_phone)}</div>` : ''}
         </div>`)
         .addTo(group);
+      arricchisciFumetto(mk, { id: String(p.id), name: String(p.name || ''), lat: Number(p.lat), lon: Number(p.lon), category, poiType: String(p.poi_type || ''), testo: p.description_short || '' }, language);
     }
   }, [language]);
 
@@ -2006,13 +2089,14 @@ function MapArea({
           className: 'wip-sentiero-marker',
           ...cerchioMarkerOpts(),
         });
-        L.marker([Number(s.lat), Number(s.lon)], { icon })
+        const mkS = L.marker([Number(s.lat), Number(s.lon)], { icon })
           .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:230px;">
             <div style="font-size:12px;font-weight:700;color:#111827;">${emojiFonte} ${escapeHtml(s.name || '')}</div>
             <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(s.description_short || '')}</div>
             <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_punto_partenza_osm', language)}</div>
           </div>`)
           .addTo(group);
+        arricchisciFumetto(mkS, { id: String(s.id), name: String(s.name || ''), lat: Number(s.lat), lon: Number(s.lon), category: 'cammini', poiType: 'trail', testo: s.description_short || '' }, language);
       }
       // I rifugi lungo il cammino, dalla tabella dei servizi.
       if (rifugiQui) {
@@ -2030,13 +2114,14 @@ function MapArea({
             className: 'wip-rifugio-marker',
             ...cerchioMarkerOpts(),
           });
-          L.marker([Number(r.lat), Number(r.lon)], { icon })
+          const mkR = L.marker([Number(r.lat), Number(r.lon)], { icon })
             .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;">
               <div style="font-size:12px;font-weight:700;color:#111827;">🏔 ${escapeHtml(r.name || '')}</div>
               <div style="font-size:11px;color:#374151;margin-top:2px;">${getTranslation('mp_rifugio_alpino', language)}</div>
               <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_osm_contributori', language)}</div>
             </div>`)
             .addTo(group);
+          if (r.name) arricchisciFumetto(mkR, { id: `util-${r.id}`, name: String(r.name), lat: Number(r.lat), lon: Number(r.lon), category: 'neve', poiType: 'rifugio_alpino', salva: false }, language);
         }
       }
 
@@ -2235,13 +2320,14 @@ function MapArea({
           className: 'wip-ciclabile-marker',
           ...cerchioMarkerOpts(),
         });
-        L.marker([Number(c.lat), Number(c.lon)], { icon })
+        const mkC = L.marker([Number(c.lat), Number(c.lon)], { icon })
           .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:230px;">
             <div style="font-size:12px;font-weight:700;color:#111827;">${emojiFonte} ${escapeHtml(c.name || '')}</div>
             <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(c.description_short || '')}</div>
             <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_punto_partenza_osm', language)}</div>
           </div>`)
           .addTo(group);
+        arricchisciFumetto(mkC, { id: String(c.id), name: String(c.name || ''), lat: Number(c.lat), lon: Number(c.lon), category: 'cammini', poiType: 'trail', testo: c.description_short || '' }, language);
       }
 
       const nomi = new Map<string, string>((data || []).map((c: any) => [String(c.id), String(c.name || '')]));
@@ -2410,7 +2496,7 @@ function MapArea({
           className: 'wip-strada-osm-marker',
           ...cerchioMarkerOpts(),
         });
-        L.marker([Number(s.lat), Number(s.lon)], { icon })
+        const mkV = L.marker([Number(s.lat), Number(s.lon)], { icon })
           .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
             <div style="font-size:12px;font-weight:700;color:#111827;">🍇 ${escapeHtml(s.name || '')}</div>
             <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(s.description_short || '')}</div>
@@ -2418,6 +2504,7 @@ function MapArea({
             <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_punto_partenza_percorso', language)}</div>
           </div>`)
           .addTo(group);
+        arricchisciFumetto(mkV, { id: String(s.id), name: String(s.name || ''), lat: Number(s.lat), lon: Number(s.lon), category: 'enogastronomia', poiType: 'strada_del_vino', testo: s.description_short || '' }, language);
       }
 
       // 2-bis) I TRACCIATI. Le strade del gusto non esistono su OSM come
@@ -2487,7 +2574,7 @@ function MapArea({
             className: 'wip-gusto-marker',
             ...cerchioMarkerOpts(produttore ? 30 : MARKER_CERCHIO_PX),
           });
-          L.marker([Number(p.lat), Number(p.lon)], { icon })
+          const mkG = L.marker([Number(p.lat), Number(p.lon)], { icon })
             .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
               <div style="font-size:12px;font-weight:700;color:#111827;">${emoji} ${escapeHtml(p.name || '')}</div>
               <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(p.description_short || '')}</div>
@@ -2496,6 +2583,7 @@ function MapArea({
               <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_verifica_orari_osm', language)}</div>
             </div>`)
             .addTo(group);
+          arricchisciFumetto(mkG, { id: String(p.id), name: String(p.name || ''), lat: Number(p.lat), lon: Number(p.lon), category: 'enogastronomia', poiType: String(p.poi_type || ''), testo: p.description_short || '' }, language);
         }
       }
 
@@ -2619,23 +2707,39 @@ function MapArea({
   //  · zIndex 2 — le foto dall'alto di ESRI World Imagery. NON Mapbox
   //    (ordine del committente, 18/09/2026: «non usare Mapbox» — la prima
   //    stesura usava `mapbox.satellite`, che oltre la fascia gratuita si
-  //    paga a consumo). L'indirizzo pubblico di Esri non chiede chiave; se
-  //    un giorno si apre un conto ArcGIS Location Platform (2 milioni di
-  //    tile al mese gratis, ed e' la via in regola per un'app commerciale)
-  //    basta mettere VITE_ARCGIS_API_KEY e si passa da solo all'indirizzo
-  //    con la chiave. Il layer e' spento di default;
+  //    paga a consumo). L'indirizzo, CON o SENZA il token del conto ArcGIS
+  //    Location Platform (2M tile/mese gratis), lo decide il SERVER
+  //    (`/api/maps/satellite-config`) in base al contatore mensile — non
+  //    piu' una chiave letta dal bundle: vedi il commento su
+  //    `ARCGIS_API_KEY` in server.ts. Il layer e' spento di default;
   //  · zIndex 4 — le sole ETICHETTE di CARTO (`voyager_only_labels`, stessa
   //    chiave dello sfondo): una foto aerea senza i nomi delle vie e dei
   //    paesi non si legge, e i nostri pin da soli non bastano a orientarsi.
   // In mezzo (zIndex 3) resta la copertura neve MODIS.
-  const ARCGIS_KEY = (import.meta.env.VITE_ARCGIS_API_KEY as string | undefined) || '';
-  // Esri numera {z}/{y}/{x}, non {z}/{x}/{y}.
-  const URL_FOTO_SATELLITE = ARCGIS_KEY
-    ? `https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token=${ARCGIS_KEY}`
-    : 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+  const [configSatellite, setConfigSatellite] = useState<{ urlFoto: string; usaChiave: boolean }>({
+    urlFoto: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', // ripiego finché il server non risponde
+    usaChiave: false,
+  });
   const [satelliteActive, setSatelliteActive] = useState(() => {
     try { return localStorage.getItem('wip_satellite_enabled') === '1'; } catch { return false; }
   });
+  // Chiesta solo quando lo sfondo si accende (mai a chip spenta) e poi ogni
+  // 5 minuti finché resta acceso: il server puo' far scadere il tetto
+  // mentre l'utente sta guardando la mappa, e senza un ricontrollo l'ultima
+  // decisione ("usa la chiave") resterebbe valida per l'intera sessione.
+  useEffect(() => {
+    if (!satelliteActive) return;
+    let annullato = false;
+    const chiedi = () => {
+      fetch(getApiUrl('/api/maps/satellite-config'))
+        .then(r => r.ok ? r.json() : null)
+        .then(j => { if (!annullato && j?.urlFoto) setConfigSatellite({ urlFoto: j.urlFoto, usaChiave: !!j.useKey }); })
+        .catch(() => { /* resta il ripiego pubblico gia' impostato */ });
+    };
+    chiedi();
+    const id = setInterval(chiedi, 5 * 60 * 1000);
+    return () => { annullato = true; clearInterval(id); };
+  }, [satelliteActive]);
 
   const toggleSatellite = useCallback(() => {
     setSatelliteActive((prev) => {
@@ -2686,6 +2790,7 @@ function MapArea({
           ...cerchioMarkerOpts(),
         });
         const marker = L.marker([Number(l.lat), Number(l.lon)], { icon });
+        if (l.name) arricchisciFumetto(marker, { id: `util-${l.id}`, name: String(l.name), lat: Number(l.lat), lon: Number(l.lon), category: 'neve', poiType: sub, salva: false }, language);
         marker.bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:170px;max-width:230px;">
           <div style="font-size:12px;font-weight:700;color:#111827;">${emoji[sub] || '❄️'} ${escapeHtml(l.name || '')}</div>
           <div style="font-size:11px;color:#374151;margin-top:2px;">${escapeHtml(etichetta[sub] || '')}</div>
@@ -3059,6 +3164,7 @@ function MapArea({
             <div style="font-size:9px;color:#6b7280;margin-top:4px;line-height:1.3;">${getTranslation('mp_classificazione_eea', language)}</div>
           </div>`
         );
+        arricchisciFumetto(marker, { id: `bw-${site.lat.toFixed(4)}_${site.lon.toFixed(4)}`, name: String(site.name || ''), lat: site.lat, lon: site.lon, category: 'natura', poiType: 'spiagge', salva: false }, language);
         group.addLayer(marker);
       }
       // Il fetch è async: nel frattempo l'utente può aver zoomato sotto soglia
@@ -3433,18 +3539,37 @@ function MapArea({
        * luoghi (contenimento jsonb), solo a vista ravvicinata: senza indice
        * sulla galleria una bbox continentale sarebbe una scansione.
        */
-      const vistaRavvicinata = (north - south) <= 2 && (east - west) <= 2;
-      const allegati = vistaRavvicinata
-        ? supabase
+      /**
+       * (18/09/2026) LA STRADA VERA E' IL SERVER: /api/community/pins parte
+       * dalle Vision approvate e arriva ai luoghi per chiave primaria, a
+       * qualunque zoom. Il contenimento jsonb qui sotto, misurato oggi, fa
+       * 2,5 s su 0,3° e va in timeout (57014) su 2°: con la soglia a 2° la
+       * Lecciona non compariva MAI, e l'errore finiva nel catch in silenzio.
+       * Resta solo come ripiego (server irraggiungibile) e solo sotto 0,3°.
+       */
+      const daServer: Promise<any[] | null> = fetch(
+        getApiUrl(`/api/community/pins?south=${south.toFixed(5)}&west=${west.toFixed(5)}&north=${north.toFixed(5)}&east=${east.toFixed(5)}`),
+        { signal: AbortSignal.timeout(12000) }
+      )
+        .then(r => (r.ok ? r.json() : null))
+        .then(j => (Array.isArray(j?.pins) ? j.pins : null))
+        .catch(() => null);
+      const [{ data }, pinsServer] = await Promise.all([nati, daServer]);
+      let dataAllegati: any[] = [];
+      if (pinsServer) {
+        // `photos` = le foto approvate del luogo: la prima va nel pin.
+        dataAllegati = pinsServer.map((p: any) => ({ ...p, description_ai: p.description, foto_community: Array.isArray(p.photos) ? p.photos : [] }));
+      } else if ((north - south) <= 0.3 && (east - west) <= 0.3) {
+        const { data: ripiego } = await supabase
           .from('shared_pois')
           .select(colonne)
           .neq('category', 'community')
           .contains('images_json', [{ source: 'wip_community' }])
           .gte('lat', south).lte('lat', north)
           .gte('lon', west).lte('lon', east)
-          .limit(300)
-        : Promise.resolve({ data: [] as any[] });
-      const [{ data }, { data: dataAllegati }] = await Promise.all([nati, allegati]);
+          .limit(300);
+        dataAllegati = ripiego || [];
+      }
       // Denylist status COMPLETA (isVisiblePoiStatus): il solo check su
       // 'draft' lasciava visibili i POI community auto-sospesi dalle
       // segnalazioni utente (status 'needs_revision') e quelli rifiutati.
@@ -3462,23 +3587,32 @@ function MapArea({
         } catch { return null; }
       };
       const visti = new Set<string>();
-      return [...(data || []), ...(dataAllegati || [])]
+      // Prima le righe del server: portano le foto approvate del luogo.
+      return [...dataAllegati, ...(data || [])]
         .filter((i: any) => isVisiblePoiStatus(i) && i.name && !blockedIds.has(String(i.id)))
         .filter((i: any) => { const k = String(i.id); if (visti.has(k)) return false; visti.add(k); return true; })
-        .map((i: any) => ({
-          id: i.id,
-          lat: Number(i.lat),
-          lon: Number(i.lon),
-          name: i.name,
-          category: 'community',
-          baseCategory: 'community',
-          subCategory: i.poi_type || (i.category !== 'community' ? i.category : null) || 'community',
-          description: i.description_ai || i.description_short,
-          image_url: i.image_url || fotoCommunity(i),
-          is_gem: false,
-          isFromDb: true,
-          status: i.status || 'verified'
-        } as Poi));
+        .map((i: any) => {
+          // Il pin community mostra la foto DELLA COMMUNITY (nel segnaposto e
+          // nel popup), anche quando il luogo ufficiale ha gia' la sua
+          // copertina da Wikimedia: quella resta sul pin della sua categoria.
+          const fotoPin: string | null = (Array.isArray(i.foto_community) && i.foto_community[0]) || fotoCommunity(i)
+            || (i.category === 'community' ? i.image_url : null) || null;
+          return {
+            id: i.id,
+            lat: Number(i.lat),
+            lon: Number(i.lon),
+            name: i.name,
+            category: 'community',
+            baseCategory: 'community',
+            subCategory: i.poi_type || (i.category !== 'community' ? i.category : null) || 'community',
+            description: i.description_ai || i.description_short,
+            image_url: fotoPin || i.image_url,
+            fotoPin,
+            is_gem: false,
+            isFromDb: true,
+            status: i.status || 'verified'
+          } as Poi;
+        });
     } catch {
       return [];
     }
@@ -4476,8 +4610,10 @@ function MapArea({
       // I POI community non devono dipendere dal clamp 25km / limit 1000
       // della RPC: fetch dedicato per bbox e merge (la versione bbox vince
       // sugli eventuali doppioni della RPC).
+      let communityVince: Poi[] = [];
       if (activeCategories.includes('community')) {
         const communityExtra = await fetchCommunityPoisInBounds(south, west, north, east);
+        communityVince = communityExtra;
         if (communityExtra.length > 0) {
           const seen = new Set(communityExtra.map(p => String(p.id)));
           dbPois = dbPois.filter(p => !seen.has(String(p.id))).concat(communityExtra);
@@ -4559,6 +4695,16 @@ function MapArea({
           dbPois = dbPois.filter(p => !visti.has(String(p.id))).concat(tematiciExtra);
           console.log(`[MapArea] +${tematiciExtra.length} POI tematici (${temAttivi.join(', ')})`);
         }
+      }
+
+      // (18/09/2026) A chip community accesa il pin community VINCE sui
+      // doppioni: le fetch dedicate qui sopra (natura, gemme, tematici…)
+      // girano dopo e si riprendevano la spiaggia della Lecciona come
+      // semplice 'beach', togliendo dalla mappa il pin con la foto. La
+      // scheda che si apre e' la stessa (stesso id), galleria compresa.
+      if (communityVince.length > 0) {
+        const idCommunity = new Set(communityVince.map(p => String(p.id)));
+        dbPois = dbPois.filter(p => !idCommunity.has(String(p.id))).concat(communityVince);
       }
 
       // Atlante dei beni vincolati: tabella a parte, quindi fetch a parte.
@@ -5116,11 +5262,20 @@ function MapArea({
       const allPois = results.flat();
 
       // 1. Crea mappe per il merge ibrido
+      // Due mappe: per ID e per coordinate. Prima ce n'era una sola, con le
+      // sole chiavi di coordinate, e il «match per ID» non trovava mai nulla:
+      // una riga del DB col nome corretto o la categoria riclassificata non
+      // superava il confronto nome+categoria del ripiego, il POI grezzo
+      // occupava l'ID e la riga curata veniva scartata al passo 3.
       const dbMap = new Map<string, Poi>();
+      const dbPerId = new Map<string, Poi>();
       dbPois.forEach(p => {
         const coordKey = `${p.lat.toFixed(4)},${p.lon.toFixed(4)}`;
         dbMap.set(coordKey, p);
+        dbPerId.set(String(p.id), p);
       });
+      let agganciPerId = 0;
+      let agganciSoloPerId = 0;
 
       const mergedPoisMap = new Map<string, Poi>();
       const newPoisToSave: Poi[] = [];
@@ -5130,9 +5285,10 @@ function MapArea({
         const idStr = String(poi.id);
         const coordKey = `${poi.lat.toFixed(4)},${poi.lon.toFixed(4)}`;
         
-        // Cerca per ID esatto o per coordinate
-        let cached = dbMap.get(idStr);
-        if (!cached) {
+        // Cerca per ID esatto o per coordinate: l'ID vince sempre.
+        const perId = dbPerId.get(idStr);
+        let cached: Poi | undefined;
+        {
           const cachedByCoord = dbMap.get(coordKey);
           // Se troviamo un POI alle stesse coordinate, uniamo SOLO se la categoria è la stessa
           // Questo evita che un "Bar" prenda la descrizione di un "Museo" (Teatro) adiacente
@@ -5153,6 +5309,11 @@ function MapArea({
               && stessoNome(cachedByCoord.name, poi.name)) {
             cached = cachedByCoord;
           }
+        }
+        if (perId) {
+          agganciPerId++;
+          if (!cached) agganciSoloPerId++;
+          cached = perId;
         }
 
         if (cached) {
@@ -5193,7 +5354,7 @@ function MapArea({
 
       // Filtra i POI in base alle categorie attualmente attive
       const finalPois = finalMergedList.filter(matchesActiveFilters);
-      console.log(`[MapArea] Hybrid Merge: Live ${allPois.length} + DB ${dbPois.length} = Merged ${finalMergedList.length}`);
+      console.log(`[MapArea] Hybrid Merge: Live ${allPois.length} + DB ${dbPois.length} = Merged ${finalMergedList.length} · agganci per ID ${agganciPerId} (di cui ${agganciSoloPerId} che il solo match per coordinate perdeva)`);
 
       // 4. Salva silenziosamente i nuovi POI scoperti nel database in background per il caching geografico
       if (newPoisToSave.length > 0) {
@@ -5842,6 +6003,11 @@ function MapArea({
       gemme:             "#0f766e",
       monumenti:         "#92400e",
       monument:          "#92400e",
+      // Targhe/lapidi commemorative (poi_type/category "memorial", es. sito
+      // plaques): mancava qui, ricadeva sul grigio generico (#6b7280) invece
+      // dell'ambra dei monumenti di cui fa parte — 13/09/2026, segnalato
+      // dall'utente su una targa a Ostiano.
+      memorial:          "#92400e",
       castle:            "#78350f",
       ruins:             "#57534e",
       archaeological_site: "#a16207",
@@ -5911,6 +6077,38 @@ function MapArea({
     // centro del comune, 23/08/2026): il pin si vede ma non finge. Contorno
     // tratteggiato e leggera trasparenza — chi guarda la mappa capisce prima
     // di aprire la scheda che quel punto indica il paese, non la porta.
+    /**
+     * PIN COMMUNITY CON LA FOTO DENTRO (18/09/2026, il committente: «le foto
+     * devono essere anche nel pin oltre che nella scheda»). Stessa goccia
+     * magenta, piu' grande (48×58) perche' in 22 px una foto non si legge; al
+     * posto dell'emoji c'e' lo scatto approvato. Se la foto non si carica
+     * l'<img> si toglie da solo e sotto resta l'emoji: mai un pin rotto.
+     */
+    const fotoPin: string = isCommunity ? String((poi as any).fotoPin || "") : "";
+    if (fotoPin && /^https?:\/\//.test(fotoPin)) {
+      const src = fotoPin.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+      const htmlFoto = `
+        <div style="position:relative;width:48px;height:58px;filter:drop-shadow(0 3px 5px rgba(0,0,0,.35));transform: rotate(calc(-1 * var(--map-rotation, 0deg)));transition: transform 0.15s ease-out;">
+          <svg viewBox="0 0 34 42" width="48" height="58" xmlns="http://www.w3.org/2000/svg" style="position:absolute;inset:0;">
+            <path d="M17 0C7.6 0 0 7.6 0 17c0 12.7 17 25 17 25S34 29.7 34 17C34 7.6 26.4 0 17 0z" fill="${bgHex}" stroke="#ffffff" stroke-width="1.5"/>
+            <circle cx="17" cy="17" r="13" fill="white"/>
+            <text x="17" y="22" text-anchor="middle" font-size="14" font-family="system-ui,sans-serif">${emoji}</text>
+          </svg>
+          <img src="${src}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none'" style="position:absolute;top:5px;left:5px;width:38px;height:38px;border-radius:50%;object-fit:cover;border:2px solid #fff;box-sizing:border-box;background:#fff;"/>
+          ${subLeftBadge ? `<div style="position:absolute;top:-4px;left:-8px;min-width:18px;height:18px;background:#fff;border-radius:9px;border:1.5px solid #e5e7eb;display:flex;align-items:center;justify-content:center;font-size:9px;box-shadow:0 1px 4px rgba(0,0,0,.25);z-index:10;">${subLeftBadge}</div>` : ""}
+          ${conPiu ? `<div class="wip-poi-piu" title="${getTranslation('tour_aggiungi', language).replace(/"/g, '&quot;')}" style="position:absolute;top:-9px;right:-9px;width:22px;height:22px;border-radius:50%;background:#ffffff;border:2px solid #059669;color:#059669;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;line-height:1;font-family:system-ui,-apple-system,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.3);cursor:pointer;z-index:11;">+</div>` : ""}
+          <div style="position:absolute;bottom:12px;right:-8px;min-width:18px;height:18px;background:#fff;border-radius:9px;border:1.5px solid #e5e7eb;display:flex;align-items:center;justify-content:center;font-size:9px;box-shadow:0 1px 4px rgba(0,0,0,.25);z-index:10;">📸</div>
+        </div>
+      `;
+      return L.divIcon({
+        html: htmlFoto,
+        className: "custom-poi-marker",
+        iconSize: [48, 58],
+        iconAnchor: [24, 58],
+        popupAnchor: [0, -58]
+      });
+    }
+
     const approssimato = (poi as any).posizioneApprossimata === true;
     const html = `
       <div style="position:relative;width:34px;height:42px;filter:drop-shadow(0 3px 5px rgba(0,0,0,.3));transform: rotate(calc(-1 * var(--map-rotation, 0deg)));transition: transform 0.15s ease-out;${approssimato ? 'opacity:.75;' : ''}">
@@ -5946,7 +6144,7 @@ function MapArea({
     // `conPiu` fa parte della chiave: senza, il primo pin disegnato deciderebbe
     // per tutti e il "+" verde non comparirebbe (o non sparirebbe entrando nel
     // giro). E` un solo bit: la cache resta efficace.
-    const cacheKey = `${poi.is_gem === true}|${poi.baseCategory || poi.category}|${poi.category || ""}|${poi.subCategory || ""}|${isAccessible(poi)}|${(poi as any).posizioneApprossimata ? 'approx' : ''}|${conPiu ? 'piu' : ''}`;
+    const cacheKey = `${poi.is_gem === true}|${poi.baseCategory || poi.category}|${poi.category || ""}|${poi.subCategory || ""}|${isAccessible(poi)}|${(poi as any).posizioneApprossimata ? 'approx' : ''}|${conPiu ? 'piu' : ''}|${(poi as any).fotoPin || ''}`;
     let icon = iconCacheRef.current.get(cacheKey);
     if (!icon) {
       icon = createPoiIcon(poi, conPiu);
@@ -6384,8 +6582,9 @@ function MapArea({
           />
           {satelliteActive && (
             <SfondoSatellite
-              urlFoto={URL_FOTO_SATELLITE}
+              urlFoto={configSatellite.urlFoto}
               urlEtichette={cartoUrl.replace('/rastertiles/voyager/', '/rastertiles/voyager_only_labels/')}
+              usaChiave={configSatellite.usaChiave}
             />
           )}
           <MapController center={center} zoom={mapZoom} />

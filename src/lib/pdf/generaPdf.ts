@@ -64,9 +64,38 @@ export const ET_ITINERARIO: Record<Lang, import('./ItinerarioPdf').ItinerarioPdf
   DE: { pagina: 'Seite', giorno: 'Tag', giorni: 'Tage', giornoSingolo: 'Tag', curatoDa: 'Reise, kuratiert von World in Pocket', intro: 'Willkommen zu deinem Reiseführer, kuratiert von World in Pocket. Diese Route führt dich zu einer besonderen Auswahl von Stationen und Sehenswürdigkeiten. Nutze die App „World in Pocket“ während des Besuchs, um interaktive Audioguides freizuschalten.', consiglioGuida: 'Tipp des Guides', tempoVisita: 'Besuchsdauer', spostamento: 'Transfer', budgetGiorno: 'Tagesbudget', totaleGiorno: 'Tagessumme', consigli: 'Tipps', suggerimenti: 'Weitere Hinweise', precauzioni: 'Vorsichtsmaßnahmen', zoneDaEvitare: 'Zu meidende Gegenden', totaleViaggio: 'Geschätzte Reisekosten', mappa: 'Routenkarte' },
 };
 
+/**
+ * COMMONS «Special:FilePath» NON SI SCARICA DAL BROWSER (20/09/2026, collaudo in
+ * Chrome: le Guide Premium uscivano in PDF SENZA NEMMENO UNA FOTO, 0,1 MB).
+ * Gli indirizzi del manifest hanno la forma
+ * `commons.wikimedia.org/w/index.php?title=Special:FilePath/<file>&width=…`
+ * (o `/wiki/Special:FilePath/…`, `Special:Redirect/file/…`): rispondono con un
+ * reindirizzamento SENZA intestazioni CORS, e `fetch` lo rifiuta («Failed to
+ * fetch»). In un <img> si vedono — per questo la guida a schermo le ha e il
+ * PDF no. L'API di Commons (con `origin=*`) restituisce la miniatura vera su
+ * upload.wikimedia.org, che il CORS lo concede. Gratis, nessuna chiave.
+ */
+async function risolviCommons(u: string): Promise<string> {
+  try {
+    const url = new URL(u);
+    if (!/(^|\.)wikimedia\.org$|(^|\.)wikipedia\.org$/i.test(url.host) || /^upload\./i.test(url.host)) return u;
+    const titolo = url.searchParams.get('title') || decodeURIComponent(url.pathname);
+    const m = titolo.match(/Special:(?:FilePath|Redirect\/file)\/(.+)$/i);
+    if (!m) return u;
+    const api = `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent('File:' + m[1].replace(/_/g, ' '))}`
+      + `&prop=imageinfo&iiprop=url&iiurlwidth=${LATO_MASSIMO}&format=json&origin=*`;
+    const r = await fetch(api, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return u;
+    const pagine = (await r.json())?.query?.pages || {};
+    const info: any = (Object.values(pagine)[0] as any)?.imageinfo?.[0];
+    return info?.thumburl || info?.url || u;
+  } catch { return u; }
+}
+
 /** Una foto come data URL, o undefined se non arriva entro 12 s / non e' un'immagine. */
 async function scaricaImmagine(url?: string | null): Promise<string | undefined> {
-  const u = String(url || '').trim();
+  let u = String(url || '').trim();
+  if (/^https?:\/\//i.test(u)) u = await risolviCommons(u);
   if (!/^https?:\/\//i.test(u) && !u.startsWith('data:')) return undefined;
   if (u.startsWith('data:image/')) return u;
   try {
@@ -78,6 +107,48 @@ async function scaricaImmagine(url?: string | null): Promise<string | undefined>
     if (/webp|gif/i.test(b.type)) return await ricodifica(b);
     return await new Promise<string>((ok, ko) => { const fr = new FileReader(); fr.onload = () => ok(String(fr.result)); fr.onerror = () => ko(fr.error); fr.readAsDataURL(b); });
   } catch { return undefined; }
+}
+
+/**
+ * La foto GIA' MISURATA e alleggerita (20/09/2026). Due motivi:
+ * - le misure servono a impaginarla intera (base.tsx › FotoIntera): senza,
+ *   finiva ritagliata in una fascia;
+ * - gli originali di Commons arrivano a 4-8 MB l'uno: sedici foto cosi'
+ *   facevano un PDF da 7 MB e, su un telefono, potevano far cadere il motore
+ *   — e allora la guida usciva dalla stampa del browser, senza foto. Sopra i
+ *   1600 px di lato si ridisegna in JPEG: in stampa non si vede differenza.
+ */
+const LATO_MASSIMO = 1600;
+async function scaricaFoto(url?: string | null): Promise<{ src: string; w: number; h: number } | undefined> {
+  let u = String(url || '').trim();
+  if (!/^https?:\/\//i.test(u) && !u.startsWith('data:image/')) return undefined;
+  if (!u.startsWith('data:')) u = await risolviCommons(u);
+  try {
+    const r = await fetch(u, u.startsWith('data:') ? {} : { signal: AbortSignal.timeout(12000), mode: 'cors' });
+    if (!r.ok) return undefined;
+    const b = await r.blob();
+    if (!/^image\/(jpeg|png|webp|gif)/i.test(b.type) || b.size > 12 * 1024 * 1024) return undefined;
+    const bmp = await createImageBitmap(b);
+    const w = bmp.width, h = bmp.height;
+    if (!(w > 0) || !(h > 0)) return undefined;
+    const scala = Math.min(1, LATO_MASSIMO / Math.max(w, h));
+    if (scala === 1 && /jpeg|png/i.test(b.type) && b.size < 900 * 1024) {
+      const src = await new Promise<string>((ok, ko) => { const fr = new FileReader(); fr.onload = () => ok(String(fr.result)); fr.onerror = () => ko(fr.error); fr.readAsDataURL(b); });
+      return { src, w, h };
+    }
+    const c = document.createElement('canvas');
+    c.width = Math.round(w * scala); c.height = Math.round(h * scala);
+    const ctx = c.getContext('2d');
+    if (!ctx) return undefined;
+    // Fondo bianco: un PNG trasparente in JPEG diventerebbe nero.
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(bmp, 0, 0, c.width, c.height);
+    return { src: c.toDataURL('image/jpeg', 0.86), w: c.width, h: c.height };
+  } catch {
+    // createImageBitmap assente o foto illeggibile: la via vecchia, senza misure.
+    const src = await scaricaImmagine(u);
+    return src ? { src, w: 0, h: 0 } : undefined;
+  }
 }
 
 async function ricodifica(b: Blob): Promise<string | undefined> {
@@ -146,20 +217,44 @@ export async function generaPdfMuseo(
   const mappeConImmagine = (mappe || []).filter((m) => m.url);
   const immaginiMappe: Record<number, string> = {};
   const immaginiTappe: Record<number, string> = {};
+  const misureTappe: Record<number, { w: number; h: number }> = {};
+  let copertina: string | undefined;
   await Promise.all([
     ...mappeConImmagine.map(async (m) => {
       const d = await scaricaImmagine(m.url);
       if (d) immaginiMappe[m.indice] = d;
     }),
     ...tappe.map(async (t, i) => {
-      const d = await scaricaImmagine(t.foto);
-      if (d) immaginiTappe[i] = d;
+      const d = await scaricaFoto(t.foto);
+      if (!d) return;
+      immaginiTappe[i] = d.src;
+      if (d.w > 0 && d.h > 0) misureTappe[i] = { w: d.w, h: d.h };
     }),
+    (async () => { copertina = (await scaricaFoto(visit.venuePhoto))?.src; })(),
   ]);
-  const copertina = await scaricaImmagine(visit.venuePhoto);
-  const doc = React.createElement(MuseumGuidaPdf, { visit, opere, mappe: mappeConImmagine, etichette: ET_MUSEO[l], immaginiMappe, immaginiTappe, copertina });
-  // Dalla pagina 2: la copertina non porta numero (stesso schema della Guida Premium).
-  return numeraPagine(await pdf(doc as any).toBlob(), ET_MUSEO[l].pagina, 2);
+  // LA GUIDA ESCE SEMPRE DA QUI (20/09/2026, committente: le guide dei musei
+  // «DEVONO ESSERE graficamente e come contenuti uguali» al PDF impaginato).
+  // Se una foto manda in errore il motore non si cade sulla stampa del
+  // browser (un elenco senza foto, con pagine bianche in coda): si riprova
+  // senza le foto delle opere, poi senza nessuna immagine. Stessa veste.
+  const tentativi: Array<Partial<import('./MuseumGuidaPdf').MuseumPdfProps>> = [
+    { immaginiMappe, immaginiTappe, misureTappe, copertina },
+    { immaginiMappe, immaginiTappe: {}, misureTappe: {}, copertina },
+    { immaginiMappe: {}, immaginiTappe: {}, misureTappe: {}, copertina: undefined },
+  ];
+  let ultimoErrore: unknown = null;
+  for (let n = 0; n < tentativi.length; n++) {
+    const immagini = tentativi[n];
+    try {
+      const doc = React.createElement(MuseumGuidaPdf, { visit, opere, mappe: mappeConImmagine, etichette: ET_MUSEO[l], ...immagini });
+      // Dalla pagina 2: la copertina non porta numero (stesso schema della Guida Premium).
+      return await numeraPagine(await pdf(doc as any).toBlob(), ET_MUSEO[l].pagina, 2);
+    } catch (e) {
+      ultimoErrore = e;
+      console.warn(`[pdf] guida museo: tentativo ${n + 1} non riuscito`, e);
+    }
+  }
+  throw ultimoErrore;
 }
 
 export async function generaPdfGuida(content: PremiumGuideContent, mediaManifest: Record<string, string>, language: unknown): Promise<Blob | null> {
@@ -173,11 +268,15 @@ export async function generaPdfGuida(content: PremiumGuideContent, mediaManifest
   for (const g of content.giorni || []) for (const p of g.pois || []) {
     richieste.push([p.poi_id, mediaManifest?.[p.poi_id] || p.image_url]);
   }
-  const cover = mediaManifest?.cover || mediaManifest?.copertina || richieste.find(([, u]) => u)?.[1];
-  const scaricate = await Promise.all([...richieste, ['cover', cover] as [string, string | undefined]].map(async ([k, u]) => [k, await scaricaImmagine(u)] as const));
+  // COPERTINA: la foto della CITTA' (committente 20/09/2026: «deve essere Londra, non un logo»). Mai la foto del
+  // primo luogo che ne ha una (poteva essere un logo, una via qualunque): senza foto della citta' la copertina esce senza.
+  const introValida = (u?: string) => (u && !/\.svg|flag|bandiera|logo|icon|locator|stripe|hex-/i.test(decodeURIComponent(u)) ? u : undefined);
+  const cover = mediaManifest?.cover || mediaManifest?.copertina || introValida(mediaManifest?.citta_intro_1);
+  const scaricate = await Promise.all([...richieste, ['cover', cover] as [string, string | undefined]].map(async ([k, u]) => [k, await scaricaFoto(u)] as const));
   const immagini: Record<string, string> = {};
-  for (const [k, d] of scaricate) if (d) immagini[k] = d;
-  const doc = React.createElement(GuidaPremiumPdf, { content, immagini, etichette: ET_GUIDA[l] });
+  const misure: Record<string, { w: number; h: number }> = {};
+  for (const [k, d] of scaricate) if (d) { immagini[k] = d.src; if (d.w > 0 && d.h > 0) misure[k] = { w: d.w, h: d.h }; }
+  const doc = React.createElement(GuidaPremiumPdf, { content, immagini, misure, etichette: ET_GUIDA[l] });
   // Dalla pagina 2: la copertina non porta numero.
   return numeraPagine(await pdf(doc as any).toBlob(), ET_GUIDA[l].pagina, 2);
 }

@@ -19,6 +19,7 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   bearing_gate_label: { IT: "Racconta solo ciò che hai davanti", EN: "Only tell me what's in front of me", FR: "Ne raconter que ce qui est devant moi", ES: "Cuenta solo lo que tienes delante", DE: "Nur erzählen, was vor dir liegt", RU: "Рассказывать только о том, что впереди", ZH: "只讲述你前方的地点" },
   bearing_gate_desc: { IT: "Se hai già superato un luogo, l'audioguida aspetta invece di partire quando ce l'hai alle spalle: riparte se torni indietro o ti giri a guardarlo. Se dopo un po' non ti sei girato, la racconta comunque.", EN: "If you've already walked past a place, the audio guide waits instead of starting when it's behind you: it starts if you turn back or turn to look at it. If you haven't turned after a while, it tells you anyway.", FR: "Si tu as déjà dépassé un lieu, l'audioguide attend au lieu de démarrer quand tu l'as dans le dos : il démarre si tu reviens ou si tu te retournes pour le regarder. Si tu ne t'es pas retourné au bout d'un moment, il le raconte quand même.", ES: "Si ya has pasado un lugar, la audioguía espera en vez de arrancar cuando lo tienes a tu espalda: arranca si vuelves atrás o te giras a mirarlo. Si al cabo de un rato no te has girado, te lo cuenta igualmente.", DE: "Wenn du einen Ort schon passiert hast, wartet der Audioguide, statt loszulegen, wenn du ihn im Rücken hast: Er startet, sobald du umkehrst oder dich danach umdrehst. Drehst du dich eine Weile nicht um, erzählt er ihn trotzdem.", RU: "Если вы уже прошли мимо места, аудиогид подождёт, а не начнёт рассказ, когда объект у вас за спиной: он включится, если вы вернётесь или обернётесь. Если вы так и не обернулись, через некоторое время он расскажет всё равно.", ZH: "如果你已经走过某个地点，语音导览会先等待，而不是在它已在你身后时才开口：当你折返或转身望向它时才会播放。若过一会儿你仍未转身，它也会照常讲述。" },
   // ── Visita guidata dall'AI dentro musei e chiese (10/09/2026) ──
+  mv_pdf_preparo_testi: { IT: "Preparo i testi di {n} opere per il PDF: qualche istante…", EN: "Preparing the texts of {n} artworks for the PDF: just a moment…", FR: "Je prépare les textes de {n} œuvres pour le PDF : un instant…", ES: "Preparo los textos de {n} obras para el PDF: un momento…", DE: "Ich bereite die Texte von {n} Werken für das PDF vor: einen Moment…", RU: "Готовлю тексты {n} произведений для PDF: минутку…", ZH: "正在为 PDF 准备 {n} 件作品的文字，请稍候…" },
   mv_title: { IT: "La tua visita", EN: "Your visit", FR: "Ta visite", ES: "Tu visita", DE: "Dein Besuch", RU: "Ваш визит", ZH: "你的参观" },
   mv_you_are_at: { IT: "Sei a", EN: "You are at", FR: "Tu es à", ES: "Estás en", DE: "Du bist in", RU: "Вы находитесь в", ZH: "你在" },
   mv_route: { IT: "Percorso consigliato", EN: "Suggested route", FR: "Parcours conseillé", ES: "Recorrido recomendado", DE: "Empfohlener Rundgang", RU: "Рекомендуемый маршрут", ZH: "推荐路线" },
@@ -845,6 +846,8 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   nav_next_stop: { IT: "Vai alla prossima tappa", EN: "Go to next stop", FR: "Aller à l'étape suivante", ES: "Ir a la siguiente parada", DE: "Zum nächsten Halt", RU: "К следующей точке", ZH: "前往下一站" },
   nav_repeat: { IT: "Ripeti istruzione", EN: "Repeat instruction", FR: "Répéter l'instruction", ES: "Repetir instrucción", DE: "Anweisung wiederholen", RU: "Повторить указание", ZH: "重复指令" },
   nav_stop: { IT: "Ferma navigazione", EN: "Stop navigation", FR: "Arrêter la navigation", ES: "Detener navegación", DE: "Navigation beenden", RU: "Остановить навигацию", ZH: "停止导航" },
+  // (21/09/2026) Android con la sola «posizione approssimativa»: i fix hanno 2 km di errore e il navigatore resterebbe muto.
+  nav_serve_posizione_precisa: { IT: "Il navigatore a piedi ha bisogno della posizione precisa: attivala in Impostazioni › App › WIP › Posizione.", EN: "Walking navigation needs your precise location: turn it on in Settings › Apps › WIP › Location.", FR: "La navigation à pied a besoin de votre position exacte : activez-la dans Paramètres › Applications › WIP › Position.", ES: "La navegación a pie necesita tu ubicación precisa: actívala en Ajustes › Aplicaciones › WIP › Ubicación.", DE: "Die Fußgängernavigation braucht deinen genauen Standort: aktiviere ihn unter Einstellungen › Apps › WIP › Standort.", RU: "Пешеходной навигации нужно точное местоположение: включите его в Настройки › Приложения › WIP › Местоположение.", ZH: "步行导航需要精确位置：请在 设置 › 应用 › WIP › 位置 中开启。" },
   // Itinerari offline (lista) — prima hardcoded in IT
   offline_itineraries_title: { IT: "Itinerari Offline", EN: "Offline Itineraries", FR: "Itinéraires hors ligne", ES: "Itinerarios sin conexión", DE: "Offline-Reiserouten", RU: "Офлайн-маршруты", ZH: "离线行程" },
   offline_saved_count: { IT: "salvati", EN: "saved", FR: "enregistrés", ES: "guardados", DE: "gespeichert", RU: "сохранено", ZH: "已保存" },
@@ -1664,6 +1667,21 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   dl_audioguide: { IT: "Audioguide", EN: "Audio guides", FR: "Audioguides", ES: "Audioguías", DE: "Audioguides", RU: "Аудиогиды", ZH: "语音导览" },
   dl_guide: { IT: "Guide e audiolibri", EN: "Guides & audiobooks", FR: "Guides et livres audio", ES: "Guías y audiolibros", DE: "Guides & Hörbücher", RU: "Гиды и аудиокниги", ZH: "指南与有声书" },
   dl_musei: { IT: "Musei", EN: "Museums", FR: "Musées", ES: "Museos", DE: "Museen", RU: "Музеи", ZH: "博物馆" },
+  // Cartelle dell'archivio (20/09/2026): cinque, sempre visibili.
+  dl_mappe: { IT: "Mappe", EN: "Maps", FR: "Cartes", ES: "Mapas", DE: "Karten", RU: "Карты", ZH: "地图" },
+  dl_guide_premium: { IT: "Guide Premium", EN: "Premium Guides", FR: "Guides Premium", ES: "Guías Premium", DE: "Premium-Guides", RU: "Премиум-гиды", ZH: "高级指南" },
+  dl_guide_musei: { IT: "Guide Musei", EN: "Museum Guides", FR: "Guides des musées", ES: "Guías de museos", DE: "Museumsführer", RU: "Гиды по музеям", ZH: "博物馆导览" },
+  dl_pdf_stampati: { IT: "PDF stampati", EN: "Printed PDFs", FR: "PDF imprimés", ES: "PDF impresos", DE: "Gedruckte PDFs", RU: "Сохранённые PDF", ZH: "已生成的 PDF" },
+  dl_pdf: { IT: "PDF", EN: "PDF", FR: "PDF", ES: "PDF", DE: "PDF", RU: "PDF", ZH: "PDF" },
+  dl_racconto: { IT: "Racconto", EN: "Story", FR: "Récit", ES: "Relato", DE: "Geschichte", RU: "Рассказ", ZH: "故事" },
+  dl_scarica: { IT: "Scarica", EN: "Download", FR: "Télécharger", ES: "Descargar", DE: "Herunterladen", RU: "Скачать", ZH: "下载" },
+  dl_museo_si_scarica: { IT: "Apro la visita: con la rete la guida si scarica da sola e resta disponibile offline", EN: "Opening the visit: with a connection the guide downloads by itself and stays available offline", FR: "J'ouvre la visite : avec le réseau, le guide se télécharge tout seul et reste disponible hors ligne", ES: "Abro la visita: con conexión la guía se descarga sola y queda disponible sin red", DE: "Ich öffne den Besuch: mit Netz lädt sich der Guide von selbst und bleibt offline verfügbar", RU: "Открываю визит: при наличии сети гид скачается сам и будет доступен офлайн", ZH: "正在打开参观：联网时导览会自动下载，并可离线使用" },
+  dl_elimina: { IT: "Elimina", EN: "Delete", FR: "Supprimer", ES: "Eliminar", DE: "Löschen", RU: "Удалить", ZH: "删除" },
+  dl_cartella_vuota: { IT: "Qui non c'è ancora niente", EN: "Nothing here yet", FR: "Rien ici pour l'instant", ES: "Aquí todavía no hay nada", DE: "Hier ist noch nichts", RU: "Здесь пока ничего нет", ZH: "这里还没有内容" },
+  dl_ascoltate: { IT: "Audioguide ascoltate", EN: "Audio guides you listened to", FR: "Audioguides écoutés", ES: "Audioguías escuchadas", DE: "Gehörte Audioguides", RU: "Прослушанные аудиогиды", ZH: "已听过的语音导览" },
+  dl_pdf_da_stampare: { IT: "Non ancora stampato: tocca PDF per crearlo", EN: "Not printed yet: tap PDF to create it", FR: "Pas encore imprimé : touchez PDF pour le créer", ES: "Aún no impreso: toca PDF para crearlo", DE: "Noch nicht gedruckt: PDF antippen, um es zu erstellen", RU: "Ещё не сохранён: нажмите PDF, чтобы создать", ZH: "尚未生成：点击 PDF 创建" },
+  dl_pdf_dalla_guida: { IT: "Si stampa dalla guida: aprila e tocca la stampante", EN: "Print it from the guide: open it and tap the printer", FR: "S'imprime depuis le guide : ouvrez-le et touchez l'imprimante", ES: "Se imprime desde la guía: ábrela y toca la impresora", DE: "Druck aus dem Guide: öffnen und Drucker antippen", RU: "Печать из гида: откройте его и нажмите на принтер", ZH: "从指南中打印：打开后点击打印机" },
+  dl_non_aperto: { IT: "Non riesco ad aprirlo: controlla la connessione e riprova", EN: "Can't open it: check your connection and try again", FR: "Impossible de l'ouvrir : vérifiez la connexion et réessayez", ES: "No puedo abrirlo: revisa la conexión e inténtalo de nuevo", DE: "Lässt sich nicht öffnen: Verbindung prüfen und erneut versuchen", RU: "Не удаётся открыть: проверьте соединение и повторите", ZH: "无法打开：请检查网络后重试" },
   dl_ordine_data: { IT: "Data", EN: "Date", FR: "Date", ES: "Fecha", DE: "Datum", RU: "Дата", ZH: "日期" },
   dl_ordine_nome: { IT: "Nome", EN: "Name", FR: "Nom", ES: "Nombre", DE: "Name", RU: "Имя", ZH: "名称" },
   dl_vista_lista: { IT: "Vista elenco", EN: "List view", FR: "Vue liste", ES: "Vista de lista", DE: "Listenansicht", RU: "Список", ZH: "列表视图" },
@@ -5198,6 +5216,15 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Закрепить остановку (сохранится при повторной генерации)",
     ZH: "锁定行程点（重新生成时保留）"
   , DE: "Station sperren (bleibt bei Neugenerierung erhalten)"},
+  // (20/09/2026) A tappa bloccata il tasto diceva ancora «Blocca tappa».
+  unlock_stop: {
+    IT: "Sblocca tappa (potrà essere cambiata rigenerando)",
+    EN: "Unlock stop (may change when regenerating)",
+    FR: "Déverrouiller l'étape (pourra changer à la régénération)",
+    ES: "Desbloquear parada (podrá cambiar al regenerar)",
+    RU: "Открепить остановку (может измениться при повторной генерации)",
+    ZH: "解锁行程点（重新生成时可能更换）",
+    DE: "Station entsperren (kann sich bei Neugenerierung ändern)"},
   confirm_delete_stop: {
     IT: "Vuoi eliminare questa tappa dall'itinerario?",
     EN: "Delete this stop from the itinerary?",
@@ -5485,8 +5512,8 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     IT: "Serata perfetta non disponibile al momento, riprova tra poco.", EN: "Perfect evening unavailable right now, try again shortly.", FR: "Soirée parfaite indisponible pour le moment, réessayez bientôt.", ES: "Noche perfecta no disponible ahora, inténtalo en breve.", RU: "Идеальный вечер сейчас недоступен, попробуйте позже.", ZH: "完美夜晚暂不可用，请稍后再试。"
   , DE: "Perfekter Abend gerade nicht verfügbar, versuche es gleich noch einmal."},
   events_evening_not_composable: {
-    IT: "Qui non ho abbastanza locali ed eventi reali per comporre una serata: prova da una città più grande.", EN: "Not enough real venues and events here to plan an evening: try from a bigger city.", FR: "Pas assez de lieux et d'événements réels ici pour composer une soirée : essayez depuis une plus grande ville.", ES: "No hay suficientes locales y eventos reales aquí para preparar una noche: prueba desde una ciudad más grande.", RU: "Здесь недостаточно реальных заведений и событий, чтобы составить вечер: попробуйте из города побольше.", ZH: "这里真实的场所和活动不足以安排夜晚：请尝试更大的城市。"
-  , DE: "Hier gibt es nicht genug echte Lokale und Events für einen Abend: versuche es von einer größeren Stadt aus."},
+    IT: "Non trovo nessun locale reale entro 40 km da questo punto: cerca una località qui sopra e riprova.", EN: "I can't find any real venue within 40 km of this point: search for a place above and try again.", FR: "Je ne trouve aucun établissement réel à moins de 40 km de ce point : cherchez une localité ci-dessus et réessayez.", ES: "No encuentro ningún local real a menos de 40 km de este punto: busca una localidad arriba y vuelve a intentarlo.", RU: "В радиусе 40 км от этой точки нет ни одного реального заведения: найдите населённый пункт выше и попробуйте снова.", ZH: "此位置 40 公里内没有找到任何真实的场所：请在上方搜索一个地点后重试。"
+  , DE: "Im Umkreis von 40 km finde ich kein echtes Lokal: Suche oben einen Ort und versuche es noch einmal."},
   events_evening_timeout: {
     IT: "La serata ci sta mettendo troppo: riprova tra poco.", EN: "The evening plan is taking too long: try again shortly.", FR: "La soirée prend trop de temps : réessayez bientôt.", ES: "La noche está tardando demasiado: inténtalo en breve.", RU: "Планирование вечера занимает слишком много времени: попробуйте позже.", ZH: "夜晚规划耗时过长：请稍后再试。"
   , DE: "Der Abend dauert zu lange: versuche es gleich noch einmal."},
@@ -6057,6 +6084,8 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   chat_mic_unsupported: { IT: "Il tuo browser non supporta il riconoscimento vocale. Usa Chrome o Edge.", EN: "Your browser doesn't support speech recognition. Use Chrome or Edge.", FR: "Ton navigateur ne prend pas en charge la reconnaissance vocale. Utilise Chrome ou Edge.", ES: "Tu navegador no admite el reconocimiento de voz. Usa Chrome o Edge.", DE: "Dein Browser unterstützt keine Spracherkennung. Nutze Chrome oder Edge.", RU: "Ваш браузер не поддерживает распознавание речи. Используйте Chrome или Edge.", ZH: "你的浏览器不支持语音识别。请使用 Chrome 或 Edge。" },
   chat_listening: { IT: "Ascolto in corso...", EN: "Listening...", FR: "Écoute en cours...", ES: "Escuchando...", DE: "Ich höre zu...", RU: "Слушаю...", ZH: "正在聆听..." },
   chat_write_message: { IT: "Scrivi un messaggio...", EN: "Write a message...", FR: "Écris un message...", ES: "Escribe un mensaje...", DE: "Schreib eine Nachricht...", RU: "Напишите сообщение...", ZH: "输入消息..." },
+  // Etichetta dentro il cerchio della chat chiusa (19/09/2026): cortissima, sta in 56 px.
+  chat_bubble_label: { IT: "Chat", EN: "Chat", FR: "Chat", ES: "Chat", DE: "Chat", RU: "Чат", ZH: "聊天" },
   chat_ask_wip: { IT: "Chiedi a WIP o ottimizza l'itinerario...", EN: "Ask WIP or optimize the itinerary...", FR: "Demande à WIP ou optimise l'itinéraire...", ES: "Pregunta a WIP u optimiza el itinerario...", DE: "Frag WIP oder optimiere die Route...", RU: "Спросите WIP или улучшите маршрут...", ZH: "询问 WIP 或优化行程..." },
   // Barra sulla mappa, senza itinerario aperto (10/09/2026): lì WIP è
   // generalista — informa e aiuta — e gli itinerari li fa l'agente dedicato

@@ -103,7 +103,7 @@ const Legenda = ({ plan, et, nGiorni }: { plan: any; et: ItinerarioPdfEtichette;
       );
     }
     righe.push(
-      <View key={t.n} style={{ width: '50%', flexDirection: 'row', alignItems: 'flex-start', paddingRight: 8, marginBottom: 2 }}>
+      <View key={t.n} wrap={false} style={{ width: '50%', flexDirection: 'row', alignItems: 'flex-start', paddingRight: 8, marginBottom: 2 }}>
         <View style={{ width: 13, height: 13, borderRadius: 6.5, backgroundColor: PDF_C.navy, alignItems: 'center', justifyContent: 'center', marginRight: 5, marginTop: 0.5 }}>
           <Text style={{ fontFamily: 'Helvetica-Bold', fontSize: 7, color: '#ffffff' }}>{t.n}</Text>
         </View>
@@ -159,7 +159,8 @@ export default function ItinerarioPdf({ plan, etichette: et, mappa }: Itinerario
           <PiedePagina titolo={titolo} etichettaPagina={et.pagina} />
           <Text style={S.occhiello}>{et.mappa}</Text>
           <Text style={[S.h2, { marginTop: 0 }]}>{titolo}</Text>
-          <View style={{ borderWidth: 1, borderColor: PDF_C.navy, borderRadius: 6, overflow: 'hidden' }}>
+          {/* Mappa ridotta all'80% e centrata: con 30-40 tappe la legenda sotto deve stare sulla stessa pagina. */}
+          <View style={{ borderWidth: 1, borderColor: PDF_C.navy, borderRadius: 6, overflow: 'hidden', width: '80%', alignSelf: 'center' }}>
             <Image src={mappa} style={{ width: '100%' }} />
           </View>
           <Text style={[S.piccolo, { marginTop: 4 }]}>© Mapbox © OpenStreetMap contributors</Text>

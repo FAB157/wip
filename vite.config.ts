@@ -67,7 +67,14 @@ export default defineConfig(({mode}) => {
           // difetto era invisibile da riga di comando (curl non ha il SW) e
           // per Googlebot (che il SW non ce l'ha). Stesso motivo per
           // sitemap/robots, serviti dal server.
-          navigateFallbackDenylist: [/^\/privacy/, /^\/terms/, /^\/support/, /^\/delete-account/, /^\/api\//, /^\/luogo\//, /^\/sitemap/, /^\/robots\.txt/],
+          // /scopri/ e /llms.txt (12/09/2026): stesso motivo — sono serviti
+          // dal server (route in server.ts + rewrite in vercel.json), non
+          // dalla SPA. Trovato aprendo /scopri/en da un profilo che aveva già
+          // il service worker installato: tornava la mappa invece della
+          // pagina, perché il navigateFallback intercetta ogni navigazione
+          // non nella denylist. Nota: /scopri (senza lingua, l'italiano) è un
+          // file statico vero e non ha questo problema — resta fuori apposta.
+          navigateFallbackDenylist: [/^\/privacy/, /^\/terms/, /^\/support/, /^\/delete-account/, /^\/api\//, /^\/luogo\//, /^\/sitemap/, /^\/robots\.txt/, /^\/llms\.txt/, /^\/scopri\//],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,

@@ -19,6 +19,9 @@ export function useItinerary(itineraryId?: string) {
   // Initial fetch
   useEffect(() => {
     if (!itineraryId) {
+      // Senza id non c'e' nulla da seguire: la riga del piano precedente non
+      // deve restare in mano a chi ascolta (20/09/2026).
+      setItinerary(null);
       setLoading(false);
       return;
     }

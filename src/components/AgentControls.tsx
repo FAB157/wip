@@ -36,6 +36,15 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
   const [customEvent, setCustomEvent] = useState(initialMessage || '');
   const [isLoading, setIsLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  // DA CHIUSA LA CHAT E` UN CERCHIO, NON UNA BARRA (19/09/2026, committente,
+  // sull'itinerario: «rimane sempre in prima impressione», poi: «riducila a un
+  // cerchio con scritta trasparente "chat", meno invasivo possibile»). La barra
+  // larga quanto lo schermo copriva le tappe che si stavano leggendo, e il suo
+  // testo finiva sotto il microfono (il campo riservava posto a UN tasto e ne
+  // mostrava due). Ora da chiusa c'e' solo il volto di WIP in basso a destra,
+  // semitrasparente, con l'etichetta «Chat»: un tocco apre la chat intera, dove
+  // microfono, info e aiuto ci sono gia' tutti.
+  const soloIcona = !isExpanded;
   const [showInfo, setShowInfo] = useState(false);
   const [isListening, setIsListening] = useState(false);
 
@@ -435,10 +444,10 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
         layout
         initial={{ y: 50, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        className={`fixed left-1/2 -translate-x-1/2 w-[95%] max-w-md rounded-3xl border border-gray-100/50 z-[1000] overflow-hidden flex flex-col transition-all duration-300 ${
+        className={`fixed ${soloIcona ? `${sopraControlliMappa ? 'left-3' : 'right-3'} rounded-full overflow-visible` : 'left-1/2 -translate-x-1/2 w-[95%] max-w-md rounded-3xl overflow-hidden'} border border-gray-100/50 z-[1000] flex flex-col transition-all duration-300 ${
         isExpanded
           ? 'bg-white shadow-2xl bottom-[calc(6rem+env(safe-area-inset-bottom))] h-[65vh]'
-          : `bg-white/60 backdrop-blur-xl shadow-lg p-1.5 ${
+          : `bg-transparent border-transparent shadow-none p-0 opacity-85 hover:opacity-100 active:opacity-100 ${
               sopraControlliMappa
                 ? 'bottom-[calc(10rem+env(safe-area-inset-bottom))]'
                 : 'bottom-[calc(6rem+env(safe-area-inset-bottom))]'
@@ -530,16 +539,24 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
         )}
 
         {/* Input Area (always visible, style changes based on expansion) */}
-        <div className={`flex items-center gap-2 ${isExpanded ? 'bg-white p-3 border-t border-gray-100' : 'bg-transparent pl-1'}`}>
+        <div className={`flex items-center gap-2 ${isExpanded ? 'bg-white p-3 border-t border-gray-100' : 'bg-transparent'}`}>
           {!isExpanded && (
-            <div className="flex items-center pl-1 gap-2 cursor-pointer" onClick={() => setIsExpanded(true)}>
-              <div className="w-9 h-9 rounded-full bg-black flex items-center justify-center flex-shrink-0 overflow-hidden shadow-lg border border-white/20">
-                <img src="/avatar.png" alt="WIP" className="w-full h-full object-cover p-0.5" />
-              </div>
-            </div>
+            <button
+              type="button"
+              className="relative w-14 h-14 rounded-full overflow-hidden cursor-pointer shadow-lg border border-white/40 bg-black/70 backdrop-blur-sm"
+              onClick={() => setIsExpanded(true)}
+              aria-label={tr(itineraryId === 'general' ? 'chat_ask_wip_generale' : 'chat_ask_wip')}
+            >
+              <img src="/avatar.png" alt="" className="w-full h-full object-cover p-0.5 opacity-90" />
+              {/* L'etichetta sta DENTRO il cerchio, su una fascia scura
+                  trasparente: dice cos'e' senza allargare l'ingombro. */}
+              <span className="absolute bottom-0 inset-x-0 pb-1 pt-0.5 text-center text-[9px] font-black uppercase tracking-widest text-white bg-black/45">
+                {tr('chat_bubble_label')}
+              </span>
+            </button>
           )}
-          
-          <div className="flex-1 relative flex items-center">
+
+          <div className={`flex-1 relative items-center ${soloIcona ? 'hidden' : 'flex'}`}>
             <input 
               type="text" 
               value={customEvent}
@@ -567,7 +584,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
                       // promettere di ottimizzare un itinerario che non c'è.
                       : tr(itineraryId === 'general' ? 'chat_ask_wip_generale' : 'chat_ask_wip')
               }
-              className={`w-full ${isExpanded ? 'bg-gray-50' : 'bg-white/50 placeholder-gray-600'} border-none rounded-full py-2 pl-4 ${isExpanded ? 'pr-20' : 'pr-10'} text-sm focus:ring-2 focus:ring-primary transition-colors ${isListening ? 'ring-2 ring-red-400 bg-red-50 placeholder-red-500' : ''}`}
+              className={`w-full ${isExpanded ? 'bg-gray-50' : 'bg-white/50 placeholder-gray-600'} border-none rounded-full py-2 pl-4 pr-20 text-ellipsis text-sm focus:ring-2 focus:ring-primary transition-colors ${isListening ? 'ring-2 ring-red-400 bg-red-50 placeholder-red-500' : ''}`}
             />
             
             <div className="absolute right-1 flex items-center gap-1">

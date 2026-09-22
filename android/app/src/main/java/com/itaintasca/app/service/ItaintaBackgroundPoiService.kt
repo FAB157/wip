@@ -87,6 +87,10 @@ class ItaintaBackgroundPoiService : Service() {
         const val ACTION_NAV_REPLAY = "com.itaintasca.app.NAV_REPLAY"
         const val ACTION_NAV_RECALC = "com.itaintasca.app.NAV_RECALC"
         const val ACTION_NAV_END = "com.itaintasca.app.NAV_END"
+        // (21/09/2026, REVISIONE 2) «Riprendi» ha un'azione SUA: prima era lo
+        // stesso ACTION_NAV_PAUSE e il follower la eseguiva come interruttore,
+        // invertendo il proprio stato e non quello mostrato sul cruscotto.
+        const val ACTION_NAV_RESUME = "com.itaintasca.app.NAV_RESUME"
         /** Tocco arrivato a WebView morta: si annota qui e lo consegna il plugin al suo load(). */
         const val PREF_PENDING_NAV_ACTION = "pending_nav_action"
         const val PREF_PENDING_NAV_ACTION_TS = "pending_nav_action_ts"
@@ -109,6 +113,15 @@ class ItaintaBackgroundPoiService : Service() {
          * applyLocationRate guarda NavFollower da solo.
          */
         @Volatile var onNavRouteChanged: (() -> Unit)? = null
+        /**
+         * (21/09/2026, REVISIONE 2) PAGINA RICREATA: il load() del plugin
+         * svuota il follower e, con questo hook, spegne anche il CRUSCOTTO.
+         * Prima la notifica restava per sempre ferma sull'ultima svolta
+         * (la pagina nuova non sa di averlo acceso e non lo spegne mai). Un
+         * giro ripreso da localStorage lo riaccende al suo primo stato.
+         * null quando il servizio non e' vivo: non si avvia niente da qui.
+         */
+        @Volatile var onPaginaNuova: (() -> Unit)? = null
         // Heartbeat letto da ServiceWatchdog: aggiornato a ogni fix GPS
         // processato, così il watchdog riavvia solo un servizio davvero
         // bloccato invece di farlo ciecamente ogni 15 min.
@@ -266,6 +279,8 @@ class ItaintaBackgroundPoiService : Service() {
         // (18/09/2026) Il plugin avvisa da un thread del bridge: la cadenza
         // dei fix si tocca solo dal main, come fa tutto il resto del servizio.
         onNavRouteChanged = { Handler(Looper.getMainLooper()).post { syncNavRate() } }
+        // (21/09/2026, REVISIONE 2) Pagina ricreata: via il cruscotto, dal main.
+        onPaginaNuova = { Handler(Looper.getMainLooper()).post { applicaNavBanner(null, null, false) } }
     }
 
     /**
@@ -342,7 +357,13 @@ class ItaintaBackgroundPoiService : Service() {
         // startForeground SUBITO e per OGNI percorso: il servizio può essere avviato
         // con startForegroundService da plugin/watchdog/boot/sync e ha pochi secondi
         // per promuoversi, pena ForegroundServiceDidNotStartInTimeException.
-        val notification = buildNotification("Audioguida attiva", "Acquisizione posizione...")
+        // (21/09/2026, REVISIONE 2) Con l'ULTIMO titolo/testo pubblicati, non
+        // con quelli fissi: startForeground ripubblica la notifica senza
+        // passare dalla chiave anti-duplicato, e dopo «Termina» o l'arrivo
+        // (cruscotto gia' spento) lo spegnimento del JS trovava la chiave
+        // uguale e la notifica restava su «Acquisizione posizione...». Al
+        // primo avvio i due valori SONO quelli fissi: nulla cambia.
+        val notification = buildNotification(ultimoTitolo, ultimoTesto)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
@@ -497,6 +518,7 @@ class ItaintaBackgroundPoiService : Service() {
         // (03/09/2026) Un tasto del cruscotto toccato sulla notifica.
         val azioneNav = when (intent?.action) {
             ACTION_NAV_PAUSE -> "pausa"
+            ACTION_NAV_RESUME -> "riprendi"
             ACTION_NAV_SKIP -> "salta"
             ACTION_NAV_REPLAY -> "riascolta"
             ACTION_NAV_RECALC -> "ricalcola"
@@ -504,8 +526,11 @@ class ItaintaBackgroundPoiService : Service() {
             else -> null
         }
         if (azioneNav != null) {
-            applicaAzioneNavAlFollower(azioneNav)
-            inoltraAzioneNav(azioneNav)
+            val dettoDalNativo = applicaAzioneNavAlFollower(azioneNav)
+            // (21/09/2026, REVISIONE 2) «Riascolta» gia' detto dal follower (al
+            // comando): al JS non si inoltra, al risveglio lo direbbe di nuovo
+            // (e magari la svolta di prima del congelamento).
+            if (!(azioneNav == "riascolta" && dettoDalNativo)) inoltraAzioneNav(azioneNav)
             // (18/09/2026 notte) Dopo, non prima: vedi ridisegnaCruscottoDopoAzione.
             ridisegnaCruscottoDopoAzione(azioneNav)
             return START_STICKY
@@ -801,7 +826,16 @@ class ItaintaBackgroundPoiService : Service() {
         // la cartella cache. Best-effort, mai bloccante per l'avvio.
         RoadSnap.cacheDir = filesDir
         RoadSnap.loadCached()
-        locationCallback = object : LocationCallback() {
+        // (21/09/2026, REVISIONE 2) SERVIZIO GIA' VIVO = MAI UN SECONDO
+        // CALLBACK. Qui si arriva a ogni onStartCommand «completo» (sync delle
+        // impostazioni, muto, chip, cambio piedi/auto, sentinella, watchdog):
+        // ogni volta nasceva un LocationCallback nuovo e il vecchio restava
+        // registrato al livello che aveva — anche HIGH_ACCURACY ogni 2 s da
+        // navigatore, per ore a schermo spento dopo la fine del giro, perche'
+        // applyLocationRate/syncNavRate/onDestroy vedono solo l'ultimo. Il
+        // corpo legge solo campi dell'istanza: riusarlo con le impostazioni
+        // appena rilette e' corretto. Si rifa' solo la richiesta, qui sotto.
+        if (locationCallback == null) locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val location = result.lastLocation ?: return
 
@@ -901,7 +935,12 @@ class ItaintaBackgroundPoiService : Service() {
                 Log.d(TAG, "Instant location fix on start, fetching POIs...")
                 checkRefreshGeofences(location)
             }
-            applyLocationRate(armed = false)
+            // (21/09/2026, REVISIONE 2) Al livello GIA' deciso (armato/fine dal
+            // predittore, percorso del follower letto da applyLocationRate),
+            // non «a riposo»: a servizio gia' armato il predittore, idempotente,
+            // non ri-armerebbe e l'arrivo al POI sarebbe campionato ogni 20-60 s.
+            // Al primo avvio isArmed e isFine sono false: identico a prima.
+            applyLocationRate(isArmed, isFine)
         } catch (e: SecurityException) {
             // (MAP-01) Permesso revocato mentre il servizio era acceso.
             onLocationPermissionLost()
@@ -1105,39 +1144,50 @@ class ItaintaBackgroundPoiService : Service() {
      * (18/09/2026) I tasti del cruscotto premuti a SCHERMO SPENTO: il JS è
      * congelato e l'azione inoltrata la vedrà solo al risveglio, ma intanto
      * chi parla è il follower nativo — che quindi obbedisce subito da solo.
-     * Col JS vivo è innocuo (vedi NavFollower.alternaPausa).
+     * Col JS vivo è innocuo (vedi NavFollower.impostaPausa).
+     * (21/09/2026, REVISIONE 2) Ritorna true solo se il follower ha DETTO
+     * qualcosa («riascolta» col nativo al comando): quell'azione non va
+     * inoltrata al JS, sarebbe detta due volte.
      */
-    private fun applicaAzioneNavAlFollower(azione: String) {
+    private fun applicaAzioneNavAlFollower(azione: String): Boolean {
         try {
             when (azione) {
-                "pausa" -> NavFollower.alternaPausa()
+                // (21/09/2026, REVISIONE 2) Azioni ESPLICITE, mai un'alternanza;
+                // e il GPS segue la pausa (in pausa torna a riposo).
+                "pausa" -> { NavFollower.impostaPausa(true); syncNavRate() }
+                "riprendi" -> { NavFollower.impostaPausa(false); syncNavRate() }
                 "termina" -> {
-                    NavFollower.clear(); syncNavRate()
+                    // (21/09/2026, REVISIONE 2) Con la FOTOGRAFIA del progresso:
+                    // al «Termina» in ritardo seguito da «no» il JS lo riprende.
+                    NavFollower.terminaDalBanner(); syncNavRate()
                     // (18/09/2026 notte) «Termina» SPEGNE il cruscotto. Lo fa
                     // gia' inoltraAzioneNav subito dopo: qui e' esplicito perche'
                     // il follower non dipenda da quell'ordine (la chiave
                     // anti-duplicato evita la doppia pubblicazione).
                     ridisegnaCruscottoNativo(NavFollower.Cruscotto(spegni = true))
                 }
-                "riascolta" -> NavFollower.ripeti(SystemClock.elapsedRealtime())?.let { diceNavigatore(it) }
+                "riascolta" -> {
+                    val frase = NavFollower.ripeti(SystemClock.elapsedRealtime())
+                    if (frase != null) { diceNavigatore(frase); return true }
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "NavFollower azione $azione: ${e.message}")
         }
+        return false
     }
 
     /**
      * (18/09/2026 notte) Tasto «pausa»/«riprendi» a SCHERMO SPENTO: ridisegno
      * immediato del cruscotto con l'`inPausa` del follower. Va chiamata DOPO
      * inoltraAzioneNav, non dentro applicaAzioneNavAlFollower: inoltraAzioneNav
-     * sul tasto pausa ROVESCIA navBannerInPausa rispetto a quello che trova, e
-     * un ridisegno fatto prima verrebbe rovesciato di nuovo («Pausa» al posto
-     * di «Riprendi»). Fatto dopo, l'ultima parola e' quella del follower, che
-     * a schermo spento e' chi comanda davvero. Col JS vivo cruscottoSubito e'
-     * null e resta tutto com'era.
+     * imposta navBannerInPausa, e un ridisegno fatto prima verrebbe coperto.
+     * Fatto dopo, l'ultima parola e' quella del follower, che a schermo spento
+     * e' chi comanda davvero. Col JS vivo cruscottoSubito e' null e resta
+     * tutto com'era. (21/09/2026) Per «pausa» E per «riprendi», ora distinti.
      */
     private fun ridisegnaCruscottoDopoAzione(azione: String) {
-        if (azione != "pausa") return
+        if (azione != "pausa" && azione != "riprendi") return
         try {
             NavFollower.cruscottoSubito(SystemClock.elapsedRealtime(), System.currentTimeMillis())
                 ?.let { ridisegnaCruscottoNativo(it) }
@@ -2148,6 +2198,23 @@ class ItaintaBackgroundPoiService : Service() {
     private fun navActionIntent(action: String, requestCode: Int): PendingIntent = speechActionIntent(action, requestCode)
 
     /**
+     * (21/09/2026, REVISIONE 2) «Salta» e «Ricalcola» il nativo non li sa
+     * fare (non calcola percorsi): APRONO L'APP, con un PendingIntent di
+     * Activity verso MainActivity — dalla lock screen il sistema chiede lo
+     * sblocco da solo — e l'azione arriva al JS fresca (MainActivity la
+     * consegna col suo ts). Mai startActivity dal servizio: con target ≥ 31
+     * e' un «trampolino» di notifica e il sistema lo blocca. Prima questi due
+     * tasti, a schermo spento, non facevano nulla.
+     */
+    private fun navActivityIntent(action: String, requestCode: Int): PendingIntent =
+        PendingIntent.getActivity(
+            this, requestCode,
+            Intent(this, MainActivity::class.java).setAction(action)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+    /**
      * (03/09/2026) UN TASTO DEL CRUSCOTTO TOCCATO SULLA NOTIFICA. Effetto
      * visibile subito (pausa ↔ riprendi, o cruscotto via su «termina»), poi
      * il tocco va al JS come `navBannerAction {action, ts}` — lo stesso
@@ -2160,7 +2227,11 @@ class ItaintaBackgroundPoiService : Service() {
      */
     private fun inoltraAzioneNav(azione: String) {
         when (azione) {
-            "pausa" -> applicaNavBanner(navBannerTitolo, navBannerCorpo, true, navBannerFotoUrl, inPausa = !navBannerInPausa)
+            // (21/09/2026, REVISIONE 2) Il valore ESPLICITO del tasto, mai
+            // !navBannerInPausa: un'alternanza sullo stato mostrato poteva
+            // non corrispondere a quello del follower.
+            "pausa" -> applicaNavBanner(navBannerTitolo, navBannerCorpo, true, navBannerFotoUrl, inPausa = true)
+            "riprendi" -> applicaNavBanner(navBannerTitolo, navBannerCorpo, true, navBannerFotoUrl, inPausa = false)
             "termina" -> applicaNavBanner(null, null, false)
         }
         val ts = System.currentTimeMillis()
@@ -2173,9 +2244,15 @@ class ItaintaBackgroundPoiService : Service() {
             putString(PREF_PENDING_NAV_ACTION, azione)
             putLong(PREF_PENDING_NAV_ACTION_TS, ts)
         }
+        // (21/09/2026, REVISIONE 2) Da Android 12 (target ≥ 31, qui 36) aprire
+        // un'Activity da un servizio avviato dal tasto di una notifica e' un
+        // «trampolino»: il sistema lo blocca in silenzio (niente eccezione).
+        // Li' non si prova nemmeno: l'azione resta annotata e la consegna il
+        // plugin al prossimo load(). Sotto la 31 resta com'era.
+        if (Build.VERSION.SDK_INT >= 31) return
         try {
-            // Consentito: l'app ha appena ricevuto un tocco su un suo
-            // PendingIntent (eccezione «pochi secondi» del background
+            // Consentito sotto Android 12: l'app ha appena ricevuto un tocco su
+            // un suo PendingIntent (eccezione «pochi secondi» del background
             // activity launch per service/receiver).
             startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
         } catch (e: Exception) {
@@ -2341,9 +2418,12 @@ class ItaintaBackgroundPoiService : Service() {
         // posto di quelli della voce e dello Stop del servizio: Android ne
         // mostra al massimo tre, quindi la terna dipende dallo stato —
         // in cammino [Pausa][Salta][Termina], in pausa [Riprendi][Ricalcola]
-        // [Termina], a tappa singola [Ricalcola][Termina]. «Termina» chiede
-        // lo sblocco del telefono (API 31+): e' l'unico distruttivo, e in app
-        // chiede conferma.
+        // [Termina], a tappa singola [Riascolta][Ricalcola][Termina] (21/09,
+        // come la Live Activity iOS: il follower sa ripetere la manovra).
+        // «Termina» chiede lo sblocco del telefono (API 31+): e' l'unico
+        // distruttivo, e in app chiede conferma. (21/09/2026) «Salta» e
+        // «Ricalcola» aprono l'app (vedi navActivityIntent); «Riprendi» ha
+        // un'azione sua (ACTION_NAV_RESUME), non piu' la stessa di «Pausa».
         if (bannerAttivo) {
             val lang = NotificationStrings.lang(this)
             val termina = NotificationCompat.Action.Builder(
@@ -2352,13 +2432,14 @@ class ItaintaBackgroundPoiService : Service() {
                 navActionIntent(ACTION_NAV_END, 25)
             ).setAuthenticationRequired(true).build()
             if (navBannerModo == "singola") {
-                builder.addAction(android.R.drawable.ic_menu_rotate, NotificationStrings.get(lang, "nav_ricalcola"), navActionIntent(ACTION_NAV_RECALC, 24))
+                builder.addAction(android.R.drawable.ic_media_previous, NotificationStrings.get(lang, "nav_riascolta"), navActionIntent(ACTION_NAV_REPLAY, 23))
+                builder.addAction(android.R.drawable.ic_menu_rotate, NotificationStrings.get(lang, "nav_ricalcola"), navActivityIntent(ACTION_NAV_RECALC, 24))
             } else if (navBannerInPausa) {
-                builder.addAction(android.R.drawable.ic_media_play, NotificationStrings.get(lang, "nav_riprendi"), navActionIntent(ACTION_NAV_PAUSE, 21))
-                builder.addAction(android.R.drawable.ic_menu_rotate, NotificationStrings.get(lang, "nav_ricalcola"), navActionIntent(ACTION_NAV_RECALC, 24))
+                builder.addAction(android.R.drawable.ic_media_play, NotificationStrings.get(lang, "nav_riprendi"), navActionIntent(ACTION_NAV_RESUME, 26))
+                builder.addAction(android.R.drawable.ic_menu_rotate, NotificationStrings.get(lang, "nav_ricalcola"), navActivityIntent(ACTION_NAV_RECALC, 24))
             } else {
                 builder.addAction(android.R.drawable.ic_media_pause, NotificationStrings.get(lang, "nav_pausa"), navActionIntent(ACTION_NAV_PAUSE, 21))
-                builder.addAction(android.R.drawable.ic_media_next, NotificationStrings.get(lang, "nav_salta"), navActionIntent(ACTION_NAV_SKIP, 22))
+                builder.addAction(android.R.drawable.ic_media_next, NotificationStrings.get(lang, "nav_salta"), navActivityIntent(ACTION_NAV_SKIP, 22))
             }
             return builder.addAction(termina).build()
         }
@@ -2473,6 +2554,7 @@ class ItaintaBackgroundPoiService : Service() {
         // Pulizia rigorosa per evitare memory leaks
         onVoiceStateChanged = null
         onNavRouteChanged = null
+        onPaginaNuova = null
         serviceScope.cancel()
         locationCallback?.let {
             try {

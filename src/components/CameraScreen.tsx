@@ -872,6 +872,10 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
 
       // Modalità 📱 Screenshot: niente EXIF né coordinate, flusso dedicato.
       if (visionTarget === 'screenshot') {
+        // Consenso AI anche qui (22/09/2026): questo ramo saltava analyzeImage
+        // e quindi il gate — una foto della galleria partiva verso OpenAI
+        // senza richiesta.
+        if (!(await chiediConsensoAi())) return;
         const shot = await resizeImage(file);
         setPreviewImage(`data:image/jpeg;base64,${shot.base64}`);
         await analyzeScreenshot(shot.base64);

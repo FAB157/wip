@@ -22,6 +22,7 @@ import CreditConfirmationModal from './CreditConfirmationModal';
 import { PRICING_LIST, getWalletBalance, notifyCreditsChanged } from '../lib/pricing';
 import { Language, getTranslation } from '../lib/i18n';
 import { getApiUrl } from '../lib/api';
+import { chiediConsensoAi } from '../lib/aiConsent';
 import ShopScreen from './ShopScreen';
 import PremiumGuideRenderer from './PremiumGuideRenderer';
 
@@ -99,6 +100,8 @@ export default function PremiumGuideModal({
       // con email (PDF allegato) e push. L'utente puo' chiudere subito.
       // Se la stessa guida e' gia' in archivio (stesso hash), si apre in
       // diretta come prima, senza addebito.
+      // Consenso AI (22/09/2026): la coda genera con un modello esterno, e porta la dedica dell'utente.
+      if (!(await chiediConsensoAi())) { setPhase('select_style'); return; }
       const hash = await computeItineraryHash(itinerary, `${selectedStyle}_${language}`);
       const destinatari = emailExtra.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean).slice(0, 5);
       const coda = await accodaGuida({ itinerary, style: selectedStyle, hash, language, dedica, emailExtra: destinatari });

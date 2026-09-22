@@ -72,8 +72,12 @@ export interface ItaintaBackgroundPoiPlugin {
    * plugin — il ripiego che non muore mai quando Azure/Google non rispondono
    * — e risponde `direct:true, id`: la fine arriva con l'evento
    * `directSpeechFinished {id}`, non stimata.
+   * `ttlMs` (21/09/2026, additivo): l'elemento di coda SCADE dopo ttlMs —
+   * solo le svolte del navigatore (20000): un «gira a destra» uscito dietro
+   * una guida o una telefonata è un'indicazione sbagliata. Teaser, arrivi e
+   * guide non lo mandano e non scadono mai, come prima.
    */
-  speakText(options: { text: string; poiId?: string; kind?: string; priority?: number; force?: boolean }): Promise<{ ok?: boolean; direct?: boolean; id?: string; reason?: string }>;
+  speakText(options: { text: string; poiId?: string; kind?: string; priority?: number; force?: boolean; ttlMs?: number }): Promise<{ ok?: boolean; direct?: boolean; id?: string; reason?: string }>;
   /** Ferma la voce diretta avviata con speakText({force:true}). */
   stopSpeakText(): Promise<void>;
 
@@ -99,11 +103,18 @@ export interface ItaintaBackgroundPoiPlugin {
   prefetchGuides(options: { poiIds: string[]; lang: string; character?: string }): Promise<{ ok?: boolean; accodati?: number }>;
   setNavRoute(options: { routeJson: string }): Promise<{ ok?: boolean }>;
   clearNavRoute(): Promise<void>;
-  navHeartbeat(options: { indice: number; dettiVicino?: number[]; dettiLontano?: number[] }): Promise<void>;
+  /** `inPausa` (21/09/2026): il battito PORTA la pausa del JS; assente = false. */
+  navHeartbeat(options: { indice: number; dettiVicino?: number[]; dettiLontano?: number[]; inPausa?: boolean }): Promise<void>;
+  /**
+   * `finito` (21/09/2026): l'arrivo finale l'ha chiuso il nativo al comando.
+   * `terminato`: il follower è stato svuotato dal «Termina» del cruscotto —
+   * `attivo:false` con la fotografia di id, indice e «detti» di quel momento.
+   */
   getNavProgress(): Promise<{
     attivo?: boolean; id?: string; indice?: number;
     dettiVicino?: number[]; dettiLontano?: number[];
     nativoAlComando?: boolean; ultimoTestoVicino?: string; ultimoTestoLontano?: string;
+    finito?: boolean; terminato?: boolean;
   }>;
 
   /**
@@ -176,13 +187,16 @@ export interface ItaintaBackgroundPoiPlugin {
   /**
    * (03/09/2026) Un tasto del cruscotto a display spento: i Button della
    * Live Activity iOS (App Intents) o le azioni della notifica del servizio
-   * Android. `action`: 'pausa' (alterna) | 'riascolta' | 'salta' |
-   * 'ricalcola' | 'termina'. Lo gestisce App.tsx (giro/percorso) o
-   * useWalkingNavigation (tappa singola, via evento 'wip-nav-banner-action').
+   * Android. `action`: 'pausa' | 'riprendi' (dal 21/09/2026 azioni
+   * ESPLICITE e idempotenti, non più un'alternanza) | 'riascolta' | 'salta' |
+   * 'ricalcola' | 'termina'. `ts` = ms dal 1970 del TOCCO (Android e, dal
+   * 21/09/2026, iOS): serve alla regola dei 60 s di App.tsx. Lo gestisce
+   * App.tsx (giro/percorso) o useWalkingNavigation (tappa singola, via
+   * evento 'wip-nav-banner-action').
    */
   addListener(
     eventName: 'navBannerAction',
-    listener: (data: { action?: string }) => void,
+    listener: (data: { action?: string; ts?: number }) => void,
   ): Promise<PluginListenerHandle> & PluginListenerHandle;
   addListener(
     eventName: string,

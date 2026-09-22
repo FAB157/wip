@@ -1,6 +1,6 @@
 import { X, Navigation, Trash2, MapPin, ChevronDown, ChevronUp, GripVertical } from "lucide-react";
 import { motion, AnimatePresence, Reorder } from "motion/react";
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, type WheelEvent } from "react";
 import { CATEGORY_COLORS, CATEGORY_EMOJIS } from "../lib/mapConstants";
 import { Language, getTranslation } from "../lib/i18n";
 import { tourService, MAX_TAPPE, metri as metriFra } from "../services/tourService";
@@ -123,7 +123,9 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
         : bozza.errore === 'POSIZIONE'
           ? tr('gr_serve_posizione')
           : bozza.metri > 0
-            ? `${distanza(bozza.metri)} · ${bozza.minutiCammino} ${tr('gr_min_a_piedi')} · ${bozza.anello ? tr('gr_anello_da_dove_sei') : tr('gr_fino_ultima_tappa')}${distanzaDalRientro != null ? ` · ${tr('gr_finisci_a_distanza').replace('{d}', distanza(distanzaDalRientro))}` : ''}`
+            ? `${distanza(bozza.metri)} · ${bozza.minutiCammino} ${tr('gr_min_a_piedi')} · ${bozza.soloItinerario
+                ? (bozza.anello ? tr('gr_anello_dalla_prima') : tr('gr_dalla_prima_all_ultima'))
+                : (bozza.anello ? tr('gr_anello_da_dove_sei') : tr('gr_fino_ultima_tappa'))}${distanzaDalRientro != null ? ` · ${tr('gr_finisci_a_distanza').replace('{d}', distanza(distanzaDalRientro))}` : ''}`
             : tr('gr_wipnav_ordina');
 
   // 1. Deduplicazione rigorosa basata su nome o coordinate molto vicine
@@ -170,6 +172,18 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
   const handleItemClick = (poi: any) => {
     setFocusedId(poi.id);
     onFocus(poi);
+  };
+
+  /** Rotellina verticale → scorrimento orizzontale, per le righe di chip
+   *  "Tempo che hai" e "Arrivo" (vedi sopra: col mouse non c'era altro modo
+   *  di raggiungere le voci fuori dallo schermo). Solo quando la riga ha
+   *  davvero dell'altro da scorrere, altrimenti si ruba lo scroll verticale
+   *  del pannello a chi sta solo passando col mouse sopra le chip. */
+  const scorriOrizzontale = (e: WheelEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollWidth <= el.clientWidth) return;
+    el.scrollLeft += e.deltaY;
+    e.preventDefault();
   };
 
   // MEZZO SCHERMO, NON TRE QUARTI (28/08/2026, collaudo). A 78dvh il pannello
@@ -298,7 +312,25 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
           chi cammina. */}
       {!isCollapsed && scelte.length > 0 && (
         <div className="px-4 py-2.5 border-b border-black/5 bg-white/70 space-y-2">
-          <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto touch-pan-x no-scrollbar -mx-1 px-1 py-0.5">
+          {/* Scorrimento ORIZZONTALE, non a capo (13/09/2026: andare a capo
+              allungava il pannello, "meglio che scorrano per non togliere
+              spazio"). Il difetto vero non era lo scorrimento in se': col
+              mouse su desktop non c'era ALCUN modo di farlo scorrere (barra
+              nascosta apposta da no-scrollbar, nessun trascinamento) — la
+              terza voce di "Arrivo" restava irraggiungibile. `onWheel` gira
+              la rotellina verticale in scorrimento orizzontale su questa
+              riga, lo stesso trucco di qualsiasi lista a chip da desktop
+              (Gmail, Notion...); su touch resta il vero swipe orizzontale.
+              CON IL MOUSE SI VA A CAPO (20/09/2026, committente dal web: «non
+              scorrono», «Solo il giro dalla 1ª tappa» e «Tutto» irraggiungibili).
+              La rotellina non la scopre nessuno, e un trackpad senza gesto
+              orizzontale non ha proprio modo. `pointer:fine` = mouse: li' il
+              pannello e' una colonna alta, lo spazio c'e', e le opzioni si
+              vedono TUTTE. Col dito (`pointer:coarse`) resta lo scorrimento. */}
+          <div
+            className="flex items-center gap-1.5 flex-nowrap overflow-x-auto touch-pan-x no-scrollbar -mx-1 px-1 py-0.5 [@media(pointer:fine)]:flex-wrap [@media(pointer:fine)]:overflow-x-visible"
+            onWheel={scorriOrizzontale}
+          >
             <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1 shrink-0 whitespace-nowrap">{tr('gr_tempo_che_hai')}</span>
             {TEMPI.map(({ min, label }) => (
               <button
@@ -316,7 +348,10 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
           </div>
           {/* Ad anello o aperto. Era sempre ad anello: chi dorme dall'altra
               parte della citta` non vuole tornare al punto di partenza. */}
-          <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto touch-pan-x no-scrollbar -mx-1 px-1 py-0.5">
+          <div
+            className="flex items-center gap-1.5 flex-nowrap overflow-x-auto touch-pan-x no-scrollbar -mx-1 px-1 py-0.5 [@media(pointer:fine)]:flex-wrap [@media(pointer:fine)]:overflow-x-visible"
+            onWheel={scorriOrizzontale}
+          >
             <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1 shrink-0 whitespace-nowrap">{tr('gr_arrivo')}</span>
             {/* TRE possibilita`, non due (28/08/2026). L'anello ha DUE mete
                 diverse appena il giro viene ricalcolato per strada: il punto

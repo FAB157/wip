@@ -739,15 +739,37 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     // Guida Premium (base.tsx). html2pdf resta SOLO ripiego (lingue non
     // latine, o se il motore non ce la fa).
     const ordinati = ordineAttivo.map(k => visit.guide.tappe[k]);
-    const opereOrdinate = Object.fromEntries(ordineAttivo.map((k, n) => [n, operaGuide[k]]).filter(([, g]) => !!g));
+
+    // IL PDF HA I TESTI DI TUTTE LE OPERE, SEMPRE (20/09/2026). Il committente
+    // ha stampato due volte il Duomo di Milano: la prima, 6 pagine con
+    // «Opera di Giuseppe Perego (1774).» sotto ogni titolo; la seconda, 11
+    // pagine con un paragrafo vero per ogni opera. Stessa guida, stesso tasto:
+    // cambiava solo QUANTE opere erano gia' state aperte. Il testo base di una
+    // tappa (`perche`) puo' essere una riga; il racconto sta nella scheda
+    // dell'opera, che entrava nel PDF solo da `operaGuide` — cioe' solo se
+    // l'utente l'aveva gia' toccata in questa sessione. Ora: prima l'archivio
+    // del telefono (le opere scaricate, gratis), e se ne mancano ancora si
+    // completa lo scarico — lo stesso di «Scarica tutto» — PRIMA di impaginare.
+    const schedaDi = (k: number): ArtworkGuide | undefined =>
+      operaGuide[k] || operaDallArchivio(visit.venueKey, language, visit.guide.tappe[k]?.nome) || undefined;
+    const senzaScheda = () => ordineAttivo.filter(k => !schedaDi(k)?.testo);
+    if (senzaScheda().length > 0 && online && !scaricando) {
+      notify(t('mv_pdf_preparo_testi').replace('{n}', String(senzaScheda().length)), 'info');
+      setScaricando({ fatte: 0, totali: visit.guide.tappe.length });
+      try {
+        await scaricaPacchettoMuseo(visit, language, (fatte, totali) => setScaricando({ fatte, totali }));
+        setScaricato(true);
+      } catch { /* si stampa con quello che c'e' */ } finally { setScaricando(null); }
+    }
+    const opereOrdinate = Object.fromEntries(ordineAttivo.map((k, n) => [n, schedaDi(k)]).filter(([, g]) => !!g));
     try {
       notify(t('pf_pdf_in_corso'));
       const { generaPdfMuseo } = await import('../lib/pdf/generaPdf');
       const blob = await generaPdfMuseo({ ...visit, guide: { ...visit.guide, tappe: ordinati } }, opereOrdinate, mappe, language);
       if (blob) {
         const { saveBlobAsFile } = await import('../services/premiumGuideService');
-        const ok = await saveBlobAsFile(blob, nomeFile);
-        notify(t(ok ? 'pf_pdf_salvato' : 'pf_pdf_non_riuscito'));
+        const ok = await saveBlobAsFile(blob, nomeFile, { tipo: 'museo', nome: visit.venue.name });
+        notify(t(ok ? (Capacitor.isNativePlatform() ? 'pf_pdf_salvato' : 'pf_pdf_salvato_web') : 'pf_pdf_non_riuscito'));
         return;
       }
     } catch (e) {
@@ -785,8 +807,8 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             pagebreak: { mode: ['css', 'legacy'] },
           }).from(elemento).outputPdf('blob');
           const { saveBlobAsFile } = await import('../services/premiumGuideService');
-          const ok = await saveBlobAsFile(blob, nomeFile);
-          notify(t(ok ? 'pf_pdf_salvato' : 'pf_pdf_non_riuscito'));
+          const ok = await saveBlobAsFile(blob, nomeFile, { tipo: 'museo', nome: visit.venue.name });
+          notify(t(ok ? (Capacitor.isNativePlatform() ? 'pf_pdf_salvato' : 'pf_pdf_salvato_web') : 'pf_pdf_non_riuscito'));
         } finally {
           elemento.setAttribute('style', stilePrima);
         }

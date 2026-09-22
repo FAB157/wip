@@ -361,7 +361,9 @@ final class WipSupabaseClient {
     /// Testo integrale dai campi grezzi di shared_pois (fallback mono-lingua,
     /// tipicamente italiano). Tenuto come rete di sicurezza offline/di errore.
     func fetchPoiAudioText(_ poiId: String, completion: @escaping (String?) -> Void) {
-        let sel = "audio_script,description_long,description_ai,description"
+        // (20/09/2026) `description` NON esiste su shared_pois: con quella colonna
+        // la query dava 400 e questo ripiego tornava SEMPRE nil.
+        let sel = "audio_script,description_long,description_ai,description_short"
         guard let req = request(path: "/rest/v1/shared_pois?id=eq.\(poiId)&select=\(sel)", method: "GET") else {
             completion(nil)
             return
@@ -374,7 +376,7 @@ final class WipSupabaseClient {
                 completion(nil)
                 return
             }
-            for key in ["audio_script", "description_long", "description_ai", "description"] {
+            for key in ["audio_script", "description_long", "description_ai", "description_short"] {
                 if let v = row[key] as? String, !v.trimmingCharacters(in: .whitespaces).isEmpty {
                     completion(v)
                     return

@@ -40,13 +40,9 @@ export default function PriceList({ language, onOpenShop }: PriceListProps) {
             unit={t('vr_b_unit_10messages')}
             desc={t('vr_b_pl_chat_desc')}
           />
-          <PriceItem
-            icon={<Info className="w-5 h-5" />}
-            name={t('vr_b_svc_poi')}
-            price={String(PRICING_LIST.poi_detail)}
-            unit={t('vr_b_unit_per_place')}
-            desc={t('vr_b_pl_poi_desc')}
-          />
+          {/* (19/09/2026) La scheda del luogo non e` piu` in listino: il
+              committente ha tolto il cancello da 5 crediti, testo e foto di un
+              POI sono gratis. A pagamento resta l'audioguida, qui sotto. */}
           <PriceItem
             icon={<Camera className="w-5 h-5" />}
             name="Vision AI"
@@ -99,18 +95,18 @@ export default function PriceList({ language, onOpenShop }: PriceListProps) {
             desc={t('pc_listino_desc')}
           />
           <PriceItem
-            icon={<CalendarPlus className="w-5 h-5" />}
-            name={t('vr_b_pl_extend_name')}
-            price={String(PRICING_LIST.extend_itinerary_day)}
-            unit={t('vr_b_pl_extend_unit')}
-            desc={t('vr_b_pl_extend_desc')}
-          />
-          <PriceItem
             icon={<RefreshCw className="w-5 h-5" />}
             name={t('vr_b_pl_replace_name')}
             price={String(PRICING_LIST.replace_stop)}
             unit={t('vr_b_pl_replace_unit')}
             desc={t('vr_b_pl_replace_desc')}
+          />
+          <PriceItem
+            icon={<CalendarPlus className="w-5 h-5" />}
+            name={t('vr_b_pl_extend_name')}
+            price={String(PRICING_LIST.extend_itinerary_day)}
+            unit={t('vr_b_pl_extend_unit')}
+            desc={t('vr_b_pl_extend_desc')}
           />
           <PriceItem
             icon={<Volume2 className="w-5 h-5" />}

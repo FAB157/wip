@@ -28,6 +28,12 @@ export const CATEGORY_COLORS: Record<string, string> = {
   viewpoint:         "bg-[#0369a1]",
   castle:            "bg-[#78350f]",
   monument:          "bg-[#92400e]",
+  // "memorial" (targhe, lapidi, memoriali di guerra) manca qui: sulla mappa
+  // cadeva sul pin generico invece che sull'ambra dei monumenti, di cui fa
+  // parte a tutti gli effetti (MONUMENTI_TYPES in poiTaxonomy.ts, stesso
+  // trattamento già presente in poiCategories.ts) — 13/09/2026, segnalato
+  // dall'utente su una targa a Ostiano.
+  memorial:          "bg-[#92400e]",
   ruins:             "bg-[#57534e]",
   archaeological_site: "bg-[#a16207]",
   artwork:           "bg-[#be185d]",
@@ -102,6 +108,7 @@ export const CATEGORY_HEX: Record<string, string> = {
   gemme:             "#0f766e",
   monumenti:         "#92400e",
   monument:          "#92400e",
+  memorial:          "#92400e",
   castle:            "#78350f",
   ruins:             "#57534e",
   archaeological_site: "#a16207",
@@ -191,6 +198,7 @@ export const CATEGORY_EMOJIS: Record<string, string> = {
   viewpoint: "🌄",
   castle: "🏰",
   monument: "🏛️",
+  memorial: "🏛️",
   ruins: "🏚️",
   archaeological_site: "⚱️",
   artwork: "🎨",
@@ -246,6 +254,7 @@ export const SUB_CATEGORY_EMOJIS: Record<string, string> = {
   archaeological_site: "⚱️",
   artwork: "🎨",
   monument: "🏛️",
+  memorial: "🏛️",
   attraction: "📍",
   church: "⛪",
   museum: "🖼️",

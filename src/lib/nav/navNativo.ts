@@ -95,7 +95,43 @@ let ultimoBattitoTs = 0;
 let ultimoBattitoDaFixTs = 0;
 let timerBattito: ReturnType<typeof setInterval> | null = null;
 let ascoltoRipresa = false;
-let riallineamentoInCorso = false;
+/**
+ * UN SOLO RIALLINEAMENTO IN VOLO, CONDIVISO (21/09/2026, verifica a schermo
+ * spento). Prima era un flag: chi arrivava col riallineamento già partito
+ * non poteva aspettarne l'esito. Ora è una promessa: il battito e
+ * `riallineaSeScongelato` (le azioni del cruscotto al risveglio) aspettano
+ * la STESSA, e un'azione in coda si applica solo dopo che il progresso fatto
+ * dal follower a schermo spento è tornato qui.
+ */
+let promessaRiallineamento: Promise<void> | null = null;
+/** Quando è finito l'ultimo riallineamento: è un «contatto» col nativo come un battito. */
+let riallineatoTs = 0;
+/**
+ * Quando un battito ha trovato il nativo al comando da ≥ 8 s, cioè la
+ * fine dell'ultimo buco: al risveglio l'azione del
+ * cruscotto in coda può arrivare DOPO il primo battito, che il buco l'ha già
+ * chiuso — vedi `nativoAlComando`.
+ */
+let fineBucoTs = 0;
+const FINESTRA_RISVEGLIO_MS = 3000;
+/**
+ * LA PAUSA VIAGGIA COL PERCORSO (21/09/2026, REVISIONE 2 della spec). In
+ * pausa MANUALE il giro non ritira più il percorso: resta al follower, in
+ * pausa (tace ma tiene il conto), e «Riprendi» dalla lock screen trova
+ * qualcosa da riprendere — prima il follower era vuoto e taceva fino
+ * all'apertura dell'app. La pausa va in OGNI battito e in OGNI consegna.
+ */
+let pausaCorrente = false;
+/**
+ * IL CRUSCOTTO HA UN PROPRIETARIO come il percorso (21/09/2026). Notifica
+ * e Live Activity sono UNA: con il giro e «Naviga» verso un POI accesi
+ * insieme si sovrascrivevano, e ogni tasto (anche «Termina») finiva al giro.
+ * La tappa singola lo tiene finché è attiva, tasti compresi; il giro lo
+ * riprende quando lei lascia (evento 'wip-cruscotto-tappa-libero'). È un
+ * flag SEPARATO dal proprietario del percorso: quello è null sul web, sulle
+ * build vecchie o dopo un rifiuto del nativo, e il cruscotto c'è lo stesso.
+ */
+let cruscottoTappa = false;
 /** Build nativa più vecchia del JS: i metodi non esistono, si smette di provare. */
 let nativoSenzaMetodi = false;
 
@@ -125,7 +161,9 @@ function inMuto(): boolean {
 function consegna(): void {
   if (!ultimoJson) return;
   const id = String(ultimoJson.id || '');
-  const routeJson = JSON.stringify({ ...ultimoJson, indice: ultimoIndice });
+  // La pausa di ADESSO, non quella della prima consegna: una riconsegna dopo
+  // il muto o dopo un «Termina»+«no» deve trovare il follower nello stato giusto.
+  const routeJson = JSON.stringify({ ...ultimoJson, indice: ultimoIndice, inPausa: pausaCorrente });
   ItaintaBackgroundPoi.setNavRoute({ routeJson })
     .then((r) => { if (r?.ok === false && id === idCorrente) { proprietario = null; firmaCorrente = ''; } })
     .catch((e: any) => {
@@ -167,46 +205,97 @@ function allineaMuto(): void {
  * allineare.
  */
 async function riallineaDalNativo(): Promise<void> {
-  if (riallineamentoInCorso || !proprietario || !disponibile() || sospesoPerMuto) return;
-  riallineamentoInCorso = true;
+  if (!proprietario || !disponibile() || sospesoPerMuto) return;
   const canale = proprietario;
   const id = idCorrente;
   try {
     const p = await ItaintaBackgroundPoi.getNavProgress();
     if (id !== idCorrente) return; // nel frattempo è cambiato il percorso
+    const stessoId = String(p?.id || '') === id;
+    const dettaglio = {
+      canale,
+      id,
+      indice: Number(p?.indice) || 0,
+      dettiVicino: Array.isArray(p?.dettiVicino) ? p!.dettiVicino!.map(Number) : [],
+      dettiLontano: Array.isArray(p?.dettiLontano) ? p!.dettiLontano!.map(Number) : [],
+      ultimoTestoVicino: String(p?.ultimoTestoVicino || ''),
+      ultimoTestoLontano: String(p?.ultimoTestoLontano || ''),
+      // (21/09/2026) `finito`: l'arrivo finale l'ha chiuso il nativo a schermo
+      // spento — la tappa singola chiude senza ridirlo, il giro chiude l'ultima
+      // tappa o il rientro. Prima nessuno lo leggeva: allo sblocco lontano
+      // dalla meta si ricalcolava verso un posto già visitato.
+      finito: p?.finito === true,
+      terminato: p?.terminato === true,
+    };
     // IL NATIVO NON HA PIÙ IL PERCORSO (o ne ha un altro) MA QUI SI NAVIGA
     // ANCORA: «Termina» toccato a schermo spento svuota il follower, ma
     // App.tsx scarta le azioni del cruscotto più vecchie di 60 s — il giro
     // continua con la stessa firma e nessuno riconsegnerebbe. Lo stesso dopo
     // un riavvio del plugin. Si riconsegna, dal punto in cui si è.
-    if (!p?.attivo || String(p.id || '') !== id) { if (!inMuto()) consegna(); return; }
-    window.dispatchEvent(new CustomEvent('wip-nav-nativo-progresso', {
-      detail: {
-        canale,
-        id,
-        indice: Number(p.indice) || 0,
-        dettiVicino: Array.isArray(p.dettiVicino) ? p.dettiVicino.map(Number) : [],
-        dettiLontano: Array.isArray(p.dettiLontano) ? p.dettiLontano.map(Number) : [],
-        ultimoTestoVicino: String(p.ultimoTestoVicino || ''),
-        ultimoTestoLontano: String(p.ultimoTestoLontano || ''),
-      },
-    }));
+    if (!p?.attivo || !stessoId) {
+      // «Termina» dal cruscotto (21/09/2026): il follower ha lasciato la
+      // FOTOGRAFIA di quello che aveva fatto. Prima il progresso (i navigatori
+      // chiudono le tappe passate), POI la riconsegna — altrimenti al «no»
+      // della conferma il giro ripartiva dalla tappa di prima.
+      if (!p?.attivo && p?.terminato === true && stessoId) {
+        window.dispatchEvent(new CustomEvent('wip-nav-nativo-progresso', { detail: dettaglio }));
+        // Chi ha ascoltato l'evento può aver già ripubblicato (percorso nuovo):
+        // si riconsegna solo quello per cui si è chiesto.
+        if (id !== idCorrente) return;
+      }
+      if (!inMuto()) consegna();
+      return;
+    }
+    window.dispatchEvent(new CustomEvent('wip-nav-nativo-progresso', { detail: dettaglio }));
   } catch { /* niente allineamento: al peggio una svolta ripetuta */ }
-  finally { riallineamentoInCorso = false; }
 }
 
-function mandaBattito(): void {
-  if (!proprietario || !disponibile()) return;
+/** Parte un riallineamento, o si aggancia a quello già in volo. */
+function avviaRiallineamento(): Promise<void> {
+  if (!promessaRiallineamento) {
+    promessaRiallineamento = riallineaDalNativo()
+      .catch(() => { /* già gestito dentro */ })
+      .finally(() => { promessaRiallineamento = null; riallineatoTs = Date.now(); });
+  }
+  return promessaRiallineamento;
+}
+
+/**
+ * Il nativo è al comando da almeno 8 s: nessun battito E nessun
+ * riallineamento da allora. Il riallineamento conta come un contatto: senza,
+ * un'azione del cruscotto riallineata al risveglio e il battito che la segue
+ * un attimo dopo avrebbero chiesto due volte la stessa cosa (e il giro
+ * avrebbe potuto chiudere due volte la stessa tappa).
+ */
+function nativoAlComandoDaUnPo(adesso: number): boolean {
+  if (ultimoBattitoTs <= 0) return false;
+  return adesso - Math.max(ultimoBattitoTs, riallineatoTs) >= BUCO_RIALLINEA_MS;
+}
+
+/**
+ * Manda il battito. Restituisce true se QUESTO battito ha trovato il nativo
+ * al comando (buco ≥ 8 s) e ha avviato — o trovato in volo — un
+ * riallineamento: i «detti» del nativo arrivano solo con l'evento
+ * 'wip-nav-nativo-progresso', e chi chiama in quel fix non deve annunciare
+ * nulla, o ripeterebbe la svolta che il nativo ha appena detto.
+ */
+function mandaBattito(): boolean {
+  if (!proprietario || !disponibile()) return false;
   allineaMuto();
-  if (sospesoPerMuto) return;
+  if (sospesoPerMuto) return false;
   const adesso = Date.now();
   // Il buco si misura QUI, prima di aggiornare l'orologio: al disgelo il timer
   // può scattare prima dell'evento di visibilità, e cancellerebbe la prova.
-  const buco = ultimoBattitoTs > 0 ? adesso - ultimoBattitoTs : 0;
+  if (ultimoBattitoTs > 0 && adesso - ultimoBattitoTs >= BUCO_RIALLINEA_MS) fineBucoTs = adesso;
+  const riallinea = promessaRiallineamento != null || nativoAlComandoDaUnPo(adesso);
   ultimoBattitoTs = adesso;
-  if (buco >= BUCO_RIALLINEA_MS) void riallineaDalNativo();
-  ItaintaBackgroundPoi.navHeartbeat({ indice: ultimoIndice, dettiVicino: dettiVicinoJs, dettiLontano: dettiLontanoJs })
+  // PRIMA la domanda al nativo, POI il battito: le chiamate al plugin sono
+  // servite in ordine, e il progresso va letto prima che il battito unisca
+  // gli insiemi del JS.
+  if (riallinea) void avviaRiallineamento();
+  ItaintaBackgroundPoi.navHeartbeat({ indice: ultimoIndice, dettiVicino: dettiVicinoJs, dettiLontano: dettiLontanoJs, inPausa: pausaCorrente })
     .catch(() => { /* best-effort */ });
+  return riallinea;
 }
 
 /**
@@ -241,11 +330,48 @@ function assicuraAscoltoRipresa(): void {
   window.addEventListener('focus', alRitorno);
 }
 
+/**
+ * AZIONE DEL CRUSCOTTO CONSEGNATA DOPO UN CONGELAMENTO (21/09/2026). Allo
+ * sblocco la prima cosa che gira è l'evento in coda («Pausa» toccata sulla
+ * lock screen): applicata subito, faceva ritirare il percorso PRIMA che
+ * qualcuno chiedesse al follower cosa aveva fatto a schermo spento, e il giro
+ * ripartiva da tappe già visitate. Chi applica un'azione aspetta questa
+ * promessa: se il nativo è al comando da ≥ 8 s riprende prima il progresso
+ * (lo stesso riallineamento del battito, condiviso), altrimenti si risolve
+ * subito — a pagina viva non cambia nulla. Non manda battiti: a pagina
+ * nascosta il nativo resta al comando.
+ */
+export function riallineaSeScongelato(): Promise<void> {
+  if (!proprietario || !disponibile() || sospesoPerMuto) return Promise.resolve();
+  if (promessaRiallineamento) return promessaRiallineamento;
+  if (!nativoAlComandoDaUnPo(Date.now())) return Promise.resolve();
+  return avviaRiallineamento();
+}
+
+/**
+ * IL NATIVO È AL COMANDO (21/09/2026): c'è un percorso consegnato, non in
+ * muto, e nessun battito da ≥ 8 s — misurato PRIMA che un battito lo
+ * aggiorni. Serve a «Riascolta» dal cruscotto: col nativo al comando il
+ * follower l'ha già ridetta a schermo spento, e su iOS l'azione arriva anche
+ * al JS (entro 60 s): si sentiva due volte.
+ * Al risveglio l'azione in coda può girare DOPO il primo battito (timer o
+ * ritorno in primo piano), che il buco l'ha già chiuso: vale ancora «al
+ * comando» per FINESTRA_RISVEGLIO_MS dalla fine del buco — il tocco è
+ * avvenuto dentro il buco.
+ */
+export function nativoAlComando(): boolean {
+  if (!proprietario || !disponibile() || sospesoPerMuto) return false;
+  const adesso = Date.now();
+  if (ultimoBattitoTs > 0 && adesso - ultimoBattitoTs >= BUCO_RIALLINEA_MS) return true;
+  return fineBucoTs > 0 && adesso - fineBucoTs < FINESTRA_RISVEGLIO_MS;
+}
+
 function azzera(): void {
   proprietario = null; firmaCorrente = ''; idCorrente = ''; passiCorrenti = [];
   dettiVicinoJs = []; dettiLontanoJs = [];
   ultimoJson = null; sospesoPerMuto = false;
   ultimoBattitoTs = 0; ultimoBattitoDaFixTs = 0;
+  riallineatoTs = 0; fineBucoTs = 0; pausaCorrente = false;
 }
 
 /**
@@ -253,6 +379,13 @@ function azzera(): void {
  * `firma` è una stringa qualunque che cambia quando cambia il percorso: con la
  * stessa firma la chiamata non fa nulla, così chi chiama può farlo a ogni fix
  * senza pensarci. `finale`: l'ultimo passo 'arrive' chiude la navigazione.
+ * `inPausa` (21/09/2026): il follower nasce in pausa (percorso consegnato
+ * durante una pausa MANUALE del giro); poi la pausa la cambia
+ * `impostaPausaNativa`, non la firma.
+ * `spegniCruscotto` (21/09/2026): all'arrivo finale col nativo al comando il
+ * follower spegne il cruscotto solo se true (assente = true, come prima). La
+ * tappa singola manda false quando c'è un giro in corso: il cruscotto dopo è
+ * del giro, e su iOS una Live Activity chiusa dal background non si riapre.
  */
 export function pubblicaPercorsoNativo(args: {
   canale: CanaleNav;
@@ -262,6 +395,8 @@ export function pubblicaPercorsoNativo(args: {
   linea?: [number, number][];
   lingua: string;
   finale: boolean;
+  inPausa?: boolean;
+  spegniCruscotto?: boolean;
 }): void {
   if (!disponibile()) return;
   // La tappa singola vince: il giro aspetta che lasci (vedi CanaleNav).
@@ -283,6 +418,8 @@ export function pubblicaPercorsoNativo(args: {
   ultimoIndice = Math.max(0, Math.min(passi.length - 1, Number(args.indice) || 0));
   dettiVicinoJs = []; dettiLontanoJs = [];
   ultimoBattitoTs = Date.now(); ultimoBattitoDaFixTs = 0;
+  riallineatoTs = 0; fineBucoTs = 0;
+  pausaCorrente = args.inPausa === true;
   ultimoJson = {
     id: idCorrente,
     passi,
@@ -291,6 +428,9 @@ export function pubblicaPercorsoNativo(args: {
     modelloLontano: MODELLO_LONTANO[l2] || MODELLO_LONTANO.en,
     fraseFuoriPercorso: FUORI_PERCORSO[l2] || FUORI_PERCORSO.en,
     finale: args.finale === true,
+    inPausa: pausaCorrente,
+    // Campo additivo: assente = il nativo spegne come prima.
+    ...(typeof args.spegniCruscotto === 'boolean' ? { spegniCruscotto: args.spegniCruscotto } : {}),
   };
   // In muto non si consegna (ci pensa allineaMuto quando il muto finisce), ma
   // il percorso di PRIMA va tolto: il nativo non deve dettare quello vecchio.
@@ -318,9 +458,15 @@ export function ritiraPercorsoNativo(canale: CanaleNav): void {
  * Il battito, da chiamare a ogni fix elaborato dal navigatore JS: dice al
  * nativo «sono vivo, parlo io», a che manovra si è arrivati e COSA si è già
  * annunciato (indici nella lista consegnata).
+ *
+ * RESTITUISCE true (21/09/2026) se questo battito ha trovato il nativo al
+ * comando da ≥ 8 s e ha avviato il riallineamento: in QUEL fix il chiamante
+ * non annuncia nulla. Su Android a schermo spento la WebView resta viva e
+ * batte solo dai fix buoni: dopo un buco il nativo diceva la svolta, e il JS
+ * la ripeteva nello stesso fix, prima che i «detti» del nativo arrivassero.
  */
-export function battitoNav(canale: CanaleNav, indice: number, dettiVicino?: Iterable<number>, dettiLontano?: Iterable<number>): void {
-  if (proprietario !== canale) return;
+export function battitoNav(canale: CanaleNav, indice: number, dettiVicino?: Iterable<number>, dettiLontano?: Iterable<number>): boolean {
+  if (proprietario !== canale) return false;
   if (Number.isFinite(indice)) ultimoIndice = Math.max(0, Math.round(indice));
   ultimoBattitoDaFixTs = Date.now();
   // Le soglie del JS e del nativo non coincidono al metro (35/30 m): senza
@@ -332,8 +478,65 @@ export function battitoNav(canale: CanaleNav, indice: number, dettiVicino?: Iter
   const cambiato = nuoviVicino.join(',') !== dettiVicinoJs.join(',') || nuoviLontano.join(',') !== dettiLontanoJs.join(',');
   dettiVicinoJs = nuoviVicino; dettiLontanoJs = nuoviLontano;
   // Una svolta appena detta va comunicata SUBITO, senza aspettare i 2 s.
-  if (!cambiato && Date.now() - ultimoBattitoTs < BATTITO_MIN_MS) return;
+  if (!cambiato && Date.now() - ultimoBattitoTs < BATTITO_MIN_MS) return false;
+  return mandaBattito();
+}
+
+/**
+ * PAUSA DEL GIRO (21/09/2026, REVISIONE 2). In pausa MANUALE il percorso
+ * resta al follower, in pausa: la si memorizza (va in ogni battito e in ogni
+ * consegna) e la si dice SUBITO al nativo con un battito, anche a pagina
+ * nascosta — il tasto «Pausa» in app deve fermare il follower adesso, non al
+ * prossimo fix. Solo quando cambia: ogni aggiornamento del giro la ripete, e
+ * un battito da una pagina nascosta tiene zitto il nativo per 8 s.
+ * No-op se il canale non è il proprietario.
+ */
+export function impostaPausaNativa(canale: CanaleNav, inPausa: boolean): void {
+  if (proprietario !== canale) return;
+  const v = inPausa === true;
+  if (v === pausaCorrente) return;
+  pausaCorrente = v;
   mandaBattito();
+}
+
+/** La tappa singola prende (true) o lascia (false) il cruscotto. */
+export function segnaCruscottoTappa(v: boolean): void { cruscottoTappa = v === true; }
+/** Il cruscotto (e i suoi tasti) è della tappa singola: il giro non lo scrive e non lo spegne. */
+export function cruscottoDellaTappa(): boolean { return cruscottoTappa; }
+
+/**
+ * PERCORSO ORFANO DOPO UNA PAGINA RICREATA (21/09/2026). Su iOS, quando muore
+ * il processo WebContent, Capacitor ricarica la pagina SENZA richiamare il
+ * `load()` del plugin — che è dove il follower si svuota. Il follower teneva
+ * il percorso della pagina morta: nessuno batteva più, e ad app aperta
+ * dettava svolte e aggiornava la Live Activity di una navigazione che l'app
+ * non mostrava, col GPS al massimo. Una volta per pagina, alla PRIMA
+ * visibilità (con il telefono in tasca il follower continua a guidare, come
+ * vuole la spec per la pagina morta a schermo spento), se questa pagina non
+ * ha consegnato nulla si svuota il follower e si avvisa App.tsx
+ * ('wip-nav-nativo-orfano'), che chiude il cruscotto se non c'è un giro.
+ * Su Android è innocuo: lì `load()` l'ha già svuotato.
+ * Non subito al caricamento del modulo: questo file lo carica App.tsx prima
+ * di montarsi, e l'evento partirebbe prima che App ascolti e riprenda il giro.
+ */
+const ORFANO_ATTESA_MS = 2500;
+let orfanoPronto = false;
+let orfanoVerificato = false;
+function pulisciOrfano(): void {
+  if (orfanoVerificato || !orfanoPronto) return;
+  if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+  orfanoVerificato = true;
+  try { document.removeEventListener('visibilitychange', pulisciOrfano); } catch { /* SSR */ }
+  if (!disponibile() || proprietario) return; // questa pagina ha già consegnato: setRoute ha sostituito il vecchio
+  ItaintaBackgroundPoi.getNavProgress().then((p) => {
+    if (proprietario) return; // nel frattempo è partita una navigazione vera
+    ItaintaBackgroundPoi.clearNavRoute().catch(() => { /* best-effort */ });
+    window.dispatchEvent(new CustomEvent('wip-nav-nativo-orfano', { detail: { attivo: !!p?.attivo } }));
+  }).catch(() => { /* build senza il metodo: niente da pulire */ });
+}
+if (typeof document !== 'undefined' && typeof window !== 'undefined') {
+  document.addEventListener('visibilitychange', pulisciOrfano);
+  setTimeout(() => { orfanoPronto = true; pulisciOrfano(); }, ORFANO_ATTESA_MS);
 }
 
 /** false sul web e sulle build native senza il follower: chi chiama può risparmiarsi il lavoro. */

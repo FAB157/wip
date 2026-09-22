@@ -7,7 +7,7 @@
 import React from 'react';
 import { Document, Page, Text, View, Image } from '@react-pdf/renderer';
 import type { PremiumGuideContent, PremiumGuidePoi } from '../../services/premiumGuideService';
-import { PDF_C, pdfStili as S, pulisci, Elenco, stelle, PiedePagina } from './base.js';
+import { PDF_C, pdfStili as S, pulisci, Elenco, stelle, PiedePagina, FotoConTesto, type MisureFoto } from './base.js';
 
 export interface GuidaPdfEtichette {
   guida: string; sommario: string; giorno: string; introduzione: string;
@@ -21,6 +21,8 @@ export interface GuidaPdfProps {
   content: PremiumGuideContent;
   /** poi_id → data URL (o URL http) della foto; 'cover' per la copertina. */
   immagini: Record<string, string>;
+  /** poi_id → misure della foto, per mostrarla intera (assenti sul server: si ripiega su `contain`). */
+  misure?: Record<string, MisureFoto>;
   etichette: GuidaPdfEtichette;
 }
 
@@ -28,9 +30,12 @@ const Copertina = ({ content, cover, et }: { content: PremiumGuideContent; cover
   const titolo = pulisci(content.guida_titolo) || et.guida;
   const dim = titolo.length > 44 ? 26 : titolo.length > 26 ? 30 : 36;
   return (
+    // Misure esplicite, un punto sotto l'A4 (595.28 × 841.89): con '100%' il
+    // motore metteva la foto a pagina 1 e il titolo a pagina 2 (20/09/2026,
+    // stessa correzione di MuseumGuidaPdf, collaudata li').
     <Page size="A4" style={{ backgroundColor: PDF_C.navy, padding: 0 }} bookmark={{ title: titolo }}>
-      {cover ? <Image src={cover} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: 0.32 }} /> : null}
-      <View style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', paddingTop: 30 * 2.835, paddingHorizontal: 18 * 2.835, paddingBottom: 16 * 2.835, justifyContent: 'space-between' }}>
+      {cover ? <Image src={cover} style={{ position: 'absolute', left: 0, top: 0, width: 595.28, height: 840, objectFit: 'cover', opacity: 0.32 }} /> : null}
+      <View style={{ position: 'absolute', left: 0, top: 0, width: 595.28, height: 840, paddingTop: 30 * 2.835, paddingHorizontal: 18 * 2.835, paddingBottom: 16 * 2.835, justifyContent: 'space-between' }}>
         <View>
           <Text style={{ fontFamily: 'Helvetica-Bold', fontSize: dim, color: PDF_C.bianco, lineHeight: 1.1, marginBottom: 14 }}>{titolo}</Text>
           <View style={{ alignSelf: 'flex-start', backgroundColor: PDF_C.oro, borderRadius: 3, paddingVertical: 4, paddingHorizontal: 12, marginBottom: 18 }}>
@@ -127,20 +132,25 @@ const RigaInfo = ({ k, v }: { k: string; v?: string }) => (!v ? null : (
   </View>
 ));
 
-const SchedaPoi: React.FC<{ p: PremiumGuidePoi; n: number; foto?: string; et: GuidaPdfEtichette }> = ({ p, n, foto, et }) => {
+const SchedaPoi: React.FC<{ p: PremiumGuidePoi; n: number; foto?: string; misure?: MisureFoto; et: GuidaPdfEtichette }> = ({ p, n, foto, misure, et }) => {
   const piatti = (p.migliori_piatti || []).map((x) => typeof x === 'string' ? x : [x?.nome, x?.descrizione, x?.prezzo].filter(Boolean).join(' — '));
   const meta = [pulisci(p.categoria_pdf), p.valutazione ? stelle(p.valutazione) : '', pulisci(p.orario_visita)].filter(Boolean).join('   ·   ');
+  const intestazione = (
+    <View>
+      <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 10 }}>
+        <Text style={{ fontFamily: 'Helvetica-Bold', fontSize: 11, color: PDF_C.oro, width: 22 }}>{n}.</Text>
+        <Text style={[S.h3, { marginTop: 0, flex: 1 }]}>{pulisci(p.titolo)}</Text>
+      </View>
+      {meta ? <Text style={[S.sans, S.piccolo, { marginLeft: 22, marginBottom: 4, color: PDF_C.arancio }]}>{meta}</Text> : null}
+    </View>
+  );
   return (
     <View>
-      <View wrap={false} minPresenceAhead={60}>
-        <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 10 }}>
-          <Text style={{ fontFamily: 'Helvetica-Bold', fontSize: 11, color: PDF_C.oro, width: 22 }}>{n}.</Text>
-          <Text style={[S.h3, { marginTop: 0, flex: 1 }]}>{pulisci(p.titolo)}</Text>
-        </View>
-        {meta ? <Text style={[S.sans, S.piccolo, { marginLeft: 22, marginBottom: 4, color: PDF_C.arancio }]}>{meta}</Text> : null}
-      </View>
-      {foto ? <Image src={foto} style={{ width: '100%', maxHeight: 62 * 2.835, objectFit: 'cover', borderRadius: 4, marginBottom: 6 }} /> : null}
-      <Text style={S.paragrafo}>{pulisci(p.descrizione_lunga)}</Text>
+      {/* La foto si vede INTERA e resta piccola (20/09/2026): verticale o
+          quadrata → in verticale col testo accanto; orizzontale → sopra il
+          testo, ridotta e centrata. Il testo lungo SCORRE fra le pagine: solo
+          intestazione e foto restano unite (base.tsx › FotoConTesto). */}
+      <FotoConTesto intestazione={intestazione} foto={foto} misure={misure} testo={pulisci(p.descrizione_lunga)} stileTesto={[S.paragrafo, { marginBottom: 6 }]} />
       {p.curiosita && p.curiosita.length ? (
         <View>
           <Text style={S.occhiello} minPresenceAhead={30}>{et.curiosita}</Text>
@@ -179,7 +189,7 @@ const SchedaPoi: React.FC<{ p: PremiumGuidePoi; n: number; foto?: string; et: Gu
   );
 };
 
-export default function GuidaPremiumPdf({ content, immagini, etichette: et }: GuidaPdfProps) {
+export default function GuidaPremiumPdf({ content, immagini, misure, etichette: et }: GuidaPdfProps) {
   const titolo = pulisci(content.guida_titolo) || et.guida;
   return (
     <Document title={titolo} author="WIP · World in Pocket · wip.guide" subject={pulisci(content.sottotitolo)} creator="wip.guide" producer="wip.guide">
@@ -197,7 +207,7 @@ export default function GuidaPremiumPdf({ content, immagini, etichette: et }: Gu
               {g.tema_giorno ? <Text style={S.bandaGiornoTema}>{pulisci(g.tema_giorno)}</Text> : null}
             </View>
             {(g.pois || []).map((p, i) => (
-              <SchedaPoi key={p.poi_id || i} p={p} n={i + 1} foto={immagini[p.poi_id]} et={et} />
+              <SchedaPoi key={p.poi_id || i} p={p} n={i + 1} foto={immagini[p.poi_id]} misure={misure?.[p.poi_id]} et={et} />
             ))}
           </View>
         ))}

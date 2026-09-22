@@ -14,7 +14,7 @@
  * scaricato a runtime: per ora quelle lingue restano sulla vecchia via.
  */
 import React from 'react';
-import { Page, Text, View, StyleSheet } from '@react-pdf/renderer';
+import { Page, Text, View, Image, StyleSheet } from '@react-pdf/renderer';
 import { pulisci } from './pulisci.js';
 
 export { pulisci, haCaratteriNonLatini } from './pulisci.js';
@@ -101,6 +101,100 @@ export const PiedePagina = ({ titolo }: { titolo: string; etichettaPagina?: stri
     </Text>
   </>
 );
+
+/**
+ * LA FOTO SI VEDE INTERA (20/09/2026, committente sul PDF del Duomo: «verifica
+ * perche' le foto vengono tagliate»). Prima: `width: 100%` + `maxHeight: 62mm`
+ * + `objectFit: cover` — una fascia larga 174 mm e alta 62: QUALSIASI foto
+ * (una 3:2 a quella larghezza e' alta 116 mm) veniva ritagliata a meta', e di
+ * una verticale — una statua, una vetrata, un portale — restava la striscia
+ * centrale. Ora la foto tiene le SUE proporzioni: con le misure note
+ * (`misure`, lette quando la si scarica) il riquadro e' esattamente il suo,
+ * largo quanto serve e alto al massimo `maxAltezza`; senza misure si ripiega
+ * su `contain`, che la mostra comunque tutta.
+ */
+export const PDF_LARGHEZZA_TESTO = 595.28 - 2 * 18 * 2.835;
+export interface MisureFoto { w: number; h: number }
+export function riquadroFoto(misure: MisureFoto | undefined, maxLarghezza: number, maxAltezza: number): { width: number; height: number } | null {
+  if (!misure || !(misure.w > 0) || !(misure.h > 0)) return null;
+  const rapporto = misure.w / misure.h;
+  let width = maxLarghezza, height = width / rapporto;
+  if (height > maxAltezza) { height = maxAltezza; width = height * rapporto; }
+  return { width, height };
+}
+export const FotoIntera = ({ src, misure, maxLarghezza = PDF_LARGHEZZA_TESTO, maxAltezza = 62 * 2.835, stile }: { src: string; misure?: MisureFoto; maxLarghezza?: number; maxAltezza?: number; stile?: any }) => {
+  const r = riquadroFoto(misure, maxLarghezza, maxAltezza);
+  if (!r) return <Image src={src} style={[{ width: '100%', maxHeight: maxAltezza, objectFit: 'contain' }, stile || {}]} />;
+  return <Image src={src} style={[{ width: r.width, height: r.height, borderRadius: 4, alignSelf: 'center' }, stile || {}]} />;
+};
+
+/**
+ * FOTO E TESTO CHE SCORRONO (20/09/2026, collaudo del PDF del Duomo in
+ * produzione: mezza pagina bianca dopo l'introduzione, e a pagina dell'Organo
+ * il titolo sovrapposto al sottotitolo con una fascia grigia in mezzo al
+ * testo). Causa: l'INTERA scheda dell'opera era un blocco indivisibile
+ * (`wrap={false}`). Con i testi veri (2.000-4.000 caratteri) la scheda non
+ * entrava nello spazio rimasto e saltava alla pagina dopo, lasciando il vuoto;
+ * quando era piu' alta di una pagina il motore la schiacciava.
+ * Ora si tiene unito SOLO cio' che e' piccolo: intestazione + foto (e la parte
+ * di testo che le sta accanto). Il resto del testo e' un paragrafo normale, che
+ * va a capo di pagina dove serve.
+ *  - foto VERTICALE o quadrata → in verticale, col testo accanto: le prime frasi
+ *    che stanno nell'altezza della foto; il resto sotto, a tutta larghezza;
+ *  - foto ORIZZONTALE → sopra il testo, ridotta e centrata;
+ *  - nessuna foto → intestazione + testo.
+ */
+export const PDF_TESTO_FONT = 10.5;
+export const PDF_TESTO_INTERLINEA = 1.45;
+const RE_FRASI = /[^.!?…\n]+[.!?…]+["»”')\]]*\s*|[^.!?…\n]*\n+|[^.!?…\n]+$/g;
+/** Divide `testo` in (parte accanto alla foto, resto) a fine frase entro `budget` caratteri. */
+export function dividiPerFianco(testo: string, budget: number): [string, string] {
+  if (testo.length <= budget) return [testo, ''];
+  let fine = 0;
+  for (const m of testo.matchAll(RE_FRASI)) {
+    const nuovo = (m.index ?? 0) + m[0].length;
+    if (fine && nuovo > budget) break;
+    fine = nuovo;
+    if (fine > budget) break;
+  }
+  // Una frase sola lunghissima: si taglia a fine parola.
+  if (fine === 0 || fine > budget * 1.3) fine = testo.slice(0, budget).replace(/\s+\S*$/, '').length;
+  return [testo.slice(0, fine).trim(), testo.slice(fine).trim()];
+}
+export const FotoConTesto = ({ intestazione, foto, misure, testo, stileTesto }: {
+  intestazione?: React.ReactNode; foto?: string; misure?: MisureFoto; testo?: string; stileTesto?: any;
+}) => {
+  const fianco = foto && misure && misure.w / misure.h < 1.1 ? riquadroFoto(misure, 62 * 2.835, 72 * 2.835) : null;
+  const stile = stileTesto || pdfStili.paragrafo;
+  if (fianco && foto) {
+    const colonna = PDF_LARGHEZZA_TESTO - fianco.width - 10;
+    // Righe che stanno nell'altezza della foto × caratteri per riga (Times ≈ 0.46 em/carattere).
+    const budget = Math.max(3, Math.floor(fianco.height / (PDF_TESTO_FONT * PDF_TESTO_INTERLINEA)) - 1) * Math.floor(colonna / (PDF_TESTO_FONT * 0.46));
+    const [accanto, resto] = dividiPerFianco(String(testo || ''), budget);
+    return (
+      <>
+        <View wrap={false}>
+          {intestazione}
+          <View style={{ flexDirection: 'row', marginTop: 4 }}>
+            <Image src={foto} style={{ width: fianco.width, height: fianco.height, borderRadius: 4 }} />
+            <Text style={[stile, { width: colonna, marginLeft: 10, marginBottom: 0 }]}>{accanto}</Text>
+          </View>
+        </View>
+        {resto ? <Text style={[stile, { marginTop: 4 }]}>{resto}</Text> : null}
+      </>
+    );
+  }
+  return (
+    <>
+      <View wrap={false}>
+        {intestazione}
+        {/* Orizzontale: ridotta e centrata. Senza misure (foto non leggibile dal browser): intera comunque, in un riquadro basso. */}
+        {foto ? <FotoIntera src={foto} misure={misure} maxLarghezza={120 * 2.835} maxAltezza={66 * 2.835} stile={{ marginTop: 4, marginBottom: 2 }} /> : null}
+      </View>
+      {testo ? <Text style={[stile, { marginTop: 3 }]}>{testo}</Text> : null}
+    </>
+  );
+};
 
 export const Elenco = ({ voci, stile }: { voci: string[]; stile?: any }) => (
   <View style={{ marginBottom: 4 }}>

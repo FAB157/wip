@@ -65,18 +65,25 @@ const testoProprio = (t) => {
 };
 const STATI_ESCLUSI = new Set(['draft', 'needs_revision', 'rejected', 'hidden']);
 
-const ammesso = (p) => {
-  if (p.is_hidden === true || STATI_ESCLUSI.has(String(p.status || ''))) return false;
-  const c = testoProprio(p.description_short).length;
-  const l = testoProprio(p.description_long).length;
-  return Math.max(c, l) >= MIN_DESCRIZIONE;
-};
-
 const attesa = (ms) => new Promise((r) => setTimeout(r, ms));
 const slug = (s) => String(s ?? '')
   .normalize('NFD').replace(new RegExp('[̀-ͯ]', 'g'), '')
   .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
 const urlLuogo = (p) => `${slug(p?.name) || 'luogo'}~${encodeURIComponent(String(p?.id ?? ''))}`;
+
+/** Stessa regola di seoSlugDegenere() in server.ts: nome mojibake perso, non nome corto. */
+const slugDegenere = (s) => {
+  if (s.length < 6) return false;
+  return new Set(s.replace(/-/g, '')).size <= 2;
+};
+
+const ammesso = (p) => {
+  if (p.is_hidden === true || STATI_ESCLUSI.has(String(p.status || ''))) return false;
+  if (slugDegenere(slug(p.name))) return false;
+  const c = testoProprio(p.description_short).length;
+  const l = testoProprio(p.description_long).length;
+  return Math.max(c, l) >= MIN_DESCRIZIONE;
+};
 
 /** Deve dare lo STESSO risultato di seoCella() in server.ts. */
 const cella = (lat, lon) => {

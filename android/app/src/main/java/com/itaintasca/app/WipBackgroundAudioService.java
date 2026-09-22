@@ -377,6 +377,9 @@ public class WipBackgroundAudioService extends Service {
             @Override
             public void onPlaybackStateChanged(int state) {
                 if (state == Player.STATE_ENDED) {
+                    // A fine guida playWhenReady resta true: il focus va
+                    // reso qui, o la musica dell'utente resta abbassata.
+                    rilasciaFocusAudio();
                     stopProgressTicker();
                     if (callback != null) {
                         callback.onPlaybackProgress(exoPlayer.getDuration(), exoPlayer.getDuration());
@@ -393,6 +396,17 @@ public class WipBackgroundAudioService extends Service {
                         stopSelfIfIdle();
                     }
                 }
+            }
+
+            // IL FOCUS SEGUE playWhenReady, non isPlaying (che va a false anche
+            // durante il buffering): copre la pausa da qualunque parte arrivi —
+            // JS, schermo di blocco, cuffie, voce nativa — e la ripresa dallo
+            // schermo di blocco, che non passa da resume(). rilasciaFocusAudio
+            // esisteva ma non la chiamava nessuno.
+            @Override
+            public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
+                if (playWhenReady) richiediFocusAudio();
+                else rilasciaFocusAudio();
             }
 
             @Override
@@ -418,6 +432,7 @@ public class WipBackgroundAudioService extends Service {
             @Override
             public void onPlayerError(PlaybackException error) {
                 Log.e(TAG, "Playback error: " + error.getMessage(), error);
+                rilasciaFocusAudio();
                 stopProgressTicker();
                 if (callback != null) callback.onPlaybackError(error.getMessage());
                 pausedByNativeVoice = false;
@@ -500,6 +515,10 @@ public class WipBackgroundAudioService extends Service {
 
     private void richiediFocusAudio() {
         try {
+            // Gia' nostro: ogni AudioFocusRequest nuovo e' una voce in piu'
+            // nella pila del sistema, e quelle vecchie non le rilasciava
+            // nessuno (la musica dell'utente restava abbassata).
+            if (focusRequest != null) return;
             android.media.AudioManager am = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
             if (am == null) return;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -616,6 +635,7 @@ public class WipBackgroundAudioService extends Service {
     }
 
     public void stop() {
+        rilasciaFocusAudio();
         stopProgressTicker();
         pausedByNativeVoice = false;
         if (exoPlayer != null) {
@@ -855,6 +875,7 @@ public class WipBackgroundAudioService extends Service {
         if (instance == this) instance = null;
         playingNow = false;
         pausedByNativeVoice = false;
+        rilasciaFocusAudio();
         stopProgressTicker();
         releaseMegaphone();
         callback = null;

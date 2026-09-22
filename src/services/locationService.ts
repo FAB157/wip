@@ -3,7 +3,7 @@
 // =====================================================================
 
 import { incrementUserQuota } from '../lib/quotaManager';
-import { Language, getTranslation } from '../lib/i18n';
+import { Language, getTranslation, linguaCorrente } from '../lib/i18n';
 import { supabase } from '../lib/supabase';
 import { recordListening } from '../lib/listeningHistory';
 import type { GeofencePoi } from '../types/poi';
@@ -1042,7 +1042,10 @@ class LocationService {
         // cruscotto a display spento non deve morire con la guida. Il
         // servizio riparte in modalita` navigatore e da qui in poi e` della
         // navigazione, che lo spegnera` a destinazione.
-        if (this.navSingolaAttiva) {
+        // (21/09/2026) Vale per QUALUNQUE navigatore ancora proprietario
+        // (tappa singola o giro/percorso): col flag unico, una tappa finita
+        // prima faceva spegnere qui il servizio del percorso in corso.
+        if (this.proprietariNav.size > 0) {
           this.servizioPerNav = true;
           this.startNativeBackgroundService({ soloNavigatore: true }).catch(() => {});
         } else {
@@ -1196,13 +1199,27 @@ class LocationService {
    * teaser ne' audioguide. A navigazione finita, se la guida e` ancora
    * spenta, si spegne. Se nel frattempo l'utente accende le cuffie, il
    * servizio passa a loro e non lo spegne piu` nessuno da qui.
+   *
+   * DUE PROPRIETARI (21/09/2026, verifica a schermo spento). Il servizio
+   * acceso per il navigatore lo usano la tappa singola ('tappa',
+   * useWalkingNavigation) e il giro/percorso ('giro', il cruscotto di
+   * App.tsx). Con un flag solo, il primo che lasciava spegneva il servizio
+   * anche all'altro: a cuffie spente, finire un «Naviga» verso un POI durante
+   * un percorso su misura PAGATO lasciava il percorso senza voce e senza
+   * cruscotto a schermo spento. Ora si spegne solo quando lasciano entrambi.
    */
+  /** Chi usa adesso il servizio per navigare. */
+  private proprietariNav = new Set<'tappa' | 'giro'>();
+  /** Il servizio acceso adesso l'ha acceso la navigazione (non la guida). */
   private servizioPerNav = false;
-  private navSingolaAttiva = false;
+  /** Contro le corse fra un rilascio che aspetta la voce e un nuovo avvio. */
+  private rilascioNavGen = 0;
 
-  public async assicuraServizioNativoPerNav(): Promise<void> {
+  public async assicuraServizioNativoPerNav(chi: 'tappa' | 'giro'): Promise<void> {
     if (!Capacitor.isNativePlatform() || !ItaintaBackgroundPoiPlugin) return;
-    this.navSingolaAttiva = true;
+    // Sincrono, prima di ogni await: un rilascio dell'altro proprietario che
+    // arriva durante l'attesa del permesso deve già vederlo.
+    this.proprietariNav.add(chi);
     // Guida accesa: il servizio c'e` gia`, e appartiene a lei.
     if (this.isTourActive) { this.servizioPerNav = false; return; }
     if (this.servizioPerNav) return;
@@ -1210,17 +1227,76 @@ class LocationService {
       const perm = await Geolocation.checkPermissions();
       if (perm.location === 'denied' && (perm.coarseLocation ?? 'denied') === 'denied') return;
     } catch { /* si tenta comunque */ }
+    // Rilasciato durante l'attesa, o nel frattempo acceso da altri (l'altro
+    // navigatore, oppure le cuffie): non si accende niente.
+    if (!this.proprietariNav.has(chi) || this.servizioPerNav || this.isTourActive) return;
     this.servizioPerNav = true;
     await this.startNativeBackgroundService({ soloNavigatore: true });
   }
 
-  public async rilasciaServizioNativoPerNav(): Promise<void> {
-    this.navSingolaAttiva = false;
+  /**
+   * `dopoLaVoce` (21/09/2026, arrivo della tappa singola): lo stop del
+   * servizio svuota la coda vocale e tronca il TTS, e «Sei arrivato a X» era
+   * appena entrato in coda — si sentiva il «ding» e poi niente. Si aspetta
+   * che la coda abbia finito (al massimo 12 s); il cruscotto invece si spegne
+   * subito, come prima. Il tasto X e lo smontaggio restano immediati: lì
+   * l'utente ha chiesto di fermare.
+   */
+  public async rilasciaServizioNativoPerNav(chi: 'tappa' | 'giro', opz: { dopoLaVoce?: boolean } = {}): Promise<void> {
+    // Non era suo: non tocca nulla (uno stop senza navigazione in corso non
+    // deve spegnere il servizio acceso dall'altro navigatore).
+    if (!this.proprietariNav.delete(chi)) return;
+    if (this.proprietariNav.size > 0) return;
     if (!this.servizioPerNav) return;
-    this.servizioPerNav = false;
     // Con la guida accesa il servizio e` suo: non si tocca.
-    if (this.isTourActive) return;
+    if (this.isTourActive) { this.servizioPerNav = false; return; }
+    const gen = ++this.rilascioNavGen;
+    if (opz.dopoLaVoce) {
+      // servizioPerNav resta vero durante l'attesa: una navigazione nuova che
+      // parte adesso trova il servizio acceso e non lo riavvia (un riavvio
+      // taglierebbe proprio la frase che si sta aspettando).
+      const inizio = Date.now();
+      await new Promise(r => setTimeout(r, 400)); // Android scrive teaser_speaking sul main thread
+      while (Date.now() - inizio < 12000) {
+        const s = await this.getNativeTeaserState();
+        // Finita la frase d'arrivo (porta il poiId, quindi aggiorna
+        // lastFinishedAt): non si aspetta anche una guida accodata dopo.
+        if (!s || !s.isSpeaking || (Number(s.lastFinishedAt) || 0) > inizio) break;
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+    // Nel frattempo il servizio e` stato ripreso (nuova navigazione, cuffie
+    // accese, un altro rilascio): non si spegne.
+    if (gen !== this.rilascioNavGen || this.proprietariNav.size > 0 || this.isTourActive || !this.servizioPerNav) return;
+    this.servizioPerNav = false;
     await this.stopNativeBackgroundService();
+  }
+
+  /**
+   * POSIZIONE APPROSSIMATIVA = NAVIGATORE MUTO (21/09/2026). Su Android 12+
+   * con la sola «posizione approssimativa» i fix arrivano con 2 km di errore:
+   * il navigatore JS li scarta tutti (80 m), il follower nativo pure (60 m), e
+   * il navigatore restava muto col cruscotto fermo, senza una parola. Prima
+   * di calcolare il percorso: se la precisa manca si chiede (Android propone
+   * «passa alla posizione precisa», finché il sistema lo concede); se resta
+   * negata si avvisa e si ritorna false. Solo Android nativo: iOS chiede già
+   * la precisione piena da sé. Un errore del controllo non blocca mai.
+   */
+  public async verificaPosizionePrecisaPerNav(): Promise<boolean> {
+    if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') return true;
+    try {
+      let p = await Geolocation.checkPermissions();
+      const soloApprossimativa = (x: { location?: string; coarseLocation?: string }) =>
+        x.coarseLocation === 'granted' && x.location !== 'granted';
+      if (!soloApprossimativa(p)) return true;
+      try { p = await Geolocation.requestPermissions({ permissions: ['location'] }); } catch { /* resta com'era */ }
+      if (!soloApprossimativa(p)) return true;
+      const testo = getTranslation('nav_serve_posizione_precisa', linguaCorrente());
+      import('../lib/toast').then(({ notify }) => { notify(testo, 'info', 8000); }).catch(() => {});
+      return false;
+    } catch {
+      return true;
+    }
   }
 
   private async startNativeBackgroundService(opzioni: { soloNavigatore?: boolean } = {}) {

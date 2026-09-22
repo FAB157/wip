@@ -292,6 +292,8 @@ export async function fetchVenueGuide(args: {
   poiId?: string | null;
   language: Language;
 }): Promise<VenueGuideResponse | null> {
+  // Consenso AI (22/09/2026): posizione precisa e nome del museo digitato vanno a un modello.
+  if (!(await chiediConsensoAi())) return null;
   const headers = await authHeaders();
   if (!headers) return null;
   try {
@@ -557,6 +559,8 @@ export function markWorkSeen(workName: string, cardId: string | null): MuseumVis
  * Non consuma il pass: sapere dove si è non è contenuto, è orientamento.
  */
 export async function leggiCartelloSala(imageBase64: string, sale: string[]): Promise<{ ok: boolean; sala?: string; reason?: string }> {
+  // Stesso gate di leggiCartellino (22/09/2026): la foto va a un modello di visione esterno.
+  if (!(await chiediConsensoAi())) return { ok: false, reason: 'consenso' };
   const headers = await authHeaders();
   if (!headers) return { ok: false, reason: 'login' };
   try {

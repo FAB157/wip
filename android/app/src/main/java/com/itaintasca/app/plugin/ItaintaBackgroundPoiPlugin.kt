@@ -113,6 +113,18 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         // (giroDriver confronta la firma). NON in handleOnDestroy: se
         // l'Activity muore a schermo spento la guida deve continuare.
         try { NavFollower.clear(); avvisaServizioNav() } catch (_: Exception) { }
+        // (21/09/2026, REVISIONE 2) ...e via anche il CRUSCOTTO acceso dalla
+        // pagina di prima: la pagina nuova non sa di averlo e non lo spegneva
+        // mai (notifica ferma per sempre sull'ultima svolta, tappa singola
+        // soprattutto). Si dimentica l'ultimo stato JS ricordato (nome tappa,
+        // minuti, metri totali della navigazione vecchia) e si spegne il
+        // banner SOLO se il servizio e' vivo (hook null altrimenti): mai
+        // avviare il servizio da qui. Un giro ripreso da localStorage lo
+        // riaccende al suo primo stato.
+        try {
+            NavFollower.ricordaCruscottoJs(false, false, "", "", -1.0, -1.0, -1.0)
+            ItaintaBackgroundPoiService.onPaginaNuova?.invoke()
+        } catch (_: Exception) { }
         // (03/09/2026) Un tasto del cruscotto toccato mentre la WebView era
         // morta: il servizio l'ha annotato e ha aperto l'app. Si consegna
         // adesso (retainUntilConsumed: il listener JS puo' non esserci ancora).
@@ -1125,7 +1137,15 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                     isItinerary = false,
                     poiId = call.getString("poiId"),
                     priority = call.getInt("priority") ?: 0,
-                    kind = call.getString("kind") ?: "nav"
+                    kind = call.getString("kind") ?: "nav",
+                    // (21/09/2026, REVISIONE 2) `ttlMs` opzionale: la frase
+                    // scade adesso+ttl, come le svolte del follower. Il JS lo
+                    // manda (20000) SOLO per le svolte del navigatore: una
+                    // svolta uscita dietro a un teaser, una guida o una
+                    // telefonata e' un'indicazione sbagliata. Assente o ≤ 0 =
+                    // non scade mai, come prima (teaser, arrivi, guide).
+                    scadenzaElapsedMs = call.data.optLong("ttlMs", 0L).takeIf { it > 0L }
+                        ?.let { android.os.SystemClock.elapsedRealtime() + it }
                 )
             )
             ret.put("ok", true)
@@ -1372,13 +1392,18 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
 
     @PluginMethod
     fun navHeartbeat(call: PluginCall) {
-        NavFollower.heartbeat(
+        val pausaCambiata = NavFollower.heartbeat(
             // optInt e non getInt: un indice arrivato come 3.0 resta 3.
             call.data.optInt("indice", -1),
             leggiIndici(call, "dettiVicino"),
             leggiIndici(call, "dettiLontano"),
-            android.os.SystemClock.elapsedRealtime()
+            android.os.SystemClock.elapsedRealtime(),
+            // (21/09/2026, REVISIONE 2) Il battito PORTA la pausa del JS:
+            // assente = false (una build vecchia si comporta come prima).
+            pausaJs = call.getBoolean("inPausa", false) ?: false
         )
+        // In pausa il GPS torna a riposo, alla ripresa risale: subito.
+        if (pausaCambiata) avvisaServizioNav()
         call.resolve()
     }
 
@@ -1398,6 +1423,11 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         ret.put("nativoAlComando", p.nativoAlComando)
         ret.put("ultimoTestoVicino", p.ultimoTestoVicino)
         ret.put("ultimoTestoLontano", p.ultimoTestoLontano)
+        // (21/09/2026, REVISIONE 2) `finito`: arrivo finale chiuso dal nativo
+        // (il JS chiude senza ridirlo). `terminato`: svuotato da «Termina» sul
+        // cruscotto, i campi sopra sono la fotografia presa prima.
+        ret.put("finito", p.finito)
+        ret.put("terminato", p.terminato)
         call.resolve(ret)
     }
 

@@ -20,6 +20,23 @@ const config: CapacitorConfig = {
     CapacitorHttp: {
       enabled: true
     },
+    // (12/09/2026) Login social: SOLO Google e Apple, che sono gli unici usati
+    // dall'app. Senza questa mappa il plugin @capgo/capacitor-social-login
+    // abilita tutti e quattro i provider e compila dentro facebook-core, il
+    // cui manifest aggiunge com.google.android.gms.permission.AD_ID: il Play
+    // Console segnalava «ID pubblicità: dichiarazione No, ma il manifest lo
+    // richiede» e bloccava l'invio della release in revisione. false =
+    // compileOnly (la dipendenza non entra nell'APK). Va rifatto `cap sync`
+    // dopo ogni modifica qui: è lo script del plugin a scrivere i flag in
+    // android/gradle.properties.
+    SocialLogin: {
+      providers: {
+        google: true,
+        apple: true,
+        facebook: false,
+        twitter: false,
+      },
+    },
     // (22/08/2026) Qui c'era un blocco SplashScreen con launchShowDuration:
     // 2500. Era INERTE: @capacitor/splash-screen non è installato (non è in
     // package.json, non è in capacitor.settings.gradle né nel Podfile), quindi

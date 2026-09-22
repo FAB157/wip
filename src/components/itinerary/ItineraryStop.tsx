@@ -149,8 +149,8 @@ export default function ItineraryStop({
             <button
               onClick={onToggleLock}
               aria-pressed={isLocked}
-              aria-label={getTranslation("lock_stop", language)}
-              title={getTranslation("lock_stop", language)}
+              aria-label={getTranslation(isLocked ? "unlock_stop" : "lock_stop", language)}
+              title={getTranslation(isLocked ? "unlock_stop" : "lock_stop", language)}
               className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full transition-colors ${isLocked ? 'bg-secondary/10 text-secondary' : 'bg-gray-50 text-on-surface-variant/60 hover:text-secondary'}`}
             >
               {isLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}

@@ -204,6 +204,12 @@ const slug = (s) => String(s ?? '')
 /** Stessa forma di seoUrlLuogo() in server.ts: la tilde separa nome e id. */
 const urlLuogo = (p) => `${slug(p?.name) || 'luogo'}~${encodeURIComponent(String(p?.id ?? ''))}`;
 
+/** Stessa regola di seoSlugDegenere() in server.ts: nome mojibake perso, non nome corto. */
+const slugDegenere = (s) => {
+  if (s.length < 6) return false;
+  return new Set(s.replace(/-/g, '')).size <= 2;
+};
+
 const STATI_ESCLUSI = new Set(['draft', 'needs_revision', 'rejected', 'hidden']);
 
 async function cacheScrivi(chiave, contenuto) {
@@ -321,6 +327,7 @@ async function main() {
 
       const ammesse = righe.filter((p) => {
         if (p.is_hidden === true || STATI_ESCLUSI.has(String(p.status || ''))) return false;
+        if (slugDegenere(slug(p.name))) return false;
         const corto = testoProprio(p.description_short).length;
         const lungo = testoProprio(p.description_long).length;
         return Math.max(corto, lungo) >= MIN_DESCRIZIONE;

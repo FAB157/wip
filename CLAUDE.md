@@ -75,6 +75,26 @@ Content is generated once and cached forever:
 
 `supabase/functions/` holds four Deno edge functions (`auto-enrich-poi`, `generate-poi-audio`, `generate-poi-data`, `manager-poi`) that duplicate parts of this pipeline server-side.
 
+#### On-the-fly enrichment of a POI card — the rules (19/09/2026)
+
+What the user actually opens: the **pin popup** (`PoiPopupContent` → `/api/poi/details`, then `/api/poi/enrich-stream`) and the **sheet** (`PoiDetailSheet` → `/api/poi/details`, then `/api/poi/enrich` + the stream). Measured that day: 77% of the POIs around Forte dei Marmi had neither text nor photo (almost all `source='overture'`), and the pipeline had fired 105 times in 7 days. Decisions of the committente, all in force:
+
+- **No credit gate on the card.** The 5-credit «Arricchimento Dettagli (AI)» confirmation and charge are gone: a place's text and photo are free. The audioguide keeps its own gate.
+- **Guests get the cache, never a generation** («ospiti no»): `/api/poi/details` and the STEP 0 cache hit stay public; everything after it sits behind `cancelloGenerazione`, which is called **before** the source lookup, not after.
+- **No source → no text, and no LLM call either.** The text was already forced empty (rule of 24/08); now the model is not even called, the outcome is remembered for 14 days (`enrich_vuoto_<id>` in `api_cache`), and a photo that *was* found is saved immediately — not after the stream.
+- **Overture commercial POIs: data only, no prose** (`eCommercialeOverture`: `source='overture'` or id `ov-…`, and a commercial category — beach clubs, restaurants, hotels, shops, chargers). No Wikipedia, no official-site-as-source, no LLM: the server answers `solo_dati: true` and the client shows the data line (street · city; phone, site and hours already have their buttons). The only lookup allowed is the street-level photo. Museums, churches, monuments, parks and galleries are **not** commercial, even when the row comes from Overture.
+- **`nomeCombacia` no longer accepts one shared word.** That rule matched «Bagno Versilia – *Forte* dei Marmi» with «*Forte* Lorenese» and gave a wine bar the photo of a fountain. Now: Wikipedia's parenthetical disambiguator and the caller's `toponimi` (the POI's city, plus the settlement articles of the same geosearch, `toponimiDaPagine`) do not count, and **every** proper word of the shorter name must be in the other. The city name proves nothing. A Wikidata hit by *name* must also have coordinates (P625) within 2 km. `scratch/collaudo-nome-combacia.mjs` runs the real cases against the code extracted from `server.ts` — run it after touching the function.
+- A saved `wikidata` QID or `wikipedia_url` on the row is the exact source and is used first, by both routes (`cercaMaterialeReale` used to ignore them). So is the article title saved at import in `technical_data.wikipedia_raw` (`wikipediaDaDatiTecnici`, 21/09/2026).
+- **Every card as complete as possible, never invented (committente 21/09/2026: «devono essere tutti più completi possibili»; «le schede solo dei POI culturali, il resto la schedina»).** When articles, official site and web give nothing:
+  · `materialeDaiDati` reads **Wikidata** (saved QID, or found by name with coordinates ≤ 1.5 km): type, style, architect, heritage designation, material, part of, year, height, visitors, and the P18 photo. With ≥ 3 facts they become the model's material (short card, rule «only these data, no coordinates, no added adjectives»); with fewer, `schedaDaiDati` composes the card from the data alone, no model.
+  · `rigaDatiLuogo` = the data line (type · street · city · cuisine) from `ETICHETTE_TIPO_LUOGO` (all real categories, IT/EN). A place of UNKNOWN type (`poi_type='isolated'`) gets no type word: the import category is often wrong (the statue «Stégosaure» was filed as a museum).
+  · **Commercial (Overture): still no prose, but the data line is saved as `description_short`** («e i commerciali aggiungi riga»), and the photo is first the `og:image` of their official site, then street level. Everything written this way carries `enrichment_source='dati_strutturati'`.
+  · The «already searched, empty» memo key is now `enrich_vuoto_v2_…`, so places marked empty before 21/09 are re-evaluated once with the new sources.
+  · **Photos only when the file names the place**: `fotoDelLuogo` no longer accepts «the nearest file within 60 m» (it gave Oxygen Park, London, the photo of Morpeth Mansions). Street level (Mapillary) is now also tried when a text exists but the photo does not.
+  · **Map layers** (gusto, sentieri, ciclabili, shopping, lusso, neve, spiagge) open a static bubble: `arricchisciFumetto` (MapArea) asks `/api/poi/enrich` in `fast` mode (no model) on popup open and appends short text + photo. Points that are not in `shared_pois` (neve, spiagge) send `salva:false`: no row is created (they must not appear as places), the answer is cached 30 days in `api_cache` (`schedina_…`).
+  · **Pre-enrichment** of a zone before users arrive: `node scripts/prearricchisci-zona.mjs <lat> <lon> [km] [--limite=N] [--prova]` — calls the production route with `x-script-secret`, i.e. as `background-script`: rotating pool only, never the dedicated keys, never direct DeepSeek. It never starts by itself.
+- **Wider sources, never Groq "from memory"** («aggiungi le fonti»). Until 22–24/08 Groq wrote every card from its weights and photos were picked by name: everything looked filled and a good part was invented — that is why it was turned off, and it does not come back. When Wikipedia/Wikivoyage give nothing, `materialeWebPerPoi` adds the place's **official site** (`contact_website`, or `sitoUfficialeViaRicerca`) and the **open web** through the same `cercaMaterialeWeb` the museum guides use (SearXNG): a page counts only if it names the place (≥ 2 proper words) **and the city** — the city plays the role the museum plays there; no city, no search. Tier A = reliable sources, tier B = blogs marked «NON VERIFICATA»; tier B alone is not enough to say a fact, so it yields no text. Every prompt that receives this material must append `regoleMaterialeWeb` (never copy sentences, length follows the facts, tier B only if confirmed). Web text is **never** shown or saved raw: `/api/poi/enrich` skips the web in `fast` mode (there the extract becomes `description_short` as is) and never falls back to the raw extract when it came from the web. 14 s cap, in parallel with the photo search. Never for commercial POIs. `scratch/collaudo-materiale-web-poi.mjs` tests the glue logic with stubbed network.
+
 ### Geofencing — two independent implementations
 
 This is the part most likely to bite you: **the same logic exists three times and all must be kept in sync.**
@@ -149,6 +169,28 @@ places that were not La Spezia (22/08/2026).
   migration `20260917080000_foto_pois_da_verificare.sql`), invisible in the
   app until a human approves that exact row. Never write a third-party URL
   into `image_url` directly, no matter how good the name match looks.
+- **Whoever hides a duplicate inherits its content first** (19/09/2026,
+  committente: «avevo molte più foto giuste… evita che risucceda»). Mass jobs
+  of 10–14/09 hid ~55,000 rows of `shared_pois` that carried a photo, without
+  passing it to the row left visible — and for ~25% of them (≈14,000 real
+  places) there was no visible row at all. Never hide or blank rows in bulk
+  without (a) a record of the previous values and (b) inheritance onto the
+  surviving row. The safety net: trigger `trg_doppione_nascosto_in_coda`
+  (migration `20260919200000_doppioni_da_ereditare.sql`) notes every hidden
+  row that had a photo or text in `doppioni_da_ereditare`; after any job that
+  hides rows run `scratch/foto-dal-doppione-mondo.mjs --coda --tutti --write`,
+  then the same with `--testi`. It does **not** copy blindly: a duplicate's
+  photo was picked by coordinates and measured wrong 1 time in 4 (a castle
+  with a church, a street in Naples, a cemetery, a bus), so a photo moves only
+  if its **file name names the place** (`scratch/lib-foto-coerente.mjs`,
+  test `scratch/collaudo-foto-coerente.mjs`), and a «text» that is an import
+  label (`[Wikipedia Import] en:…`) or WIP filler is not a text. Twins with a
+  *different* name within 40 m are not the same place often enough to trust
+  (0–1 right out of 5 in the sample): don't match them.
+- **Coordinates can be NaN.** 215 visible `unesco-…` rows have `lat`/`lon` =
+  NaN (`location` = `POINT(NaN NaN)`): their bounding box «contains» every
+  point on Earth, so any spatial join must add
+  `lat <> 'NaN'::float8 AND lon <> 'NaN'::float8`.
 - **No photo is better than the wrong photo.** Every renderer must survive a
   missing image. A place shown with someone else's picture is a printed lie,
   and it is worse than a blank space.
@@ -233,6 +275,164 @@ per-work button answered «nessuna fonte».
   Wikipedia's title match is ≥ 0.6, and only the Italian title finds
   «Vetrate del Duomo di Milano».
 
+## Premium Guide: truth before length (20/09/2026)
+
+Set after the Greve in Chianti guide of 05–13/09: of 61 dates written, 2 (3%)
+were in the Wikipedia article of the place, and Podere Le Fornaci — a goat-cheese
+farm — was described as a winery with three wines, an Etruscan tunnel and Jewish
+refugees hidden from the Nazis. Cause: the prompt IMPOSED 450–600 words, 4–5
+"mandatory" curiosities and an "insider tip known only to residents", even where
+the material was two lines: the model fills from memory. Same rule as the
+audioguide and the museum guides: **a minimum length applies only if the material
+supports it; sources are searched first, the text is shortened only after.**
+
+- `pgPreparaMateriale` (server.ts, above `/api/premium-guide/generate`) finds the
+  material of every stop and classifies it: **ricco** (>1,500 chars: full text,
+  description 300–450 words), **medio** (300–1,500: 110–220), **scarso** (<300: a
+  40–70-word neutral card, no curiosities/insider/dishes, an honest "few verified
+  facts" line). Order of sources: exact Wikipedia title of the name and of its
+  parts («Castello Sforzesco e Parco Sempione» → «Castello Sforzesco»; the text
+  must name the city) → `cercaMaterialeReale` (Wikidata QID / saved link /
+  coordinates, official site, open web with tiers). **Never a geosearch article
+  of another TYPE of place** (`pgTipiCoerenti`: «Duomo di Milano» used to land on
+  «Piazza del Duomo»). Restaurants/bars/shops: no open web.
+- The model sees only `materiale_verificato`, never the itinerary's own
+  `attivita` (another AI's text) — `pgVistaModello`. Rules live in ONE text,
+  `pgRegolePrompt()`, shared by the full guide and by `pgGenerateSingleDay`
+  (free regeneration of a day): do not paste a copy.
+- Transport: only from the Wikivoyage «Come arrivare/Come spostarsi» sections
+  (`pgSezioniViaggio`); never say that a station, line or car park exists if it is
+  not in the material.
+- Post-filter, not just a prompt (`pgApplicaFiltro`, `pgFiltraTesto`): removes
+  SENTENCES whose years, centuries, figures with units or high-risk legends
+  (Leonardo, secret passages, awards, WWII…) are not in the material; length caps
+  per level. The material's text is by other authors: rule 11 forbids copying, and
+  `pgRiscriviCopiati` rewrites any description with ≥60% identical 8-word runs
+  (measured before the rule: Museo civico del marmo 99%, Galleria 95%; after: ≤30%
+  in most places). `content.qualita` and `poi.copia_pct/livello_materiale/fonte_url`
+  record what happened.
+- Measure with `scratch/genera-guide-prova.mjs` (local server, 20 credits/guide),
+  `collaudo-guida-file.mjs` (levels, dates found in the source, copy %),
+  `mostra-fonti-file.mjs` (which article each stop used) and
+  `collaudo-filtro-guida.mjs` (the filter alone, no credits).
+
+## Reference documents: the base of every guide, museum guide and itinerary (20/09/2026)
+
+The committente approved three documents as THE reference («guide premium va bene così»,
+«guide museo come questa», «itinerario perfetto anche pdf») and ordered that the rules that
+made them are the base of everything generated from now on. Do not lower them; a new path
+or a fix is measured against these files (kept by the committente on the desktop, folder
+«marketing wip»):
+
+| Product | Reference | Rules that made it |
+|---|---|---|
+| Premium Guide | `WIP - Greve in Chianti (nuove regole).pdf`, `WIP - Carrara (nuove regole).pdf` | «Premium Guide: truth before length» + the photo rules below + the print rules |
+| Museum guide | `WIP - Duomo di Milano (PROVA nuova impaginazione).pdf` | «Museum guides: no empty stop» + «Audioguide text: every sentence about THIS place» + the print rules |
+| Itinerary | the itinerary pipeline of 19/09/2026 and its PDF (`ItinerarioPdf`) | its prompt rules + the two fixed rules «giorni pieni» and «doppioni mai» (next section); any other change to `/api/groq/itinerary-stream` needs an explicit order |
+
+**Photos in every guide (Premium and museum), all mandatory:**
+- Only monuments, museums, viewpoints/panoramas and cultural places. **Never restaurants,
+  bars, shops, markets** — whatever the source (database, official site, Wikipedia, Commons).
+  Allow-list, not block-list: if the stop type is not cultural, no photo.
+- The **cover is a photo of the CITY** (lead image of the city's Wikipedia article), never a
+  logo, flag, SVG or the photo of the first place that happens to have one. No city photo →
+  the cover goes without.
+- A photo is used only if the place is really the subject: the article is that place, or the
+  file name names it (`nomeCombacia`). Never «the first file within 250 m». Scans of books and
+  newspapers (`page1-…djvu.jpg`, Internet Archive) are not photos of a place.
+- Every request to Wikimedia carries `WIKI_UA`: with axios' default user-agent they answer
+  403 and the photo phase silently found nothing (Milano, Parigi, Londra, 20/09/2026).
+- Layout: whole, small, horizontal above the text, vertical beside it; only the cover is
+  full-page (see «Print rules»).
+
+**Text, in every document:** real facts from a source, level by material (rich / medium /
+poor), never filler, never copied, checked by a second engine (next section). Characters
+the PDF font has no glyph for are reduced to their base letter (`pulisci`, `ō`→`o`):
+«Ōban» used to print as «BAM».
+
+Regression: `python scratch/verifica-grafica-pdf.py <file.pdf>` must pass on every PDF before
+it is handed over. On the reference files it flags Carrara p.2 (one glyph, fixed for future
+runs by `pulisci`) and the Duomo PROVA (no page numbers: it came from a test script;
+`generaPdfMuseo` numbers pages from page 2).
+
+## Every generated document is checked by a SECOND engine and by measurement (20/09/2026)
+
+Standing rule of the committente («DeepSeek produce, Groq o altro deve correggere e
+verificare sia il contenuto che la grafica»):
+
+- **Content: the writer never checks itself.** DeepSeek writes; a different engine
+  (`excludeEngines: ['deepseek']`) re-reads each place against its material, marks the facts
+  the material does not support and rewrites only those fields. Premium Guide:
+  `pgRevisore` (server.ts, right after `pgRiscriviCopiati`); museum guides: the reviewer +
+  rewrite in `venue_guide`; itineraries: `/api/itinerary/verify`. The outcome is written down
+  (`content.qualita.revisore`: controllati / corretti / esito) — a reviewer that did not run
+  says `non_eseguito`, it never passes silently. A new generation path MUST have one.
+- **Which engine reviews (measured 20/09/2026).** `chiamaRevisore` (server.ts): first
+  **`gemini-3.6-flash`** (other family than DeepSeek, careful, five keys with quota), then the
+  normal fallback (Groq…) with no forced model; Agnes is out (minutes per long prompt).
+  Gemini's quota is **per model**: the code's old default `gemini-3.5-flash-lite` was out of
+  quota on 4 keys of 5, `gemini-2.5-flash` no longer exists (404). **Two models = two quotas
+  (decided 20/09/2026):** `gemini-3.6-flash` ONLY for the reviewers and the final fallback (which
+  tries `3.6-flash`, then `3.5-flash`); `gemini-3.5-flash-lite` (free tier: 500 requests/day per
+  project) stays the general model for teasers, enrichment, vision… so the reviewer never takes
+  calls from them. A guide review is ~10 requests (5–10k tokens each). The
+  Groq keys are FOUR SEPARATE ACCOUNTS (committente; confirmed 20/09: one key at 199,445 of
+  its 200,000 tokens/day while the others answered), so four daily limits; `tentaConRotazione`
+  already tries the others when one is out and pauses the engine only when all are.
+  `pgRevisore` sends the reviewer the SAME
+  material the writer had (up to 7,000 chars — with 2,500 it «could not find» true facts and
+  cut Tower Bridge from 485 to 214 words), 2 places per call, up to 6 calls in parallel, 75 s
+  cap; Londra 3 days: 17/17 places checked, 5 corrected, text +3%, guide in 132 s (serial it was
+  3/17 and 238 s). The podcast has the same reviewer (`/api/generate-daily-podcast`).
+- **Dedicated keys, never in the rotating pool (committente 20/09/2026).** Five Groq and five
+  Gemini accounts: each kind of work has keys of its own, so a background job can never eat
+  the quota of a user who is waiting or of a reviewer.
+  · **Gemini dedicated** = reviewers of itineraries, podcast, Premium Guide, museum guide:
+    env `GEMINI_API_KEY_VERIFICA` (more: `…_VERIFICA_2`, `…_ONTHEFLY`, `…_ONTHEFLY_2`…), read into
+    `geminiDedicate`, used through the `revisore: true` option of `callUniversalAi` (dedicated
+    first, the pool only if they fail). The rotating pool is `GEMINI_API_KEY`, `_1`…`_8` only.
+  · **Groq dedicated** = on-the-fly enrichment (photos and descriptions of pins and sheets) AND
+    the audioguide: env `GROQ_API_KEY_ONTHEFLY` first, then `GROQ_API_KEY_ONTHEFLY_2`, `_3`… as
+    fallbacks IN ORDER (`groqOnTheFlyClients`; then the pool), `groqOnTheFly` option, only with
+    a real user waiting. The pool (`GROQ_API_KEY`, `_2`…) is what seeding and background scripts use.
+  · Start with ONE dedicated key per kind; if it is not enough add another account (rename
+    the env var as above) — nothing else to change. Gemini model: `gemini-3.5-flash`.
+- **Graphics: measured, never eyeballed.** Every PDF goes through
+  `python scratch/verifica-grafica-pdf.py <file.pdf>` before it is handed over: overlaps,
+  near-empty pages, distorted or full-page photos (only the cover), photos off the page,
+  missing page number / `wip.guide`. Exit code 1 = do not deliver.
+- **Itinerary fixed rules (`/api/groq/itinerary-stream`).** Everything the prompt lists under
+  «REGOLE STRUTTURA GIORNATA», «REGOLE LUNGHEZZA TESTI», «REGOLE INFO VIAGGIO» (lengths, tips,
+  budget, the four sections…) plus the two rules the committente ordered back on 20/09/2026,
+  after removing them the same day as a test («riinserisci queste 2 regole … mettile come
+  regole fisse insieme a tutte le altre»):
+  - **GIORNI PIENI** — prompt point 7, enforced by `riempiGiorniVuoti`: a day under three
+    quarters of the median stops count, or missing because a block failed, is asked again
+    (same prompt, places already used to avoid, 3 tries); trailing days that stay empty are
+    dropped (`incompleto` + refund cover them).
+  - **DOPPIONI MAI** — prompt point 8, enforced by `togliDoppioni`: one place appears once in
+    the whole itinerary (key = `poi_id`, else the name words; hotels/returns excepted). It runs
+    again after `agganciaTappeAlDatabase`, because the block dedupe compares the AI's names and
+    the hook-up is what makes «place du Louvre» and «Musée du Louvre» one place (Parigi 20/09).
+  - **DEEPSEEK CHOOSES WITHOUT SEEING OUR DATABASE** (committente 20/09/2026: «è sempre stato
+    così la logica: deve cercare la miglior soluzione senza vedere il nostro database; le tappe
+    che non ci sono nel database diventeranno poi nuovi POI»; prompt point 9). The prompt gets
+    NO list of `shared_pois` or `locali_pois` (`ragInstruction = ""`, dining context off):
+    DeepSeek picks the best places and restaurants from its own knowledge (guides, Michelin…).
+    AFTER, `agganciaTappeAlDatabase` links each stop to the POI that already exists (name,
+    coordinates, sheet) and the stops that are not in the database become new POIs
+    (`PlanScreen` → `/api/poi/from-itinerary`, `source='itinerary'`, id `iti-…`, excluded from
+    matches and from the sources). The list used to be ordered only by `is_gem`, so DeepSeek
+    "preferred" small OSM buildings to the British Museum (Londra 5 days, 20/09). The hook-up
+    never matches charging stations or car parks (`ocm-`, «Supercharger», «Q-Park»: the Tower of
+    London was linked to a Tesla charger). Measured on Londra 3 days: British Museum, National
+    Gallery, Tate Modern, V&A… and 13 rich / 4 medium / 0 poor places in the guide (before:
+    8 / 3 / 26).
+  - Known and left: new POIs are created by the CLIENT when the app opens the plan (an
+    itinerary generated in the background queue creates them only once opened), with the
+    AI's own coordinates, unverified — a Photon check by name is the next step, not done.
+  - Nothing else in the itinerary pipeline changes without an explicit order.
+
 ## Print rules (itinerary PDF and Premium Guide)
 
 Learned from the two PDFs of 22/08/2026. Check these before touching
@@ -256,6 +456,57 @@ Learned from the two PDFs of 22/08/2026. Check these before touching
   after, or every guide is saved with the same name.
 - Cover titles must scale with length: a fixed size eats half the first page
   when the title is long.
+- **A photo is shown WHOLE and stays small; only the cover is full-page**
+  (20/09/2026, Duomo di Milano guide: 15 photos out of 17 are vertical —
+  statues, stained glass, portals — and the old `width:100% + maxHeight:62mm +
+  objectFit:cover` band cut every one of them). Rule, in `src/lib/pdf/base.tsx`
+  (`FotoIntera`, `riquadroFoto`): horizontal → above the text, reduced and
+  centred (max 120×66 mm); vertical or square → vertical, **text beside it**
+  (max 62×72 mm). The sizes come from `scaricaFoto` (`generaPdf.ts`), which
+  also downsizes anything over 1600 px. Same rule in `MuseumGuidaPdf` and
+  `GuidaPremiumPdf`. Check with `scratch/collaudo-pdf-museo.tsx`.
+- **The react-pdf cover must not measure exactly one page.** With
+  `height:'100%'` on the photo and on the title layer the engine put the photo
+  on page 1 and the title alone on page 2; `wrap={false}` on the `Page` gives
+  a blank page instead. Explicit sizes one point under A4 (595.28 × 840).
+- **Never make a whole card unbreakable (`wrap={false}` on the artwork/POI
+  block).** Found in production on the Duomo di Milano guide (20/09/2026): with
+  real texts (2,000–4,000 chars) the card did not fit the space left, jumped to
+  the next page and left half a page blank, and when taller than a page the
+  engine squashed it (title over subtitle, a grey box in mid-paragraph). Only
+  what is small stays together — header + photo (+ the sentences that fit
+  beside a vertical photo) — via `FotoConTesto` in `base.tsx`; the rest of the
+  text is a normal paragraph. The room band goes INSIDE that unit (a separate
+  element was left alone at the bottom of a page; `minPresenceAhead` is ignored
+  by this react-pdf version — do not rely on it). Test with **long** texts:
+  `scratch/collaudo-pdf-museo.tsx` (env `COLLAUDO_LUNGHEZZE`) and
+  `collaudo-pdf-guida.tsx`, then measure page fill / overlaps on the result.
+  Known residue: a card whose photo block does not fit goes to the next page
+  (gaps up to ~1/3 page, rarely more).
+- **A museum guide always comes out of `generaPdfMuseo`.** The browser-print
+  fallback (`MuseumPrintView`) is a plain list with no photos and blank
+  trailing pages: `generaPdfMuseo` retries without the stop photos, then with
+  no images at all, before anyone falls back to it.
+
+## One archive, three entrances (20/09/2026)
+
+`DownloadsScreen` is THE archive: five folders always visible (Itinerari,
+Mappe, Audioguide, Guide Premium, Guide Musei), every row in the same form —
+tap opens, the buttons underneath do the rest (Naviga · Racconto · PDF ·
+Elimina). It is the same component in Profilo › «I miei download», Piano ›
+«I miei itinerari» (`cartellaIniziale`) and Piano › Offline: do not build a
+second list of saved itineraries or guides anywhere. Opening goes through the
+`wip-apri-download` event (App.tsx → `wip-apri-itinerario-offline` /
+`wip-apri-guida-premium` in PlanScreen, which read the offline copy first and
+the account row otherwise). Printed PDFs are kept in `src/lib/pdfArchivio.ts`
+(idb-keyval, 25 max) through the third argument of `saveBlobAsFile` and show
+up in the folder of their document. The «ready» push/email names the exact
+place (`testiPronta` in `server.ts`), and the tap lands in that folder.
+
+`fetchCurrentPlan` (PlanScreen) restores the last plan **once, at mount**, and
+never over a plan someone already opened (`pianoApertoRef`): it used to sit in
+an effect keyed on `generatedPlan?.id`, so every itinerary opened was replaced
+by the last modified one («si apre sempre Savona»).
 
 ## Environment
 

@@ -7,6 +7,7 @@ import { downloadGuideAsEpub, getAccessToken, saveGuideLocally } from '../servic
 import { azureVoiceName, speakWithSystemVoice, stopSystemVoice, pauseSystemVoice, resumeSystemVoice } from '../services/ttsService';
 import { PRICING_LIST, notifyCreditsChanged } from '../lib/pricing';
 import type { PremiumGuideContent } from '../services/premiumGuideService';
+import { getTranslation } from '../lib/i18n';
 import type { Language } from '../lib/i18n';
 
 /**
@@ -87,6 +88,7 @@ const TRANSLATE_LANGS: { code: string; label: string }[] = [
 ];
 
 export default function PremiumGuideAudiobook({ content, language, hash, onContentUpdate }: PremiumGuideAudiobookProps) {
+  const tr = (k: string) => getTranslation(k, language);
   const chapters = useMemo(() => buildChapters(content), [content]);
   const [open, setOpen] = useState(false);
   const [activeChapter, setActiveChapter] = useState<number | null>(null);
@@ -181,7 +183,7 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
         const letto = await leggiConVoceDiSistema(blocks[b], 'nicky', session);
         if (sessionRef.current !== session) return;
         if (!letto) {
-          notify('Lettura interrotta: riprova tra qualche istante.');
+          notify(tr('pg_ab_lettura_interrotta'));
           stop();
           return;
         }
@@ -242,8 +244,8 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getAccessToken()}` },
         body: JSON.stringify({ destination, pois, language }),
       });
-      if (res.status === 401) { notify('Accedi per generare l’intervista.'); setIvState('idle'); return; }
-      if (res.status === 402) { notify('Crediti insufficienti per l’intervista.'); setIvState('idle'); return; }
+      if (res.status === 401) { notify(tr('pg_ab_iv_login')); setIvState('idle'); return; }
+      if (res.status === 402) { notify(tr('pg_ab_iv_crediti')); setIvState('idle'); return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       notifyCreditsChanged();
@@ -275,7 +277,7 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
     } catch (e) {
       console.error('[Intervista] errore:', e);
       if (sessionRef.current === session) {
-        notify('Intervista interrotta: riprova tra qualche istante.');
+        notify(tr('pg_ab_iv_interrotta'));
         setIvState('idle');
       }
     }
@@ -287,9 +289,9 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
     setEpubBusy(true);
     try {
       const ok = await downloadGuideAsEpub(hash, content.guida_titolo, String(language));
-      if (!ok) notify('Export EPUB non riuscito. Riprova.');
+      if (!ok) notify(tr('pg_ab_epub_errore'));
     } catch {
-      notify('Export EPUB non riuscito. Riprova.');
+      notify(tr('pg_ab_epub_errore'));
     } finally {
       setEpubBusy(false);
     }
@@ -307,8 +309,8 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getAccessToken()}` },
         body: JSON.stringify({ hash, targetLanguage: trLang }),
       });
-      if (res.status === 401) { notify('Accedi per tradurre la guida.'); setTrState('idle'); return; }
-      if (res.status === 402) { notify('Crediti insufficienti per la traduzione.'); setTrState('idle'); return; }
+      if (res.status === 401) { notify(tr('pg_ab_tr_login')); setTrState('idle'); return; }
+      if (res.status === 402) { notify(tr('pg_ab_tr_crediti')); setTrState('idle'); return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       notifyCreditsChanged();
@@ -316,12 +318,12 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
         // Copia offline della traduzione (hash derivato) + aggiornamento vista
         saveGuideLocally({ content: data.content, media_manifest: data.media_manifest || {}, hash: data.hash || `${hash}_tr_${trLang}`, fromCache: false }).catch(() => {});
         onContentUpdate?.(data.content);
-        notify(data.cached ? 'Traduzione già disponibile: nessun addebito.' : 'Guida tradotta!');
+        notify(tr(data.cached ? 'pg_ab_tr_gia' : 'pg_ab_tr_ok'));
       }
       setTrState('idle');
     } catch (e) {
       console.error('[Traduzione guida] errore:', e);
-      notify('Traduzione non riuscita: nessun credito perso, riprova.');
+      notify(tr('pg_ab_tr_errore'));
       setTrState('idle');
     }
   };
@@ -336,8 +338,8 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getAccessToken()}` },
         body: JSON.stringify({ hash, dayIndex: regenDay, language }),
       });
-      if (res.status === 401) { notify('Accedi per aggiornare la guida.'); return; }
-      if (res.status === 402) { notify('Guida non trovata: usa la generazione completa.'); return; }
+      if (res.status === 401) { notify(tr('pg_ab_giorno_login')); return; }
+      if (res.status === 402) { notify(tr('pg_ab_giorno_assente')); return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data?.content) {
@@ -345,11 +347,11 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
         // prossima apertura ripescherebbe il giorno vecchio dalla cache locale.
         saveGuideLocally({ content: data.content, media_manifest: data.media_manifest || {}, hash, fromCache: false }).catch(() => {});
         onContentUpdate?.(data.content);
-        notify(`Giorno ${(content.giorni?.[regenDay]?.giorno) ?? regenDay + 1} aggiornato (gratuito).`);
+        notify(tr('pg_ab_giorno_ok').replace('{n}', String((content.giorni?.[regenDay]?.giorno) ?? regenDay + 1)));
       }
     } catch (e) {
       console.error('[Rigenera giorno] errore:', e);
-      notify('Aggiornamento del giorno non riuscito. Riprova.');
+      notify(tr('pg_ab_giorno_errore'));
     } finally {
       setRegenBusy(false);
     }

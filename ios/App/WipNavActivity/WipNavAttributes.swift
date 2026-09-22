@@ -40,7 +40,14 @@ enum WipNavAppGroup {
 enum WipNavAzione {
     static let notifica = Notification.Name("wip.nav.azione")
     static let chiavePendente = "wipNavAzionePendente"
+    /// (21/09/2026) L'istante del TOCCO (ms dal 1970, Double) accanto
+    /// all'azione pendente: il JS scarta le azioni vecchie (regola dei 60 s).
+    static let chiavePendenteTs = "wipNavAzionePendenteTs"
     static let pausa = "pausa"
+    /// (21/09/2026) «Riprendi» è un'azione a sé, non il tasto pausa premuto
+    /// di nuovo: un'alternanza invertiva lo stato del follower anche quando
+    /// non era quello mostrato (pausa automatica del giro).
+    static let riprendi = "riprendi"
     static let riascolta = "riascolta"
     static let salta = "salta"
     static let ricalcola = "ricalcola"

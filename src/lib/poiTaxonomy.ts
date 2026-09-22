@@ -239,7 +239,7 @@ export const PANORAMI_TYPES = [
   "viewpoint", "panorami", "panorama", "lighthouse", "faro", "scenic_road", "aerialway",
   "sentiero", "sentieri", "hiking", "trail", "cammino", "via_ferrata",
 ];
-export const MONUMENTI_TYPES = ["monument", "monumenti", "monumento", "artwork", "attraction", "attrazioni", "castle", "castelli", "ruins", "archaeological_site", "archeo", "memorial", "fort", "tower"];
+export const MONUMENTI_TYPES = ["monument", "monumenti", "monumento", "artwork", "attraction", "attrazioni", "castle", "castelli", "ruins", "archaeological_site", "archeo", "memorial", "fort", "tower", "square", "piazza", "piazze"];
 export const LOCALI_TYPES = ["locali", "restaurant", "ristorante", "ristoranti", "cafe", "bar", "fast_food", "pub", "ice_cream", "gelateria", "bakery", "nightclub", "biergarten", "food_court"];
 export const FAMIGLIE_TYPES = ["famiglie", "playground", "parco_giochi", "theme_park", "parco_divertimenti", "aquarium", "acquario", "zoo", "water_park", "roller_coaster"];
 // I mercati (marketplace/mercato) NON stanno più in Utilità (29/08/2026,
@@ -584,14 +584,28 @@ export function passesCategoryRule(p: any, selectedCategories: string[], subFilt
   }
 
   if (!macro) return false;
-  if (!selectedCategories.includes(macro)) return false;
 
-  const subsOfMacro = SUBS_BY_MACRO[macro] || [];
+  // DOPPIA APPARTENENZA DELLE GEMME (19/09/2026, committente: «Scultura Dunchi
+  // deve apparire sia come gemma che come monumento»). `resolvePoiTaxonomy`
+  // da` una macro sola, e a una gemma da` "gemme": con la chip Gemme spenta e
+  // Monumenti accesa il luogo spariva dalla mappa, proprio lui che e` il
+  // migliore dei monumenti. Una gemma E` un monumento (o una chiesa, un
+  // museo, un panorama): passa con la chip Gemme OPPURE con la chip Monumenti,
+  // e i sotto-chip si valutano su quella accesa — sono gli stessi quattro.
+  // Il pin resta quello della gemma: qui si decide solo se mostrarla.
+  let macroFiltro = macro;
+  if (macro === "gemme" && !selectedCategories.includes("gemme") && selectedCategories.includes("monumenti")) macroFiltro = "monumenti";
+  if (!selectedCategories.includes(macroFiltro)) return false;
+
+  const subsOfMacro = SUBS_BY_MACRO[macroFiltro] || [];
   const activeSubs = (subFilter || []).filter(s => subsOfMacro.includes(s));
   // Nessun sub-chip di questa macro selezionato ⇒ il chip "Tutti" è attivo.
   if (activeSubs.length === 0) return true;
 
   if (subId && activeSubs.includes(subId)) return true;
+  // Una gemma senza famiglia riconosciuta (import CSV, `category='gemme'`) vale
+  // come «monumenti_sub», esattamente come la sua gemella non-gemma qui sopra.
+  if (macro === "gemme" && !subId && activeSubs.includes("monumenti_sub")) return true;
   // glutenfree ha tre id equivalenti tra chip e dati.
   const GF = ["glutenfree", "gluten_free_only", "gluten_free_options"];
   if (GF.includes(subId) && activeSubs.some(s => GF.includes(s))) return true;

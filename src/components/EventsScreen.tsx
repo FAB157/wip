@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 // schermata importava la copia di MapArea.
 import { haversineMeters } from "../lib/geo";
 import { notify } from "../lib/toast";
+import { chiediConsensoAi } from "../lib/aiConsent";
 import {
   MapPin,
   Phone,
@@ -15,6 +16,7 @@ import {
   Heart
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { Capacitor } from "@capacitor/core";
 import { get as idbGet } from "idb-keyval";
 import { logApiCall } from "../lib/apiLogger";
 import { supabase } from "../lib/supabase";
@@ -252,6 +254,18 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   const searchCenter: [number, number] | undefined = cittaCercata
     ? [cittaCercata.lat, cittaCercata.lon]
     : useTripCenter && activeTrip ? [activeTrip.lat, activeTrip.lon] : mapCenter;
+
+  // IL PUNTO DI RIFERIMENTO DI «SERATA», «STASERA» E DELLE DISTANZE
+  // (19/09/2026). Prima era sempre `deviceCoords || searchCenter`: il GPS
+  // vinceva anche su una città cercata. Chi cercava Milano da Carrara si
+  // vedeva comporre la serata a Carrara — con l'errore «non ho abbastanza
+  // locali» sotto la foto del Duomo — e «Stasera vicino a te» restava vuoto,
+  // perché filtrava gli eventi di Milano a 10 km dal telefono. Una scelta
+  // ESPLICITA (città cercata, destinazione del viaggio) batte il GPS; il GPS
+  // vale solo quando l'utente non ha scelto nulla.
+  const sceltaEsplicita = !!cittaCercata || (useTripCenter && !!activeTrip);
+  const puntoRiferimento: [number, number] | null | undefined =
+    sceltaEsplicita ? searchCenter : (deviceCoords || searchCenter);
 
   // Date filters: oggi in ora LOCALE (toISOString slitta di un giorno la sera)
   const [startDate, setStartDate] = useState<string>(() => isoOggiLocale());
@@ -1452,7 +1466,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   const kmDa = (l: any): string => {
     const d = Number(l?.distanza_km ?? l?.distance_km);
     if (Number.isFinite(d)) return `${d < 10 ? d.toFixed(1) : Math.round(d)} km`;
-    const rif = deviceCoords || searchCenter;
+    const rif = puntoRiferimento;
     if (!rif || !Number.isFinite(Number(l?.lat)) || !Number.isFinite(Number(l?.lon))) return '';
     const km = haversineMeters(rif[0], rif[1], Number(l.lat), Number(l.lon)) / 1000;
     return `${km < 10 ? km.toFixed(1) : Math.round(km)} km`;
@@ -1710,9 +1724,14 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
 
   // ── «Serata perfetta» in un tap ────────────────────────────────────────
   const requestEveningPlan = async () => {
-    const ref = deviceCoords || searchCenter;
+    const ref = puntoRiferimento;
     if (!ref) return notify(getTranslation("events_evening_no_position", language));
-    if (eveningPlan) { setShowEveningModal(true); return; }
+    // La proposta vale per la ZONA per cui è stata composta: cambiata città,
+    // si ricompone (prima restava in memoria la serata della città di prima).
+    const zona = `${ref[0].toFixed(1)}_${ref[1].toFixed(1)}`;
+    if (eveningPlan && eveningPlan._zona === zona) { setShowEveningModal(true); return; }
+    // Consenso AI (22/09/2026): la posizione dell'utente va a un modello esterno.
+    if (!(await chiediConsensoAi())) return;
     setEveningLoading(true);
     try {
       // apiFetch: Bearer automatico (rotta a login obbligatorio) + timeout 45 s.
@@ -1731,7 +1750,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       if (!r.ok || !Array.isArray(data?.tappe) || data.tappe.length === 0) {
         throw new Error(data?.error || "Proposta non disponibile");
       }
-      setEveningPlan(data);
+      setEveningPlan({ ...data, _zona: zona });
       setShowEveningModal(true);
     } catch (e: any) {
       console.error("evening-plan error:", e);
@@ -1905,7 +1924,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   // distanza. Solo filtro client dei dati già fetchati, nessuna nuova fonte.
   // Solo fonti con una data VERA (Ticketmaster, sagre/mercati): i biglietti
   // e i tour prenotabili non sono «stasera», sono sempre.
-  const tonightRef = deviceCoords || searchCenter;
+  const tonightRef = puntoRiferimento;
   const tonightEvents = (new Date().getHours() >= 16 && tonightRef)
     ? displayEvents
         .filter(e => ["ticketmaster", "local"].includes(e.source) && !e.bookable)
@@ -1919,28 +1938,26 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         .slice(0, 3)
     : [];
 
+  // Alternativa Mappe di Apple (13/09/2026, App Review Guideline 4: SEMPRE
+  // la scelta accanto a Google Maps su iPhone/iPad, non solo Google). Una
+  // sola destinazione (mai più tappe qui), quindi Apple Maps la accetta per
+  // intero — a differenza del caso itinerario multi-tappa, qui non manca
+  // nulla scegliendola.
+  const [sceltaMappaEvento, setSceltaMappaEvento] = useState<{ raw: string; isCoord: boolean } | null>(null);
   const openNavigation = (event: EventData) => {
-    if (event.lat && event.lon) {
-      window.open(
-        `https://www.google.com/maps/dir/?api=1&destination=${event.lat},${event.lon}`,
-        "_blank",
-      );
-    } else if (event.venueAddress) {
-      window.open(
-        `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(event.venueAddress)}`,
-        "_blank",
-      );
-    } else if (
-      event.venueName &&
-      event.venueName !== "Località non specificata"
-    ) {
-      window.open(
-        `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(event.venueName)}`,
-        "_blank",
-      );
-    } else {
-      notify(getTranslation("events_error_nav", language));
+    let dest: string | null = null;
+    let isCoord = false;
+    if (event.lat && event.lon) { dest = `${event.lat},${event.lon}`; isCoord = true; }
+    else if (event.venueAddress) dest = event.venueAddress;
+    else if (event.venueName && event.venueName !== "Località non specificata") dest = event.venueName;
+
+    if (!dest) { notify(getTranslation("events_error_nav", language)); return; }
+
+    if (Capacitor.getPlatform() === 'ios') {
+      setSceltaMappaEvento({ raw: dest, isCoord });
+      return;
     }
+    window.open(`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}`, "_blank");
   };
 
   return (
@@ -2600,6 +2617,48 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
                   {getTranslation("events_evening_disclaimer", language)}
                 </p>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Scelta Google Maps / Mappe di Apple, solo iOS: vedi openNavigation. */}
+      <AnimatePresence>
+        {sceltaMappaEvento && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[10000] flex items-end justify-center bg-black/40"
+            onClick={() => setSceltaMappaEvento(null)}
+          >
+            <motion.div
+              initial={{ y: 40 }}
+              animate={{ y: 0 }}
+              exit={{ y: 40 }}
+              className="w-full max-w-sm m-3 rounded-2xl bg-white shadow-2xl overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <a
+                href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(sceltaMappaEvento.raw)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setSceltaMappaEvento(null)}
+                className="flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors"
+              >
+                <MapPin className="w-5 h-5 text-primary" />
+                <span className="text-sm font-bold text-gray-900">{getTranslation('open_gmaps', language)}</span>
+              </a>
+              <a
+                href={`https://maps.apple.com/?daddr=${sceltaMappaEvento.isCoord ? sceltaMappaEvento.raw : encodeURIComponent(sceltaMappaEvento.raw)}&dirflg=d`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setSceltaMappaEvento(null)}
+                className="flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors border-t border-gray-100"
+              >
+                <MapPin className="w-5 h-5 text-primary" />
+                <span className="text-sm font-bold text-gray-900">{getTranslation('open_apple_maps', language)}</span>
+              </a>
             </motion.div>
           </motion.div>
         )}

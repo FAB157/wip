@@ -11,6 +11,10 @@ interface AttractionImageProps {
   /** «Foto: Nome (CC BY-SA 4.0) via Wikimedia Commons» — obbligatoria quando
    *  c'e': senza il credito quelle immagini non sono utilizzabili. */
   attribuzione?: string | null;
+  /** Seconda foto DELLO STESSO LUOGO, provata se la prima non si carica. */
+  srcRipiego?: string;
+  /** Chi disegna il credito FUORI da qui deve sapere quale foto si vede. */
+  onRipiego?: (attivo: boolean) => void;
 }
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
@@ -40,9 +44,27 @@ const CATEGORY_GRADIENTS: Record<string, string> = {
 // negoziabile del progetto vieta: la fotografia di un altro luogo mostrata
 // come se fosse questo. Nessuna foto e' meglio della foto sbagliata.
 
-export default function AttractionImage({ src, alt, category, className = "", attribuzione }: AttractionImageProps) {
+export default function AttractionImage({ src: srcPrincipale, alt, category, className = "", attribuzione, srcRipiego, onRipiego }: AttractionImageProps) {
   const [error, setError] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
+  const [usaRipiego, setUsaRipiego] = React.useState(false);
+
+  // La scheda non si smonta passando da un POI all'altro: senza questo reset
+  // l'errore della foto precedente lasciava il segnaposto anche sulla nuova.
+  React.useEffect(() => {
+    setError(false);
+    setLoading(true);
+    setUsaRipiego(false);
+  }, [srcPrincipale]);
+
+  React.useEffect(() => { onRipiego?.(usaRipiego); }, [usaRipiego]);
+
+  const ripiegoValido = !!srcRipiego && srcRipiego !== srcPrincipale;
+  const src = usaRipiego && ripiegoValido ? srcRipiego : srcPrincipale;
+  const suErrore = () => {
+    if (!usaRipiego && ripiegoValido) { setUsaRipiego(true); setLoading(true); }
+    else setError(true);
+  };
 
   // Normalize category
   const cat = (category || 'default').toLowerCase();
@@ -102,13 +124,13 @@ export default function AttractionImage({ src, alt, category, className = "", at
         fetchPriority="high"
         decoding="async"
         className={`w-full h-full object-cover transition-opacity duration-500 ${loading ? 'opacity-0' : 'opacity-100'}`}
-        onError={() => setError(true)}
+        onError={suErrore}
         onLoad={() => setLoading(false)}
         referrerPolicy="no-referrer"
       />
       {/* Il credito compare solo a foto caricata: se l'immagine non arriva non
           c'e' nulla da attribuire, e la riga sospesa nel vuoto confonderebbe. */}
-      {!loading && <AttribuzioneFoto testo={attribuzione} />}
+      {!loading && !usaRipiego && <AttribuzioneFoto testo={attribuzione} />}
     </div>
   );
 }

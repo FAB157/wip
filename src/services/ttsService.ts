@@ -247,8 +247,15 @@ export function pickVoice(lang: string, character: GuideCharacter = 'nicky'): Sp
 
 import { locationService } from './locationService';
 
-/** Legge una frase breve con la voce nativa del browser (gratis). */
-export function speakInstruction(text: string, lang = 'it', character: GuideCharacter = 'nicky'): void {
+/**
+ * Legge una frase breve con la voce nativa del browser (gratis).
+ * `opts.ttlMs` (21/09/2026, navigatore a schermo spento): SOLO le svolte e i
+ * preavvisi del navigatore lo passano (20000). Nella coda nativa l'elemento
+ * scade: dietro una guida di quattro minuti o una telefonata un «gira a
+ * destra» è un'indicazione sbagliata, non in ritardo. Arrivi, teaser e
+ * guide non lo passano e non scadono, come prima.
+ */
+export function speakInstruction(text: string, lang = 'it', character: GuideCharacter = 'nicky', opts?: { ttlMs?: number }): void {
   // Notifica il banner ApproachBanner dell'istruzione corrente: deve arrivare
   // SEMPRE, anche col muto attivo (il muto silenzia solo la sintesi vocale,
   // non il testo della svolta a schermo).
@@ -264,7 +271,7 @@ export function speakInstruction(text: string, lang = 'it', character: GuideChar
   // restava MUTO. Instradiamo la frase al TTS nativo/Azure (stesso canale delle
   // audioguide su nativo) così le indicazioni si sentono anche in-app.
   if (Capacitor.isNativePlatform() || !hasWebSpeech) {
-    void speakInstructionNative(text, lang, character);
+    void speakInstructionNative(text, lang, character, opts?.ttlMs);
     return;
   }
 
@@ -341,18 +348,22 @@ function stopNativeDirect() {
  */
 async function speakViaNativeQueue(
   text: string,
-  opts?: { poiId?: string; kind?: string; priority?: number; force?: boolean; lang?: string; character?: GuideCharacter },
+  opts?: { poiId?: string; kind?: string; priority?: number; force?: boolean; lang?: string; character?: GuideCharacter; ttlMs?: number },
   onEnd?: () => void,
 ): Promise<boolean> {
   if (!nativePoiPlugin) return false;
   try {
     ensureDirectListener();
+    const ttlMs = Number(opts?.ttlMs);
     const res = await nativePoiPlugin.speakText({
       text,
       poiId: opts?.poiId,
       kind: opts?.kind || 'nav',
       priority: opts?.priority ?? 0,
       force: opts?.force === true,
+      // Scadenza in coda (21/09/2026): solo se data, così tutto il resto
+      // resta com'era (senza campo = non scade mai).
+      ...(Number.isFinite(ttlMs) && ttlMs > 0 ? { ttlMs: Math.round(ttlMs) } : {}),
     });
     if (res?.ok !== true) return false;
     if (res.direct && res.id) {
@@ -496,7 +507,7 @@ export async function speakArrivalNative(text: string, poiId?: string): Promise<
  * di CapacitorHttp) e lo riproduce sul player nativo. Best-effort: offline o
  * errore → niente voce, come prima.
  */
-async function speakInstructionNative(text: string, lang: string, character: GuideCharacter): Promise<void> {
+async function speakInstructionNative(text: string, lang: string, character: GuideCharacter, ttlMs?: number): Promise<void> {
   // 1) VOCE DI SISTEMA (coda TTS nativa dei teaser). È la strada preferita:
   //    funziona OFFLINE, parte all'istante (niente MP3 da scaricare), non
   //    costa nulla — su un percorso di 27 manovre erano 27 chiamate Azure —
@@ -513,7 +524,7 @@ async function speakInstructionNative(text: string, lang: string, character: Gui
   //    diretto invece le parlerebbe sopra — in quel caso si resta al
   //    comportamento di prima (frase a schermo, riaccodata dal direttore).
   const guidaInCorso = nativePlaybackActive || (() => { try { return !!locationService.getAudioState()?.isActive; } catch { return false; } })();
-  if (await speakViaNativeQueue(text, { force: !guidaInCorso, lang, character }, () => emitSpeechEnded(text))) {
+  if (await speakViaNativeQueue(text, { force: !guidaInCorso, lang, character, ttlMs }, () => emitSpeechEnded(text))) {
     return;
   }
 

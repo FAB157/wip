@@ -170,7 +170,9 @@ export default function PercorsoPanel({ language, onClose, avvioRapido }: Props)
       : bozza.errore === 'ACCESSO_RICHIESTO'
         ? tr('pc_accedi')
         : bozza.metri > 0
-          ? `${distanza(bozza.metri)} · ${bozza.minutiCammino} ${tr('gr_min_a_piedi')} · ${bozza.anello ? tr('gr_anello_da_dove_sei') : tr('gr_fino_ultima_tappa')}`
+          ? `${distanza(bozza.metri)} · ${bozza.minutiCammino} ${tr('gr_min_a_piedi')} · ${bozza.soloItinerario
+              ? (bozza.anello ? tr('gr_anello_dalla_prima') : tr('gr_dalla_prima_all_ultima'))
+              : (bozza.anello ? tr('gr_anello_da_dove_sei') : tr('gr_fino_ultima_tappa'))}`
           : bozza.errore && bozza.errore !== 'PASS_RICHIESTO'
             ? bozza.errore
             : tr('gr_wipnav_ordina');

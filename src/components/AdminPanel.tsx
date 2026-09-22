@@ -38,13 +38,15 @@ const AdminVisits = lazy(() => import('./admin/AdminVisits'));
 const AdminNotifiche = lazy(() => import('./admin/AdminNotifiche'));
 // Completezza dei musei prioritari + editor dei pin sulla pianta (12/09/2026).
 const AdminMusei = lazy(() => import('./admin/AdminMusei'));
+// Foto candidate (blog, social, guide, Commons alla larga) da approvare a mano (18/09/2026).
+const AdminFotoVerifica = lazy(() => import('./admin/AdminFotoVerifica'));
 
 const CaricamentoScheda = () => (
   <div className="py-16 text-center text-sm font-bold text-on-surface-variant/70">Carico la scheda…</div>
 );
 
 export default function AdminPanel() {
-  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision' | 'content_queue' | 'ops' | 'social' | 'visits' | 'notifiche' | 'musei'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision' | 'content_queue' | 'ops' | 'social' | 'visits' | 'notifiche' | 'musei' | 'foto'>('users');
   // La scheda Utenti ora e' quella nuova (ricerca, consumo per utente, azioni
   // tracciate). La vista storica resta raggiungibile con un interruttore:
   // mostra cose che la nuova non ha (storico ascolti, righe dei pass).
@@ -553,6 +555,16 @@ export default function AdminPanel() {
             <Landmark className="w-4 h-4" />
             Musei
           </button>
+          {/* Foto candidate da approvare a mano: mai in app senza un sì (18/09/2026) */}
+          <button
+            onClick={() => setActiveTab('foto')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'foto' ? 'bg-white text-sky-600 shadow-sm' : 'text-primary/60 hover:text-sky-600'
+            }`}
+          >
+            <Camera className="w-4 h-4" />
+            Foto da verificare
+          </button>
           <button
             onClick={() => setActiveTab('editor')}
             className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
@@ -667,6 +679,9 @@ export default function AdminPanel() {
       )}
       {activeTab === 'musei' && (
         <Suspense fallback={<CaricamentoScheda />}><AdminMusei /></Suspense>
+      )}
+      {activeTab === 'foto' && (
+        <Suspense fallback={<CaricamentoScheda />}><AdminFotoVerifica /></Suspense>
       )}
       {managedUser && <UserManageModal user={managedUser} onClose={() => setManagedUser(null)} onChanged={() => fetchData()} />}
 

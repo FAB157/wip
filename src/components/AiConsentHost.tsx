@@ -16,9 +16,10 @@ export const FORNITORI_AI = 'OpenAI, Google (Gemini), Groq, DeepSeek, Together A
 const TESTI: Record<Lingua, { titolo: string; intro: string; cosaTitolo: string; cosa: string[]; chiTitolo: string; chi: string; mai: string; revoca: string; policy: string; consenti: string; nega: string }> = {
   IT: {
     titolo: 'Funzioni AI: serve il tuo permesso',
-    intro: 'La chat «Chiedi a WIP», AI Scan e la creazione degli itinerari usano servizi di intelligenza artificiale di terze parti. Prima di inviare qualcosa ti chiediamo il permesso.',
+    intro: 'Le audioguide dei luoghi, la chat «Chiedi a WIP», AI Scan, «Chiedi alla guida» nei musei e la creazione degli itinerari usano servizi di intelligenza artificiale di terze parti. Prima di inviare qualcosa ti chiediamo il permesso.',
     cosaTitolo: 'Quali dati vengono inviati',
     cosa: [
+      'per le audioguide: solo il nome del luogo e la lingua (nessun tuo dato)',
       'il testo dei messaggi e delle domande che scrivi o detti',
       'le foto che scatti o carichi in AI Scan',
       'la tua posizione approssimativa e la lingua dell’app, per risposte pertinenti',
@@ -34,9 +35,10 @@ const TESTI: Record<Lingua, { titolo: string; intro: string; cosaTitolo: string;
   },
   EN: {
     titolo: 'AI features: your permission is needed',
-    intro: 'The “Ask WIP” chat, AI Scan and itinerary creation use third-party artificial intelligence services. Before anything is sent, we ask for your permission.',
+    intro: 'Place audio guides, the “Ask WIP” chat, AI Scan, “Ask the guide” in museums and itinerary creation use third-party artificial intelligence services. Before anything is sent, we ask for your permission.',
     cosaTitolo: 'What data is sent',
     cosa: [
+      'for audio guides: only the place name and the language (none of your data)',
       'the text of the messages and questions you type or dictate',
       'the photos you take or upload in AI Scan',
       'your approximate location and the app language, for relevant answers',
@@ -52,9 +54,10 @@ const TESTI: Record<Lingua, { titolo: string; intro: string; cosaTitolo: string;
   },
   FR: {
     titolo: 'Fonctions IA : votre autorisation est nécessaire',
-    intro: 'Le chat « Demander à WIP », AI Scan et la création d’itinéraires utilisent des services d’intelligence artificielle tiers. Avant tout envoi, nous vous demandons votre autorisation.',
+    intro: 'Les audioguides des lieux, le chat « Demander à WIP », AI Scan, « Demander au guide » dans les musées et la création d’itinéraires utilisent des services d’intelligence artificielle tiers. Avant tout envoi, nous vous demandons votre autorisation.',
     cosaTitolo: 'Quelles données sont envoyées',
     cosa: [
+      'pour les audioguides : uniquement le nom du lieu et la langue (aucune de vos données)',
       'le texte des messages et questions que vous écrivez ou dictez',
       'les photos que vous prenez ou importez dans AI Scan',
       'votre position approximative et la langue de l’app, pour des réponses pertinentes',
@@ -70,9 +73,10 @@ const TESTI: Record<Lingua, { titolo: string; intro: string; cosaTitolo: string;
   },
   ES: {
     titolo: 'Funciones de IA: necesitamos tu permiso',
-    intro: 'El chat «Pregunta a WIP», AI Scan y la creación de itinerarios usan servicios de inteligencia artificial de terceros. Antes de enviar nada, te pedimos permiso.',
+    intro: 'Las audioguías de los lugares, el chat «Pregunta a WIP», AI Scan, «Pregunta al guía» en los museos y la creación de itinerarios usan servicios de inteligencia artificial de terceros. Antes de enviar nada, te pedimos permiso.',
     cosaTitolo: 'Qué datos se envían',
     cosa: [
+      'para las audioguías: solo el nombre del lugar y el idioma (ningún dato tuyo)',
       'el texto de los mensajes y preguntas que escribes o dictas',
       'las fotos que haces o subes en AI Scan',
       'tu ubicación aproximada y el idioma de la app, para respuestas pertinentes',
@@ -88,9 +92,10 @@ const TESTI: Record<Lingua, { titolo: string; intro: string; cosaTitolo: string;
   },
   DE: {
     titolo: 'KI-Funktionen: Deine Erlaubnis ist nötig',
-    intro: 'Der Chat „WIP fragen“, AI Scan und die Erstellung von Reiserouten nutzen KI-Dienste von Drittanbietern. Bevor etwas gesendet wird, bitten wir dich um Erlaubnis.',
+    intro: 'Die Audioguides der Orte, der Chat „WIP fragen“, AI Scan, „Guide fragen“ in Museen und die Erstellung von Reiserouten nutzen KI-Dienste von Drittanbietern. Bevor etwas gesendet wird, bitten wir dich um Erlaubnis.',
     cosaTitolo: 'Welche Daten gesendet werden',
     cosa: [
+      'für Audioguides: nur der Name des Ortes und die Sprache (keine deiner Daten)',
       'der Text der Nachrichten und Fragen, die du schreibst oder diktierst',
       'die Fotos, die du in AI Scan aufnimmst oder hochlädst',
       'dein ungefährer Standort und die App-Sprache, für passende Antworten',
@@ -106,9 +111,10 @@ const TESTI: Record<Lingua, { titolo: string; intro: string; cosaTitolo: string;
   },
   RU: {
     titolo: 'Функции ИИ: нужно ваше разрешение',
-    intro: 'Чат «Спросить WIP», AI Scan и создание маршрутов используют сторонние сервисы искусственного интеллекта. Прежде чем что-либо отправить, мы просим вашего разрешения.',
+    intro: 'Аудиогиды мест, чат «Спросить WIP», AI Scan, «Спросить гида» в музеях и создание маршрутов используют сторонние сервисы искусственного интеллекта. Прежде чем что-либо отправить, мы просим вашего разрешения.',
     cosaTitolo: 'Какие данные отправляются',
     cosa: [
+      'для аудиогидов: только название места и язык (никаких ваших данных)',
       'текст сообщений и вопросов, которые вы пишете или диктуете',
       'фотографии, которые вы снимаете или загружаете в AI Scan',
       'ваше приблизительное местоположение и язык приложения — для уместных ответов',
@@ -124,9 +130,10 @@ const TESTI: Record<Lingua, { titolo: string; intro: string; cosaTitolo: string;
   },
   ZH: {
     titolo: 'AI 功能：需要您的许可',
-    intro: '“问问 WIP”聊天、AI Scan 和行程创建会使用第三方人工智能服务。在发送任何内容之前，我们先征求您的许可。',
+    intro: '地点语音导览、“问问 WIP”聊天、AI Scan、博物馆中的“问问导览员”和行程创建会使用第三方人工智能服务。在发送任何内容之前，我们先征求您的许可。',
     cosaTitolo: '会发送哪些数据',
     cosa: [
+      '语音导览：仅发送地点名称和语言（不含您的任何数据）',
       '您输入或口述的消息和问题的文字',
       '您在 AI Scan 中拍摄或上传的照片',
       '您的大致位置和应用语言，用于提供相关回答',

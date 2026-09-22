@@ -152,18 +152,34 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         // manda Android dalle azioni della notifica del servizio. La chiave
         // nell'App Group copre il tocco arrivato PRIMA che il plugin fosse
         // in ascolto (app appena rilanciata dal sistema).
+        // (21/09/2026, REVISIONE 2) Con l'azione viaggia `ts`, l'istante del
+        // TOCCO (ms dal 1970, scritto da WipNavConsegna), come su Android:
+        // senza, la regola dei 60 s di App.tsx non valeva mai su iOS — un
+        // «Termina» toccato a schermo spento chiudeva il percorso pagato senza
+        // conferma al risveglio, e «Salta»/«Ricalcola» partivano in ritardo.
         NotificationCenter.default.addObserver(forName: WipNavAzione.notifica, object: nil, queue: .main) { [weak self] n in
             let azione = (n.userInfo?["azione"] as? String) ?? ""
-            UserDefaults(suiteName: WipNavAppGroup.id)?.removeObject(forKey: WipNavAzione.chiavePendente)
+            // Ripiego sull'adesso: l'osservatore gira al momento del tocco.
+            let ts = (n.userInfo?["ts"] as? Double) ?? Date().timeIntervalSince1970 * 1000
+            let gruppo = UserDefaults(suiteName: WipNavAppGroup.id)
+            gruppo?.removeObject(forKey: WipNavAzione.chiavePendente)
+            gruppo?.removeObject(forKey: WipNavAzione.chiavePendenteTs)
             guard !azione.isEmpty else { return }
             // (18/09/2026) A schermo spento il JS è sospeso: il follower
             // nativo del navigatore obbedisce subito al tasto, il JS al risveglio.
             BackgroundPoiManager.shared.azioneNavDalBanner(azione)
-            self?.notifyListeners("navBannerAction", data: ["action": azione], retainUntilConsumed: true)
+            self?.notifyListeners("navBannerAction", data: ["action": azione, "ts": ts], retainUntilConsumed: true)
         }
-        if let pendente = UserDefaults(suiteName: WipNavAppGroup.id)?.string(forKey: WipNavAzione.chiavePendente), !pendente.isEmpty {
-            UserDefaults(suiteName: WipNavAppGroup.id)?.removeObject(forKey: WipNavAzione.chiavePendente)
-            notifyListeners("navBannerAction", data: ["action": pendente], retainUntilConsumed: true)
+        let gruppoNav = UserDefaults(suiteName: WipNavAppGroup.id)
+        if let pendente = gruppoNav?.string(forKey: WipNavAzione.chiavePendente), !pendente.isEmpty {
+            // Il ts salvato insieme all'azione; 0 = chiave scritta da una build
+            // di prima (App.tsx la tratta come fresca, come prima).
+            let ts = gruppoNav?.double(forKey: WipNavAzione.chiavePendenteTs) ?? 0
+            gruppoNav?.removeObject(forKey: WipNavAzione.chiavePendente)
+            gruppoNav?.removeObject(forKey: WipNavAzione.chiavePendenteTs)
+            var dati: [String: Any] = ["action": pendente]
+            if ts > 0 { dati["ts"] = ts }
+            notifyListeners("navBannerAction", data: dati, retainUntilConsumed: true)
         }
     }
 
@@ -577,7 +593,8 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         // Audioguida spenta = niente cruscotto: se il giro non ha fatto in
         // tempo a mandare `attivo: false`, la Live Activity resterebbe sulla
         // lock screen fino alle 8 ore di scadenza di sistema.
-        LiveActivityNav.shared.termina()
+        // (21/09/2026) Sul main, come updateNavBanner: stessa coda dell'avvio.
+        DispatchQueue.main.async { LiveActivityNav.shared.termina() }
         call.resolve()
     }
 
@@ -604,8 +621,15 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
     @objc func updateNavBanner(_ call: CAPPluginCall) {
         let attivo = call.getBool("attivo") ?? false
         if !attivo {
-            LiveActivityNav.shared.termina()
-            call.resolve(["ok": true])
+            // (21/09/2026) Anche la CHIUSURA sul main, come l'avvio qui sotto:
+            // sulla coda del bridge poteva passare DAVANTI a un avvio già
+            // accodato sul main (true poi false in pochi ms al risveglio), e
+            // l'avvio creava una Live Activity nuova a navigazione finita.
+            // Una coda sola, in ordine, e niente corse sul riferimento statico.
+            DispatchQueue.main.async {
+                LiveActivityNav.shared.termina()
+                call.resolve(["ok": true])
+            }
             return
         }
         guard LiveActivityNav.shared.disponibili else {
@@ -685,25 +709,32 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         call.resolve()
     }
 
-    /// `{ indice, dettiVicino?, dettiLontano? }`: il JS è vivo e parla lui.
-    /// Gli array si leggono come NSNumber: un `as? [Int]` secco fallirebbe in
-    /// blocco al primo valore non intero arrivato dal ponte.
+    /// `{ indice, dettiVicino?, dettiLontano?, inPausa? }`: il JS è vivo e
+    /// parla lui. Gli array si leggono come NSNumber: un `as? [Int]` secco
+    /// fallirebbe in blocco al primo valore non intero arrivato dal ponte.
+    /// (21/09/2026, REVISIONE 2) Il battito PORTA la pausa del JS (assente =
+    /// false): se cambia, il GPS va subito sul profilo giusto (a riposo in
+    /// pausa, da navigatore alla ripresa), senza aspettare il fix dopo.
     @objc func navHeartbeat(_ call: CAPPluginCall) {
         let vicinoGrezzo: JSArray = call.getArray("dettiVicino") ?? []
         let lontanoGrezzo: JSArray = call.getArray("dettiLontano") ?? []
         let vicino: [Int] = vicinoGrezzo.compactMap { ($0 as? NSNumber)?.intValue }
         let lontano: [Int] = lontanoGrezzo.compactMap { ($0 as? NSNumber)?.intValue }
-        NavFollower.shared.heartbeat(
+        let pausaCambiata = NavFollower.shared.heartbeat(
             indice: call.getInt("indice") ?? 0,
             dettiVicino: vicino,
-            dettiLontano: lontano
+            dettiLontano: lontano,
+            inPausa: call.getBool("inPausa") ?? false
         )
+        if pausaCambiata { BackgroundPoiManager.shared.aggiornaProfiloNavigatore() }
         call.resolve()
     }
 
     /// `{ attivo, id, indice, dettiVicino, dettiLontano, nativoAlComando,
-    /// ultimoTestoVicino, ultimoTestoLontano }`: al risveglio il JS riprende
-    /// da qui senza ripetere ciò che il nativo ha già detto.
+    /// ultimoTestoVicino, ultimoTestoLontano, finito, terminato }`: al
+    /// risveglio il JS riprende da qui senza ripetere ciò che il nativo ha già
+    /// detto. `terminato` (21/09/2026): svuotato dal «Termina» del cruscotto,
+    /// i dati sono la fotografia di quel momento (NavFollower.terminaDalBanner).
     @objc func getNavProgress(_ call: CAPPluginCall) {
         call.resolve(NavFollower.shared.progress())
     }
@@ -873,13 +904,21 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
             if call.getBool("force") == true { return speakDirect(text, call: call) }
             return call.resolve(["ok": false, "reason": "service_inactive"])
         }
+        // (21/09/2026, REVISIONE 2) `ttlMs` facoltativo: > 0 = la frase scade
+        // in coda dopo quel tempo (stesso campo delle frasi del follower). Il
+        // JS lo manda SOLO per le svolte del navigatore: dietro un teaser o
+        // una guida, un «gira a destra» detto minuti dopo è un'indicazione
+        // sbagliata. Assente = non scade mai, cioè teaser, arrivi e guide
+        // restano come prima.
+        let ttlMs = call.getDouble("ttlMs") ?? 0
         SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
             text: text,
             isGem: false,
             isItinerary: false,
             poiId: call.getString("poiId"),
             priority: call.getInt("priority") ?? 0,
-            kind: call.getString("kind") ?? "nav"
+            kind: call.getString("kind") ?? "nav",
+            scadenzaMs: ttlMs > 0 ? nowMs() + ttlMs : nil
         ))
         call.resolve(["ok": true])
     }

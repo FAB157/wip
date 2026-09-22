@@ -49,11 +49,19 @@ enum WipNavLink {
 }
 
 /// Consegna dell'azione all'app: chiave pendente + notifica. Usata dal
-/// perform() dell'intent (iOS 17) e da AppDelegate per il Link (iOS 16).
+/// perform() dell'intent (iOS 17) e da AppDelegate per il Link (iOS 16, e
+/// «salta»/«ricalcola» anche su iOS 17).
+/// (21/09/2026) Con l'azione viaggia `ts`, l'istante del TOCCO (ms dal 1970):
+/// nell'App Group accanto alla chiave pendente e nella notifica. Il JS la
+/// usa per la regola dei 60 s (un «Termina» vecchio chiede conferma, «Salta»
+/// e «Ricalcola» vecchi si scartano), che prima su iOS non valeva mai.
 enum WipNavConsegna {
     static func consegna(_ azione: String) {
-        UserDefaults(suiteName: WipNavAppGroup.id)?.set(azione, forKey: WipNavAzione.chiavePendente)
-        NotificationCenter.default.post(name: WipNavAzione.notifica, object: nil, userInfo: ["azione": azione])
+        let ts = Date().timeIntervalSince1970 * 1000
+        let gruppo = UserDefaults(suiteName: WipNavAppGroup.id)
+        gruppo?.set(azione, forKey: WipNavAzione.chiavePendente)
+        gruppo?.set(ts, forKey: WipNavAzione.chiavePendenteTs)
+        NotificationCenter.default.post(name: WipNavAzione.notifica, object: nil, userInfo: ["azione": azione, "ts": ts])
     }
 }
 
@@ -78,9 +86,11 @@ struct WipNavAzioneIntent: LiveActivityIntent {
         let a = azione
         // L'effetto visibile subito, sulla Live Activity stessa.
         if let attivita = Activity<WipNavAttributes>.activities.first {
-            if a == WipNavAzione.pausa {
+            if a == WipNavAzione.pausa || a == WipNavAzione.riprendi {
+                // (21/09/2026) Lo stato VOLUTO, non l'opposto di quello
+                // mostrato: il tasto porta già l'azione giusta.
                 var stato = attivita.content.state
-                stato.inPausa = !(stato.inPausa ?? false)
+                stato.inPausa = (a == WipNavAzione.pausa)
                 await attivita.update(ActivityContent(state: stato, staleDate: nil))
             } else if a == WipNavAzione.termina {
                 await attivita.end(nil, dismissalPolicy: .immediate)

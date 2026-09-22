@@ -51,7 +51,7 @@ il processo muore il percorso si perde, va bene così.
 
 ## Algoritmo del follower (IDENTICO su Kotlin e Swift)
 Costanti:
-`HEARTBEAT_STALE_MS=12000, NEAR_M=30, FAR_MIN_M=50, FAR_MAX_M=150, ARRIVE_M=25,
+`HEARTBEAT_STALE_MS=8000 (era 12000: vedi «Correzioni dalla REVISIONE» in fondo), NEAR_M=30, FAR_MIN_M=50, FAR_MAX_M=150, ARRIVE_M=25,
 LEAVE_STOP_M=45, PASSED_MARGIN_M=15, MISSED_MARGIN_M=40, SKIP_NEXT_M=40,
 MAX_ACC_M=60, OFFROUTE_M=70, OFFROUTE_MS=20000, BACK_ON_ROUTE_M=40, DEDUPE_MS=20000`
 
@@ -243,3 +243,134 @@ Il fix va passato al follower nel punto in cui il servizio riceve già le posizi
   anche nell'elenco `pluginMethods` (CAPBridgedPlugin) se il plugin lo usa.
 - Android: un file nuovo `NavFollower.kt` nel package del servizio va bene.
 - Non cambiare il comportamento delle audioguide/teaser esistenti.
+
+## REVISIONE 2 — verifica a schermo spento (21/09/2026) — PREVALE su tutto quanto sopra
+Verifica a codice di 9 ispettori + verifica avversaria di ogni criticità
+(43 segnalazioni, 26 confermate prima di questa revisione). Tutto additivo: JS
+e nativo viaggiano nello stesso pacchetto (`capacitor.config` senza
+`server.url`), un campo assente vale come prima. Identico su Kotlin e Swift.
+
+### Contratto
+1. `routeJson`, campi opzionali nuovi:
+   - `"inPausa": false` — il follower nasce in pausa (percorso consegnato durante
+     una pausa MANUALE del giro).
+   - `"spegniCruscotto": true` — all'arrivo finale col nativo al comando il
+     follower spegne il cruscotto SOLO se true. La tappa singola manda `false`
+     quando c'è un giro/percorso in corso: il cruscotto dopo è del giro, e su
+     iOS una Live Activity chiusa dal background non si riapre più.
+   - `passi[].tappa` della tratta di RIENTRO dell'anello: il JS ci mette
+     l'etichetta tradotta «Ritorno al punto di partenza» (prima era vuota e il
+     cruscotto ripiegava sul nome di una tappa già visitata, con la sua foto).
+2. `navHeartbeat({ indice, dettiVicino?, dettiLontano?, inPausa? })`: il battito
+   PORTA la pausa del JS — `inPausa` assente = false. Sostituisce «il battito
+   toglie la pausa». Motivo: in pausa manuale il percorso NON si ritira più (il
+   follower vuoto non poteva obbedire a «Riprendi» dalla lock screen).
+3. `getNavProgress()` restituisce anche `finito: boolean` e `terminato: boolean`.
+   `terminato`: il follower è stato svuotato dal tasto «Termina» del cruscotto
+   (`terminaDalBanner` = fotografia di `id`, `indice`, insiemi «davvero», poi
+   `clear`); finché non arriva `setNavRoute`, `clearNavRoute` o il `load()` del
+   plugin, `getNavProgress` restituisce la fotografia con `attivo:false,
+   terminato:true`. Serve al «Termina» in ritardo seguito da «no»: il JS riprende
+   prima il progresso fatto a schermo spento, poi riconsegna.
+4. `speakText({ …, ttlMs? })`: `ttlMs > 0` = l'elemento di coda scade a
+   adesso+ttl (stesso campo `scadenzaElapsedMs`/`scadenzaMs`). Il JS lo manda
+   (20000) SOLO per le svolte del navigatore; teaser, arrivi e guide no.
+5. Tasti del cruscotto (`navBannerAction`):
+   - `pausa` = metti in pausa, `riprendi` = togli la pausa: azioni ESPLICITE e
+     idempotenti, mai un'alternanza (Android `ACTION_NAV_RESUME`, iOS
+     `WipNavAzione.riprendi`). L'interruttore invertiva lo stato del follower
+     e non quello mostrato: durante la pausa AUTOMATICA di tourState (ferma da
+     3 min, percorso NON ritirato) «Riprendi» metteva in pausa il follower.
+   - `ts` (ms dal 1970, istante del TOCCO) su ENTRAMBE: su iOS l'intent lo
+     scrive nell'App Group (`wipNavAzionePendenteTs`) e nella notifica. Senza,
+     la regola dei 60 s di App.tsx non valeva mai su iOS.
+   - `salta` e `ricalcola` il nativo non li sa fare: APRONO L'APP (Android:
+     PendingIntent di Activity verso MainActivity, mai `startActivity` dal
+     servizio — con target ≥ 31 è un trampolino bloccato; iOS: `Link
+     itainta://nav/<azione>` anche su iOS 17) e arrivano al JS freschi.
+   - `riascolta` anche su Android nella tappa singola ([Riascolta][Ricalcola]
+     [Termina], come iOS). Se l'ha già detto il nativo (al comando), l'azione
+     NON si inoltra al JS: sarebbe detta due volte.
+   - `termina` = `terminaDalBanner()` (vedi 3).
+
+### Follower
+- **Pausa**: in pausa `onFix` si comporta come col JS vivo — TACE MA TIENE IL
+  CONTO (niente frasi, niente «davvero», niente `finito`, niente fuori
+  percorso) e il ramo «lontano» non si segna. Il GPS torna a riposo
+  (`haPercorsoAttivo`/`richiedeFixFitti` falsi in pausa) e il cruscotto non si
+  ridisegna a ogni fix (solo il ridisegno immediato di un tasto).
+- **Istruzione del cruscotto**: `idxJs` = passo che il JS stava mostrando
+  (impostato da `setRoute` e da OGNI battito, azzerato da `clear`).
+  `arrivoSuperato` = c'è un passo `arrive` in [idxJs, idx). Allora:
+  `istruzione = testo del passo`, oppure quella del JS solo se `idx <= idxJs`,
+  altrimenti vuota (mai una svolta di una tratta prima); il nome del JS si usa
+  solo se `!arrivoSuperato`; `tappaCambiata = arrivoSuperato || nomi diversi`
+  (niente foto, niente «prossima»); `indiceTappa` = quello del JS + gli arrivi
+  superati (tetto `tappeTotali`). In pausa lo stato JS ricordato NON sostituisce
+  l'istruzione con «In pausa» (Kotlin già così, Swift allineato).
+- **Arrivo finale** (solo l'ultimo `arrive` con `finale`), oltre ai 25 m:
+  NEI PARAGGI = entro 60 m ininterrottamente da 45 s (la regola 3 del JS);
+  SFIORATO = `minDist < 60 && d > minDist + max(40, accuratezza)` → si conta
+  senza dirlo. Senza, chi non entrava nei 25 m teneva il GPS al massimo e il
+  cruscotto acceso fino all'apertura dell'app, e poi sentiva «fuori percorso».
+- **Fuori percorso**: si ridice se si è ancora fuori dopo 60 s dall'ultima
+  volta, al massimo 2 ripetizioni per uscita; `setRoute`/`clear` e il rientro
+  (< 40 m) azzerano il conto.
+- **Riascolta**: su un `arrive` non ancora raggiunto NON si dice «Sei arrivato».
+- **iOS, orologio**: `CLOCK_MONOTONIC` (conta anche il sonno, come
+  `elapsedRealtime`), non `systemUptime`.
+- **Pagina ricreata**: Android, `load()` del plugin spegne anche il cruscotto
+  (se il servizio è vivo) e dimentica l'ultimo stato JS. iOS: un ricaricamento
+  della WebView dopo la morte del processo WebContent NON richiama `load()`: il
+  JS (`navNativo`) alla prima visibilità della pagina svuota un percorso nativo
+  che non ha consegnato lui.
+
+### JS
+- Pausa MANUALE: il percorso resta al follower (`inPausa`), la firma non cambia
+  con la pausa; `impostaPausaNativa` manda subito un battito.
+- Il CRUSCOTTO ha un proprietario come il percorso: la tappa singola finché è
+  attiva (tasti compresi); il giro lo riprende quando lei lascia.
+- Il servizio nativo acceso per il navigatore ha due proprietari (`tappa`,
+  `giro`): si spegne solo quando lasciano entrambi, e all'arrivo della tappa
+  singola solo dopo che la coda ha finito di dire «Sei arrivato».
+- Al risveglio le azioni del cruscotto si applicano DOPO il riallineamento.
+- `finito` dal nativo: la tappa singola chiude senza ridire l'arrivo, il giro
+  chiude l'ultima tappa o il rientro (`concludiRientro`, e il rientro concluso
+  non si riapre al fix dopo).
+- `nativoAlComando()` (navNativo): c'è un proprietario, non in muto, e il
+  battito manca da ≥ 8 s (vale ancora 3 s dopo il battito che chiude il buco:
+  al risveglio l'azione in coda può arrivare dopo). Su iOS un «riascolta» del
+  cruscotto già detto dal follower non si ripete nel JS; su Android non arriva
+  proprio al JS.
+- Fonti di riserva ORS/Geoapify (solo passi `continue`): se nessun passo è
+  `arrive`, l'ULTIMO passo consegnato al nativo diventa `arrive`, con la frase
+  d'arrivo già usata dal JS. Indici invariati.
+- Percorso orfano (iOS, WebView ricaricata): la pulizia parte alla prima
+  visibilità della pagina, non prima di 2,5 s dal caricamento (prima che App
+  ascolti e che il giro sia ripristinato).
+- Tappa singola finita con un giro in corso: niente `attivo:false`, il
+  cruscotto passa al giro, e il proprietario `tappa` del servizio si rilascia
+  dopo 3 s (il giro intanto si iscrive: dal background Android 12+ il servizio
+  spento non si riaccende).
+
+### La svolta sopra la guida MP3 (21/09/2026, ordine «risolvi tutte»)
+Coda nativa (Android `GeofenceBroadcastReceiver`, iOS `SpeechQueue`), identica
+sulle due piattaforme. Una frase `kind:"nav"` CON scadenza che arriva mentre
+la coda suona l'MP3 di una guida: l'MP3 va in pausa (posizione salvata), la
+frase si dice col TTS di sistema, poi l'MP3 riprende dal punto esatto. Altre
+frasi nav valide arrivate intanto si dicono di seguito, prima della ripresa.
+Se l'utente aveva messo in pausa l'MP3, la svolta si dice e l'MP3 resta in
+pausa; Pausa/Play toccati durante la frase valgono a frase finita. Mai sopra
+una telefonata o una perdita di focus. Teaser, guide lette dal TTS (il TTS non
+sa riprendere da metà) e item senza scadenza: invariati, aspettano il turno.
+È lo stesso trattamento che a schermo acceso riceve già la guida del JS
+(AUD-01). Dopo un'interruzione, una frase del navigatore scaduta non si
+riprende.
+
+### Limiti noti (aggiunti)
+- Una guida lunga letta dal TTS (senza MP3) tiene ancora in coda le svolte,
+  che scadono dopo 20 s.
+- Dopo l'arrivo della tappa singola a schermo spento, con un giro in corso, il
+  giro resta muto fino al risveglio (canale nativo unico, riconsegna dal JS).
+- Salta/Ricalcola dal cruscotto aprono l'app (sblocco): su Android il `ts` è
+  l'istante in cui MainActivity riceve l'intent, non quello del tocco.

@@ -34,6 +34,34 @@
       "destination": "/api/index.ts"
     },
     {
+      "source": "/llms.txt",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/scopri/en",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/scopri/fr",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/scopri/es",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/scopri/de",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/scopri/ru",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/scopri/zh",
+      "destination": "/api/index.ts"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

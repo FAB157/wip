@@ -141,6 +141,18 @@
 # Costa qualche centinaio di KB: meglio del geofencing muto in release.
 -keep class com.google.android.gms.location.** { *; }
 
+# ── Login social (@capgo/capacitor-social-login) ──
+# (12/09/2026) Facebook e Twitter sono DISATTIVATI in capacitor.config.ts
+# (providers: facebook/twitter = false → dipendenze compileOnly): l'SDK
+# Facebook non entra nell'APK, e con lui la permission AD_ID che bloccava la
+# release su Play. La classe FacebookProvider del plugin resta pero' nel
+# codice e referenzia com.facebook.*: senza questa regola R8 ferma la build
+# di release con «Missing class com.facebook.AccessToken…». Le classi non
+# vengono mai caricate (il provider non e' inizializzato), quindi ignorare
+# l'avviso e' corretto — e' la regola che R8 stessa propone in
+# missing_rules.txt.
+-dontwarn com.facebook.**
+
 # ── EncryptedSharedPreferences (androidx.security.crypto) ──
 # Usa Tink internamente: alcune classi sono referenziate solo da codice
 # nativo/reflection interno alla libreria.

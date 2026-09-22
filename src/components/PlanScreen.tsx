@@ -19,9 +19,8 @@ import { useCreditConfirmation } from '../hooks/useCreditConfirmation';
 import CreditConfirmationModal from './CreditConfirmationModal';
 import { consumeCredits, PRICING_LIST, getWalletBalance, refundCredits, notifyCreditsChanged } from '../lib/pricing';
 import { printScoped } from '../lib/printScoped';
-import { getApiUrl, apiFetch } from '../lib/api';
+import { getApiUrl, apiFetch, bearerHeaders } from '../lib/api';
 import { chiediConsensoAi } from '../lib/aiConsent';
-import { OSRM_FOOT_BASE } from '../services/osrmService';
 import { notify as sharedNotify } from '../lib/toast';
 import { Capacitor } from '@capacitor/core';
 import { ensureAffiliateUrl, trackAffiliateClick } from '../lib/affiliates';
@@ -52,7 +51,7 @@ import GroupPlanPanel, { type MergedGroupPrefs } from './GroupPlanPanel';
 import DayPassCard from './DayPassCard';
 import ShopScreen from './ShopScreen';
 import LoadingQuiz from './LoadingQuiz';
-import { downloadGuideAsPdf } from '../services/premiumGuideService';
+import { downloadGuideAsPdf, getLocalGuide } from '../services/premiumGuideService';
 import { mapItineraryCategoryToMapCategory, tappaDiventaPoi } from '../services/poiRepository';
 import { mieGenerazioni, type Generazione } from '../services/generazioniService';
 import BudgetTable from './itinerary/BudgetTable';
@@ -937,6 +936,12 @@ export default function PlanScreen({
   const [selectedFavoriteIds, setSelectedFavoriteIds] = useState<string[]>([]);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [generatedPlan, setGeneratedPlanState] = useState<GeneratedItinerary | null>(null);
+  // (20/09/2026) Vero appena QUALCUNO ha messo un piano a schermo (l'utente da
+  // «I miei itinerari», un download, una generazione). fetchCurrentPlan — il
+  // ripristino dell'ultimo piano all'apertura del tab — lo guarda prima di
+  // scrivere: arriva dalla rete in ritardo e non deve coprire una scelta fatta
+  // nel frattempo (si apriva sempre l'ultimo modificato, «Savona»).
+  const pianoApertoRef = useRef(false);
   // Selettore giorno sulla mappa dell'itinerario: 'tutti' resta il default
   // (mappa completa coi colori per giorno come prima), un numero filtra
   // mappa E stampa a quel solo giorno. Si azzera a ogni nuovo piano
@@ -990,6 +995,7 @@ export default function PlanScreen({
   ) => {
     setGeneratedPlanState((prev) => {
       const next = typeof p === 'function' ? (p as any)(prev) : p;
+      if (next) pianoApertoRef.current = true;
       const deduped = dedupTappaIds(next);
       if (setExternalPlan) setExternalPlan(deduped);
       // (14/09/2026) Il widget «Itinerario di oggi» legge una copia leggera del piano.
@@ -1001,6 +1007,7 @@ export default function PlanScreen({
 
   useEffect(() => {
     if (externalPlan && !generatedPlan) {
+      pianoApertoRef.current = true;
       setGeneratedPlanState(dedupTappaIds(externalPlan));
       setPlannerMode('view');
     }
@@ -1083,10 +1090,24 @@ export default function PlanScreen({
           // da quello auto (marciapiedi, ZTL, scorciatoie). Richiesta foot separata
           // sulla base condivisa (stesso fix del routing pedonale). Best-effort: se
           // fallisce si ricade sulla stima dalla distanza auto.
+          // (21/09/2026) Prima andava a /api/route/foot con TUTTE le tappe del
+          // giorno: quella rotta accetta due punti soli (400) e dal 10/09 vuole
+          // anche il Bearer (401), quindi il tempo a piedi era SEMPRE la stima
+          // dall'auto. Il giro in anteprima fa esattamente questo: una leg per
+          // tratta, nell'ordine dato (ordina=false), senza istruzioni, gratis
+          // ma col login. Ospite → niente chiamata (e niente modale di login
+          // all'apertura di un itinerario): resta la stima. Una tratta che il
+          // server ha dovuto tirare in linea d'aria non e' un tempo vero.
           let footLegs: any[] = [];
           try {
-            const rf = await fetch(`${OSRM_FOOT_BASE}${coordStr}?overview=false&steps=false`, { signal: AbortSignal.timeout(6000) });
-            if (rf.ok) { const df = await rf.json(); footLegs = df?.routes?.[0]?.legs || []; }
+            const auth = await bearerHeaders();
+            if (auth.Authorization) {
+              const rf = await fetch(getApiUrl(`/api/tour/foot/${coordStr}?ordina=false&anello=false&anteprima=true`), { headers: auth, signal: AbortSignal.timeout(20000) });
+              if (rf.ok) {
+                const df = await rf.json();
+                footLegs = (df?.routes?.[0]?.legs || []).map((l: any) => (l?.wip_irraggiungibile ? null : l));
+              }
+            }
           } catch { /* foot giù: fallback alla stima dalla distanza auto */ }
           out[g] = {};
           for (let j = 0; j < validIdx.length - 1; j++) {
@@ -1428,7 +1449,8 @@ export default function PlanScreen({
       setGeneratedPlan(null);
     }
   }, [resetCounter]);
-  const [planMyItinerariesTab, setPlanMyItinerariesTab] = useState<'ai' | 'premium'>('ai');
+  // Cartella con cui si apre l'archivio unico (DownloadsScreen) da «I miei itinerari».
+  const [archivioCartella, setArchivioCartella] = useState<'itinerari' | 'guide'>('itinerari');
   const [guideToRender, setGuideToRender] = useState<{content: any, media: any, hash: string} | null>(null);
 
   // ── Viator Experiences per day ──
@@ -2727,10 +2749,18 @@ export default function PlanScreen({
     { id: 'fotografia', label: INTERESTS_TRANSLATIONS.fotografia[language] }
   ];
 
+  // SOLO AL MONTAGGIO (20/09/2026). Stava nell'effetto qui sotto, che ha per
+  // dipendenza generatedPlan?.id: a ogni itinerario aperto l'id cambiava,
+  // l'effetto ripartiva e fetchCurrentPlan rimetteva a schermo l'ULTIMO
+  // modificato — qualsiasi itinerario si toccasse (anche dai download) si
+  // apriva sempre lo stesso.
   useEffect(() => {
     fetchSavedPois();
     fetchCurrentPlan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  useEffect(() => {
     const handleFavoritesUpdate = () => {
       fetchSavedPois();
     };
@@ -2887,6 +2917,7 @@ export default function PlanScreen({
       try {
         const local: any = await idbGet('wip_last_plan');
         if (local && Array.isArray(local.giorni) && local.giorni.length > 0) {
+          if (pianoApertoRef.current) return true; // l'utente ha gia' aperto altro
           setGeneratedPlan(local);
           setPlannerMode('view');
           return true;
@@ -2910,6 +2941,9 @@ export default function PlanScreen({
         .limit(1)
         .single();
 
+      // La risposta arriva dopo secondi: se nel frattempo e' stato aperto un
+      // itinerario (download, «I miei itinerari», generazione) non lo si copre.
+      if (pianoApertoRef.current) return;
       if (!error && data && data.dati_itinerario && Array.isArray(data.dati_itinerario.giorni)) {
         setGeneratedPlan(data.dati_itinerario);
         setPlannerMode('view');
@@ -2923,6 +2957,7 @@ export default function PlanScreen({
       if (await ripiegaSuCopiaLocale()) return;
     }
 
+    if (pianoApertoRef.current) return;
     // Fallback to local storage
     try {
       const localData = JSON.parse(localStorage.getItem('mock_db_user_itineraries') || '[]');
@@ -3019,6 +3054,8 @@ export default function PlanScreen({
           } catch { /* niente */ }
         })();
         void fetchMyItineraries();
+        // L'archivio a schermo (DownloadsScreen) rilegge l'account.
+        try { window.dispatchEvent(new CustomEvent('wip-downloads-updated')); } catch { /* niente */ }
       }
     } catch { /* offline: resta com'e' */ }
   };
@@ -3035,7 +3072,15 @@ export default function PlanScreen({
     window.addEventListener('wip-generazioni-aggiornate', h);
     // Apertura dell'Archivio dal tocco su una notifica (App.tsx) o dal link
     // dell'email (?archivio=guide|itinerari).
-    const apri = () => { setPlannerMode('my_itineraries'); void fetchMyItineraries(); void fetchSavedPremiumGuides(); try { sessionStorage.removeItem('wip_apri_archivio'); } catch { /* niente */ } };
+    const apri = () => {
+      // La cartella d'ingresso: «guide» dal link dell'email di una Guida
+      // Premium, altrimenti gli itinerari.
+      let dove = '';
+      try { dove = new URLSearchParams(window.location.search).get('archivio') || sessionStorage.getItem('wip_apri_archivio') || ''; } catch { /* niente */ }
+      setArchivioCartella(/guid/i.test(dove) ? 'guide' : 'itinerari');
+      setPlannerMode('my_itineraries'); void fetchGenerazioni();
+      try { sessionStorage.removeItem('wip_apri_archivio'); } catch { /* niente */ }
+    };
     window.addEventListener('wip-apri-archivio', apri);
     // "I MIEI DOWNLOAD" (08/09/2026): un tocco su un itinerario scaricato lo
     // apre direttamente — stesso percorso del tasto "Apri" della lista
@@ -3045,22 +3090,66 @@ export default function PlanScreen({
       if (d) d.handled = true; // ricevuta: App.tsx ridispatcha finche' il tab non e' montato
       const id = d?.id;
       if (!id) return;
-      const data = await getOfflineItinerary(String(id));
-      if (!data) return;
-      setGeneratedPlan(data);
+      let data: any = await getOfflineItinerary(String(id)).catch(() => null);
+      // (20/09/2026) Un itinerario che sta SOLO sull'account (mai scaricato su
+      // questo telefono) si apre lo stesso, dalla sua riga: prima il tocco
+      // portava alla lista, e da li' si ricominciava a cercarlo.
+      if (!data) {
+        try {
+          const { data: sessionData } = await supabase.auth.getSession();
+          const uid = sessionData?.session?.user?.id;
+          if (uid) {
+            const { data: riga } = await supabase.from('user_itineraries').select('dati_itinerario').eq('id', String(id)).eq('user_id', uid).maybeSingle();
+            const dati = typeof riga?.dati_itinerario === 'string' ? JSON.parse(riga.dati_itinerario) : riga?.dati_itinerario;
+            if (dati) data = dati;
+          }
+        } catch { /* sotto: mirror locale */ }
+      }
+      if (!data) {
+        try {
+          const locale = JSON.parse(localStorage.getItem('mock_db_user_itineraries') || '[]').find((i: any) => String(i.id) === String(id));
+          if (locale?.dati_itinerario) data = locale.dati_itinerario;
+        } catch { /* niente */ }
+      }
+      if (!data) { notify(getTranslation('dl_non_aperto', language)); return; }
+      const giorniRaw = data.giorni || [];
+      setGeneratedPlan({ ...data, giorni: Array.isArray(giorniRaw) ? giorniRaw : Object.values(giorniRaw) });
+      setDbItineraryId(null);
       setLockedStops({});
       setExpandedStops({});
-      if (data.podcast_cache && typeof data.podcast_cache === 'object') setPodcastCache(data.podcast_cache);
+      setPodcastCache(data.podcast_cache && typeof data.podcast_cache === 'object' ? data.podcast_cache : {});
       setPlannerMode('view');
     };
     window.addEventListener('wip-apri-itinerario-offline', apriOffline);
+    // Una Guida Premium dall'archivio: copia locale (funziona senza rete),
+    // altrimenti la riga dell'account. Si apre nel visualizzatore qui sotto.
+    const apriGuida = async (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      if (d) d.handled = true;
+      const hash = String(d?.hash || '');
+      if (!hash) return;
+      try {
+        const locale = await getLocalGuide(hash);
+        if (locale?.content) { setGuideToRender({ content: locale.content, media: (locale as any).media_manifest || {}, hash }); return; }
+      } catch { /* si prova l'account */ }
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const uid = sessionData?.session?.user?.id;
+        if (uid) {
+          const { data: riga } = await supabase.from('itinerary_guides').select('content_data, media_manifest, itinerary_hash').eq('user_id', uid).eq('itinerary_hash', hash).limit(1).maybeSingle();
+          if (riga?.content_data) { setGuideToRender({ content: riga.content_data, media: riga.media_manifest, hash }); return; }
+        }
+      } catch { /* niente */ }
+      notify(getTranslation('dl_non_aperto', language));
+    };
+    window.addEventListener('wip-apri-guida-premium', apriGuida);
     try {
       // Dal link dell'email: App.tsx mette la destinazione in sessionStorage
       // (sopravvive al login), qui si consuma.
       const p = new URLSearchParams(window.location.search).get('archivio') || sessionStorage.getItem('wip_apri_archivio');
       if (p) { apri(); window.history.replaceState({}, '', window.location.pathname); }
     } catch { /* niente */ }
-    return () => { window.removeEventListener('wip-generazioni-aggiornate', h); window.removeEventListener('wip-apri-archivio', apri); window.removeEventListener('wip-apri-itinerario-offline', apriOffline); };
+    return () => { window.removeEventListener('wip-generazioni-aggiornate', h); window.removeEventListener('wip-apri-archivio', apri); window.removeEventListener('wip-apri-itinerario-offline', apriOffline); window.removeEventListener('wip-apri-guida-premium', apriGuida); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -3681,9 +3770,18 @@ export default function PlanScreen({
       let podcastText = podcastCache[cacheKey];
 
       if (!podcastText) {
+        // PRIMA dell'addebito: il podcast parla solo con la sintesi del
+        // browser, che sulla WebView Android spesso manca. Il controllo stava
+        // dopo la generazione: 15 crediti scalati e poi «non supportato».
+        if (!('speechSynthesis' in window)) {
+          notify(getTranslation('err_tts_unsupported', language));
+          setIsGeneratingPodcast(null);
+          return;
+        }
         const { data: sessionData } = await supabase.auth.getSession();
         const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
-        const numDaysPodcast = dayNum === "Intero Itinerario" && generatedPlan ? generatedPlan.giorni.length : 1;
+        // Un episodio = un giorno = un addebito (il server scala 1 unità).
+        const numDaysPodcast = 1;
         const podcastCost = PRICING_LIST.podcast_daily * numDaysPodcast;
         
         // Saldo passato al modale: senza, mostrava sempre "0 crediti disponibili"
@@ -5608,7 +5706,7 @@ export default function PlanScreen({
               {/* I Miei Itinerari (tasto lungo) + Offline */}
               <div className="flex gap-3">
                 <button
-                  onClick={() => { setPlannerMode('my_itineraries'); fetchMyItineraries(); fetchSavedPremiumGuides(); }}
+                  onClick={() => { setArchivioCartella('itinerari'); setPlannerMode('my_itineraries'); void fetchGenerazioni(); }}
                   className="flex-1 p-4 bg-blue-50 rounded-2xl border border-blue-100 shadow-sm flex items-center gap-3 group hover:bg-blue-100 hover:border-blue-300 transition-all"
                 >
                   <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
@@ -7051,219 +7149,49 @@ export default function PlanScreen({
             </motion.div>
           )}
 
-          {/* ── I MIEI ITINERARI ── */}
-          {plannerMode === 'my_itineraries' && (
+          {/* ── I MIEI ITINERARI / OFFLINE: UN SOLO ARCHIVIO (20/09/2026) ──
+              Erano due liste diverse (qui «Riprendi» e cestino, nei download
+              naviga/elimina, nel Profilo racconto/calendario): ora e' lo
+              stesso componente di «I miei download», a cartelle, con le voci
+              tutte nella stessa forma. Da «I miei itinerari» si entra gia'
+              nella cartella Itinerari. La X sta IN ALTO A DESTRA e resta
+              visibile scorrendo (era in fondo alla lista: con venti itinerari
+              non si trovava). */}
+          {(plannerMode === 'my_itineraries' || plannerMode === 'offline_list') && (
             <motion.div
-              key="my_itineraries"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="space-y-6 pt-4"
+              key={plannerMode}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="space-y-4"
             >
-              <div className="flex justify-between items-center px-1">
-                <h3 className="text-xl font-black text-primary">
-                  {getTranslation('my_itineraries', language)}
+              <div className="sticky top-0 z-30 -mx-6 px-6 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 bg-[#f8f5f0]/95 backdrop-blur flex justify-between items-center gap-3">
+                <h3 className="text-xl font-black text-primary truncate">
+                  {plannerMode === 'my_itineraries' ? getTranslation('my_itineraries', language) : getTranslation('dl_titolo', language)}
                 </h3>
-                <span className="text-[10px] font-black text-on-surface-variant/40 uppercase tracking-widest bg-white px-3 py-1 rounded-full border border-outline-variant/10 shadow-sm">
-                  {planMyItinerariesTab === 'ai' ? myItineraries.length : savedPremiumGuides.length} {getTranslation('saved_count', language)}
-                </span>
-              </div>
-
-              {/* Toggles */}
-              <div className="flex bg-white/50 p-1 rounded-2xl mb-4 border border-outline-variant/10 shadow-sm">
                 <button
-                  onClick={() => setPlanMyItinerariesTab('ai')}
-                  className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${planMyItinerariesTab === 'ai' ? 'bg-primary text-white shadow-md' : 'text-gray-500 hover:bg-white/50'}`}
-                >
-                  {getTranslation('ai_itineraries', language)}
-                </button>
-                <button
-                  onClick={() => setPlanMyItinerariesTab('premium')}
-                  className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${planMyItinerariesTab === 'premium' ? 'bg-primary text-white shadow-md' : 'text-gray-500 hover:bg-white/50'}`}
-                >
-                  {getTranslation('premium_guides_tab', language)}
-                </button>
-              </div>
-
-              {planMyItinerariesTab === 'ai' ? (
-                <div className="grid grid-cols-1 gap-4 max-h-[60dvh] overflow-y-auto pr-2 no-scrollbar">
-                  {myItinerariesLoading ? (
-                    <div className="flex items-center justify-center py-16">
-                      <Loader2 className="w-8 h-8 animate-spin text-primary/40" />
-                    </div>
-                  ) : myItineraries.length === 0 ? (
-                    <div className="p-12 border-2 border-dashed border-outline-variant/30 rounded-[2.5rem] flex flex-col items-center text-center opacity-40">
-                      <History className="w-12 h-12 mb-4" />
-                      <p className="text-sm font-bold">
-                        {getTranslation('no_saved_itineraries', language)}
-                      </p>
-                      <p className="text-[10px] uppercase font-black tracking-widest mt-2 px-6">
-                        {getTranslation('generate_first', language)}
-                      </p>
-                    </div>
-                  ) : (
-                    [...myItineraries].sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime()).map((item: any) => {
-                      // JSON.parse PROTETTO: prima una sola riga corrotta (save
-                      // parziale) faceva crashare l'INTERA lista in render, e
-                      // l'utente non poteva nemmeno cancellarla. Ora la riga
-                      // corrotta mostra solo il cestino.
-                      let parsedDati: any = null;
-                      try {
-                        parsedDati = typeof item.dati_itinerario === 'string' ? JSON.parse(item.dati_itinerario) : item.dati_itinerario;
-                      } catch { parsedDati = null; }
-                      if (!parsedDati) {
-                        return (
-                          <div key={item.id} className="p-5 rounded-[2rem] bg-white border border-red-100 shadow-sm flex justify-between items-center">
-                            <span className="text-xs font-bold text-red-400">{item.titolo || 'Itinerario'} — dati non leggibili</span>
-                            <button onClick={() => deleteMyItinerary(item.id)} className="w-9 h-9 rounded-full bg-red-50 text-red-400 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center shrink-0">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        );
-                      }
-                      const giorniRaw = parsedDati?.giorni || [];
-                      const giorni = Array.isArray(giorniRaw) ? giorniRaw : Object.values(giorniRaw);
-                      const tappeTotal = giorni.reduce((acc: number, g: any) => acc + (g.tappe?.length || 0), 0);
-                      const date = item.updated_at ? new Date(item.updated_at).toLocaleDateString('it-IT', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
-                      return (
-                        <div
-                          key={item.id}
-                          className="p-5 rounded-[2rem] bg-white border border-outline-variant/10 shadow-sm group relative overflow-hidden"
-                        >
-                          <div className="flex justify-between items-start mb-3">
-                            <div className="flex-1 pr-2">
-                              <h4 className="font-black text-primary text-base leading-tight mb-1">{item.titolo || 'Itinerario'}</h4>
-                              <div className="flex gap-2 flex-wrap">
-                                <span className="text-[10px] font-black bg-primary/5 text-primary px-2 py-0.5 rounded-full">
-                                  📅 {giorni.length} {getTranslation('days_count', language)}
-                                </span>
-                                <span className="text-[10px] font-black bg-primary/5 text-primary px-2 py-0.5 rounded-full">
-                                  📍 {tappeTotal} {getTranslation('stops_count', language)}
-                                </span>
-                                {date && <span className="text-[10px] font-bold text-gray-500">{date}</span>}
-                              </div>
-                            </div>
-                            <button
-                              onClick={() => deleteMyItinerary(item.id)}
-                              className="w-9 h-9 rounded-full bg-red-50 text-red-400 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center shrink-0"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                          <button
-                            onClick={() => {
-                              // Normalizza giorni (a volte oggetto invece di array)
-                              // così la vista non resta bianca senza uscita.
-                              setGeneratedPlan({ ...parsedDati, giorni });
-                              // Aggancia la riga DB reale: senza, il primo edit
-                              // creava un itinerario duplicato e l'agente AI non
-                              // era disponibile finché non si salvava.
-                              setDbItineraryId(item.itinerary_id || null);
-                              // Stato blocchi/espansioni appartiene al vecchio itinerario: azzeriamo
-                              setLockedStops({});
-                              setExpandedStops({});
-                              // Ripristina podcast cache da Supabase
-                              if (parsedDati?.podcast_cache) {
-                                setPodcastCache(parsedDati.podcast_cache);
-                              } else {
-                                setPodcastCache({});
-                              }
-                              setPlannerMode('view');
-                            }}
-                            className="w-full py-3 bg-primary/5 text-primary rounded-xl font-bold text-sm border border-primary/10 hover:bg-primary hover:text-white transition-colors"
-                          >
-                            {getTranslation('resume_btn', language)}
-                          </button>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 gap-4 max-h-[60dvh] overflow-y-auto pr-2 no-scrollbar">
-                  {/* Generazioni in differita (06/09/2026): in coda/in corso o fallite. */}
-                  {generazioniInCorso.filter(g => g.tipo === 'guida').map(g => (
-                    <div key={g.id} className={`p-5 rounded-3xl border shadow-sm flex items-center gap-4 ${g.stato === 'fallita' ? 'bg-red-50 border-red-100' : 'bg-amber-50 border-amber-100'}`}>
-                      {g.stato === 'fallita' ? <AlertTriangle className="w-6 h-6 text-red-500 shrink-0" /> : <Loader2 className="w-6 h-6 text-amber-600 animate-spin shrink-0" />}
-                      <div className="min-w-0">
-                        <h4 className="font-black text-primary leading-tight truncate">{g.titolo || 'Guida Premium'}</h4>
-                        <p className="text-xs font-bold text-on-surface-variant/70 mt-0.5">
-                          {g.stato === 'fallita' ? getTranslation('gen_fallita', language) : getTranslation('gen_in_preparazione', language)}
-                          {g.stato !== 'fallita' && <> · {getTranslation('gen_in_coda_nota', language)}</>}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                  {savedPremiumGuides.length === 0 && generazioniInCorso.filter(g => g.tipo === 'guida').length === 0 ? (
-                    <div className="py-12 flex flex-col items-center justify-center text-center">
-                      <div className="w-20 h-20 bg-primary/5 rounded-[2rem] flex items-center justify-center mb-6">
-                        <Download className="w-10 h-10 text-primary/20" />
-                      </div>
-                      <h3 className="font-black text-primary mb-2">Guide Premium</h3>
-                      <p className="text-sm text-on-surface-variant font-bold max-w-xs opacity-70">
-                        {getTranslation('no_pdf_generated', language)}
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {savedPremiumGuides.map((guide) => (
-                        <div key={guide.id} className="p-5 bg-white rounded-3xl border border-outline-variant/10 shadow-sm flex flex-col gap-3">
-                          <div className="flex justify-between items-start">
-                            <div className="flex flex-col gap-1.5">
-                              <h4 className="font-black text-primary text-lg leading-tight">
-                                {guide.content_data?.guida_titolo || "Guida Premium"}
-                              </h4>
-                              <span className="text-[10px] bg-amber-100 text-amber-800 self-start px-2 py-0.5 rounded font-black tracking-widest uppercase">
-                                {guide.stile_guida || 'essential'}
-                              </span>
-                            </div>
-                          </div>
-                          <p className="text-sm font-bold text-on-surface-variant opacity-70">
-                             {new Date(guide.created_at || Date.now()).toLocaleDateString('it-IT')}
-                          </p>
-                          <div className="flex gap-2 mt-2">
-                            <button
-                              onClick={() => setGuideToRender({ content: guide.content_data, media: guide.media_manifest, hash: guide.itinerary_hash })}
-                              className="flex-1 text-center py-3 bg-primary text-white font-black text-xs rounded-xl shadow-md hover:bg-primary/90 transition-all flex items-center justify-center gap-2"
-                            >
-                              <Download className="w-4 h-4" /> {getTranslation('download_pdf_btn', language)}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <button
-                onClick={() => setPlannerMode('selection')}
-                className="w-16 h-16 rounded-3xl bg-white border border-outline-variant/10 flex items-center justify-center text-primary/40 hover:text-red-500 transition-colors shadow-sm"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </motion.div>
-          )}
-
-          {plannerMode === 'offline_list' && (
-            <motion.div 
-              key="offline_list"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="space-y-6 pt-4"
-            >
-              {/* "I MIEI DOWNLOAD" (08/09/2026): la stessa area unica del Profilo.
-                  Un tocco su un itinerario lo apre qui (evento
-                  wip-apri-download → App → wip-apri-itinerario-offline). */}
-              <DownloadsScreen language={language} />
-
-              <div className="flex gap-4 pt-4">
-                <button 
                   onClick={() => setPlannerMode('selection')}
-                  className="w-16 h-16 rounded-3xl bg-white border border-outline-variant/10 flex items-center justify-center text-primary/40 hover:text-red-500 transition-colors shadow-sm"
+                  aria-label="Chiudi"
+                  className="shrink-0 w-11 h-11 rounded-2xl bg-white border border-outline-variant/10 flex items-center justify-center text-primary/60 hover:text-red-500 transition-colors shadow-sm"
                 >
-                  <X className="w-6 h-6" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
+
+              {/* Generazioni in differita (06/09/2026): in coda/in corso o fallite. */}
+              {generazioniInCorso.map(g => (
+                <div key={g.id} className={`p-5 rounded-3xl border shadow-sm flex items-center gap-4 ${g.stato === 'fallita' ? 'bg-red-50 border-red-100' : 'bg-amber-50 border-amber-100'}`}>
+                  {g.stato === 'fallita' ? <AlertTriangle className="w-6 h-6 text-red-500 shrink-0" /> : <Loader2 className="w-6 h-6 text-amber-600 animate-spin shrink-0" />}
+                  <div className="min-w-0">
+                    <h4 className="font-black text-primary leading-tight truncate">{g.titolo || (g.tipo === 'guida' ? 'Guida Premium' : 'Itinerario')}</h4>
+                    <p className="text-xs font-bold text-on-surface-variant/70 mt-0.5">
+                      {g.stato === 'fallita' ? getTranslation('gen_fallita', language) : getTranslation('gen_in_preparazione', language)}
+                      {g.stato !== 'fallita' && <> · {getTranslation('gen_in_coda_nota', language)}</>}
+                    </p>
+                  </div>
+                </div>
+              ))}
+
+              <DownloadsScreen language={language} cartellaIniziale={plannerMode === 'my_itineraries' ? archivioCartella : undefined} />
             </motion.div>
           )}
 
@@ -7338,8 +7266,8 @@ export default function PlanScreen({
                           const blob = await generaPdfItinerario(printPlan, language);
                           if (blob) {
                             const { saveBlobAsFile } = await import('../services/premiumGuideService');
-                            const ok = await saveBlobAsFile(blob, nomeFile);
-                            notify(getTranslation(ok ? 'pf_pdf_salvato' : 'pf_pdf_non_riuscito', language));
+                            const ok = await saveBlobAsFile(blob, nomeFile, { tipo: 'itinerario', nome: t });
+                            notify(getTranslation(ok ? (Capacitor.isNativePlatform() ? 'pf_pdf_salvato' : 'pf_pdf_salvato_web') : 'pf_pdf_non_riuscito', language));
                             return;
                           }
                         } catch (e) {
@@ -7381,8 +7309,8 @@ export default function PlanScreen({
                             pagebreak: { mode: ['css', 'legacy'] },
                           }).from(elemento).outputPdf('blob');
                           const { saveBlobAsFile } = await import('../services/premiumGuideService');
-                          const ok = await saveBlobAsFile(blob, nomeFile);
-                          notify(getTranslation(ok ? 'pf_pdf_salvato' : 'pf_pdf_non_riuscito', language));
+                          const ok = await saveBlobAsFile(blob, nomeFile, { tipo: 'itinerario', nome: t });
+                          notify(getTranslation(ok ? (Capacitor.isNativePlatform() ? 'pf_pdf_salvato' : 'pf_pdf_salvato_web') : 'pf_pdf_non_riuscito', language));
                         } catch (e) {
                           console.error('[PlanScreen] PDF itinerario non riuscito', e);
                           notify(getTranslation('pf_pdf_non_riuscito', language));
