@@ -470,7 +470,7 @@ async function callUniversalAi(
       // di musei e itinerari, era rimasto fuori e Groq rispondeva 400
       // «property 'gonkaPool' is unsupported» a OGNI chiamata della semina —
       // il motore più veloce tagliato fuori da un campo in più per due giorni.
-      const { strictEngine: _se, excludeEngines: _ee, ultimaSpiaggiaPagante: _up, groqOnTheFly: _otf, gonkaPool: _gp, gonkaUltimo: _gu, gonkaModel: _gm, revisore: _rv, ...groqOptions } = options as any;
+      const { strictEngine: _se, excludeEngines: _ee, ultimaSpiaggiaPagante: _up, groqOnTheFly: _otf, gonkaPool: _gp, gonkaUltimo: _gu, gonkaPrimo: _gpr, gonkaModel: _gm, revisore: _rv, ...groqOptions } = options as any;
       const chiediGroq = (groqInstance: any) => groqInstance.chat.completions.create({
         messages,
         model: finalModel,
@@ -798,7 +798,11 @@ async function callUniversalAi(
     // Gonka è la riserva a pagamento se tutti loro falliscono nella stessa
     // chiamata — la stessa posizione di `gonkaUltimo` qui sotto, che quindi
     // non serve più distinguere dal caso normale.
-    consentiti = [...consentiti, 'gonka'];
+    // ECCEZIONE (22/09/2026 sera, committente per il pre-arricchimento dei
+    // luoghi: «usa gonka, dopo usato groq, ma non fermarti mai»): con
+    // `gonkaPrimo` Gonka e' il PRIMO tentativo e i gratuiti (Groq…) restano
+    // dietro come riserva. Solo per `background-script`, come tutto il blocco.
+    consentiti = options.gonkaPrimo ? ['gonka', ...consentiti] : [...consentiti, 'gonka'];
   }
   // Un motore che ha appena detto "quota esaurita" si salta finché il tetto
   // non si ricarica: nella semina del 19/08/2026 groq era esaurito e veniva
@@ -16260,7 +16264,7 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       // attesa: i lavori di sfondo restano sul pool comune.
       // SFONDO (20/09/2026): Gonka in coda per i lavori di massa (pool 'musei'); `userId: 'background-script'`
       // serve proprio a questo — Gonka si appende SOLO per quell'identita`, mai con un utente in attesa.
-      "groq", [{ role: "user", content: prompt }], { temperature: 0.7, ultimaSpiaggiaPagante: utenteInAttesa, groqOnTheFly: utenteInAttesa, ...(utenteInAttesa ? {} : { gonkaPool: 'poi' }) },
+      "groq", [{ role: "user", content: prompt }], { temperature: 0.7, ultimaSpiaggiaPagante: utenteInAttesa, groqOnTheFly: utenteInAttesa, ...(utenteInAttesa ? {} : { gonkaPool: 'poi', gonkaPrimo: true }) },
       "rigenerazione_audio", sUrl, sKey, getGroqClient(), utenteInAttesa ? undefined : 'background-script'
     );
     if (response?.truncated) {
@@ -16271,7 +16275,7 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       console.warn("[regenerateAudioguideText] Output troncato, retry con max_tokens esplicito raddoppiato.");
       try {
         response = await callUniversalAi(
-          "groq", [{ role: "user", content: prompt }], { temperature: 0.7, max_tokens: 4096, ultimaSpiaggiaPagante: utenteInAttesa, groqOnTheFly: utenteInAttesa, ...(utenteInAttesa ? {} : { gonkaPool: 'poi' }) },
+          "groq", [{ role: "user", content: prompt }], { temperature: 0.7, max_tokens: 4096, ultimaSpiaggiaPagante: utenteInAttesa, groqOnTheFly: utenteInAttesa, ...(utenteInAttesa ? {} : { gonkaPool: 'poi', gonkaPrimo: true }) },
           "rigenerazione_audio_retry_troncato", sUrl, sKey, getGroqClient(), utenteInAttesa ? undefined : 'background-script'
         );
       } catch (retryErr: any) {
@@ -19403,8 +19407,10 @@ ${description}
               { role: 'system', content: `Traduci in ${nomeLingua(langRaw)} i testi descrittivi di un luogo, campo per campo. Rispondi SOLO con JSON con le STESSE chiavi ricevute. NON tradurre i nomi propri (luoghi, persone, monumenti). Mantieni registro e lunghezza dell'originale, nessuna aggiunta.` },
               { role: 'user', content: JSON.stringify(sorgente) },
             ],
-            { response_format: { type: 'json_object' }, temperature: 0.2, max_tokens: 6000 },
-            'poi_details_i18n', supabaseUrl, supabaseServiceKey, null,
+            // SFONDO (22/09/2026 sera, committente): dal pre-arricchimento Gonka e' il primo motore (tre account a
+            // rotazione), Groq e gli altri gratuiti dietro. Con un utente in attesa resta Groq come prima.
+            { response_format: { type: 'json_object' }, temperature: 0.2, max_tokens: 6000, ...(req?.userId === 'background-script' ? { gonkaPool: 'poi', gonkaPrimo: true } : {}) },
+            'poi_details_i18n', supabaseUrl, supabaseServiceKey, null, req?.userId === 'background-script' ? 'background-script' : undefined,
           );
           try { tradotti = JSON.parse(String(ai.data || '').replace(/```json|```/g, '').trim()); } catch { console.warn(`[traduciCampiPoi] ${poi.id} → ${langRaw}: risposta AI non JSON (${ai?.engine || '?'})`); }
           if (tradotti && typeof tradotti === 'object' && Object.keys(tradotti).length) {
@@ -19448,17 +19454,19 @@ ${description}
       if (!riga) return res.status(404).json({ error: 'POI non trovato' });
       if (!String(riga.description_short || riga.description_long || '').trim()) return res.json({ id, nessun_testo: true, fatte: [], vuote: lingue });
       const fatte: string[] = [], vuote: string[] = [];
-      for (const lang of lingue) {
+      // TUTTE LE LINGUE IN PARALLELO (22/09/2026 sera): con Gonka per primo una traduzione dura 1-2 minuti,
+      // sei in fila sforerebbero i 300 s della function; insieme durano quanto la piu' lenta.
+      await Promise.all(lingue.map(async (lang: string) => {
         // Copia per lingua: traduciCampiPoi muta l'oggetto che riceve.
         const copia = { ...riga };
         const prima = String(copia.description_short || copia.description_long || '');
-        await traduciCampiPoi(copia, lang, req);
-        const dopo = String(copia.description_short || copia.description_long || '');
         const lingua = String(riga.description_lang || '').toLowerCase().slice(0, 2);
         // Stessa lingua del testo originale: gia' «tradotta» per definizione, la si salva com'e'.
-        if (lingua === lang) { void salvaPoiDetailsPerLingua(id, lang, { summary: riga.description_short, wiki_extract: riga.description_long }); fatte.push(lang); continue; }
+        if (lingua === lang) { void salvaPoiDetailsPerLingua(id, lang, { summary: riga.description_short, wiki_extract: riga.description_long }); fatte.push(lang); return; }
+        await traduciCampiPoi(copia, lang, req);
+        const dopo = String(copia.description_short || copia.description_long || '');
         if (dopo && dopo !== prima) fatte.push(lang); else vuote.push(lang);
-      }
+      }));
       return res.json({ id, fatte, vuote });
     } catch (e: any) {
       console.error('[/api/poi/traduci]', e?.message);
@@ -30823,7 +30831,10 @@ ${materialePerAi || "Nessuna fonte trovata"}
           const aiResponse = await callUniversalAi(poiEnrichEngine, [{ role: "user", content: curatorPrompt }], // (20/09/2026) SFONDO: Gonka in coda (pool 'musei': i luoghi culturali). Le due chiavi Gonka sono quasi nuove
             // (0,02 $ spesi su 20 per pool) e questa e` la strada dei lavori di massa; DeepSeek diretto resta vietato
             // in sfondo. Con un utente in attesa `gonkaPool` non si passa: Gonka lavora solo per `background-script`.
-            { response_format: { type: "json_object" }, ultimaSpiaggiaPagante: utenteInAttesa, groqOnTheFly: utenteInAttesa, ...(utenteInAttesa ? {} : { gonkaPool: 'poi' }) }, `poi_enrichment | Target: ${name}`, supabaseUrl, supabaseServiceKey, groq, userId);
+            // (22/09/2026 sera, committente: «usa gonka, dopo groq, non fermarti mai, le 3 chiavi in parallelo»)
+            // `gonkaPrimo`: in sfondo Gonka e' il primo tentativo (pool 'poi' = rotazione a caso fra i tre account,
+            // quindi in parallelo fra i lavoratori), i gratuiti restano dietro come riserva.
+            { response_format: { type: "json_object" }, ultimaSpiaggiaPagante: utenteInAttesa, groqOnTheFly: utenteInAttesa, ...(utenteInAttesa ? {} : { gonkaPool: 'poi', gonkaPrimo: true }) }, `poi_enrichment | Target: ${name}`, supabaseUrl, supabaseServiceKey, groq, userId);
           const parsed = parseSafeJSON(aiResponse.data || "{}");
 
           // Backstop di CODICE, non solo di prompt: se non c'era materiale

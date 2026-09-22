@@ -27,7 +27,7 @@ async function post(p, body, ms = 200000) {
     try {
       const r = await fetch(`${B}${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-script-secret': SEG }, body: JSON.stringify(body), signal: AbortSignal.timeout(ms) });
       const x = await r.text(); let d = {}; try { d = JSON.parse(x); } catch { d = { raw: x.slice(0, 80) }; }
-      if (r.status === 429 || r.status === 503) { await pausa(20000 * (t + 1)); continue; }
+      if (r.status === 429 || r.status === 503) { await pausa(15000 * (t + 1)); continue; }
       return { s: r.status, d };
     } catch (e) { if (t === 2) return { s: 0, d: { error: e.message } }; await pausa(5000); }
   }
@@ -49,7 +49,8 @@ async function una(p) {
   } else esito = 'solo_traduci';
   // Le altre lingue: una chiamata sola, dal testo appena scritto (o gia' presente).
   if (haTesto && altre.length) {
-    const t = await post('/api/poi/traduci', { id: p.id, lingue: altre }, 120000);
+    // 290 s: le lingue si traducono in parallelo sul server, ma con Gonka per primo una passata dura 1-2 minuti.
+    const t = await post('/api/poi/traduci', { id: p.id, lingue: altre }, 290000);
     if (t.s === 200) stato.tradotte += (t.d?.fatte || []).length; else stato.errori++;
   }
   stato.esiti[esito] = (stato.esiti[esito] || 0) + 1;
@@ -64,7 +65,8 @@ while (stato.pos < righe.length) {
     while (coda.length) {
       const p = coda.shift(); const esito = await una(p);
       male = esito === 'errore' ? male + 1 : 0;
-      if (male >= 8) { console.log(`${new Date().toISOString()} troppi errori di fila: pausa di 5 minuti`); await pausa(300000); male = 0; }
+      // «Non fermarti mai» (committente 22/09/2026 sera): dopo 8 errori di fila solo un respiro di 45 s, poi avanti.
+      if (male >= 8) { console.log(`${new Date().toISOString()} troppi errori di fila: pausa di 45 secondi`); await pausa(45000); male = 0; }
       await pausa(PAUSA);
     }
   }));
