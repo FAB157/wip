@@ -363,11 +363,18 @@ async function callUniversalAi(
     // TERZO ACCOUNT (20/09/2026, committente: «usa anche questa Gonka»): i LUOGHI (schede e audioguide dei POI
     // in sfondo). Separato dagli altri due: proprio credito, proprio contatore e proprio tetto mensile.
     poi: process.env.GONKAROUTER_API_KEY_POI || process.env.VITE_GONKAROUTER_API_KEY_POI,
+    // DUE ACCOUNT IN PIÙ (22/09/2026 sera, committente: «se serve faccio altri 2 account gonka» → «usa tutte le
+    // chiavi gonka»): stesso pool «poi» del pre-arricchimento dei luoghi, proprio credito e proprio tetto
+    // ciascuno — con 8 lavoratori paralleli sul droplet una sola chiave era il collo di bottiglia.
+    poi2: process.env.GONKAROUTER_API_KEY_POI_2 || process.env.VITE_GONKAROUTER_API_KEY_POI_2,
+    poi3: process.env.GONKAROUTER_API_KEY_POI_3 || process.env.VITE_GONKAROUTER_API_KEY_POI_3,
+    poi4: process.env.GONKAROUTER_API_KEY_POI_4 || process.env.VITE_GONKAROUTER_API_KEY_POI_4,
   };
 
   // Pool effettivamente scelto per questa chiamata (20/09/2026, committente: «usa tutte le chiavi Gonka»): per i
-  // luoghi (`poi`) si ruota fra i TRE account, ognuno col proprio contatore e tetto, cosi' nessuno supera il suo credito.
-  let gonkaPoolEffettivo: ('itinerari' | 'musei' | 'poi' | undefined) = options.gonkaPool;
+  // luoghi (`poi`) si ruota fra tutti gli account poi-*, ognuno col proprio contatore e tetto, cosi' nessuno
+  // supera il suo credito.
+  let gonkaPoolEffettivo: ('itinerari' | 'musei' | 'poi' | 'poi2' | 'poi3' | 'poi4' | undefined) = options.gonkaPool;
 
   async function tryEngine(engine: string) {
     if (engine === "agnes") {
@@ -766,14 +773,17 @@ async function callUniversalAi(
   // aperto. Due pool separati (itinerari/musei, due account diversi): serve
   // `options.gonkaPool` esplicito, altrimenti non si sa quale addebitare e
   // il motore resta fuori dalla coda.
-  let gonkaPoolRichiesto = options.gonkaPool as ('itinerari' | 'musei' | 'poi' | undefined);
+  let gonkaPoolRichiesto = options.gonkaPool as ('itinerari' | 'musei' | 'poi' | 'poi2' | 'poi3' | 'poi4' | undefined);
   if (userId === 'background-script' && gonkaPoolRichiesto === 'poi' && !vietati.has('gonka') && !consentiti.includes('gonka')) {
-    // Luoghi: tutte e tre le chiavi, partendo da una a caso; la prima con chiave e sotto il proprio tetto vince.
-    const giro = ['poi', 'itinerari', 'musei'] as const;
-    const via = Math.floor(Math.random() * giro.length);
+    // Luoghi: prima le QUATTRO chiavi dedicate ai luoghi (poi/poi2/poi3/poi4, 22/09/2026 sera), partendo da
+    // una a caso cosi' i lavoratori paralleli si distribuiscono; solo se sono tutte sature si prova a
+    // pescare da itinerari/musei. La prima con chiave e sotto il proprio tetto vince.
+    const giro = ['poi', 'poi2', 'poi3', 'poi4', 'itinerari', 'musei'] as const;
+    const DEDICATE = 4; // le prime N del giro sono i pool esclusivi dei luoghi
+    const via = Math.floor(Math.random() * DEDICATE);
     let scelto: typeof giro[number] | undefined;
     for (let i = 0; i < giro.length && !scelto; i++) {
-      const p = giro[(via + i) % giro.length];
+      const p = giro[i < DEDICATE ? (via + i) % DEDICATE : i];
       if (gonkaKeys[p] && (await seminaGonkaConsentita(p))) scelto = p;
     }
     gonkaPoolRichiesto = scelto || 'poi';
@@ -965,16 +975,18 @@ async function registraSpesaSeminaDeepSeek(usd: number): Promise<void> {
 // («solo i $20 di credito gratuito, poi stop» — 16/09/2026): esaurito, la
 // semina torna ai motori gratuiti finché non arriva un nuovo ordine con un
 // tetto più alto.
-// Due pool = due account = due contatori e due tetti separati, mai
-// mescolati (musei e itinerari hanno ciascuno il proprio credito omaggio).
-const gonkaSeminaLimitUsd = (pool: 'itinerari' | 'musei' | 'poi') => {
-  const envName = pool === 'musei' ? 'GONKA_SEMINA_LIMIT_USD_MUSEI' : pool === 'poi' ? 'GONKA_SEMINA_LIMIT_USD_POI' : 'GONKA_SEMINA_LIMIT_USD_ITINERARI';
+// Pool = account = contatore e tetto separati, mai mescolati (ognuno ha il proprio credito omaggio).
+// poi2/poi3/poi4 (22/09/2026 sera): stesso schema dei due account originari, proprio env dedicato ciascuno.
+const gonkaSeminaLimitUsd = (pool: 'itinerari' | 'musei' | 'poi' | 'poi2' | 'poi3' | 'poi4') => {
+  const envName = pool === 'musei' ? 'GONKA_SEMINA_LIMIT_USD_MUSEI' : pool === 'poi' ? 'GONKA_SEMINA_LIMIT_USD_POI'
+    : pool === 'poi2' ? 'GONKA_SEMINA_LIMIT_USD_POI_2' : pool === 'poi3' ? 'GONKA_SEMINA_LIMIT_USD_POI_3'
+    : pool === 'poi4' ? 'GONKA_SEMINA_LIMIT_USD_POI_4' : 'GONKA_SEMINA_LIMIT_USD_ITINERARI';
   const raw = String(process.env[envName] ?? '').trim();
   const v = Number(raw);
   return raw !== '' && Number.isFinite(v) && v >= 0 ? v : 20;
 };
-const chiaveSpesaSeminaGonka = (pool: 'itinerari' | 'musei' | 'poi') => `gonka_semina_usd_${pool}_${new Date().toISOString().slice(0, 7)}`;
-async function seminaGonkaConsentita(pool: 'itinerari' | 'musei' | 'poi'): Promise<boolean> {
+const chiaveSpesaSeminaGonka = (pool: 'itinerari' | 'musei' | 'poi' | 'poi2' | 'poi3' | 'poi4') => `gonka_semina_usd_${pool}_${new Date().toISOString().slice(0, 7)}`;
+async function seminaGonkaConsentita(pool: 'itinerari' | 'musei' | 'poi' | 'poi2' | 'poi3' | 'poi4'): Promise<boolean> {
   try {
     const row = await getFromCache(chiaveSpesaSeminaGonka(pool));
     const spesa = Number(row?.text_content) || 0;
@@ -986,7 +998,7 @@ async function seminaGonkaConsentita(pool: 'itinerari' | 'musei' | 'poi'): Promi
     return true;
   } catch { return false; }
 }
-async function registraSpesaSeminaGonka(pool: 'itinerari' | 'musei' | 'poi', usd: number): Promise<void> {
+async function registraSpesaSeminaGonka(pool: 'itinerari' | 'musei' | 'poi' | 'poi2' | 'poi3' | 'poi4', usd: number): Promise<void> {
   const row = await getFromCache(chiaveSpesaSeminaGonka(pool));
   const spesa = (Number(row?.text_content) || 0) + usd;
   await saveToCache(chiaveSpesaSeminaGonka(pool), 'counter', spesa.toFixed(6));
