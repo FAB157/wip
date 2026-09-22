@@ -19292,6 +19292,45 @@ ${description}
     return null;
   }
 
+  // OGNI DESCRIZIONE, IN QUALUNQUE LINGUA, RESTA SALVATA (22/09/2026, ordine
+  // del committente dopo il fix della lingua sbagliata: «ogni descrizione
+  // corta o dettagliata che si crea in qualsiasi lingua deve essere salvata
+  // in supabase per cache»). `shared_pois.description_short/long` puo`
+  // portare UNA sola lingua per POI (una riga sola, niente struttura per
+  // lingua): resta la lingua "primaria", quella scritta la prima volta. Ogni
+  // ALTRA descrizione generata — la stessa primaria, e ogni traduzione fatta
+  // dopo da `traduciCampiPoi` — va invece qui, in `poi_details`: una riga per
+  // (poi_id, lingua), stessa tabella che il client legge da tempo
+  // (poiRepository.getPoiDetails) ma che finora nessuna rotta scriveva mai —
+  // restava vuota (63 righe in tutto, un'importazione manuale di luglio).
+  // Lingua in MAIUSCOLO: e` la convenzione gia` in uso in produzione su
+  // poi_audioguides (168.035 righe 'IT', 147.775 'EN' contro poche decine
+  // in minuscolo) — scrivere qui in minuscolo avrebbe creato una riga
+  // duplicata invece di aggiornare quella giusta. Mai bloccante: un
+  // fallimento qui non deve rompere la risposta all'utente.
+  async function salvaPoiDetailsPerLingua(poiId: string, lang: string, campi: { summary?: string | null; wiki_extract?: string | null }): Promise<void> {
+    if (!poiId || !lang) return;
+    const summary = campi.summary?.trim() || null;
+    const wiki_extract = campi.wiki_extract?.trim() || null;
+    if (!summary && !wiki_extract) return;
+    try {
+      await axios.post(
+        `${supabaseUrl}/rest/v1/poi_details?on_conflict=poi_id,language`,
+        {
+          poi_id: String(poiId),
+          language: String(lang).toUpperCase().slice(0, 2),
+          summary,
+          wiki_extract,
+          enriched: true,
+          updated_at: new Date().toISOString(),
+        },
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' }, timeout: 8000 }
+      );
+    } catch (e: any) {
+      console.warn('[poi_details] salvataggio fallito:', poiId, lang, e?.response?.data?.message || e?.message);
+    }
+  }
+
   // TRADUZIONE DEI CAMPI DI UN POI NELLA LINGUA DELL'UTENTE (22/09/2026,
   // segnalazione del committente: pin, schede e audioguide uscivano nella
   // lingua SBAGLIATA — non quella dell'utente). Causa: description_short/
@@ -19366,6 +19405,9 @@ ${description}
         for (const k of campi) {
           if (typeof tradotti[k] === 'string' && tradotti[k].trim()) poi[k] = tradotti[k].trim();
         }
+        // Ogni traduzione appena fatta e` una nuova "descrizione creata in
+        // quella lingua": va salvata anche lei (vedi la nota sopra la funzione).
+        if (poi.id) void salvaPoiDetailsPerLingua(String(poi.id), langRaw, { summary: poi.description_short, wiki_extract: poi.description_long });
       }
     } catch (e: any) {
       // Traduzione fallita: si risponde con l'originale, mai con un buco.
@@ -30331,6 +30373,9 @@ app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => 
           await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(String(id))}&description_short=is.null`,
             { description_short: breveLocale, description_lang: String(lang || 'it').toLowerCase().slice(0, 2), enrichment_source: 'dati_strutturati', updated_at: new Date().toISOString() }, { headers: svcW, timeout: 6000 }).catch(() => {});
         }
+        // poi_details.poi_id ha un vincolo FK su shared_pois: si scrive solo
+        // se la riga esiste gia` (rigaNota viene da una SELECT riuscita).
+        if (breveLocale && id && rigaNota) void salvaPoiDetailsPerLingua(String(id), String(lang || 'it'), { summary: breveLocale });
         return res.json({
           description_short: breveLocale, description_long: "", extract: breveLocale, thumbnail: foto, pageUrl: "",
           is_gem: false, source: "solo_dati", solo_dati: true, riga_dati: rigaDatiScheda,
@@ -30873,6 +30918,16 @@ ${materialePerAi || "Nessuna fonte trovata"}
           didWrite = true;
         }
 
+        // Ogni descrizione creata, in qualunque lingua, resta anche in
+        // poi_details (22/09/2026, ordine del committente): shared_pois porta
+        // solo la lingua primaria, questa e` la cache per lingua. QUI, non
+        // prima: poi_details.poi_id ha un vincolo FK su shared_pois, e sopra
+        // e` il punto in cui la riga esiste di sicuro (gia` c'era, o e`
+        // appena stata creata).
+        if (content.description_short || content.description_long) {
+          void salvaPoiDetailsPerLingua(precisionId, lang, { summary: content.description_short, wiki_extract: content.description_long });
+        }
+
         // Audio solo su contenuto nuovo: mai sovrascrivere l'audioguida di un
         // POI già arricchito.
         if (didWrite && (jsonResponse as any).audio_script) {
@@ -31335,6 +31390,7 @@ ${materialePerAi || "Nessuna fonte trovata"}
         if (long && long.length > short.length + 10) { campi.description_long = long; campi.description_ai = long; }
         await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(dbPoiId)}&description_short=is.null`, campi, { headers: reqHeaders, timeout: 6000 })
           .catch((e: any) => console.warn('[enrich-stream] salvataggio testo dai dati fallito:', e?.message));
+        void salvaPoiDetailsPerLingua(dbPoiId, lang, { summary: short, wiki_extract: campi.description_long });
       };
 
       // ESITO NEGATIVO RICORDATO (14 giorni). Prima un POI senza fonti rifaceva
@@ -31452,10 +31508,19 @@ Restituisci IMMEDIATAMENTE un JSON valido con questa struttura:
 
       const regolaSenzaMateriale = `\nSE il blocco <materiale> contiene ESATTAMENTE "Nessuna fonte trovata": NON hai nessuna fonte su questo luogo specifico. È VIETATO scrivere una descrizione basata sulla tua conoscenza generale della zona, della città o di luoghi con nomi simili — anche se pensi di riconoscere il posto dalle coordinate. In quel caso restituisci description_short, description_long e audio_script come stringhe VUOTE ("") e is_gem:false. Una descrizione dettagliata ma del posto sbagliato è peggio di nessuna descrizione.`;
 
+      // LINGUA DELLA GENERAZIONE (22/09/2026, ordine del committente: «tutti
+      // sono così» — collaudo su un POI mai arricchito prima). Mancava del
+      // tutto: `roleInstruction` non menzionava mai la lingua, e il modello
+      // scriveva nella lingua del PROMPT (italiano) qualunque fosse `lang`.
+      // Non era un problema di cache o di traduzione: la primissima
+      // generazione di un POI usciva sempre in italiano, per chiunque. Stessa
+      // frase gia` in uso in /api/poi/enrich.
+      const regolaLinguaGenerazione = `\nScrivi TUTTI i testi (description_short, description_long, audio_script) in ${nomeLingua(lang)}. Le CHIAVI del JSON restano invariate.`;
+
       // (19/09/2026) Materiale dal web (sito ufficiale / SearXNG): regole in piu`,
       // le stesse dell'audioguida per opera dei musei.
       const regoleWeb = regolaPiuFattiMaiAria() + (materiale.dalWeb ? `\nREGOLE PER IL MATERIALE DAL WEB:${regoleMaterialeWeb(!!materiale.haFontiTerzi)}` : '');
-      const curatorPrompt = `${roleInstruction}${regolaSenzaMateriale}${regoleWeb}${regolaDati}
+      const curatorPrompt = `${roleInstruction}${regolaSenzaMateriale}${regolaLinguaGenerazione}${regoleWeb}${regolaDati}
 
 INFORMAZIONI SUL LUOGO DA CURARE:
 Nome: "${name}"
@@ -31525,6 +31590,13 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
           ).catch(() => null);
           if (patchRes?.data?.length > 0) {
             console.log(`✅ [enrich-stream] Arricchimento salvato in shared_pois (id=${candidate})`);
+            // Ogni descrizione creata, in qualunque lingua, resta anche in
+            // poi_details (22/09/2026, ordine del committente): QUI, non
+            // prima — poi_details.poi_id ha un vincolo FK su shared_pois, e
+            // solo qui la riga esiste di sicuro (appena confermata dal PATCH).
+            if (patch.description_short || patch.description_long) {
+              void salvaPoiDetailsPerLingua(candidate, lang, { summary: patch.description_short, wiki_extract: patch.description_long });
+            }
             return;
           }
         }
@@ -31547,6 +31619,9 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
               geofence_radius: 50
             }, { headers: { ...reqHeaders, Prefer: "resolution=merge-duplicates" } });
             console.log(`✅ [enrich-stream] Nuovo POI terze parti salvato in shared_pois (id=${idStr})`);
+            if (patch.description_short || patch.description_long) {
+              void salvaPoiDetailsPerLingua(idStr, lang, { summary: patch.description_short, wiki_extract: patch.description_long });
+            }
             return;
           } catch (insErr: any) {
             console.warn(`[enrich-stream] Insert nuovo POI fallito:`, insErr?.message);
