@@ -1535,7 +1535,8 @@ async function sitoUfficialeViaRicerca(nome: string, citta: string, lang: string
   const parola: Record<string, string> = { it: 'sito ufficiale', en: 'official website', fr: 'site officiel', es: 'sitio oficial', de: 'offizielle Website', pt: 'site oficial', nl: 'officiële website' };
   const l = String(lang || 'it').slice(0, 2).toLowerCase();
   try {
-    const ris = await eventiFeed.ricercaWeb(`"${String(nome).trim()}" ${String(citta || '').trim()} ${parola[l] || parola.en}`, { lang: l, count: 8, provider: 'searxng' });
+    // senzaRiserva (22/09/2026): schede e guide cercano solo sul droplet, mai su un motore a pagamento.
+    const ris = await eventiFeed.ricercaWeb(`"${String(nome).trim()}" ${String(citta || '').trim()} ${parola[l] || parola.en}`, { lang: l, count: 8, provider: 'searxng', senzaRiserva: true });
     let visitati = 0;
     for (const r of ris) {
       if (!isPublicHttpUrl(r.url)) continue;
@@ -8831,7 +8832,7 @@ ORDER BY DESC(?fama)`;
       const HOST_AFFIDABILI = /(^|\.)(wikipedia\.org|wikivoyage\.org|treccani\.it|europeana\.eu|unesco\.org|britannica\.com)$|beniculturali\.it$|\.(gov|edu)(\.[a-z]{2})?$|\.(gob|gouv)\.[a-z]{2}$/i;
       const nomiWeb = [...new Set(o.nomi.filter((n) => n && n.length >= 3))].slice(0, 2);
       const ricerche = await Promise.all(nomiWeb.flatMap((n) => o.lingue.map((l) =>
-        eventiFeed.ricercaWeb(`"${n}" ${o.museo}`, { lang: l, count: 6, provider: 'searxng', senzaCache: true }).catch(() => [] as any[])
+        eventiFeed.ricercaWeb(`"${n}" ${o.museo}`, { lang: l, count: 6, provider: 'searxng', senzaCache: true, senzaRiserva: true }).catch(() => [] as any[])
       )));
       const visti = new Set<string>((o.escludiUrl || []).filter(Boolean));
       const candidati: { url: string; host: string; tier: 'A' | 'B' }[] = [];
@@ -30580,92 +30581,78 @@ app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => 
       // (testi protetti: i fatti si riscrivono, regola del committente). In
       // `fast` la scheda prende foto e Wikipedia; il web lo legge lo stream che
       // parte subito dopo, e lo RISCRIVE.
-      let sitoComeFonte = '';
+      // (22/09/2026, committente: «tutto deve essere velocissimo») I quattro
+      // passi che seguono — sito ufficiale, web aperto, dati Wikidata, foto
+      // dalla strada — partivano UNO DOPO L'ALTRO, ciascuno solo dopo il
+      // fallimento del precedente: nel caso peggiore (nessuna Wikipedia) la
+      // somma arrivava a mezzo minuto prima ancora di chiamare il modello.
+      // Ora partono INSIEME e il tempo massimo lo detta il piu` lento, non la
+      // somma. Nessuna fonte tolta, stesso ordine di preferenza nel SCEGLIERE:
+      // sito ufficiale, poi web aperto (dentro materialeWebPerPoi), poi i dati
+      // strutturati; per la foto Wikidata P18 prima di Mapillary, come prima.
+      // Le condizioni di ciascun passo sono quelle di prima (mai il web per i
+      // commerciali, mai in `fast`, mai senza ancora), solo valutate all'inizio.
+      // ANCORA DEL LUOGO (21/09/2026): senza citta` fa da ancora la regione,
+      // poi il paese; il sito ufficiale si tenta anche senza ancora.
       let materialeDalWeb = false;
       let fontiTerziWeb = false;
-      if (!extract && name && !fast) {
-        try {
-          let cittaPoi = '';
-          if (id) {
-            const rc = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(String(id))}&select=city,contact_website&limit=1`,
-              { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 5000 }).catch(() => null);
-            cittaPoi = String(rc?.data?.[0]?.city || '');
-            if (rc?.data?.[0]?.contact_website && isPublicHttpUrl(rc.data[0].contact_website)) sitoComeFonte = String(rc.data[0].contact_website);
-          }
-          if (!sitoComeFonte) {
-            const s = await sitoUfficialeViaRicerca(String(name), cittaPoi, String(lang || 'it'));
-            if (s) sitoComeFonte = s.url;
-          }
-          if (sitoComeFonte) {
-            const r = await axios.get(sitoComeFonte, { timeout: 8000, maxRedirects: 3, responseType: 'text', maxContentLength: 1_500_000, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WIPGuide/1.0; +https://wip.guide)', Accept: 'text/html' } });
-            const testo = String(r.data || '')
-              .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<nav[\s\S]*?<\/nav>|<footer[\s\S]*?<\/footer>/gi, ' ')
-              .replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
-            // Il testo deve parlare del POI: almeno una parola propria del nome.
-            if (testo.length >= 300 && tokensNomeLuogo(String(name)).some((t) => normTesto(testo).includes(t))) {
-              extract = testo.slice(0, 4000);
-              pageUrl = sitoComeFonte;
-              distanceKm = 0;
-              materialeDalWeb = true;
-              console.log(`[enrich] "${name}": materiale dal sito ufficiale ${sitoComeFonte} (${testo.length} caratteri)`);
-            } else sitoComeFonte = '';
-          }
-        } catch (e: any) { sitoComeFonte = ''; console.warn('[enrich] sito ufficiale come fonte non riuscito:', e?.message); }
-      }
-
-      // 3-ter. IL WEB APERTO (19/09/2026, committente: «aggiungi le fonti»).
-      // Se nemmeno il sito ufficiale ha dato materiale: SearXNG, con le regole
-      // di materialeWebPerPoi (la pagina deve nominare il luogo E la citta`;
-      // fonti affidabili prima, blog marcati «NON VERIFICATA»). Mai per i
-      // commerciali, mai senza citta`, mai in `fast`. Tetto 14 s.
-      // ANCORA DEL LUOGO (21/09/2026, committente: «cerchi sul web, sito, blog»): parchi, crateri e siti remoti
-      // non hanno una citta` e restavano senza web (40% delle gemme «senza fonte»). Senza citta` fa da ancora la
-      // regione, poi il paese: la pagina deve nominare il luogo (>= 2 parole proprie) e quell'ancora.
+      let daiDatiScheda: { testo: string; fatti: string[]; qid: string; foto: string } | null = null;
+      let materialeDaiDatiStrutturati = false;
+      let fotoStrada: { attribuzione: string; licenza: string; fonte: string } | null = null;
       const ancoraLuogo = String(rigaNota?.city || rigaNota?.region || rigaNota?.country || '').trim();
-      if (!extract && name && !fast && ancoraLuogo && !ePoiCommerciale(rigaNota?.category || category, rigaNota?.poi_type || subCategory)) {
-        const w = await Promise.race([
-          materialeWebPerPoi(String(name), ancoraLuogo, String(lang || 'it'), null, true).catch(() => null),
-          new Promise<null>((fine) => setTimeout(() => fine(null), 14000)),
-        ]);
-        if (w?.testo) {
-          extract = w.testo;
-          pageUrl = pageUrl || w.pageUrl;
-          distanceKm = 0;
-          materialeDalWeb = true;
-          fontiTerziWeb = w.haFontiTerzi;
-          console.log(`[enrich] "${name}": materiale dal web aperto (${w.testo.length} caratteri${w.haFontiTerzi ? ', con fonti di terzi' : ''})`);
-        }
-      }
+      const commercialePoi = ePoiCommerciale(rigaNota?.category || category, rigaNota?.poi_type || subCategory);
+      const sitoNotoPoi = rigaNota?.contact_website && isPublicHttpUrl(String(rigaNota.contact_website)) ? String(rigaNota.contact_website) : null;
+      const webPromessa: Promise<{ testo: string; pageUrl: string; haFontiTerzi: boolean } | null> = (!extract && name && !fast)
+        ? Promise.race([
+            // Commerciali: solo il loro sito, mai il web aperto (regola del 19/09).
+            materialeWebPerPoi(String(name), ancoraLuogo, String(lang || 'it'), sitoNotoPoi, false, commercialePoi).catch(() => null),
+            new Promise<null>((fine) => setTimeout(() => fine(null), 14000)),
+          ])
+        : Promise.resolve(null);
+      const daiDatiPromessa = (!extract && name && !commercialePoi)
+        ? materialeDaiDati({ name: String(name), lat: targetLat, lon: targetLon, lang: String(lang || 'it'), qid: wikidataDaUsare || rigaNota?.wikidata, toponimi: toponimiPoi }).catch(() => null)
+        : Promise.resolve(null);
+      const mapillaryPromessa = !thumbnail
+        ? fotoMapillary(targetLat, targetLon, String(name || '')).catch(() => null)
+        : Promise.resolve(null);
+      const [w, daiDatiRis, m] = await Promise.all([webPromessa, daiDatiPromessa, mapillaryPromessa]);
 
+      // 3-bis/3-ter. SITO UFFICIALE E WEB APERTO (13/09 e 19/09/2026): il
+      // testo del sito o delle pagine che nominano il luogo E l'ancora diventa
+      // il materiale, con l'URL come fonte dichiarata. La foto NON si prende da
+      // qui. Mai in `fast`: li` il testo trovato diventa description_short
+      // cosi` com'e` (va bene l'incipit di Wikipedia, non una pagina altrui).
+      if (!extract && w?.testo) {
+        extract = w.testo;
+        pageUrl = pageUrl || w.pageUrl;
+        distanceKm = 0;
+        materialeDalWeb = true;
+        fontiTerziWeb = w.haFontiTerzi;
+        console.log(`[enrich] "${name}": materiale dal web (${w.testo.length} caratteri${w.haFontiTerzi ? ', con fonti di terzi' : ''})`);
+      }
 
       // DATI STRUTTURATI (21/09/2026, committente: «devono essere tutti piu' completi possibili»): senza articolo ne' web,
       // i fatti di Wikidata (anno, stile, architetto, tutela…) e la sua foto P18. Con almeno 3 fatti diventano il materiale del
       // modello (scheda breve); con meno la scheda si compone dai soli dati, qui sotto, senza modello.
-      let daiDatiScheda: { testo: string; fatti: string[]; qid: string; foto: string } | null = null;
-      let materialeDaiDatiStrutturati = false;
-      if (!extract && name && !ePoiCommerciale(rigaNota?.category || category, rigaNota?.poi_type || subCategory)) {
-        daiDatiScheda = await materialeDaiDati({ name: String(name), lat: targetLat, lon: targetLon, lang: String(lang || 'it'), qid: wikidataDaUsare || rigaNota?.wikidata, toponimi: toponimiPoi }).catch(() => null);
-        if (daiDatiScheda?.foto && !thumbnail) thumbnail = daiDatiScheda.foto;
-        if (daiDatiScheda && daiDatiScheda.fatti.length >= 3 && !fast) {
+      if (daiDatiRis) {
+        daiDatiScheda = daiDatiRis;
+        if (daiDatiScheda.foto && !thumbnail) thumbnail = daiDatiScheda.foto;
+        if (!extract && daiDatiScheda.fatti.length >= 3 && !fast) {
           extract = daiDatiScheda.testo; distanceKm = 0; materialeDaiDatiStrutturati = true;
         }
       }
 
       // ULTIMA RISORSA: la foto dalla strada (Mapillary), 10/09/2026.
-      // Scatta solo se Wikipedia, Wikidata e Commons non hanno dato nulla:
+      // Vale solo se Wikipedia, Wikidata e Commons non hanno dato nulla:
       // meglio l'esterno visto dalla strada che il riquadro vuoto, anche per
       // chiese, musei e panorami (decisione del committente). I filtri di
       // direzione/distanza stanno dentro fotoMapillary: qui arriva solo uno
       // scatto che il POI lo inquadra davvero. L'attribuzione NON è
       // facoltativa — CC BY-SA vuole il nome dell'autore — quindi viaggia
       // insieme all'URL fino alla scrittura su shared_pois, qui sotto.
-      let fotoStrada: { attribuzione: string; licenza: string; fonte: string } | null = null;
-      if (!thumbnail) {
-        const m = await fotoMapillary(targetLat, targetLon, String(name || ''));
-        if (m) {
-          thumbnail = m.url;
-          fotoStrada = { attribuzione: m.attribuzione, licenza: m.licenza, fonte: m.fonte };
-        }
+      if (!thumbnail && m) {
+        thumbnail = m.url;
+        fotoStrada = { attribuzione: m.attribuzione, licenza: m.licenza, fonte: m.fonte };
       }
 
       // Fallback foto finale. findFallbackPhoto è disattivata dal 22/08/2026
@@ -30999,10 +30986,16 @@ ${materialePerAi || "Nessuna fonte trovata"}
    */
   // `senzaSito`: chi chiama ha gia` provato il sito ufficiale per conto suo
   // (/api/poi/enrich, passo 3-bis) — qui si fa solo il web aperto.
-  async function materialeWebPerPoi(name: string, citta: string, lang: string, sitoNoto?: string | null, senzaSito = false): Promise<{ testo: string; pageUrl: string; haFontiTerzi: boolean } | null> {
+  // (22/09/2026, «tutto velocissimo») `soloSito`: solo la pagina del sito
+  // ufficiale, niente web aperto — e` il caso dei luoghi commerciali (bar,
+  // ristoranti), dove il web aperto non entra per regola. Senza `citta` si
+  // tenta comunque il sito (la ricerca del sito regge anche senza ancora); il
+  // web aperto invece richiede l'ancora, come prima.
+  async function materialeWebPerPoi(name: string, citta: string, lang: string, sitoNoto?: string | null, senzaSito = false, soloSito = false): Promise<{ testo: string; pageUrl: string; haFontiTerzi: boolean } | null> {
     const nome = String(name || '').trim();
     const dove = String(citta || '').trim();
-    if (!nome || !dove) return null;
+    if (!nome) return null;
+    if (!dove && senzaSito) return null;
     const pezzi: string[] = [];
     let pageUrl = '';
     let hostSito = '';
@@ -31027,7 +31020,7 @@ ${materialePerAi || "Nessuna fonte trovata"}
       const tokOpera = tokenSignificativi(nome).filter((t) => !tokCitta.has(t));
       // Con UNA sola parola propria («Fontana Fredda») la pagina «giusta» e`
       // qualunque pagina che la contenga: troppo poco per fidarsi del web aperto.
-      if (tokOpera.length >= 2) {
+      if (!soloSito && dove && tokOpera.length >= 2) {
         const w = await cercaMaterialeWeb({
           nomi: [nome], museo: dove, lingue: Array.from(new Set([String(lang || 'it').slice(0, 2).toLowerCase(), 'en'])).slice(0, 2),
           tokOpera, hostSitoMuseo: hostSito || undefined, escludiUrl: sito ? [sito] : [],
@@ -31438,10 +31431,25 @@ ${materialePerAi || "Nessuna fonte trovata"}
       // tappe di itinerario AI quel campo è la prosa non verificata generata
       // dall'itinerario stesso — usarla come "materiale" avrebbe fatto scrivere
       // un'audioguida "storicamente dettagliata" su fatti mai controllati.
+      // (22/09/2026, «tutto deve essere velocissimo») I dati Wikidata e la foto
+      // dalla strada partono ORA, insieme alla ricerca delle fonti, invece di
+      // aspettare uno dopo l'altro che quella fallisca: sono chiamate gratuite
+      // e si usano solo se servono (stesse regole di prima: dati solo senza
+      // materiale, Mapillary solo senza altra foto). Il tempo massimo lo detta
+      // la ricerca piu` lenta, non la somma.
+      const commercialePopup = ePoiCommerciale(noto.category || category, noto.poi_type || subCategory);
+      const daiDatiPromessa = !commercialePopup
+        ? materialeDaiDati({ name: String(name || ''), lat: targetLat, lon: targetLon, lang, qid: noto.wikidata, toponimi: [noto.city, noto.region].filter(Boolean) as string[] }).catch(() => null)
+        : Promise.resolve(null);
+      // Mapillary solo se non c'e` gia` una foto e non c'e` una fonte esatta
+      // (un QID porta quasi sempre la P18): non si spende la quota per niente.
+      const mapillaryPromessa = (!existingImage && !noto.wikidata)
+        ? fotoMapillary(targetLat, targetLon, String(name || '')).catch(() => null)
+        : Promise.resolve(null);
       const materiale = await cercaMaterialeReale(name, targetLat, targetLon, lang, {
         // (21/09/2026) Anche l'articolo salvato all'import (technical_data.wikipedia_raw): e' la fonte esatta, prima non si leggeva.
         wikidata: noto.wikidata, wikipediaUrl: noto.wikipedia_url || wikipediaDaDatiTecnici(noto.technical_data, lang) || null, citta: noto.city || noto.region || noto.country,
-        soloConNome: ePoiCommerciale(noto.category || category, noto.poi_type || subCategory),
+        soloConNome: commercialePopup,
         sitoUfficiale: noto.contact_website,
       });
       let extract = materiale.extract;
@@ -31450,7 +31458,7 @@ ${materialePerAi || "Nessuna fonte trovata"}
       // del modello (scheda breve e onesta); con meno la scheda si compone dai soli dati, senza modello.
       let daiDati: { testo: string; fatti: string[]; qid: string; foto: string } | null = null;
       if (nienteMateriale) {
-        daiDati = await materialeDaiDati({ name: String(name || ''), lat: targetLat, lon: targetLon, lang, qid: noto.wikidata, toponimi: [noto.city, noto.region].filter(Boolean) as string[] }).catch(() => null);
+        daiDati = await daiDatiPromessa;
         if (daiDati?.foto && !materiale.thumbnail) materiale.thumbnail = daiDati.foto;
         if (daiDati && daiDati.fatti.length >= 3) { extract = daiDati.testo; nienteMateriale = false; }
       }
@@ -31467,7 +31475,7 @@ ${materialePerAi || "Nessuna fonte trovata"}
       // fa gia` /api/poi/enrich.
       // Foto dalla strada anche quando il testo c'e' ma la foto no (prima scattava solo senza materiale).
       if (!existingImage && !materiale.thumbnail) {
-        const m = await fotoMapillary(targetLat, targetLon, String(name || '')).catch(() => null);
+        const m = noto.wikidata ? await fotoMapillary(targetLat, targetLon, String(name || '')).catch(() => null) : await mapillaryPromessa;
         if (m) await salvaSoloFoto(m.url, { fonte: m.fonte, attribuzione: m.attribuzione, licenza: m.licenza });
       }
       if (nienteMateriale) {

@@ -614,15 +614,35 @@ export function fornitoreRicerca(): 'brave' | 'google' | 'searxng' | null {
 
 const hashBreve = (s: string) => createHash('md5').update(s).digest('hex').slice(0, 12);
 
+// INTERRUTTORE SU SEARXNG (22/09/2026, committente: «e se spengi il droplet?»).
+// Con l'istanza spenta o satura ogni ricerca aspettava il timeout per intero, e
+// un luogo senza Wikipedia costava all'utente quei secondi a vuoto — a ogni
+// apertura. Dopo SEARX_FALLIMENTI_MAX errori di fila (rete, timeout, 5xx) si
+// smette di chiamarla per SEARX_PAUSA_MS e si passa subito alla riserva (o a
+// niente, vedi `senzaRiserva`); al primo successo dopo la pausa si riparte.
+// Stato in memoria: su Vercel vale per la singola istanza calda, e va bene —
+// e` proprio l'istanza che sta servendo l'utente a non dover piu` aspettare.
+const searxStato = { fallimenti: 0, chiusoFinoA: 0, avvisato: false };
+const SEARX_FALLIMENTI_MAX = 3;
+const SEARX_PAUSA_MS = 3 * 60_000;
+export function searxDisponibile(): boolean {
+  if (!process.env.SEARXNG_URL) return false;
+  return Date.now() >= searxStato.chiusoFinoA;
+}
+
 export async function ricercaWeb(query: string, opts: { lang?: string; cc?: string; count?: number;
   /** 12/09/2026: fornitore e chiave dedicati (i musei non devono bruciare il credito degli Eventi).
    *  'searxng' = istanza SearXNG auto-ospitata (SEARXNG_URL + SEARXNG_TOKEN): gratis, senza crediti. */
   provider?: 'brave' | 'google' | 'searxng'; braveKey?: string;
   /** 19/09/2026: chi salva già il proprio risultato (guide dei musei) non passa dalla cache dei 7 giorni:
    *  nel periodo in cui SearXNG era degradato vi si erano fissate risposte spazzatura. */
-  senzaCache?: boolean } = {}): Promise<RisultatoWeb[]> {
+  senzaCache?: boolean;
+  /** 22/09/2026: schede dei luoghi e guide dei musei — regola del committente: «SearXNG, il droplet,
+   *  gratis: mai un motore a pagamento». Se SearXNG non risponde si torna a mani vuote, non su Brave.
+   *  Gli Eventi non lo passano e tengono la riserva a pagamento di prima. */
+  senzaRiserva?: boolean } = {}): Promise<RisultatoWeb[]> {
   let fornitore: 'brave' | 'google' | 'searxng' | null = opts.provider || fornitoreRicerca();
-  const riserva = (): 'brave' | 'google' | null => (opts.braveKey || process.env.BRAVE_SEARCH_API_KEY) ? 'brave' : (process.env.GOOGLE_CSE_API_KEY && process.env.GOOGLE_CSE_CX) ? 'google' : null;
+  const riserva = (): 'brave' | 'google' | null => opts.senzaRiserva ? null : (opts.braveKey || process.env.BRAVE_SEARCH_API_KEY) ? 'brave' : (process.env.GOOGLE_CSE_API_KEY && process.env.GOOGLE_CSE_CX) ? 'google' : null;
   if (fornitore === 'searxng' && !process.env.SEARXNG_URL) fornitore = riserva();
   if (fornitore === 'google' && !(process.env.GOOGLE_CSE_API_KEY && process.env.GOOGLE_CSE_CX)) fornitore = fornitoreRicerca();
   if (fornitore === 'brave' && !(opts.braveKey || process.env.BRAVE_SEARCH_API_KEY)) fornitore = fornitoreRicerca();
@@ -634,18 +654,29 @@ export async function ricercaWeb(query: string, opts: { lang?: string; cc?: stri
   const chiave = `web_${fornitore}_${lang}_${hashBreve(`${q}|${cc}|${count}`)}`;
   const hit = opts.senzaCache ? null : await cacheLeggi(chiave, 7 * 86400_000);
   if (Array.isArray(hit)) return hit;
+  // Interruttore aperto: niente attesa, si va dritti alla riserva (o a niente).
+  if (fornitore === 'searxng' && !searxDisponibile()) {
+    const r = riserva();
+    if (!r) return [];
+    return ricercaWeb(query, { ...opts, provider: r });
+  }
   let out: RisultatoWeb[] = [];
   try {
     if (fornitore === 'searxng') {
       // SearXNG sul droplet (12/09/2026 sera, committente): GET /search con
       // format=json; il token segreto nell'header protegge l'istanza.
+      // Timeout 10 s (era 15): il popup ha un guardiano a 25 s e la ricerca
+      // web un tetto di 14 s — un'istanza che non risponde in 10 s non
+      // rispondera` in tempo utile comunque.
       const base = String(process.env.SEARXNG_URL || '').replace(/\/+$/, '');
       const r = await axios.get(`${base}/search`, {
         params: { q, format: 'json', language: lang, safesearch: 1, categories: 'general' },
         headers: { Accept: 'application/json', ...(process.env.SEARXNG_TOKEN ? { 'X-Searx-Token': process.env.SEARXNG_TOKEN } : {}) },
-        timeout: 15000,
+        timeout: 10000,
       });
       out = (r.data?.results || []).slice(0, count).map((x: any) => ({ title: String(x.title || ''), url: String(x.url || ''), snippet: String(x.content || '') }));
+      if (searxStato.fallimenti || searxStato.avvisato) console.log('[ricercaWeb] SearXNG risponde di nuovo: interruttore chiuso');
+      searxStato.fallimenti = 0; searxStato.chiusoFinoA = 0; searxStato.avvisato = false;
     } else if (fornitore === 'brave') {
       const r = await axios.get('https://api.search.brave.com/res/v1/web/search', {
         params: { q, count, search_lang: lang, ...(cc ? { country: cc } : {}), safesearch: 'moderate', text_decorations: false },
@@ -662,9 +693,23 @@ export async function ricercaWeb(query: string, opts: { lang?: string; cc?: stri
     }
   } catch (e: any) {
     console.warn(`[ricercaWeb] ${fornitore} fallita:`, e?.response?.status || e?.message);
-    // SearXNG giù (container fermo, certificato scaduto, droplet spento):
-    // un solo ripiego sul fornitore a pagamento, che non passa da qui.
-    if (fornitore === 'searxng' && riserva()) return ricercaWeb(query, { ...opts, provider: riserva()! });
+    if (fornitore === 'searxng') {
+      // Un 403 (token) o un 4xx e` un nostro errore di configurazione, non
+      // un'istanza morta: conta solo rete, timeout e 5xx.
+      const st = Number(e?.response?.status || 0);
+      if (!st || st >= 500) {
+        searxStato.fallimenti++;
+        if (searxStato.fallimenti >= SEARX_FALLIMENTI_MAX) {
+          searxStato.chiusoFinoA = Date.now() + SEARX_PAUSA_MS;
+          if (!searxStato.avvisato) { console.warn(`[ricercaWeb] SearXNG non risponde da ${searxStato.fallimenti} chiamate: interruttore APERTO per ${SEARX_PAUSA_MS / 60000} min (droplet spento o saturo?)`); searxStato.avvisato = true; }
+        }
+      }
+      // SearXNG giù (container fermo, certificato scaduto, droplet spento):
+      // un solo ripiego sul fornitore a pagamento — mai per schede e guide
+      // (`senzaRiserva`), che tornano a mani vuote.
+      const r = riserva();
+      if (r) return ricercaWeb(query, { ...opts, provider: r });
+    }
     return [];
   }
   out = out.filter((x) => /^https?:\/\//i.test(x.url));
