@@ -484,7 +484,11 @@ async function callUniversalAi(
         response_format: options.response_format,
         temperature: options.temperature || 0.7,
         max_tokens: options.max_tokens || 8192
-      }, { headers: { "Authorization": `Bearer ${gonkaKeyPool}` }, timeout: 180000 });
+      // 90 s per i lavori di sfondo invece di 180 (23/09/2026): misurato sul pre-arricchimento, Gonka andava
+      // a buon fine ~8 volte al minuto contro le ~20 di Agnes; ogni fallimento costava 180 s di attesa prima
+      // del ripiego, e 180 + 60 di Agnes superava il tempo massimo della function — le traduzioni morivano.
+      // Con 90 s il ripiego su Agnes rientra nei tempi. In diretta (utente in attesa) Gonka non si usa.
+      }, { headers: { "Authorization": `Bearer ${gonkaKeyPool}` }, timeout: userId === 'background-script' ? 90000 : 180000 });
       textContent = res.data.choices?.[0]?.message?.content || "";
       responseData = res.data;
       tokensUsed = res.data.usage?.total_tokens || 0;
@@ -19565,18 +19569,63 @@ ${description}
       if (!riga) return res.status(404).json({ error: 'POI non trovato' });
       if (!String(riga.description_short || riga.description_long || '').trim()) return res.json({ id, nessun_testo: true, fatte: [], vuote: lingue });
       const fatte: string[] = [], vuote: string[] = [];
-      // TUTTE LE LINGUE IN PARALLELO (22/09/2026 sera): con Gonka per primo una traduzione dura 1-2 minuti,
-      // sei in fila sforerebbero i 300 s della function; insieme durano quanto la piu' lenta.
-      await Promise.all(lingue.map(async (lang: string) => {
-        // Copia per lingua: traduciCampiPoi muta l'oggetto che riceve.
-        const copia = { ...riga };
-        const prima = String(copia.description_short || copia.description_long || '');
-        const lingua = String(riga.description_lang || '').toLowerCase().slice(0, 2);
-        // Stessa lingua del testo originale: gia' «tradotta» per definizione, la si salva com'e'.
-        if (lingua === lang) { void salvaPoiDetailsPerLingua(id, lang, { summary: riga.description_short, wiki_extract: riga.description_long }); fatte.push(lang); return; }
-        await traduciCampiPoi(copia, lang, req);
-        const dopo = String(copia.description_short || copia.description_long || '');
-        if (dopo && dopo !== prima) fatte.push(lang); else vuote.push(lang);
+      const lingua = String(riga.description_lang || '').toLowerCase().slice(0, 2);
+      const forza = req.body?.forza === true; // il pre-arricchimento ha appena riscritto il testo: la cache vecchia non vale
+      // UNA CHIAMATA AI PER GRUPPO DI LINGUE, NON UNA PER LINGUA (23/09/2026, committente: «e traduzione?»
+      // → «risolvi tutto»). Misurato sul pre-arricchimento: con una chiamata per lingua ogni pin faceva 8
+      // chiamate a Gonka (testo, audio, 6 traduzioni), Gonka era saturo dal nostro stesso carico, le riserve
+      // gratuite erano a quota esaurita e traduciCampiPoi inghiottiva il fallimento restituendo l'originale —
+      // la rotta rispondeva 200 con le lingue «vuote» e su 549 pin con testo solo 30 avevano piu' di una
+      // lingua. Ora: campi tradotti insieme, 2-3 lingue per chiamata, tempo massimo per chiamata cosi' la
+      // function risponde sempre entro i 300 s, e le lingue mancanti tornano ONESTAMENTE in `vuote` (il
+      // driver le scrive nel file di ripasso). Stessa forma di cache di traduciCampiPoi (`poidesc_<lang>_<id>`,
+      // oggetto campo→testo) e stessa riga poi_details, cosi' l'app in diretta legge esattamente lo stesso.
+      const campi: Record<string, number> = { description_short: 1500, description_long: 2500, audio_script: 2500, practical_info: 600 };
+      const sorgente: Record<string, string> = {};
+      for (const [c, cap] of Object.entries(campi)) { const v = riga[c]; if (typeof v === 'string' && v.trim().length >= 20) sorgente[c] = v.slice(0, cap); }
+      const daTradurre: string[] = [];
+      for (const lang of lingue) {
+        if (lang === lingua) { void salvaPoiDetailsPerLingua(id, lang, { summary: riga.description_short, wiki_extract: riga.description_long }); fatte.push(lang); continue; }
+        if (!forza) {
+          const c = await getFromCache(`poidesc_${lang}_${id}`).catch(() => null);
+          if (typeof c?.text_content === 'string' && c.text_content.trim().length > 20) { fatte.push(lang); continue; }
+        }
+        daTradurre.push(lang);
+      }
+      const totChars = Object.values(sorgente).reduce((s, v) => s + v.length, 0);
+      const perGruppo = totChars > 3000 ? 2 : 3; // l'uscita deve stare sotto il tetto di 8192 token
+      const gruppi: string[][] = [];
+      for (let i = 0; i < daTradurre.length; i += perGruppo) gruppi.push(daTradurre.slice(i, i + perGruppo));
+      const conScadenza = <T,>(p: Promise<T>, ms: number): Promise<T | null> => Promise.race([p, new Promise<null>((r) => setTimeout(() => r(null), ms))]);
+      await Promise.all(gruppi.map(async (gruppo) => {
+        try {
+          const nomi = gruppo.map((l) => `${l} (${nomeLingua(l)})`).join(', ');
+          const ai = await conScadenza(callUniversalAi(
+            'groq',
+            [
+              { role: 'system', content: `Traduci i testi descrittivi di un luogo in queste lingue: ${nomi}. Rispondi SOLO con JSON: un oggetto con una chiave per codice lingua (${gruppo.join(', ')}), e dentro le STESSE chiavi dei campi ricevuti. NON tradurre i nomi propri (luoghi, persone, monumenti). Mantieni registro e lunghezza dell'originale, nessuna aggiunta.` },
+              { role: 'user', content: JSON.stringify(sorgente) },
+            ],
+            { response_format: { type: 'json_object' }, temperature: 0.2, max_tokens: 7500, gonkaPool: 'poi', gonkaPrimo: true },
+            'poi_details_i18n_batch', supabaseUrl, supabaseServiceKey, null, 'background-script',
+          ), 235000);
+          let out: any = null;
+          try { out = JSON.parse(String(ai?.data || '').replace(/```json|```/g, '').trim()); } catch { /* non JSON */ }
+          for (const lang of gruppo) {
+            const t = out?.[lang] || out?.[lang.toUpperCase()];
+            const testi: Record<string, string> = {};
+            if (t && typeof t === 'object') for (const c of Object.keys(campi)) { if (typeof t[c] === 'string' && t[c].trim()) testi[c] = t[c].trim(); }
+            if (testi.description_short || testi.description_long) {
+              saveToCache(`poidesc_${lang}_${id}`, 'poi_details_i18n', JSON.stringify(testi));
+              void salvaPoiDetailsPerLingua(id, lang, { summary: testi.description_short || riga.description_short, wiki_extract: testi.description_long || riga.description_long });
+              fatte.push(lang);
+            } else vuote.push(lang);
+          }
+          if (!out) console.warn(`[/api/poi/traduci] ${id} gruppo ${gruppo.join(',')}: ${ai ? 'risposta non JSON' : 'scaduto (235 s)'}`);
+        } catch (e: any) {
+          console.warn(`[/api/poi/traduci] ${id} gruppo ${gruppo.join(',')} fallito:`, e?.message);
+          vuote.push(...gruppo);
+        }
       }));
       return res.json({ id, fatte, vuote });
     } catch (e: any) {
@@ -23196,6 +23245,151 @@ out center tags 120;`;
     } catch (e: any) {
       res.status(503).json({ error: e?.message || 'MET Norway non raggiungibile' });
     }
+  });
+
+  /**
+   * CLIMA: IL PERIODO MIGLIORE PER VISITARE UNA ZONA (24/09/2026, committente:
+   * «meteo livelli per scegliere il periodo migliore e analisi AI con
+   * statistiche pioggia, temperature, per indirizzare l'utente al miglior
+   * periodo specifico di quell'area/città»).
+   *
+   * Fonte: NASA POWER, climatologia mensile 2001-2020 (pubblico dominio, uso
+   * commerciale consentito, nessuna chiave). Non Open-Meteo: il suo piano
+   * gratuito vieta l'uso commerciale (regola del 19/08/2026), e MET Norway
+   * ha solo previsioni, non medie di vent'anni. Griglia di 0,5°: la cella
+   * vale per tutta una città, quindi la cache dura un anno ed è condivisa.
+   *
+   * Il PUNTEGGIO di ogni mese è per chi visita A PIEDI: si parte da 85 e si
+   * tolgono punti per il caldo (massime oltre 28°, forte oltre 32°), per il
+   * freddo (massime sotto 10°, minime sotto zero), per la pioggia (mm al
+   * mese) e si aggiunge o toglie qualcosa per il sole. I mesi entro 10 punti
+   * dal migliore, accorpati se consecutivi, sono «il periodo migliore».
+   *
+   * L'ANALISI AI si genera una volta per cella e lingua e resta in cache per
+   * sempre (i numeri non cambiano): la scrive solo chi ha l'account (regola
+   * «ospiti no»), ma la risposta salvata poi la leggono tutti. Il modello
+   * riceve SOLO la tabella dei numeri e ha l'ordine di non aggiungere nulla
+   * (niente eventi, feste, luoghi): un testo che dice cose non contenute nei
+   * dati è un'invenzione, e qui non ce n'è bisogno.
+   */
+  const CLIMA_MESI = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+  const CLIMA_GIORNI = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const climaCella = (lat: number, lon: number) => `${(Math.round(lat * 2) / 2).toFixed(1)}_${(Math.round(lon * 2) / 2).toFixed(1)}`;
+
+  function climaPunteggio(tmax: number | null, tmin: number | null, mm: number | null, sole: number | null): number {
+    let p = 85;
+    if (tmax != null) {
+      if (tmax > 32) p -= 12 + Math.min(28, (tmax - 32) * 6);
+      else if (tmax > 28) p -= (tmax - 28) * 3;
+      if (tmax < 10) p -= Math.min(40, (10 - tmax) * 4);
+    }
+    if (tmin != null && tmin < 0) p -= 5;
+    if (mm != null) p -= Math.min(35, mm / 4);
+    if (sole != null) p += Math.max(-6, Math.min(12, (sole - 3) * 3));
+    return Math.max(0, Math.min(100, Math.round(p)));
+  }
+
+  /** Mesi (1-12) entro `tolleranza` punti dal riferimento, accorpati se consecutivi (dicembre → gennaio compreso). */
+  function climaPeriodi(mesi: any[], scegli: (m: any) => boolean): { da: number; a: number }[] {
+    const ok = mesi.map(scegli);
+    if (ok.every(Boolean)) return [{ da: 1, a: 12 }];
+    const periodi: { da: number; a: number }[] = [];
+    // si parte da un mese NON scelto, così un periodo a cavallo dell'anno resta unito
+    const inizio = ok.findIndex((v) => !v);
+    let corrente: { da: number; a: number } | null = null;
+    for (let k = 1; k <= 12; k++) {
+      const i = (inizio + k) % 12;
+      if (ok[i]) { if (corrente) corrente.a = i + 1; else corrente = { da: i + 1, a: i + 1 }; }
+      else if (corrente) { periodi.push(corrente); corrente = null; }
+    }
+    if (corrente) periodi.push(corrente);
+    return periodi;
+  }
+
+  async function climaPunto(lat: number, lon: number): Promise<any> {
+    const chiave = `clima_v1_${climaCella(lat, lon)}`;
+    const CACHE_MS = 365 * 24 * 60 * 60 * 1000;
+    const inCache = await getFromCache(chiave);
+    const eta = inCache?.created_at ? Date.now() - new Date(inCache.created_at).getTime() : Infinity;
+    if (inCache?.text_content?.mesi && eta < CACHE_MS) return { fonte: 'cache', ...inCache.text_content };
+
+    const url = 'https://power.larc.nasa.gov/api/temporal/climatology/point'
+      + `?parameters=T2M,T2M_RANGE,PRECTOTCORR,ALLSKY_SFC_SW_DWN,RH2M&community=RE&longitude=${lon.toFixed(3)}&latitude=${lat.toFixed(3)}&format=JSON`;
+    const r = await axios.get(url, { timeout: 20000, headers: { 'User-Agent': 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)' } });
+    const par = r.data?.properties?.parameter || {};
+    const leggi = (nome: string, mese: string) => { const v = Number(par?.[nome]?.[mese]); return Number.isFinite(v) && v > -900 ? v : null; };
+    const mesi = CLIMA_MESI.map((k, i) => {
+      // T2M_MAX/T2M_MIN della climatologia sono gli ESTREMI del mese (Firenze:
+      // gennaio -12°, luglio 37°), non le massime e minime tipiche: quelle si
+      // ricavano dalla media e dall'escursione giornaliera (T2M ± RANGE/2).
+      const media = leggi('T2M', k), escursione = leggi('T2M_RANGE', k);
+      const tmax = media == null ? null : media + (escursione ?? 8) / 2;
+      const tmin = media == null ? null : media - (escursione ?? 8) / 2;
+      const mmGiorno = leggi('PRECTOTCORR', k);
+      const mm = mmGiorno == null ? null : Math.round(mmGiorno * CLIMA_GIORNI[i]);
+      const sole = leggi('ALLSKY_SFC_SW_DWN', k), umidita = leggi('RH2M', k);
+      return { m: i + 1, tmax: tmax == null ? null : Math.round(tmax * 10) / 10, tmin: tmin == null ? null : Math.round(tmin * 10) / 10,
+        mm, sole: sole == null ? null : Math.round(sole * 10) / 10, umidita: umidita == null ? null : Math.round(umidita), punteggio: climaPunteggio(tmax, tmin, mm, sole) };
+    });
+    if (mesi.every((x) => x.tmax == null)) throw new Error('NASA POWER senza dati per questo punto');
+    const punteggi = mesi.map((x) => x.punteggio);
+    const max = Math.max(...punteggi), min = Math.min(...punteggi);
+    const con = (f: (x: any) => number | null, dir: 1 | -1) => mesi.reduce((b: any, x: any) => (f(x) != null && (b == null || dir * (f(x) as number) > dir * (f(b) as number)) ? x : b), null)?.m ?? null;
+    const dati = {
+      cella: { lat: Math.round(lat * 2) / 2, lon: Math.round(lon * 2) / 2 },
+      mesi,
+      migliori: climaPeriodi(mesi, (x) => x.punteggio >= max - 10),
+      peggiori: max - min < 15 ? [] : climaPeriodi(mesi, (x) => x.punteggio <= min + 10),
+      piuPiovoso: con((x) => x.mm, 1), piuCaldo: con((x) => x.tmax, 1), piuFreddo: con((x) => x.tmin, -1),
+      attribuzione: 'NASA POWER · medie 2001-2020',
+    };
+    saveToCache(chiave, 'clima', dati).catch(() => {});
+    return { fonte: 'nasa-power', ...dati };
+  }
+
+  app.get("/api/meteo/clima", rateLimiter, async (req, res) => {
+    const q: any = req.query || {};
+    const lat = Number(q.lat), lon = Number(q.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+      return res.status(400).json({ ok: false, error: 'lat e lon richiesti' });
+    }
+    const lang = (String(q.lang || 'it').slice(0, 2).toLowerCase().match(/^[a-z]{2}$/) || ['it'])[0];
+    let dati: any;
+    try { dati = await climaPunto(lat, lon); }
+    catch (e: any) { return res.status(503).json({ ok: false, error: e?.message || 'clima non disponibile' }); }
+
+    // L'analisi: dalla cache per tutti; generata solo con un utente vero.
+    const chiaveAi = `clima_ai_v1_${climaCella(lat, lon)}_${lang}`;
+    let analisi: string | null = null;
+    let analisiRichiedeAccesso = false;
+    try {
+      const c = await getFromCache(chiaveAi);
+      if (c?.text_content?.testo) analisi = String(c.text_content.testo);
+    } catch { /* niente */ }
+    if (!analisi) {
+      let uid: string | null = null;
+      try { uid = await verifyUserToken(req); } catch { uid = null; }
+      if (!uid) analisiRichiedeAccesso = true;
+      else {
+        const nomeM = (m: number) => new Date(2000, m - 1, 1).toLocaleString(lang, { month: 'long' });
+        const tabella = dati.mesi.map((x: any) => `${nomeM(x.m)}: max ${x.tmax ?? '?'}°, min ${x.tmin ?? '?'}°, pioggia ${x.mm ?? '?'} mm, sole ${x.sole ?? '?'} kWh/m²/giorno, umidità ${x.umidita ?? '?'}%, punteggio visita ${x.punteggio}/100`).join('\n');
+        const periodo = (p: { da: number; a: number }) => (p.da === p.a ? nomeM(p.da) : `${nomeM(p.da)}–${nomeM(p.a)}`);
+        const prompt = `Sei il consulente meteo di un'app di viaggio. Hai SOLO questa tabella (medie 2001-2020, NASA POWER) di una zona di cui NON conosci il nome:
+${tabella}
+Periodo migliore secondo il punteggio: ${dati.migliori.map(periodo).join(', ') || 'nessuno'}. Da evitare: ${dati.peggiori.map(periodo).join(', ') || 'nessuno'}.
+
+Scrivi 90-130 parole in ${nomeLingua(lang)}, prosa continua, per chi deve scegliere QUANDO visitare questa zona a piedi. Di': il periodo migliore e perché (temperature e pioggia con i numeri), cosa aspettarsi nei mesi peggiori, un consiglio pratico (orari della giornata, abbigliamento, ombrello) ricavato dai numeri.
+REGOLE: usa SOLO i numeri della tabella; niente nomi di luoghi, eventi, feste, prezzi, folla, stagioni turistiche o altro che non sia nella tabella; niente frasi di cerimonia; nessun titolo, nessun elenco.`;
+        try {
+          const r = await callUniversalAi('groq', [{ role: 'user', content: prompt }], { temperature: 0.3, max_tokens: 450, groqOnTheFly: true, excludeEngines: ['agnes'] },
+            'clima_analisi', supabaseUrl, supabaseServiceKey, groq);
+          const testo = String(r?.data || '').replace(/^["\s]+|["\s]+$/g, '').trim();
+          if (testo.length > 120) { analisi = testo; saveToCache(chiaveAi, 'clima_ai', { testo, lang }).catch(() => {}); }
+        } catch (e: any) { console.warn('[clima] analisi non generata:', e?.message); }
+      }
+    }
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.json({ ok: true, ...dati, analisi, analisiRichiedeAccesso });
   });
 
   /**

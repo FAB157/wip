@@ -28,14 +28,20 @@ let stato = { pos: 0, ok: 0, conFoto: 0, audio: 0, tradotte: 0, errori: 0, esiti
 try { stato = { ...stato, ...JSON.parse(fs.readFileSync(STATO, 'utf8')) }; } catch {}
 const salva = () => fs.writeFileSync(STATO, JSON.stringify(stato));
 const pausa = (ms) => new Promise(r => setTimeout(r, ms));
-async function post(p, body, ms = 200000) {
-  for (let t = 0; t < 3; t++) {
+// FILE DI RIPASSO (23/09/2026, committente «risolvi tutto»): ogni pin che resta incompleto — arricchimento in
+// errore, traduzione non riuscita o lingue mancanti — finisce in <lista>.ripasso.jsonl con la STESSA forma
+// delle righe della lista (`altre` = solo le lingue mancanti), cosi' un secondo giro si lancia con
+// --lista=<file>.ripasso.jsonl. Prima i falliti venivano solo contati e persi.
+const RIPASSO = `${LISTA}.ripasso.jsonl`;
+const ripassa = (p, motivo, altre) => { try { fs.appendFileSync(RIPASSO, JSON.stringify({ ...p, altre: altre || p.altre || [], motivo }) + '\n'); stato.ripasso = (stato.ripasso || 0) + 1; } catch {} };
+async function post(p, body, ms = 200000, tentativi = 3) {
+  for (let t = 0; t < tentativi; t++) {
     try {
       const r = await fetch(`${B}${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-script-secret': SEG }, body: JSON.stringify(body), signal: AbortSignal.timeout(ms) });
       const x = await r.text(); let d = {}; try { d = JSON.parse(x); } catch { d = { raw: x.slice(0, 80) }; }
       if (r.status === 429 || r.status === 503) { await pausa(15000 * (t + 1)); continue; }
       return { s: r.status, d };
-    } catch (e) { if (t === 2) return { s: 0, d: { error: e.message } }; await pausa(5000); }
+    } catch (e) { if (t === tentativi - 1) return { s: 0, d: { error: e.message } }; await pausa(5000); }
   }
   return { s: 429, d: {} };
 }
@@ -49,13 +55,18 @@ async function una(p) {
     esito = lunga.length >= 300 ? 'testo' : breve.length >= 30 ? 'breve' : e.d?.solo_dati ? 'solo_dati' : 'senza_fonte';
     haTesto = esito === 'testo' || esito === 'breve';
     if (e.d?.thumbnail) stato.conFoto++;
-  } else { stato.errori++; stato.esiti.errore = (stato.esiti.errore || 0) + 1; return 'errore'; }
+  } else { stato.errori++; stato.esiti.errore = (stato.esiti.errore || 0) + 1; ripassa(p, `enrich ${e.s}`); return 'errore'; }
   // Audioguida e traduzioni IN PARALLELO (23/09/2026): dipendono entrambe dal testo appena scritto, non l'una
   // dall'altra — messe in sequenza, con Gonka per primo (1-2 min a chiamata), un pin arrivava a 4-6 minuti.
   // Nessuna soglia di caratteri per l'audio: si tenta per ogni pin con un testo, corto o lungo che sia.
+  // Traduzione: UN solo tentativo (prima erano 3 da 290 s: un pin poteva restare fermo 15 minuti) e `forza`
+  // perche' il testo e' appena stato riscritto; le lingue che tornano in `vuote` vanno nel file di ripasso.
   const chiamate = [];
   if (AUDIO && haTesto) chiamate.push(post('/api/poi/audioguide', { poiId: p.id, lang, character: 'nicky' }).then((a) => { if (a.s === 200 && a.d?.text) stato.audio++; }));
-  if (haTesto && altre.length) chiamate.push(post('/api/poi/traduci', { id: p.id, lingue: altre }, 290000).then((t) => { if (t.s === 200) stato.tradotte += (t.d?.fatte || []).length; else stato.errori++; }));
+  if (haTesto && altre.length) chiamate.push(post('/api/poi/traduci', { id: p.id, lingue: altre, forza: true }, 290000, 1).then((t) => {
+    if (t.s === 200) { stato.tradotte += (t.d?.fatte || []).length; const mancanti = (t.d?.vuote || []).filter((l) => l !== lang); if (mancanti.length) ripassa(p, 'lingue vuote', mancanti); }
+    else { stato.errori++; ripassa(p, `traduci ${t.s}`, altre); }
+  }));
   if (chiamate.length) await Promise.all(chiamate);
   stato.esiti[esito] = (stato.esiti[esito] || 0) + 1;
   return esito;
@@ -75,6 +86,6 @@ while (stato.pos < righe.length) {
     }
   }));
   stato.pos += lotto.length; salva();
-  if (stato.pos % 40 < LAV * 4) console.log(`${new Date().toISOString()} ${stato.pos}/${righe.length} — ${JSON.stringify(stato.esiti)} foto ${stato.conFoto} audio ${stato.audio} tradotte ${stato.tradotte} errori ${stato.errori}`);
+  if (stato.pos % 40 < LAV * 4) console.log(`${new Date().toISOString()} ${stato.pos}/${righe.length} — ${JSON.stringify(stato.esiti)} foto ${stato.conFoto} audio ${stato.audio} tradotte ${stato.tradotte} errori ${stato.errori} ripasso ${stato.ripasso || 0}`);
 }
 console.log(`${new Date().toISOString()} lista finita: ${JSON.stringify(stato)}`);
