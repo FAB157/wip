@@ -1,11 +1,17 @@
 // DRIVER DA FILE PER TUTTI I PIN CULTURALI (22/09/2026, committente: «tutti i POI culturali iniziando dalle gemme»,
 // «1 lingua e tradurre tutte le altre da quella», «fallo per tutte le 7 lingue») — gira sul droplet 104, senza accesso
 // al database, come driver-arricchimento-file.mjs (20/09) da cui deriva. Legge la lista di scripts/lista-tutti-culturali.mjs
-// (UNA riga per pin: `lang` = lingua in cui generare o gia' scritta, `altre` = le lingue da tradurre, `solo_traduci` =
-// il testo c'e' gia', si traduce soltanto) e fa lavorare IL SERVER DI PRODUZIONE col segreto di infrastruttura:
-//   1. /api/poi/enrich nella lingua `lang` (salvo `solo_traduci`);
+// (UNA riga per pin: `lang` = lingua in cui generare o gia' scritta, `altre` = le lingue da tradurre) e fa lavorare
+// IL SERVER DI PRODUZIONE col segreto di infrastruttura:
+//   1. /api/poi/enrich nella lingua `lang` — SEMPRE, anche per i pin che avevano gia' un testo (23/09/2026,
+//      committente: «le audioguide anche a chi ha gia' testo e chi ha gia' testo deve essere arricchito con
+//      foto e descrizione dettagliata e audioguida»): `solo_traduci` non salta piu' la generazione, dice solo
+//      in che lingua era scritto il testo di partenza. Porta la foto se manca e prova una descrizione piu' completa.
 //   2. se il pin ha un testo, /api/poi/traduci per le lingue `altre` (una chiamata, tutte le lingue);
-//   3. con --audio, /api/poi/audioguide nella lingua `lang` (le altre si generano alla prima richiesta dal testo tradotto).
+//   3. con --audio, /api/poi/audioguide nella lingua `lang` per OGNI pin con un testo, non solo sopra una soglia
+//      di caratteri (committente: «se ci sono meno caratteri, audioguida di almeno 30 secondi») — la lunghezza
+//      minima (30-40 s) la applica gia' REGOLA_SPECIFICITA lato server usando solo i fatti disponibili, mai
+//      riempitivo: con poco materiale la guida sara' onestamente piu' corta, non finta.
 // Ripartibile: la posizione sta in <lista>.stato.json.
 //   node driver-citta.mjs --lista=/root/citta/lista-tutti-culturali.jsonl [--lavoratori=5] [--pausa=1500] [--audio]
 import fs from 'fs';
@@ -36,17 +42,16 @@ async function post(p, body, ms = 200000) {
 async function una(p) {
   const lang = String(p.lang || 'it').toLowerCase().slice(0, 2);
   const altre = (p.altre || []).filter((l) => l !== lang);
-  let esito = 'errore', haTesto = !!p.solo_traduci;
-  if (!p.solo_traduci) {
-    const e = await post('/api/poi/enrich', { id: p.id, name: p.name, lat: p.lat, lon: p.lon, category: p.category, subCategory: p.poi_type, wikidata: p.wikidata || undefined, wikipedia: p.wikipedia_url || undefined, lang, mode: 'full' });
-    if (e.s === 200) {
-      const lunga = String(e.d?.description_long || ''), breve = String(e.d?.description_short || e.d?.extract || '');
-      esito = lunga.length >= 300 ? 'testo' : breve.length >= 30 ? 'breve' : e.d?.solo_dati ? 'solo_dati' : 'senza_fonte';
-      haTesto = esito === 'testo' || esito === 'breve';
-      if (e.d?.thumbnail) stato.conFoto++;
-      if (AUDIO && lunga.length >= 600) { const a = await post('/api/poi/audioguide', { poiId: p.id, lang, character: 'nicky' }); if (a.s === 200 && a.d?.text) stato.audio++; }
-    } else { stato.errori++; stato.esiti.errore = (stato.esiti.errore || 0) + 1; return 'errore'; }
-  } else esito = 'solo_traduci';
+  let esito = 'errore', haTesto = false;
+  const e = await post('/api/poi/enrich', { id: p.id, name: p.name, lat: p.lat, lon: p.lon, category: p.category, subCategory: p.poi_type, wikidata: p.wikidata || undefined, wikipedia: p.wikipedia_url || undefined, lang, mode: 'full' });
+  if (e.s === 200) {
+    const lunga = String(e.d?.description_long || ''), breve = String(e.d?.description_short || e.d?.extract || '');
+    esito = lunga.length >= 300 ? 'testo' : breve.length >= 30 ? 'breve' : e.d?.solo_dati ? 'solo_dati' : 'senza_fonte';
+    haTesto = esito === 'testo' || esito === 'breve';
+    if (e.d?.thumbnail) stato.conFoto++;
+    // Nessuna soglia di caratteri: si tenta per ogni pin con un testo, corto o lungo che sia.
+    if (AUDIO && haTesto) { const a = await post('/api/poi/audioguide', { poiId: p.id, lang, character: 'nicky' }); if (a.s === 200 && a.d?.text) stato.audio++; }
+  } else { stato.errori++; stato.esiti.errore = (stato.esiti.errore || 0) + 1; return 'errore'; }
   // Le altre lingue: una chiamata sola, dal testo appena scritto (o gia' presente).
   if (haTesto && altre.length) {
     // 290 s: le lingue si traducono in parallelo sul server, ma con Gonka per primo una passata dura 1-2 minuti.
