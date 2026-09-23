@@ -100,12 +100,56 @@ if (sentryServerAttivo) {
       dsn: process.env.SENTRY_DSN,
       environment: process.env.NODE_ENV === 'production' ? 'production' : 'development',
       tracesSampleRate: 0,
+      // Vedi ERRORI DI RETE DI SITI ESTERNI qui sotto: non sono difetti nostri.
+      beforeSend(event: any, hint: any) {
+        return erroreReteEsterno(hint?.originalException) ? null : event;
+      },
     });
     console.log('✅ [STARTUP] Sentry (server) attivo.');
   } catch (e: any) {
     console.warn('⚠️ [STARTUP] Sentry init fallita:', e?.message);
   }
 }
+
+// ERRORI DI RETE DI SITI ESTERNI (23/09/2026, Sentry fatal su POST
+// /api/poi/enrich: «unable to verify the first certificate», non gestito).
+// L'arricchimento visita siti ufficiali e pagine web trovate per nome: alcuni
+// hanno il certificato SSL incompleto o chiudono la connessione. Ogni chiamata
+// è già in try/catch, ma il socket TLS può emettere l'errore DOPO che la
+// richiesta è stata abbandonata (timeout/Promise.race): finiva come eccezione
+// non catturata e l'istanza serverless cadeva, portandosi dietro le richieste
+// in corso. Solo questi codici di rete vengono assorbiti come avviso: qualsiasi
+// altro errore resta fatale come prima.
+const CODICI_RETE_ESTERNA = new Set([
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'SELF_SIGNED_CERT_IN_CHAIN', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID',
+  'ERR_TLS_CERT_ALTNAME_INVALID', 'CERT_UNTRUSTED', 'CERT_REJECTED', 'EPROTO', 'ERR_SSL_WRONG_VERSION_NUMBER',
+  'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ESOCKETTIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH',
+  'ENOTFOUND', 'EAI_AGAIN', 'EPIPE', 'ECONNABORTED', 'ERR_STREAM_PREMATURE_CLOSE',
+]);
+function erroreReteEsterno(err: any): boolean {
+  const codice = err?.code || err?.cause?.code;
+  return typeof codice === 'string' && CODICI_RETE_ESTERNA.has(codice);
+}
+process.on('uncaughtException', (err: any) => {
+  if (erroreReteEsterno(err)) {
+    console.warn(`⚠️ [rete esterna] ${err?.code || err?.cause?.code}: ${err?.message} — ignorato, non è un difetto nostro`);
+    return;
+  }
+  // L'integrazione di Sentry (registrata prima, in init) l'ha già inviato:
+  // qui si aspetta solo che parta e si chiude come avrebbe fatto Node.
+  console.error('💥 Eccezione non catturata:', err);
+  if (sentryServerAttivo) SentryNode.flush(2000).finally(() => process.exit(1));
+  else process.exit(1);
+});
+process.on('unhandledRejection', (motivo: any) => {
+  if (erroreReteEsterno(motivo)) {
+    console.warn(`⚠️ [rete esterna] promessa rifiutata ${motivo?.code || motivo?.cause?.code}: ${motivo?.message}`);
+    return;
+  }
+  // Come prima con Sentry attivo (modalità 'warn'): si registra, non si cade.
+  console.error('💥 Promessa rifiutata non gestita:', motivo);
+});
 
 // POSTHOG (30/08/2026, richiesta utente: "integriamo posthog"): il buco
 // trovato analizzando il codice — zero analytics di prodotto, solo
@@ -3763,7 +3807,13 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       // solo utente: col tetto normale 60/min l'arricchitore gemme da solo
       // lo saturava e ogni altro script prendeva 429. Per loro il tetto e'
       // piu' largo ma esiste comunque: protegge il DB, non il portafoglio.
-      const max = req.userId === 'background-script' ? Math.max(maxPerMinuto, 240) : maxPerMinuto;
+      // 480 invece di 240 (23/09/2026, committente: «proviamo?» dopo la prova a 100 lavoratori sul
+      // pre-arricchimento): il tetto e' condiviso da TUTTI gli script di sfondo sul droplet 104 (wip-citta
+      // insieme a wip-arricchisci, gia' attivo), non solo da uno — a 100 lavoratori il tetto vecchio faceva
+      // accodare le chiamate (35 pin/min invece di 58, errori al 6,5%). Il contatore e' un semplice RPC
+      // Postgres (rate_limit_hit): protegge il DB da un bug che spara richieste a raffica, non il portafoglio
+      // (Gonka/Groq hanno i propri tetti separati) — alzarlo e' a basso rischio.
+      const max = req.userId === 'background-script' ? Math.max(maxPerMinuto, 480) : maxPerMinuto;
       const attesa = await limiteCostosoSuperato(req, max);
       if (attesa !== null) {
         res.setHeader('Retry-After', String(attesa));
@@ -15663,10 +15713,15 @@ ${wikiExtracts.join('\n') || 'nessuno'}`;
         const d = radiusKm / 111.32; const dLon = d / Math.max(0.2, Math.cos(qLat * Math.PI / 180));
         filters += `&lat=gte.${(qLat - d).toFixed(5)}&lat=lte.${(qLat + d).toFixed(5)}&lon=gte.${(qLon - dLon).toFixed(5)}&lon=lte.${(qLon + dLon).toFixed(5)}`;
       }
-      if (Number.isFinite(beforeTs)) filters += `&created_at=lt.${encodeURIComponent(new Date(beforeTs).toISOString())}`;
+      // ordine=verifica (widget «foto community», 23/09/2026): le ultime
+      // APPROVATE, non le ultime scattate. Il cursore `before` resta su
+      // created_at, quindi in quest'ordine si ignora.
+      const perVerifica = String(req.query.ordine || '') === 'verifica';
+      if (Number.isFinite(beforeTs) && !perVerifica) filters += `&created_at=lt.${encodeURIComponent(new Date(beforeTs).toISOString())}`;
+      const ordine = perVerifica ? 'reviewed_at.desc.nullslast' : 'created_at.desc';
       const fetchN = geo ? Math.min(300, limit * 4) : limit + 1;
       const { data } = await axios.get(
-        `${supabaseUrl}/rest/v1/vision_cards?review_status=eq.approved${filters}&select=id,name,city,category,description_short,curiosity,published_photo_url,published_poi_id,created_at,lat,lon,language,first_discoverer&order=created_at.desc&limit=${fetchN}`,
+        `${supabaseUrl}/rest/v1/vision_cards?review_status=eq.approved${filters}&select=id,name,city,category,description_short,curiosity,published_photo_url,published_poi_id,created_at,reviewed_at,lat,lon,language,first_discoverer&order=${ordine}&limit=${fetchN}`,
         { headers: svcHeaders }
       );
       let rows: any[] = data || [];
@@ -15676,7 +15731,9 @@ ${wikiExtracts.join('\n') || 'nessuno'}`;
           .filter((c: any) => c.distance_km != null && c.distance_km <= radiusKm);
       }
       const page = rows.slice(0, limit);
-      const nextCursor = rows.length > limit && page.length ? page[page.length - 1].created_at : null;
+      // In ordine=verifica il cursore created_at non ha senso (verrebbe
+      // ignorato e ridarebbe la stessa pagina): niente cursore.
+      const nextCursor = !perVerifica && rows.length > limit && page.length ? page[page.length - 1].created_at : null;
       res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=120');
       res.json({ cards: page.map((c: any) => ({ ...c, first_discoverer: !!c.first_discoverer })), nextCursor });
     } catch (e: any) {
@@ -15927,6 +15984,47 @@ ${wikiExtracts.join('\n') || 'nessuno'}`;
       // Nell'ordine ricevuto (il nativo manda i piu' vicini per primi): prima i
       // POI senza nulla, poi i provvisori.
       let missing = poisToEnrich.filter((p: any) => !p[langCol]).concat(poisToEnrich.filter((p: any) => p[langCol] && provvisorio(p)));
+
+      // RIFIUTI RICORDATI (23/09/2026, batteria e costo AI; sul modello di
+      // `enrich_vuoto_<id>`). Dove il teaser viene SCARTATO per il contenuto
+      // (nessun fatto, frase fatta, segnaposto) non si salvava nulla, e il
+      // nativo rimandava gli stessi id a ogni refresh del radar: 10 chiamate AI
+      // ogni 200 m, tutte di nuovo scartate. Ora il rifiuto si ricorda 7 giorni
+      // per id + lingua, con l'impronta del materiale: se nel frattempo
+      // l'arricchimento scrive una descrizione, l'impronta cambia e si riprova.
+      // Solo i rifiuti di CONTENUTO: un errore del motore non si ricorda mai.
+      // Letto solo per le chiamate degli utenti: cron e admin riprovano sempre.
+      const RIFIUTO_TEASER_MS = 7 * 24 * 3600 * 1000;
+      const chiaveRifiutoTeaser = (id: any) => `teaser_rifiuto_${langSafe}_${String(id).replace(/[^A-Za-z0-9_:.-]/g, '').slice(0, 120)}`;
+      const improntaMateriale = (p: any) => {
+        const s = `${p?.description_long || ''}|${p?.description_short || ''}`;
+        let h = 5381;
+        for (let k = 0; k < s.length; k++) h = ((h * 33) ^ s.charCodeAt(k)) >>> 0;
+        return `${s.length}.${h.toString(36)}`;
+      };
+      const ricordaRifiutoTeaser = (p: any) => {
+        saveToCache(chiaveRifiutoTeaser(p.id), 'teaser_rifiuto', `${Date.now()}|${improntaMateriale(p)}`).catch(() => {});
+      };
+      if (!illimitato && missing.length) {
+        try {
+          const chiavi = missing.map((p: any) => encodeURIComponent(`"${chiaveRifiutoTeaser(p.id)}"`));
+          const r = await axios.get(`${supabaseUrl}/rest/v1/api_cache?cache_key=in.(${chiavi.join(',')})&select=cache_key,text_content`, {
+            headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }
+          });
+          const ricordati = new Map<string, string>((r.data || []).map((x: any) => [String(x.cache_key), String(x.text_content || '')]));
+          if (ricordati.size) {
+            const prima = missing.length;
+            missing = missing.filter((p: any) => {
+              const v = ricordati.get(chiaveRifiutoTeaser(p.id));
+              if (!v) return true;
+              const [quando, impronta] = v.split('|');
+              return !(Date.now() - (Number(quando) || 0) < RIFIUTO_TEASER_MS && impronta === improntaMateriale(p));
+            });
+            if (missing.length < prima) console.log(`[Teaser AI] ${prima - missing.length} POI saltati (rifiuto recente, stesso materiale)`);
+          }
+        } catch { /* senza cache si genera come prima */ }
+      }
+
       if (!illimitato) {
         const restanti = Math.max(0, Math.min(TEASER_MAX_PER_CHIAMATA_UTENTE, TEASER_MAX_UTENTE_GIORNO - usatiUtente, TEASER_MAX_GLOBALE_GIORNO - usatiGlobale));
         missing = missing.slice(0, restanti);
@@ -15989,7 +16087,7 @@ ${wikiExtracts.join('\n') || 'nessuno'}`;
           // piu': i teaser buoni non cambiano di una virgola.
           const RIEMPITIVO_WIP = /gemme segnalate su WIP|scheda essenziale|poco documentat|si conoscono con certezza (solo )?il tipo e la posizione|in attesa di una descrizione/i;
           const grezzo = [poi.description_long, poi.description_short].map((x: any) => String(x || '').replace(/\s+/g, ' ').trim()).find((x: string) => x && !RIEMPITIVO_WIP.test(x)) || '';
-          if (!grezzo && (poi.description_long || poi.description_short)) { console.log(`[Teaser AI] saltato (solo segnaposto WIP): ${poi.name}`); return null; }
+          if (!grezzo && (poi.description_long || poi.description_short)) { console.log(`[Teaser AI] saltato (solo segnaposto WIP): ${poi.name}`); ricordaRifiutoTeaser(poi); return null; }
           const testoBase = grezzo.slice(0, 1500);
           // Non si passa la nostra categoria interna: l'AI la ripeteva come
           // fatto ("e' un punto panoramico") anche quando era una nostra
@@ -16019,12 +16117,13 @@ Regole:
           );
 
           let teaserText = String(response.data || "").trim().replace(/^["«»“”']+|["«»“”']+$/g, '').trim();
-          if (!teaserText || /^null\.?$/i.test(teaserText) || teaserText.length < 40) return null;
-          if (FRASI_FATTE.test(teaserText)) { console.log(`[Teaser AI] scartato (frase fatta): ${poi.name}`); return null; }
+          if (!teaserText) return null; // risposta vuota = motore, non contenuto: non si ricorda
+          if (/^null\.?$/i.test(teaserText) || teaserText.length < 40) { ricordaRifiutoTeaser(poi); return null; }
+          if (FRASI_FATTE.test(teaserText)) { console.log(`[Teaser AI] scartato (frase fatta): ${poi.name}`); ricordaRifiutoTeaser(poi); return null; }
           // Un teaser che LEGGE LE COORDINATE o ammette di non sapere nulla non
           // si pronuncia davanti a nessuno (20/09/2026).
-          if (/\b\d{1,3}[.,]\d{3,}\s*°?\s*[NSEO]?\b.*\b\d{1,3}[.,]\d{3,}|coordinate|poco documentat|in attesa di una descrizione|segnalat[ae] su WIP/i.test(teaserText)) { console.log(`[Teaser AI] scartato (coordinate/segnaposto): ${poi.name}`); return null; }
-          if (dettagliConcreti(teaserText, `${poi.name} ${poi.city || ''} ${poi.country || ''}`) < 2) { console.log(`[Teaser AI] scartato (senza dettagli): ${poi.name}`); return null; }
+          if (/\b\d{1,3}[.,]\d{3,}\s*°?\s*[NSEO]?\b.*\b\d{1,3}[.,]\d{3,}|coordinate|poco documentat|in attesa di una descrizione|segnalat[ae] su WIP/i.test(teaserText)) { console.log(`[Teaser AI] scartato (coordinate/segnaposto): ${poi.name}`); ricordaRifiutoTeaser(poi); return null; }
+          if (dettagliConcreti(teaserText, `${poi.name} ${poi.city || ''} ${poi.country || ''}`) < 2) { console.log(`[Teaser AI] scartato (senza dettagli): ${poi.name}`); ricordaRifiutoTeaser(poi); return null; }
           if (teaserText.length > 600) teaserText = teaserText.slice(0, 599).replace(/\s+\S*$/, '') + '…';
 
           // Salva: il teaser, e via il marcatore di provvisorio (technical_data
@@ -22923,7 +23022,10 @@ out center tags 120;`;
     // Le copie salvate prima del 21/08/2026 non hanno la nuvolosità: per
     // quelle la cache vale come scaduta, altrimenti per mezz'ora la vista
     // delle stelle resterebbe senza il dato che le serve.
-    if (inCache?.text_content && eta < CACHE_MS && inCache.text_content.nuvole != null) {
+    // Idem per quelle senza `oreMeteo` (23/09/2026): il widget meteo ne ha
+    // bisogno per la finestra senza pioggia.
+    if (inCache?.text_content && eta < CACHE_MS && inCache.text_content.nuvole != null
+      && inCache.text_content.oreMeteo != null) {
       return { fonte: 'cache', ...inCache.text_content };
     }
 
@@ -23007,6 +23109,24 @@ out center tags 120;`;
         });
       }
 
+      // Le prossime 16 ore con cielo e pioggia, per il widget meteo (23/09/2026):
+      // il client ci cerca la finestra senza pioggia. Stesso offset lon/15.
+      const oreMeteo: any[] = [];
+      for (const p of serie.slice(0, 16)) {
+        const ts = Date.parse(String(p?.time || ''));
+        if (!Number.isFinite(ts)) continue;
+        const q = new Date(ts + offsetOreUv * msOraPerUv);
+        const n1 = p?.data?.next_1_hours;
+        oreMeteo.push({
+          ts,
+          ora: `${String(q.getUTCHours()).padStart(2, '0')}:${String(q.getUTCMinutes()).padStart(2, '0')}`,
+          temp: Number(p?.data?.instant?.details?.air_temperature ?? 0),
+          code: wmo(n1?.summary?.symbol_code || p?.data?.next_6_hours?.summary?.symbol_code),
+          pioggia: Number(n1?.details?.probability_of_precipitation ?? 0),
+          mm: Number(n1?.details?.precipitation_amount ?? 0),
+        });
+      }
+
       // ── NUVOLOSITÀ DELLA PROSSIMA NOTTE (21:00 → 03:00 locali) ─────────
       //
       // Serve alla vista delle stelle: un cielo Bortle 2 con il 90% di nuvole
@@ -23055,6 +23175,7 @@ out center tags 120;`;
         prossimeOre: prossimeOre.slice(0, 8),
         oreCritiche: prossimeOre.filter((o) => o.uv >= 6).map((o) => o.ora),
         uvMassimoOggi,
+        oreMeteo,
         attribuzione: 'MET Norway (NLOD / CC BY 4.0)',
       };
       await saveToCache(chiave, 'meteo_met', payload);
@@ -23074,6 +23195,145 @@ out center tags 120;`;
       res.json({ ok: true, ...(await meteoPunto(lat, lon)) });
     } catch (e: any) {
       res.status(503).json({ error: e?.message || 'MET Norway non raggiungibile' });
+    }
+  });
+
+  /**
+   * GEMMA DELLA SETTIMANA NELLA REGIONE, per il widget home (23/09/2026).
+   *
+   * GET ?lat&lon&lang, pubblica. Una gemma (`is_gem`) entro ~60 km, con foto
+   * vera e testo, scelta per ascolti (somma di play_count delle audioguide) e,
+   * a parità, da un hash di id + settimana: cambia ogni settimana ed è la
+   * stessa per tutti nella stessa cella di mezzo grado.
+   *
+   * La query su shared_pois NON ha ORDER BY (su quella tabella un ordinamento
+   * non indicizzato va in timeout) e filtra le coordinate NaN, che altrimenti
+   * «contengono» ogni riquadro. Timeout 8 s; se scade si riprova a 30 km; se
+   * fallisce anche così la risposta è vuota e resta in cache un'ora.
+   */
+  app.get("/api/gemme/regione", rateLimiter, async (req, res) => {
+    const q: any = req.query || {};
+    const lat = Number(q.lat), lon = Number(q.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+      return res.status(400).json({ ok: false, error: 'lat e lon richiesti' });
+    }
+    const lang = (String(q.lang || 'it').slice(0, 2).toLowerCase().match(/^[a-z]{2}$/) || ['it'])[0];
+
+    // Settimana ISO (AAAA-Www): giovedì della settimana → anno ISO.
+    const oggi = new Date();
+    const giov = new Date(Date.UTC(oggi.getUTCFullYear(), oggi.getUTCMonth(), oggi.getUTCDate()));
+    giov.setUTCDate(giov.getUTCDate() + 3 - ((giov.getUTCDay() + 6) % 7));
+    const inizioAnno = new Date(Date.UTC(giov.getUTCFullYear(), 0, 4));
+    const numSett = 1 + Math.round(((giov.getTime() - inizioAnno.getTime()) / 86400000 - 3 + ((inizioAnno.getUTCDay() + 6) % 7)) / 7);
+    const settimana = `${giov.getUTCFullYear()}-W${String(numSett).padStart(2, '0')}`;
+
+    const mezzo = (v: number) => (Math.round(v * 2) / 2).toFixed(1);
+    const chiave = `gemma_regione_v1_${mezzo(lat)}_${mezzo(lon)}_${settimana}_${lang}`;
+    const UN_ORA = 3600000;
+
+    try {
+      const inCache = await getFromCache(chiave);
+      const c = inCache?.text_content;
+      if (c && typeof c === 'object' && 'gemma' in c) {
+        // L'età si misura su `ts` salvato nel contenuto: saveToCache fa upsert
+        // (merge-duplicates) e non rinnova created_at, quindi dopo il primo
+        // guasto ogni richiesta avrebbe ritentato due query da 8 s.
+        const eta = Number.isFinite(Number(c.ts)) ? Date.now() - Number(c.ts)
+          : (inCache?.created_at ? Date.now() - new Date(inCache.created_at).getTime() : Infinity);
+        // Una risposta vuota per guasto vale un'ora; le altre tutta la settimana
+        // (la settimana è già nella chiave).
+        if (!c.guasto || eta < UN_ORA) {
+          res.set('Cache-Control', 'public, max-age=3600');
+          return res.json({ ok: true, gemma: c.gemma || null });
+        }
+      }
+
+      const svc = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+      const cerca = async (km: number) => {
+        const dLat = km / 111.32;
+        const dLon = km / (111.32 * Math.max(0.2, Math.cos(lat * Math.PI / 180)));
+        const r = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?is_gem=eq.true`
+          + `&lat=gte.${(lat - dLat).toFixed(5)}&lat=lte.${(lat + dLat).toFixed(5)}`
+          + `&lon=gte.${(lon - dLon).toFixed(5)}&lon=lte.${(lon + dLon).toFixed(5)}`
+          + `&lat=neq.NaN&lon=neq.NaN`
+          + `&select=id,name,lat,lon,city,region,category,image_url,photo_url,image_attribution,description_short,description_ai,status,is_hidden`
+          + `&limit=500`, { headers: svc, timeout: 8000 });
+        return Array.isArray(r.data) ? r.data : [];
+      };
+      let righe: any[] | null = null;
+      try { righe = await cerca(60); }
+      catch (e: any) {
+        console.warn('[gemme/regione] 60 km fallita, riprovo a 30:', e?.code || e?.response?.status || e?.message);
+        try { righe = await cerca(30); } catch (e2: any) {
+          console.warn('[gemme/regione] anche 30 km fallita:', e2?.code || e2?.response?.status || e2?.message);
+        }
+      }
+      if (!righe) {
+        await saveToCache(chiave, 'gemma_regione', { gemma: null, guasto: true, ts: Date.now() });
+        return res.json({ ok: true, gemma: null });
+      }
+
+      const NASCOSTI = new Set(['draft', 'needs_revision', 'rejected', 'hidden']);
+      const fotoDi = (p: any) => {
+        for (const u of [p.image_url, p.photo_url]) {
+          const s = String(u || '').trim();
+          if (s.startsWith('https://') && !/unsplash/i.test(s)) return s;
+        }
+        return '';
+      };
+      const candidate = righe.filter((p: any) => {
+        const id = String(p?.id || '');
+        if (!id || id.startsWith('iti-') || id.startsWith('vision-')) return false;
+        if (String(p.category || '') === 'community') return false;
+        if (p.is_hidden === true || NASCOSTI.has(String(p.status || ''))) return false;
+        if (!Number.isFinite(Number(p.lat)) || !Number.isFinite(Number(p.lon))) return false;
+        if (!fotoDi(p)) return false;
+        return !!String(p.description_short || p.description_ai || '').trim();
+      });
+
+      // Ascolti: una query per blocco di 100 id, somma per POI.
+      const ascolti = new Map<string, number>();
+      for (let i = 0; i < candidate.length; i += 100) {
+        const blocco = candidate.slice(i, i + 100).map((p: any) => `"${String(p.id).replace(/"/g, '')}"`).join(',');
+        try {
+          const r = await axios.get(`${supabaseUrl}/rest/v1/poi_audioguides?poi_id=in.(${encodeURIComponent(blocco)})&select=poi_id,play_count`,
+            { headers: svc, timeout: 8000 });
+          for (const a of (Array.isArray(r.data) ? r.data : [])) {
+            const k = String(a.poi_id);
+            ascolti.set(k, (ascolti.get(k) || 0) + (Number(a.play_count) || 0));
+          }
+        } catch { /* senza ascolti decide l'hash della settimana */ }
+      }
+      // FNV-1a 32 bit di id + settimana.
+      const hash = (s: string) => {
+        let h = 0x811c9dc5;
+        for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+        return h >>> 0;
+      };
+      candidate.sort((a: any, b: any) =>
+        ((ascolti.get(String(b.id)) || 0) - (ascolti.get(String(a.id)) || 0))
+        || (hash(String(a.id) + settimana) - hash(String(b.id) + settimana)));
+
+      const p = candidate[0];
+      let gemma: any = null;
+      if (p) {
+        let regione = String(p.region || '');
+        try {
+          const nomi = await eventiFeed.cittaInTreNomi(Number(p.lat), Number(p.lon), lang);
+          if (nomi?.regione) regione = nomi.regione;
+        } catch { /* resta la regione della riga */ }
+        gemma = {
+          id: String(p.id), nome: String(p.name || ''), citta: String(p.city || ''), regione,
+          foto: fotoDi(p), attribuzione: String(p.image_attribution || ''),
+          lat: Number(p.lat), lon: Number(p.lon),
+        };
+      }
+      await saveToCache(chiave, 'gemma_regione', { gemma });
+      res.set('Cache-Control', 'public, max-age=3600');
+      res.json({ ok: true, gemma });
+    } catch (e: any) {
+      console.error('[gemme/regione] Errore:', e?.message);
+      res.json({ ok: true, gemma: null });
     }
   });
 
@@ -32458,6 +32718,94 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
       // MAI un 500 grezzo: esito strutturato, dettagli solo nei log server.
       console.error('[rain-guarantee] Errore:', e?.message);
       res.status(500).json({ refunded: false, reason: 'errore_temporaneo_riprova' });
+    }
+  });
+
+  /**
+   * STATO DELLA GARANZIA per il widget meteo (23/09/2026).
+   *
+   * GET ?itineraryId=… con Bearer. Dice se l'itinerario è coperto (pagato),
+   * fino a quando, e quali giorni passati risultano GIÀ reclamabili secondo il
+   * registro pioggia proprio. Solo letture Supabase (api_cache, e le fonti del
+   * pagamento di rainCreditsPaidFor): NESSUNA chiamata a NOAA, Open-Meteo o
+   * al geocoder — il widget si aggiorna spesso e non deve costare nulla. Per
+   * questo un giorno senza riga `rainlog_` non compare: il reclamo vero, con
+   * le fonti complete, resta quello di /claim.
+   */
+  app.get("/api/rain-guarantee/stato", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ ok: false, reason: 'login_required' });
+      const itineraryId = String((req.query as any).itineraryId || '').trim();
+      if (!/^[A-Za-z0-9_-]{6,64}$/.test(itineraryId)) {
+        return res.status(400).json({ ok: false, reason: 'itineraryId non valido' });
+      }
+
+      let itin: any = null;
+      try {
+        const r = await axios.get(`${supabaseUrl}/rest/v1/user_itineraries`
+          + `?id=eq.${encodeURIComponent(itineraryId)}&user_id=eq.${encodeURIComponent(userId)}`
+          + `&select=*`, { headers: CREDIT_SVC_HEADERS, timeout: 6000 });
+        itin = r.data?.[0] || null;
+      } catch {
+        return res.status(503).json({ ok: false, reason: 'verifica_itinerario_non_riuscita' });
+      }
+      if (!itin) return res.status(404).json({ ok: false, reason: 'itinerario_non_trovato' });
+
+      const paid = await rainCreditsPaidFor(itin, userId);
+      const coperta = paid.total > 0;
+      const createdMs = Date.parse(itin.created_at || '') || 0;
+      const finoAl = createdMs ? createdMs + RAIN_GUARANTEE_WINDOW_DAYS * 86400000 : 0;
+
+      const giorniReclamabili: string[] = [];
+      const coords = rainCoordsFromItinerary(itin.dati_itinerario);
+      // Come /claim: il rimborso per giorno è floor(pagato / giorni); se fa 0,
+      // /claim risponde «nessun_credito_pagato» e non va promesso nulla.
+      const giorniItin = Math.max(1, Array.isArray(itin.dati_itinerario?.giorni) ? itin.dati_itinerario.giorni.length : 1);
+      const rimborsoGiorno = coperta ? Math.floor(paid.total / giorniItin) : 0;
+      if (coperta && rimborsoGiorno > 0 && createdMs && coords) {
+        // Giorni candidati: dal giorno DOPO la creazione a ieri, dentro la
+        // finestra di /claim (stesse date UTC).
+        const giornoMs = 86400000;
+        const createdDay = new Date(createdMs).toISOString().slice(0, 10);
+        const oggi = new Date().toISOString().slice(0, 10);
+        const minStr = new Date(Date.now() - RAIN_GUARANTEE_WINDOW_DAYS * giornoMs).toISOString().slice(0, 10);
+        const candidati: string[] = [];
+        for (let i = 1; i <= RAIN_GUARANTEE_WINDOW_DAYS; i++) {
+          const g = new Date(Date.now() - i * giornoMs).toISOString().slice(0, 10);
+          if (g >= oggi || g <= createdDay || g < minStr) continue;
+          candidati.push(g);
+        }
+        if (candidati.length) {
+          // Reclami già fatti: una sola query sul prefisso, come il tetto di /claim.
+          const numDays = Math.max(1, Array.isArray(itin.dati_itinerario?.giorni) ? itin.dati_itinerario.giorni.length : 1);
+          let giaReclamati = new Set<string>();
+          let limiteRaggiunto = false;
+          try {
+            const prefix = `rain_claim_${userId}_${itineraryId}_`;
+            const r = await axios.get(`${supabaseUrl}/rest/v1/api_cache`
+              + `?cache_key=like.${encodeURIComponent(prefix + '*')}&select=cache_key`, { headers: CREDIT_SVC_HEADERS, timeout: 6000 });
+            const righe = Array.isArray(r.data) ? r.data : [];
+            giaReclamati = new Set(righe.map((x: any) => String(x.cache_key || '').slice(prefix.length)));
+            limiteRaggiunto = righe.length >= numDays;
+          } catch { /* se non si legge, meglio non promettere nulla */ limiteRaggiunto = true; }
+          if (!limiteRaggiunto) {
+            const registri = await Promise.all(candidati
+              .filter((g) => !giaReclamati.has(g))
+              .map(async (g) => ({ g, p: await leggiPioggiaRegistrata(coords.lat, coords.lon, g) })));
+            for (const { g, p } of registri) {
+              if (p && (p.ore >= RAIN_GUARANTEE_MIN_HOURS || p.mm >= RAIN_GUARANTEE_MIN_MM)) giorniReclamabili.push(g);
+            }
+            giorniReclamabili.sort();
+          }
+        }
+      }
+
+      res.set('Cache-Control', 'private, max-age=600');
+      res.json({ ok: true, coperta, finoAl, giorniReclamabili });
+    } catch (e: any) {
+      console.error('[rain-guarantee/stato] Errore:', e?.message);
+      res.status(500).json({ ok: false, reason: 'errore_temporaneo_riprova' });
     }
   });
 
