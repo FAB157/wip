@@ -49,15 +49,14 @@ async function una(p) {
     esito = lunga.length >= 300 ? 'testo' : breve.length >= 30 ? 'breve' : e.d?.solo_dati ? 'solo_dati' : 'senza_fonte';
     haTesto = esito === 'testo' || esito === 'breve';
     if (e.d?.thumbnail) stato.conFoto++;
-    // Nessuna soglia di caratteri: si tenta per ogni pin con un testo, corto o lungo che sia.
-    if (AUDIO && haTesto) { const a = await post('/api/poi/audioguide', { poiId: p.id, lang, character: 'nicky' }); if (a.s === 200 && a.d?.text) stato.audio++; }
   } else { stato.errori++; stato.esiti.errore = (stato.esiti.errore || 0) + 1; return 'errore'; }
-  // Le altre lingue: una chiamata sola, dal testo appena scritto (o gia' presente).
-  if (haTesto && altre.length) {
-    // 290 s: le lingue si traducono in parallelo sul server, ma con Gonka per primo una passata dura 1-2 minuti.
-    const t = await post('/api/poi/traduci', { id: p.id, lingue: altre }, 290000);
-    if (t.s === 200) stato.tradotte += (t.d?.fatte || []).length; else stato.errori++;
-  }
+  // Audioguida e traduzioni IN PARALLELO (23/09/2026): dipendono entrambe dal testo appena scritto, non l'una
+  // dall'altra — messe in sequenza, con Gonka per primo (1-2 min a chiamata), un pin arrivava a 4-6 minuti.
+  // Nessuna soglia di caratteri per l'audio: si tenta per ogni pin con un testo, corto o lungo che sia.
+  const chiamate = [];
+  if (AUDIO && haTesto) chiamate.push(post('/api/poi/audioguide', { poiId: p.id, lang, character: 'nicky' }).then((a) => { if (a.s === 200 && a.d?.text) stato.audio++; }));
+  if (haTesto && altre.length) chiamate.push(post('/api/poi/traduci', { id: p.id, lingue: altre }, 290000).then((t) => { if (t.s === 200) stato.tradotte += (t.d?.fatte || []).length; else stato.errori++; }));
+  if (chiamate.length) await Promise.all(chiamate);
   stato.esiti[esito] = (stato.esiti[esito] || 0) + 1;
   return esito;
 }
