@@ -69,8 +69,11 @@ export async function getDayPassState(): Promise<DayPassState> {
 /** Lo stato del pass com'e' sul server (user_passes), senza mirror. */
 async function leggiPassDalServer(): Promise<DayPassState> {
   try {
-    const { data: userData } = await supabase.auth.getUser();
-    const userId = userData?.user?.id;
+    // getSession (locale) e non getUser (una chiamata /auth/v1/user in rete a
+    // ogni lettura): serve solo l'id per il filtro, la select resta protetta
+    // dalla RLS di user_passes (23/09/2026, batteria, voce 19).
+    const { data: sessionData } = await supabase.auth.getSession();
+    const userId = sessionData?.session?.user?.id;
     if (!userId) return { active: false, expiresAt: 0, used: 0, cap: 0 };
     const { data } = await supabase
       .from('user_passes')

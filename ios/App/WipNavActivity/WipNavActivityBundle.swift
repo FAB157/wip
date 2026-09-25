@@ -12,8 +12,42 @@
 //  `if #available` qui sotto serve appunto a reggere anche quel caso.
 //
 
+//  DAL 23/09/2026 i widget della home sono 15 (4 + 11 nuovi): con le 2 Live
+//  Activity si supera il massimo di 10 elementi per blocco del
+//  WidgetBundleBuilder, quindi stanno in due bundle secondari (A: 10, B: 5)
+//  inclusi qui con `.body`. Chi aggiunge un widget lo mette in B finche' ha
+//  posto (massimo 10 righe per bundle).
+//
+
 import SwiftUI
 import WidgetKit
+
+@available(iOS 16.1, *)
+struct WipHomeBundleA: WidgetBundle {
+    var body: some Widget {
+        WipItinerarioWidget()
+        WipVisitaWidget()
+        WipCreditiWidget()
+        WipViciniWidget()
+        WipUltimoAscoltoWidget()
+        WipLuogoGiornoWidget()
+        WipVisionWidget()
+        WipMeteoWidget()
+        WipAscoltaWidget()
+        WipEventiWidget()
+    }
+}
+
+@available(iOS 16.1, *)
+struct WipHomeBundleB: WidgetBundle {
+    var body: some Widget {
+        WipGemmaRegioneWidget()
+        WipConfrontoWidget()
+        WipAltraLinguaWidget()
+        WipGuidaStampataWidget()
+        WipFotoCommunityWidget()
+    }
+}
 
 @main
 struct WipNavActivityBundle: WidgetBundle {
@@ -21,10 +55,8 @@ struct WipNavActivityBundle: WidgetBundle {
         if #available(iOS 16.1, *) {
             WipNavLiveActivity()
             WipMuseumLiveActivity()
-            WipItinerarioWidget()
-            WipVisitaWidget()
-            WipCreditiWidget()
-            WipViciniWidget()
+            WipHomeBundleA().body
+            WipHomeBundleB().body
         }
     }
 }

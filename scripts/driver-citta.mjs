@@ -63,7 +63,11 @@ async function una(p) {
   // perche' il testo e' appena stato riscritto; le lingue che tornano in `vuote` vanno nel file di ripasso.
   const chiamate = [];
   if (AUDIO && haTesto) chiamate.push(post('/api/poi/audioguide', { poiId: p.id, lang, character: 'nicky' }).then((a) => { if (a.s === 200 && a.d?.text) stato.audio++; }));
-  if (haTesto && altre.length) chiamate.push(post('/api/poi/traduci', { id: p.id, lingue: altre, forza: true }, 290000, 1).then((t) => {
+  // (23/09/2026 sera) Si traduce anche quando l'arricchimento risponde «senza fonte» ma la riga aveva GIA' un
+  // testo (`solo_traduci` nella lista): misurato su 160 pin, 151 avevano un testo nel DB e ne venivano tradotti
+  // 14, perche' si guardava solo la risposta dell'arricchimento. La rotta legge la riga da sola e risponde
+  // `nessun_testo` a costo zero se davvero non c'e' niente.
+  if ((haTesto || p.solo_traduci) && altre.length) chiamate.push(post('/api/poi/traduci', { id: p.id, lingue: altre, forza: true }, 290000, 1).then((t) => {
     if (t.s === 200) { stato.tradotte += (t.d?.fatte || []).length; const mancanti = (t.d?.vuote || []).filter((l) => l !== lang); if (mancanti.length) ripassa(p, 'lingue vuote', mancanti); }
     else { stato.errori++; ripassa(p, `traduci ${t.s}`, altre); }
   }));

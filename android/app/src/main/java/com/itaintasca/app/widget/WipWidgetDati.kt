@@ -37,6 +37,31 @@ class WipWidgetDati private constructor(private val json: JSONObject) {
     val vicini: JSONArray get() = json.optJSONArray("vicini") ?: JSONArray()
     val posizione: JSONObject? get() = json.optJSONObject("posizione")
 
+    // ── Undici widget nuovi (23/09/2026): blocchi opzionali dello snapshot
+    //    (rev 2, v resta 1). Uno snapshot vecchio li da' tutti null/vuoti. ──
+    val sessione: Boolean get() = json.optBoolean("sessione", false)
+    val ultimoAscolto: JSONObject? get() = json.optJSONObject("ultimoAscolto")
+    val linguaAlt: JSONObject? get() = json.optJSONObject("linguaAlt")
+    val luogoGiorno: JSONArray get() = json.optJSONArray("luogoGiorno") ?: JSONArray()
+    val meteo: JSONObject? get() = json.optJSONObject("meteo")
+    val garanzia: JSONObject? get() = json.optJSONObject("garanzia")
+    val ascoltaOra: JSONObject? get() = json.optJSONObject("ascoltaOra")
+    val eventi: JSONArray get() = json.optJSONArray("eventi") ?: JSONArray()
+    val gemmaRegione: JSONObject? get() = json.optJSONObject("gemmaRegione")
+    val confronto: JSONObject? get() = json.optJSONObject("confronto")
+    val guidaStampata: JSONObject? get() = json.optJSONObject("guidaStampata")
+    val fotoCommunity: JSONObject? get() = json.optJSONObject("fotoCommunity")
+
+    /** Il luogo del giorno con la data di OGGI (il JS ne manda tre: oggi, domani,
+     *  dopodomani), cosi' il ciclo di 30 minuti cambia voce la mattina anche ad
+     *  app chiusa. Data locale del telefono, formato AAAA-MM-GG. */
+    fun luogoDiOggi(): JSONObject? {
+        val oggi = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val lista = luogoGiorno
+        for (i in 0 until lista.length()) lista.optJSONObject(i)?.let { if (it.optString("giorno") == oggi) return it }
+        return null
+    }
+
     fun e(chiave: String, default: String): String = etichette.optString(chiave, default).ifEmpty { default }
 
     companion object {
@@ -93,20 +118,32 @@ class WipWidgetDati private constructor(private val json: JSONObject) {
         }
 
         /**
-         * Miniatura (max ~160 px) o null. Tempo massimo 4 s per immagine, mai
-         * un'eccezione: senza foto resta l'icona della categoria.
+         * Miniatura (max `lato` px sul lato lungo) o null. Tempo massimo 4 s per
+         * immagine, mai un'eccezione: senza foto resta l'icona della categoria.
+         *
+         * (23/09/2026) Chiave di cache con il lato (le miniature da 160 gia' in
+         * cache restano valide: stesso nome di prima), scrittura su .tmp e poi
+         * rinomina (un widget che legge a meta' scrittura non trova un JPEG
+         * troncato). Sopra 160 px la bitmap e' RGB_565: la «foto grande» da 400
+         * pesa ~240 KB, dentro il limite del Binder di RemoteViews.
          */
         fun miniatura(context: Context, url: String, lato: Int = 160): Bitmap? {
             if (url.isEmpty() || !url.startsWith("http")) return null
             return try {
                 val dir = File(context.cacheDir, "widget-miniature").apply { mkdirs() }
-                val file = File(dir, nomeFile(url))
+                val file = File(dir, nomeFile(if (lato == 160) url else "$url#$lato"))
+                val leggera = lato > 160
+                fun opzioni(campione: Int = 1) = BitmapFactory.Options().apply {
+                    inSampleSize = campione
+                    if (leggera) inPreferredConfig = Bitmap.Config.RGB_565
+                }
                 if (file.exists()) {
-                    BitmapFactory.decodeFile(file.absolutePath)?.let { return it }
+                    // Rinfresca la data: la pulizia dei 14 giorni tocca solo le foto non piu' usate.
+                    BitmapFactory.decodeFile(file.absolutePath, opzioni())?.let { try { file.setLastModified(System.currentTimeMillis()) } catch (_: Exception) { }; return it }
                 }
                 val conn = (URL(url).openConnection() as HttpURLConnection).apply {
                     connectTimeout = 4000; readTimeout = 4000
-                    setRequestProperty("User-Agent", "WIPWorldInPocket/1.0 (widget)")
+                    setRequestProperty("User-Agent", "WorldInPocket/1.0 (https://wip.guide; support@wip.guide)")
                     instanceFollowRedirects = true
                 }
                 if (conn.responseCode !in 200..299) return null
@@ -115,12 +152,26 @@ class WipWidgetDati private constructor(private val json: JSONObject) {
                 BitmapFactory.decodeByteArray(byteArray, 0, byteArray.size, limiti)
                 var campione = 1
                 while (max(limiti.outWidth, limiti.outHeight) / campione > lato * 2) campione *= 2
-                val piena = BitmapFactory.decodeByteArray(byteArray, 0, byteArray.size, BitmapFactory.Options().apply { inSampleSize = campione }) ?: return null
+                val piena = BitmapFactory.decodeByteArray(byteArray, 0, byteArray.size, opzioni(campione)) ?: return null
                 val scala = minOf(1f, lato.toFloat() / max(piena.width, piena.height))
                 val piccola = if (scala < 1f) Bitmap.createScaledBitmap(piena, (piena.width * scala).toInt().coerceAtLeast(1), (piena.height * scala).toInt().coerceAtLeast(1), true) else piena
-                try { file.outputStream().use { piccola.compress(Bitmap.CompressFormat.JPEG, 80, it) } } catch (_: Exception) { }
+                try {
+                    val tmp = File(dir, file.name + ".tmp")
+                    tmp.outputStream().use { piccola.compress(Bitmap.CompressFormat.JPEG, 80, it) }
+                    if (!tmp.renameTo(file)) tmp.delete()
+                } catch (_: Exception) { }
                 piccola
             } catch (_: Exception) { null }
+        }
+
+        /** Cancella le miniature (e i .tmp orfani) piu' vecchie di 14 giorni. */
+        fun pulisciMiniature(context: Context) {
+            try {
+                val limite = System.currentTimeMillis() - 14L * 24 * 3600 * 1000
+                File(context.cacheDir, "widget-miniature").listFiles()?.forEach { f ->
+                    if (f.isFile && f.lastModified() < limite) f.delete()
+                }
+            } catch (_: Exception) { }
         }
     }
 }

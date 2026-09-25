@@ -176,32 +176,35 @@ export default function PremiumGuideModal({
   const handlePlayGuidePodcast = async () => {
     if (!guideContent || playingPodcast) return;
 
+    const tappe = guideContent.giorni.flatMap(g => g.pois).map(p => ({ name: p.titolo, description: p.descrizione_lunga }));
+    const corpo = { destination: guideContent.guida_titolo, dayNum: 1, tappe: tappe.slice(0, 10), language: language || 'it' };
+    const intestazioni = { 'Content-Type': 'application/json', Authorization: `Bearer ${await getAccessToken()}` };
+    // Già generato (25/09/2026): nessuna conferma «15 crediti» per un riascolto gratuito. 204 = da generare.
+    let pronto: Response | null = null;
+    try {
+      const probe = await fetch(getApiUrl('/api/generate-daily-podcast'), { method: 'POST', headers: intestazioni, body: JSON.stringify({ ...corpo, soloCache: true }) });
+      if (probe.status === 200) pronto = probe;
+    } catch { /* rete: si procede con la conferma */ }
+
     // Stesso endpoint del podcast dell'itinerario, quindi stesso prezzo:
     // prima era gratuito e illimitato solo perché chiamato da qui.
-    const confirmed = await creditConfirm.requestConfirmation(
-      PRICING_LIST.podcast_daily,
-      getTranslation('premium_guide_podcast', language)
-    );
-    if (!confirmed) return;
+    if (!pronto) {
+      const confirmed = await creditConfirm.requestConfirmation(
+        PRICING_LIST.podcast_daily,
+        getTranslation('premium_guide_podcast', language)
+      );
+      if (!confirmed) return;
+    }
 
     setPlayingPodcast(true);
     try {
-      const tappe = guideContent.giorni.flatMap(g => g.pois).map(p => ({ name: p.titolo, description: p.descrizione_lunga }));
       // ADDEBITO SERVER-SIDE: la rotta scala/rimborsa i crediti e richiede il
       // token. Il client non addebita più (niente doppio addebito). Un giorno
       // reale, non "Intera Guida": dayNum va usato come numero per la cache.
-      const res = await fetch(getApiUrl('/api/generate-daily-podcast'), {
+      const res = pronto || await fetch(getApiUrl('/api/generate-daily-podcast'), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${await getAccessToken()}`,
-        },
-        body: JSON.stringify({
-          destination: guideContent.guida_titolo,
-          dayNum: 1,
-          tappe: tappe.slice(0, 10),
-          language: language || 'it'
-        })
+        headers: intestazioni,
+        body: JSON.stringify(corpo)
       });
       if (res.status === 402) {
         setPlayingPodcast(false);

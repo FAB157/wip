@@ -11,7 +11,7 @@ let q = `${u}/rest/v1/shared_pois?select=id,name,description_lang,description_sh
 if (latMin) q += `&lat=gte.${latMin}&lat=lte.${latMax}&lon=gte.${lonMin}&lon=lte.${lonMax}`;
 const righe = await (await fetch(q, h)).json();
 if (!Array.isArray(righe) || !righe.length) { console.log('nessuna riga', JSON.stringify(righe)); process.exit(1); }
-const r = righe[0];
+const r = righe.find((x) => String(x.description_short || '').trim()) || righe[0];
 console.log('riga:', r.id, '| lang riga:', r.description_lang, '|', (r.description_short || '').slice(0, 70));
 const c = await (await fetch(`${u}/rest/v1/api_cache?select=cache_key,created_at&cache_key=like.poidesc_%25${encodeURIComponent(r.id)}`, h)).json();
 console.log('cache traduzioni:', JSON.stringify(c));

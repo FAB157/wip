@@ -1852,6 +1852,12 @@ class TourService {
     this.coda.svuota();
     this.salva();
     this.avvisa();
+    // (23/09/2026, voce 7) La tappa fatta esce dal geofencing nativo: prima
+    // restava prioritaria fino a fine giro e, ripassandoci dopo 30 min (giro
+    // ad anello), il nativo la riannunciava e ripeteva la guida. Si
+    // riconsegnano le sole tappe non fatte (unite ai preferiti, voce 1); la
+    // tappa fatta resta un POI del radar con le regole di sempre.
+    if (this.avviato && !this.sospeso) this.sincronizzaTappeNative();
   }
 
   /**
@@ -2125,7 +2131,8 @@ class TourService {
     this.stato = { stato: 'FINITO', tappaCorrente: 0, da: Date.now() };
     try { localStorage.removeItem(CHIAVE_RIPRESA); } catch {}
     // Le tappe non devono restare geofence prioritari sul telefono.
-    if (aveva && Capacitor.isNativePlatform()) { try { locationService.unsyncTappeGiroFromNative(); } catch { /* best-effort */ } }
+    // (23/09/2026) Con la guida accesa i preferiti restano nel nativo (voce 1).
+    if (aveva && Capacitor.isNativePlatform()) { try { locationService.unsyncTappeGiroFromNative({ conPreferiti: true }); } catch { /* best-effort */ } }
     this.avvisa();
   }
 

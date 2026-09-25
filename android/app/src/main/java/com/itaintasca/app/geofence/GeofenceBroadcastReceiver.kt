@@ -1684,6 +1684,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 } else if (gate == BearingGate.Esito.RIMANDA) {
                     Log.d(TAG, "Arrivo rimandato per ${poi.nome}: e' alle spalle (gate di bussola)")
                 } else if (!blockedArrival) {
+                    // (23/09/2026, R-BUSSOLA) Il gate ha deciso: bussola spenta
+                    // subito; il servizio la riaccende se resta un candidato.
+                    BearingGate.decisa()
                     // ✅ [ROBUSTEZZA] - Permettiamo l'arrivo anche se l'approccio è stato saltato (es. marcia veloce)
                     val fired = handleArrival(
                         context, info.poiId, poi.nome, poi.guideDefault, poi.isGem, info.isItinerary,

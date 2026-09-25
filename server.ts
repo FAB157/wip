@@ -413,6 +413,11 @@ async function callUniversalAi(
     poi2: process.env.GONKAROUTER_API_KEY_POI_2 || process.env.VITE_GONKAROUTER_API_KEY_POI_2,
     poi3: process.env.GONKAROUTER_API_KEY_POI_3 || process.env.VITE_GONKAROUTER_API_KEY_POI_3,
     poi4: process.env.GONKAROUTER_API_KEY_POI_4 || process.env.VITE_GONKAROUTER_API_KEY_POI_4,
+    poi5: process.env.GONKAROUTER_API_KEY_POI_5 || process.env.VITE_GONKAROUTER_API_KEY_POI_5,
+    poi6: process.env.GONKAROUTER_API_KEY_POI_6 || process.env.VITE_GONKAROUTER_API_KEY_POI_6,
+    // SETTIMO ACCOUNT (24/09/2026, committente: «aggiungi altra chiave gonka»): il pre-caricamento del CLIMA
+    // (analisi, report, scheda del mese in sfondo), così non consuma il credito dei musei.
+    clima: process.env.GONKAROUTER_API_KEY_CLIMA || process.env.VITE_GONKAROUTER_API_KEY_CLIMA,
   };
 
   // Pool effettivamente scelto per questa chiamata (20/09/2026, committente: «usa tutte le chiavi Gonka»): per i
@@ -478,18 +483,40 @@ async function callUniversalAi(
       // va ripulito dal chiamante se mai scelto esplicitamente.
       const gonkaModel = options.gonkaModel || "deepseek-ai/DeepSeek-V4-Flash-0731";
       finalModel = `gonka:${pool}:${gonkaModel}`;
-      const res = await axios.post("https://api.gonkarouter.io/v1/chat/completions", {
-        model: gonkaModel,
-        messages,
-        response_format: options.response_format,
-        temperature: options.temperature || 0.7,
-        max_tokens: options.max_tokens || 8192
       // 90 s per i lavori di sfondo invece di 180 (23/09/2026): misurato sul pre-arricchimento, Gonka andava
       // a buon fine ~8 volte al minuto contro le ~20 di Agnes; ogni fallimento costava 180 s di attesa prima
       // del ripiego, e 180 + 60 di Agnes superava il tempo massimo della function — le traduzioni morivano.
       // Con 90 s il ripiego su Agnes rientra nei tempi. In diretta (utente in attesa) Gonka non si usa.
-      }, { headers: { "Authorization": `Bearer ${gonkaKeyPool}` }, timeout: userId === 'background-script' ? 90000 : 180000 });
-      textContent = res.data.choices?.[0]?.message?.content || "";
+      // `gonkaTimeoutMs` + `gonkaRiprova` (24/09/2026): il report clima in sfondo (3.200 token di JSON) supera
+      // spesso i 90 s, e Gonka ogni tanto risponde 502 o perde la lingua per un token; scaduto o fallito Gonka,
+      // il pool Groq saturo, Gemini in quota e Together/Mistral (402) facevano fallire la città (6 su 10 il
+      // 24/09). Le rotte clima passano 120 s e UN secondo tentativo sugli errori passeggeri (5xx, timeout,
+      // leak): 2 × 120 s stanno nei 300 s della function con i ripieghi veloci dietro.
+      const gonkaTimeout = Number(options.gonkaTimeoutMs) || (userId === 'background-script' ? 90000 : 180000);
+      const tentativiGonka = options.gonkaRiprova ? 2 : 1;
+      let res: any;
+      for (let tentativo = 1; ; tentativo++) {
+        try {
+          res = await axios.post("https://api.gonkarouter.io/v1/chat/completions", {
+            model: gonkaModel,
+            messages,
+            response_format: options.response_format,
+            temperature: options.temperature || 0.7,
+            // `gonkaMaxTokens` (25/09/2026): DeepSeek via Gonka scrive il ragionamento PRIMA del JSON, quindi un
+            // tetto tarato su Groq (report clima 2.600) lo troncava e il JSON non si leggeva (Sliven, Veliko Tărnovo).
+            max_tokens: Number(options.gonkaMaxTokens) || options.max_tokens || 8192
+          }, { headers: { "Authorization": `Bearer ${gonkaKeyPool}` }, timeout: gonkaTimeout });
+          const contenuto = res.data.choices?.[0]?.message?.content || "";
+          if (SCRIPT_INATTESO_RE.test(contenuto)) throw Object.assign(new Error('gonka: output con script inatteso (probabile leak multilingue) — scartato'), { passeggero: true });
+          textContent = contenuto;
+          break;
+        } catch (e: any) {
+          const stato = e?.response?.status;
+          const passeggero = e?.passeggero || e?.code === 'ECONNABORTED' || (stato && stato >= 500);
+          if (tentativo < tentativiGonka && passeggero) { console.warn(`[Universal AI] gonka tentativo ${tentativo} fallito (${stato || e?.code || e?.message}), riprovo`); continue; }
+          throw e;
+        }
+      }
       responseData = res.data;
       tokensUsed = res.data.usage?.total_tokens || 0;
       // LEAK MULTILINGUE (18/09/2026): trovato dal vivo sul castello di
@@ -502,9 +529,6 @@ async function callUniversalAi(
       // il testo è da buttare, non da pubblicare mezzo corrotto. Si
       // rilancia l'errore così il chiamante (tryEngine) passa al motore
       // successivo in coda, stessa strada già usata per gli altri fallimenti.
-      if (SCRIPT_INATTESO_RE.test(textContent)) {
-        throw new Error(`gonka: output con script inatteso (probabile leak multilingue) — scartato`);
-      }
       return true;
     }
 
@@ -525,7 +549,7 @@ async function callUniversalAi(
       // di musei e itinerari, era rimasto fuori e Groq rispondeva 400
       // «property 'gonkaPool' is unsupported» a OGNI chiamata della semina —
       // il motore più veloce tagliato fuori da un campo in più per due giorni.
-      const { strictEngine: _se, excludeEngines: _ee, ultimaSpiaggiaPagante: _up, groqOnTheFly: _otf, gonkaPool: _gp, gonkaUltimo: _gu, gonkaPrimo: _gpr, gonkaModel: _gm, revisore: _rv, ...groqOptions } = options as any;
+      const { strictEngine: _se, excludeEngines: _ee, ultimaSpiaggiaPagante: _up, groqOnTheFly: _otf, gonkaPool: _gp, gonkaUltimo: _gu, gonkaPrimo: _gpr, gonkaModel: _gm, gonkaTimeoutMs: _gt, gonkaRiprova: _gr, gonkaAncheInDiretta: _gad, gonkaPrimoInDiretta: _gpd, gonkaMaxTokens: _gmt, revisore: _rv, ...groqOptions } = options as any;
       const chiediGroq = (groqInstance: any) => groqInstance.chat.completions.create({
         messages,
         model: finalModel,
@@ -826,8 +850,9 @@ async function callUniversalAi(
     // Luoghi: prima le QUATTRO chiavi dedicate ai luoghi (poi/poi2/poi3/poi4, 22/09/2026 sera), partendo da
     // una a caso cosi' i lavoratori paralleli si distribuiscono; solo se sono tutte sature si prova a
     // pescare da itinerari/musei. La prima con chiave e sotto il proprio tetto vince.
-    const giro = ['poi', 'poi2', 'poi3', 'poi4', 'itinerari', 'musei'] as const;
-    const DEDICATE = 4; // le prime N del giro sono i pool esclusivi dei luoghi
+    // poi5 (24/09/2026, committente: «aggiungi anche altra chiave gonka»): quinta chiave dei luoghi.
+    const giro = ['poi', 'poi2', 'poi3', 'poi4', 'poi5', 'poi6', 'itinerari', 'musei'] as const;
+    const DEDICATE = 6; // le prime N del giro sono i pool esclusivi dei luoghi
     const via = Math.floor(Math.random() * DEDICATE);
     let scelto: typeof giro[number] | undefined;
     for (let i = 0; i < giro.length && !scelto; i++) {
@@ -837,8 +862,13 @@ async function callUniversalAi(
     gonkaPoolRichiesto = scelto || 'poi';
   }
   gonkaPoolEffettivo = gonkaPoolRichiesto;
+  // IN DIRETTA SOLO SU RICHIESTA (25/09/2026, collaudo: report clima 503 per l'utente con Groq al
+  // limite per minuto e Together/Mistral/Gemini senza quota). Con `gonkaAncheInDiretta` il chiamante
+  // ammette Gonka anche per un utente vero: sempre col pool esplicito e il suo tetto, sempre IN CODA
+  // ai gratuiti (mai `gonkaPrimo`). Il canale DeepSeek diretto non c'entra.
+  const gonkaPerUtente = !!options.gonkaAncheInDiretta && !!userId && userId !== 'background-script';
   if (
-    userId === 'background-script' &&
+    (userId === 'background-script' || gonkaPerUtente) &&
     !!gonkaPoolRichiesto &&
     !vietati.has('gonka') &&
     !consentiti.includes('gonka') &&
@@ -860,14 +890,20 @@ async function callUniversalAi(
     // luoghi: «usa gonka, dopo usato groq, ma non fermarti mai»): con
     // `gonkaPrimo` Gonka e' il PRIMO tentativo e i gratuiti (Groq…) restano
     // dietro come riserva. Solo per `background-script`, come tutto il blocco.
-    consentiti = options.gonkaPrimo ? ['gonka', ...consentiti] : [...consentiti, 'gonka'];
+    // `gonkaPrimoInDiretta` (25/09/2026): SOLO report e scheda del mese del clima, dove l'utente aspetta
+    // comunque ~1 minuto e Groq in diretta falliva (503 dopo 65 s): Gonka «clima» primo, Groq on-the-fly dietro.
+    consentiti = (options.gonkaPrimo && !gonkaPerUtente) || (gonkaPerUtente && options.gonkaPrimoInDiretta) ? ['gonka', ...consentiti] : [...consentiti, 'gonka'];
   }
   // Un motore che ha appena detto "quota esaurita" si salta finché il tetto
   // non si ricarica: nella semina del 19/08/2026 groq era esaurito e veniva
   // richiamato 16 volte su 40, ogni volta per fallire e ricadere su agnes.
   // Se però sono tutti in pausa si prova lo stesso: meglio un tentativo a
   // vuoto che nessun contenuto.
-  const disponibili = consentiti.filter((e) => !engineInPausa(e));
+  // Gonka: la pausa e' PER POOL (24/09/2026). Ogni pool e' un account con la sua quota: un 429 del pool dei
+  // luoghi (wip-citta, sei chiavi) metteva in pausa «gonka» per tutti e il pre-clima, che ha il suo account,
+  // finiva dritto su Together/Mistral (402) — 20 città su 33 fallite in due ore.
+  const chiavePausa = (e: string) => (e === 'gonka' && gonkaPoolEffettivo ? `gonka:${gonkaPoolEffettivo}` : e);
+  const disponibili = consentiti.filter((e) => !engineInPausa(chiavePausa(e)));
   const engineQueue = disponibili.length ? disponibili : consentiti;
 
   let success = false;
@@ -882,7 +918,7 @@ async function callUniversalAi(
       }
     } catch (e: any) {
       lastError = e;
-      segnaQuotaEsaurita(eng, e);
+      segnaQuotaEsaurita(chiavePausa(eng), e);
       console.warn(`[Universal AI] ${eng} failed: ${e.message}. Trying next...`);
     }
   }
@@ -982,7 +1018,8 @@ async function callUniversalAi(
     // Il tetto della semina: la spesa degli script si somma qui, sul
     // contatore del canale giusto (Gonka ha il proprio, separato da DeepSeek
     // diretto — vedi seminaGonkaConsentita).
-    if (userId === 'background-script' && isGonka && gonkaPoolUsato && realCost > 0) {
+    // Gonka conta sul tetto del suo pool anche quando serve un utente (`gonkaAncheInDiretta`).
+    if ((userId === 'background-script' || options.gonkaAncheInDiretta) && isGonka && gonkaPoolUsato && realCost > 0) {
       await registraSpesaSeminaGonka(gonkaPoolUsato, realCost).catch(() => {});
     } else if (userId === 'background-script' && finalModel.includes('deepseek') && realCost > 0) {
       await registraSpesaSeminaDeepSeek(realCost).catch(() => {});
@@ -1028,7 +1065,7 @@ async function registraSpesaSeminaDeepSeek(usd: number): Promise<void> {
 const gonkaSeminaLimitUsd = (pool: 'itinerari' | 'musei' | 'poi' | 'poi2' | 'poi3' | 'poi4') => {
   const envName = pool === 'musei' ? 'GONKA_SEMINA_LIMIT_USD_MUSEI' : pool === 'poi' ? 'GONKA_SEMINA_LIMIT_USD_POI'
     : pool === 'poi2' ? 'GONKA_SEMINA_LIMIT_USD_POI_2' : pool === 'poi3' ? 'GONKA_SEMINA_LIMIT_USD_POI_3'
-    : pool === 'poi4' ? 'GONKA_SEMINA_LIMIT_USD_POI_4' : 'GONKA_SEMINA_LIMIT_USD_ITINERARI';
+    : pool === 'poi4' ? 'GONKA_SEMINA_LIMIT_USD_POI_4' : pool === 'poi5' ? 'GONKA_SEMINA_LIMIT_USD_POI_5' : pool === 'poi6' ? 'GONKA_SEMINA_LIMIT_USD_POI_6' : pool === 'clima' ? 'GONKA_SEMINA_LIMIT_USD_CLIMA' : 'GONKA_SEMINA_LIMIT_USD_ITINERARI';
   const raw = String(process.env[envName] ?? '').trim();
   const v = Number(raw);
   return raw !== '' && Number.isFinite(v) && v >= 0 ? v : 20;
@@ -1171,6 +1208,160 @@ function somiglianzaNomi(a: any, b: any): number {
   if (!A.size || !B.size) return 0;
   let comuni = 0; for (const w of A) if (B.has(w)) comuni++;
   return comuni / Math.min(A.size, B.size);
+}
+
+// ── Chiave di una tappa per «DOPPIONI MAI» (25/09/2026) ─────────────────────
+// Con nomi fatti solo di parole vuote o corte («Trattoria da Me», «Bar Ok»)
+// paroleNome dava '' e la tappa passava senza confronto: collaudo Bologna, la
+// stessa trattoria al pranzo del giorno 1 e alla cena del giorno 2. Allora si
+// usa il nome intero normalizzato; per gli altri nomi nulla cambia.
+function chiaveNomeTappa(s: any): string {
+  const p = paroleNome(s).join(' ');
+  if (p) return p;
+  const intero = String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  // Solo parole generiche («Pranzo», «Cena in trattoria»): nessuna chiave, un pasto
+  // generico in giorni diversi non e' un doppione.
+  if (!intero || intero.split(' ').every((w) => PAROLE_VUOTE_NOMI.has(w) || w === 'in' || w === 'a' || w === 'al' || w === 'alla')) return '';
+  return `nome:${intero}`;
+}
+
+const TIPO_ALLOGGIO_RIENTRO = /hotel|alloggio|albergo|rientro|check/i;
+
+// REGOLA FISSA «DOPPIONI MAI»: un luogo compare una volta in tutto l'itinerario
+// (prima occorrenza), anche dentro lo stesso giorno. Chiave = poi_id se c'e',
+// altrimenti il nome (chiaveNomeTappa). Hotel e rientri esclusi. Con
+// `soloGiorni` (indici) si tolgono tappe SOLO da quei giorni: gli altri valgono
+// come gia' visti e restano intatti (serve ad «Aggiungi giorno»).
+function togliDoppioniItinerario(parsed: any, soloGiorni?: Set<number>): number {
+  const visti = new Set<string>();
+  let tolti = 0;
+  const chiaviDi = (t: any): string[] => {
+    const n = chiaveNomeTappa(t?.titolo_tappa || t?.titolo);
+    return [String(t?.poi_id || '') && `id:${t.poi_id}`, n && `n:${n}`].filter(Boolean) as string[];
+  };
+  const giorni: any[] = Array.isArray(parsed?.giorni) ? parsed.giorni : [];
+  if (soloGiorni) {
+    giorni.forEach((g, i) => {
+      if (soloGiorni.has(i) || !Array.isArray(g?.tappe)) return;
+      for (const t of g.tappe) if (!TIPO_ALLOGGIO_RIENTRO.test(String(t?.tipo || ''))) chiaviDi(t).forEach((c) => visti.add(c));
+    });
+  }
+  giorni.forEach((g, i) => {
+    if (!Array.isArray(g?.tappe) || (soloGiorni && !soloGiorni.has(i))) return;
+    g.tappe = g.tappe.filter((t: any) => {
+      if (TIPO_ALLOGGIO_RIENTRO.test(String(t?.tipo || ''))) return true;
+      const chiavi = chiaviDi(t);
+      if (!chiavi.length) return true;
+      if (chiavi.some((c) => visti.has(c))) { tolti++; return false; }
+      chiavi.forEach((c) => visti.add(c));
+      return true;
+    });
+  });
+  return tolti;
+}
+
+// ── REVISORE DEI FATTI DEL TESTO DELLE TAPPE (25/09/2026, ordine del committente) ──
+// La verifica anti-allucinazione controlla solo «esiste? e dove?»: il testo non
+// lo leggeva nessuno (collaudo Bologna: «Pietà di Michelangelo» in San Petronio,
+// Lucio Dalla «visse e morì» in via d'Azeglio). Un motore DIVERSO da chi scrive
+// (chiamaRevisore: mai DeepSeek, mai Gonka) segnala le FRASI con fatti falsi o
+// non verificabili; qui si TOLGONO (mai riscritte con fatti nuovi). Fail-open
+// dichiarato: l'esito finisce in parsed.qualita.revisore_fatti.
+const CAMPI_TESTO_TAPPA = ['attivita', 'consiglio_guida'];
+const NOTA_TAPPA_SENZA_TESTO: Record<string, string> = {
+  it: 'Per questo luogo abbiamo poche informazioni verificate: controlla orari e dettagli prima di andare.',
+  en: 'We have little verified information about this place: check opening times and details before you go.',
+  fr: "Nous avons peu d'informations vérifiées sur ce lieu : vérifiez les horaires et les détails avant de partir.",
+  es: 'Tenemos poca información verificada sobre este lugar: comprueba horarios y detalles antes de ir.',
+  de: 'Zu diesem Ort haben wir nur wenige geprüfte Informationen: Öffnungszeiten und Details vorab prüfen.',
+};
+const normFrase = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+/** Toglie da `testo` le frasi segnalate (confronto normalizzato, anche parziale). */
+function togliFrasiSegnalate(testo: string, segnalate: string[]): { testo: string; tolte: number } {
+  const segn = (segnalate || []).map(normFrase).filter((f) => f.length >= 12);
+  if (!segn.length || !testo) return { testo, tolte: 0 };
+  const frasi = String(testo).split(/(?<=[.!?…])\s+/);
+  let tolte = 0;
+  const tenute = frasi.filter((fr) => {
+    const n = normFrase(fr);
+    if (!n) return true;
+    const via = segn.some((s) => n.includes(s) || (n.length >= 12 && s.includes(n)));
+    if (via) tolte++;
+    return !via;
+  });
+  return { testo: tenute.join(' ').trim(), tolte };
+}
+async function revisoreFattiItinerario(parsed: any, opz: { destination?: string; language?: string; userId?: any; soloGiorni?: Set<number>; tettoMs?: number }): Promise<{ esito: string; controllate: number; frasi_tolte: number; motore?: string }> {
+  const out: { esito: string; controllate: number; frasi_tolte: number; motore?: string } = { esito: 'non_eseguito', controllate: 0, frasi_tolte: 0 };
+  const lingua = String(opz.language || 'it').toLowerCase().slice(0, 2);
+  const tappe: any[] = [];
+  (Array.isArray(parsed?.giorni) ? parsed.giorni : []).forEach((g: any, i: number) => {
+    if (opz.soloGiorni && !opz.soloGiorni.has(i)) return;
+    for (const t of (Array.isArray(g?.tappe) ? g.tappe : [])) {
+      if (TIPO_ALLOGGIO_RIENTRO.test(String(t?.tipo || ''))) continue;
+      if (CAMPI_TESTO_TAPPA.some((c) => String(t?.[c] || '').trim().length > 40)) tappe.push(t);
+    }
+  });
+  if (!tappe.length) { out.esito = 'ok'; return out; }
+  const LOTTO = 6, PARALLELE = 3;
+  const lotti: any[][] = [];
+  for (let i = 0; i < tappe.length; i += LOTTO) lotti.push(tappe.slice(i, i + LOTTO));
+  const scadenza = Date.now() + (opz.tettoMs || 60000);
+  const sbUrl = process.env.VITE_SUPABASE_URL || '', sbKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  let riusciti = 0;
+  const c0vuoto = (t: any) => !String(t?.attivita || '').trim();
+  const lavora = async (lotto: any[]) => {
+    const resta = scadenza - Date.now();
+    if (resta < 5000) return;
+    const elenco = lotto.map((t, k) => `${k + 1}. ${String(t.titolo_tappa || t.titolo || '').slice(0, 120)}\n${CAMPI_TESTO_TAPPA.map((c) => String(t?.[c] || '').trim()).filter(Boolean).join('\n').slice(0, 1500)}`).join('\n\n');
+    const messaggi = [
+      { role: 'system', content: 'Sei un verificatore di fatti per guide di viaggio. Rispondi solo con JSON.' },
+      { role: 'user', content: `Città: ${opz.destination || '?'}.\nPer ogni tappa qui sotto leggi il testo e segnala le FRASI che contengono un fatto specifico che sai essere FALSO, oppure che è rischioso e che non puoi confermare: attribuzione di un'opera a un artista, nascita/morte/residenza di una persona in quel luogo, date e secoli, record e primati, eventi storici, leggende presentate come fatti. NON segnalare descrizioni, consigli pratici, sensazioni, orari, né fatti veri e noti (esempio: l'Arca di San Domenico a Bologna ha davvero statuette giovanili di Michelangelo: NON va segnalata). Copia ogni frase segnalata ESATTAMENTE com'è nel testo.\n\n${elenco}\n\nJSON: {"tappe":[{"n":1,"frasi":["frase esatta"],"motivo":"breve"}]} — "frasi" vuoto se il testo è a posto.` },
+    ];
+    try {
+      const r: any = await Promise.race([
+        chiamaRevisore(messaggi, { temperature: 0, max_tokens: 2500, response_format: { type: 'json_object' } }, 'itinerario_revisore_fatti', sbUrl, sbKey, getGroqClient(), opz.userId),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('tetto')), resta)),
+      ]);
+      const raw = String(r?.data || '');
+      const j = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+      if (r?.motoreRevisore) out.motore = r.motoreRevisore;
+      for (const v of (Array.isArray(j?.tappe) ? j.tappe : [])) {
+        const t = lotto[Number(v?.n) - 1];
+        const frasi = Array.isArray(v?.frasi) ? v.frasi.map((f: any) => String(f || '')) : [];
+        if (!t || !frasi.length) continue;
+        for (const c of CAMPI_TESTO_TAPPA) {
+          if (!t[c]) continue;
+          const { testo, tolte } = togliFrasiSegnalate(String(t[c]), frasi);
+          if (tolte) { t[c] = testo; out.frasi_tolte += tolte; }
+        }
+        if (c0vuoto(t)) t.attivita = NOTA_TAPPA_SENZA_TESTO[lingua] || NOTA_TAPPA_SENZA_TESTO.en;
+      }
+      riusciti++;
+      out.controllate += lotto.length;
+      return true;
+    } catch (e: any) {
+      // Il motivo resta scritto (25/09/2026: su «Aggiungi giorno» usciva «non_eseguito» senza traccia).
+      (out as any).errore = String(e?.message || e).slice(0, 160);
+      console.warn(`[revisore-fatti] lotto non controllato: ${(out as any).errore}`);
+      return false;
+    }
+  };
+  const falliti: any[][] = [];
+  for (let i = 0; i < lotti.length; i += PARALLELE) {
+    if (Date.now() > scadenza - 5000) break;
+    const gruppo = lotti.slice(i, i + PARALLELE);
+    const esiti = await Promise.all(gruppo.map(lavora));
+    esiti.forEach((ok, k) => { if (!ok) falliti.push(gruppo[k]); });
+  }
+  // Un secondo tentativo per i lotti falliti, se resta tempo (un 429 o una risposta illeggibile di passaggio).
+  for (const lotto of falliti) {
+    if (Date.now() > scadenza - 8000) break;
+    await lavora(lotto);
+  }
+  out.esito = riusciti === 0 ? 'non_eseguito' : riusciti < lotti.length ? 'parziale' : 'ok';
+  return out;
 }
 
 // ── NOMI DELLO STESSO LUOGO, confronto RIGOROSO (21/09/2026) ────────────────
@@ -2032,6 +2223,17 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
     }
   });
   if (firmeUsate) console.log(`[Itinerario] "${destination}": la rete ha cambiato ${firmeUsate} verdetti su ${firmeWeb.size} tappe cercate`);
+  // NESSUN SEGNALE (25/09/2026): tappa non agganciata al database e senza firma
+  // della rete (ricerca spenta, degradata o fuori dalle prime 12) → il solo «sì»
+  // del revisore AI non basta per «verificata»: resta «poco noto». Collaudo
+  // Bologna: «La Macchina del Tempo» (esiste a Firenze) risultava verificata.
+  let senzaSegnale = 0;
+  stops.forEach((s, i) => {
+    if (!s || s.ref.poi_id || firmeWeb.has(i) || s.ref.verifica !== 'verificata') return;
+    if (TIPO_ALLOGGIO_RIENTRO.test(String(s.ref.tipo || ''))) return;
+    s.ref.verifica = 'poco_noto'; s.ref.nota_verifica = hiddenGemNote; flagged++; senzaSegnale++;
+  });
+  if (senzaSegnale) console.log(`[Itinerario] "${destination}": ${senzaSegnale} tappe non agganciate e senza firma della rete → poco noto`);
 
   // ── SECONDA DOMANDA: «E DOVE?» — passaggio a sé, su TUTTE le tappe ───────
   //
@@ -4790,14 +4992,21 @@ function parseSafeJSON(text: string) {
  * Se Gemini non risponde, ripiego normale (Groq e seguenti) SENZA modello forzato.
  */
 async function chiamaRevisore(messages: any[], opzioni: any, etichetta: string, sbUrl: string, sbKey: string, groqClient: any, userId?: any): Promise<any> {
+  // Il revisore non è MAI chi scrive: niente DeepSeek, né diretto né via Gonka (25/09/2026).
+  const VIETATI_REVISORE = ['deepseek', 'gonka', 'agnes'];
   try {
-    const r = await callUniversalAi('gemini', messages, { ...opzioni, revisore: true, strictEngine: true, excludeEngines: ['deepseek', 'agnes'] }, etichetta, sbUrl, sbKey, groqClient, userId);
+    const r = await callUniversalAi('gemini', messages, { ...opzioni, revisore: true, strictEngine: true, excludeEngines: VIETATI_REVISORE }, etichetta, sbUrl, sbKey, groqClient, userId);
     return { ...r, motoreRevisore: 'gemini-3.5-flash (chiave dedicata)' };
-  } catch {
-    const { model: _scartato, strictEngine: _s, ...senzaModello } = opzioni || {};
-    const r = await callUniversalAi('groq', messages, { ...senzaModello, excludeEngines: ['deepseek', 'agnes'] }, etichetta, sbUrl, sbKey, groqClient, userId);
-    return { ...r, motoreRevisore: 'ripiego (Groq e seguenti)' };
-  }
+  } catch { /* chiavi dedicate (e pool) Gemini senza quota: si scende */ }
+  const { model: _scartato, strictEngine: _s, gonkaPool: _gp, gonkaPrimo: _gpr, ...senzaModello } = opzioni || {};
+  // Ripiego esplicito (25/09/2026, collaudo: «quota_motori_esaurita», 6 luoghi su 28): prima il pool Groq
+  // (le chiavi con quota ruotano da sole), poi Gemini lite del pool, che ha una quota sua per modello.
+  try {
+    const r = await callUniversalAi('groq', messages, { ...senzaModello, model: 'openai/gpt-oss-120b', strictEngine: true, excludeEngines: VIETATI_REVISORE }, etichetta, sbUrl, sbKey, groqClient, userId);
+    return { ...r, motoreRevisore: 'ripiego Groq (gpt-oss-120b)' };
+  } catch { /* pool Groq al tetto: ultimo tentativo su Gemini lite */ }
+  const r = await callUniversalAi('gemini', messages, { ...senzaModello, model: 'gemini-3.5-flash-lite', strictEngine: true, excludeEngines: VIETATI_REVISORE }, etichetta, sbUrl, sbKey, groqClient, userId);
+  return { ...r, motoreRevisore: 'ripiego Gemini (3.5-flash-lite)' };
 }
 
 app.post("/api/generate-daily-podcast", rateLimiter, async (req, res) => {
@@ -4817,6 +5026,9 @@ app.post("/api/generate-daily-podcast", rateLimiter, async (req, res) => {
     if (cachedPodcast?.text_content) {
       return res.json({ text: cachedPodcast.text_content, cached: true });
     }
+    // Solo cache (25/09/2026): il client chiede prima se il podcast esiste, così la conferma «15 crediti»
+    // compare solo quando va davvero generato. 204 = da generare, nessun addebito.
+    if (req.body?.soloCache === true) return res.status(204).end();
 
     // GATE CREDITI SERVER-SIDE: prima la rotta era anonima e gratuita (8k
     // token DeepSeek via cURL). Ora richiede token e addebita 15 crediti.
@@ -5695,7 +5907,7 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
         for (const g of parsed.giorni) {
           if (!Array.isArray(g?.tappe)) continue;
           g.tappe = g.tappe.filter((t: any) => {
-            const chiave = paroleNome(t?.titolo_tappa).join(' ');
+            const chiave = chiaveNomeTappa(t?.titolo_tappa);
             if (!chiave) return true;
             if (visti.has(chiave)) return false;
             visti.add(chiave);
@@ -5708,22 +5920,8 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
       // in tutto l'itinerario (prima occorrenza). Chiave = poi_id del database quando c'e', altrimenti le parole del nome.
       // Restano fuori hotel e rientri. La deduplica dei blocchi confronta i nomi scritti dall'AI («place du Louvre»,
       // «Musée du Louvre»); e' l'aggancio al database a renderli lo stesso luogo, per questo gira anche dopo di esso.
-      const togliDoppioni = (parsed: any): number => {
-        const visti = new Set<string>();
-        let tolti = 0;
-        for (const g of parsed?.giorni || []) {
-          if (!Array.isArray(g?.tappe)) continue;
-          g.tappe = g.tappe.filter((t: any) => {
-            if (/hotel|alloggio|albergo|rientro|check/i.test(String(t?.tipo || ''))) return true;
-            const chiavi = [String(t?.poi_id || '') && `id:${t.poi_id}`, paroleNome(t?.titolo_tappa).join(' ') && `n:${paroleNome(t.titolo_tappa).join(' ')}`].filter(Boolean) as string[];
-            if (!chiavi.length) return true;
-            if (chiavi.some((c) => visti.has(c))) { tolti++; return false; }
-            chiavi.forEach((c) => visti.add(c));
-            return true;
-          });
-        }
-        return tolti;
-      };
+      // Logica in togliDoppioniItinerario (livello modulo): la usa anche «Aggiungi giorno».
+      const togliDoppioni = (parsed: any): number => togliDoppioniItinerario(parsed);
 
       // REGOLA FISSA «GIORNI PIENI» (prompt, punto 7): nessun giorno vuoto o quasi vuoto (Parigi 20/09/2026: giorno 3 con
       // la sola colazione; Londra: giorno 3 con 4 tappe contro una mediana di 8). Un giorno sotto i tre quarti della
@@ -5749,9 +5947,9 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
               const blk = JSON.parse(String(r?.data || "{}").replace(/^```json\s*/i, "").replace(/```\s*$/, ""));
               const nuovo = Array.isArray(blk?.giorni) ? blk.giorni[0] : null;
               if (!nuovo || !Array.isArray(nuovo.tappe)) continue;
-              const visti2 = new Set<string>(usati.map((n: any) => paroleNome(n).join(' ')));
+              const visti2 = new Set<string>(usati.map((n: any) => chiaveNomeTappa(n)).filter(Boolean));
               nuovo.tappe = nuovo.tappe.filter((t: any) => {
-                const chiave = paroleNome(t?.titolo_tappa).join(' ');
+                const chiave = chiaveNomeTappa(t?.titolo_tappa);
                 if (!chiave) return true;
                 if (visti2.has(chiave)) return false;
                 visti2.add(chiave);
@@ -5839,6 +6037,13 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
                 verifyItineraryAntiHallucination(parsed, { destination, lat, lon, radiusKm: radius, specialRequests, interests: interestsArr, language, inDiretta: true }),
                 new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 20000)),
               ]);
+              // REVISORE DEI FATTI del testo (25/09/2026, ordine del committente): toglie le frasi con fatti
+              // falsi o non verificabili; tetto 45 s, fail-open con esito scritto nell'itinerario.
+              try {
+                const rf = await revisoreFattiItinerario(parsed, { destination, language, userId: itinUserId, tettoMs: 45000 });
+                parsed.qualita = { ...(parsed.qualita || {}), revisore_fatti: rf };
+                console.log(`[itinerary-stream] revisore fatti: ${rf.esito}, ${rf.controllate} tappe, ${rf.frasi_tolte} frasi tolte`);
+              } catch { parsed.qualita = { ...(parsed.qualita || {}), revisore_fatti: { esito: 'non_eseguito', controllate: 0, frasi_tolte: 0 } }; }
               // Si manda SEMPRE: anche col revisore in ritardo, l'aggancio al
               // DB c'e' gia' e il client deve riceverlo.
               res.write(`data: ${JSON.stringify({ verified: parsed, report })}\n\n`);
@@ -5966,7 +6171,7 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
       // TESTI nella lingua dell'utente, le CHIAVI del JSON invariate.
       const LANG_NAMES_RA: Record<string, string> = { IT: "italiano", EN: "inglese (English)", FR: "francese (français)", ES: "spagnolo (español)", DE: "tedesco (Deutsch)", RU: "russo (русский)", ZH: "cinese semplificato (简体中文)" };
       const raLangName = LANG_NAMES_RA[String(language || "IT").toUpperCase()] || "italiano";
-      const raLangRule = raLangName === "italiano" ? "" : `\nLINGUA OBBLIGATORIA: scrivi TUTTI i testi (titolo, descrizione_breve, attivita, consiglio_guida, info_viaggio, tabella_budget) in ${raLangName}. Le CHIAVI del JSON e la struttura restano ESATTAMENTE come specificato. I prefissi "✨ Nicky" e "📜 Dante" restano invariati.`;
+      const raLangRule = raLangName === "italiano" ? "" : `\nLINGUA OBBLIGATORIA: scrivi TUTTI i testi (titolo, descrizione_breve) in ${raLangName}; i nomi dei luoghi restano quelli reali. Le CHIAVI del JSON e la struttura restano ESATTAMENTE come specificato.`;
       const tInizio = startTime || "09:00";
       const tFine = endTime || "19:00";
       // Ancora geografica dal geocoder del client (come /api/groq/candidates)
@@ -5974,22 +6179,27 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
         ? `\nLA BASE "${baseLocation}" SI TROVA ESATTAMENTE ALLE COORDINATE lat ${lat}, lon ${lon}. Tutte le alternative devono trovarsi entro il raggio indicato DA QUEL PUNTO, mai in località omonime o in altri paesi.`
         : "";
 
+      // SOLO LA TRACCIA DELLE 3 IDEE (25/09/2026, collaudo: Firenze 100 km, 2 giorni → 500
+      // «dati troncati» dopo ~44 s). Si chiedevano 3 itinerari COMPLETI (attività, consigli
+      // doppi, budget, info viaggio) in un solo JSON: ben oltre gli 8.192 token d'uscita di
+      // DeepSeek, risposta tagliata. Il client delle alternative usa solo titolo,
+      // descrizione_breve, numero di giorni e di tappe; l'itinerario vero lo scrive
+      // /api/groq/itinerary-stream alla scelta. Quindi qui: titolo, descrizione e i NOMI delle tappe.
       const systemPrompt = `Sei il motore di pianificazione viaggi di World in Pocket (WIP).
-Devi restituire ESATTAMENTE un oggetto JSON con la chiave "alternative" che contiene un array di 3 oggetti. Ogni oggetto rappresenta un'alternativa completa. 
-Il campo "dati_itinerario" DEVE avere l'identica struttura dell'itinerario standard. MAI inventarsi il sito internet - usa SOLO siti verificati. Se non esiste un sito verificato, lascia il campo "link_info" vuoto invece di inventarlo.
+Proponi 3 idee di viaggio DIVERSE tra loro. Restituisci ESATTAMENTE un oggetto JSON con la chiave "alternative" (array di 3 oggetti) e NIENT'ALTRO:
 
 {
   "alternative": [
     {
       "id_alternativa": "1",
-      "titolo": "Titolo",
-      "descrizione_breve": "...",
-      "dati_itinerario": { ... }
+      "titolo": "Titolo breve dell'idea",
+      "descrizione_breve": "2-3 frasi: zona, luoghi principali e filo conduttore",
+      "dati_itinerario": { "giorni": [ { "giorno": 1, "tappe": [ { "titolo_tappa": "Nome reale del luogo" } ] } ] }
     }
   ]
 }
 
-Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdown.${raLangRule}`;
+Nelle tappe SOLO il campo "titolo_tappa" (nome proprio reale del luogo, nessun altro campo, nessun testo). Tassativo: SOLO l'oggetto JSON valido, nessuna formattazione markdown.${raLangRule}`;
 
       let result;
       let usedEngine = "none";
@@ -6003,12 +6213,10 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
       // sono un prefisso identico e DeepSeek lo legge dalla cache.
       const hardRulesUserMsg = `Genera le 3 alternative JSON in base ai parametri indicati in fondo.
 
-RICORDA: È ASSOLUTAMENTE TASSATIVO RISPETTARE QUESTE REGOLE. PENA: FALLIMENTO TOTALE.
-1. LUNGHEZZA E DETTAGLI: "attivita" deve essere di circa 5-6 righe, "consiglio_guida" (Nicky e Dante) deve essere di circa 4 righe.
-2. CONSIGLI DOPPI ESTESI: Inserisci ENTRAMBE le guide (Nicky e Dante), con dettagli mirati e posizioni, NO banalità. Ogni consiglio deve citare almeno UN elemento concreto e verificabile di QUELLA tappa (opera, data, dettaglio architettonico, punto esatto, aneddoto reale); vietato riproporre lo stesso schema su tappe diverse.
-3. TABELLA BUDGET ESTESA: Ogni voce DEVE essere DI 1 SOLA RIGA (max 15-20 parole) e includere consigli specifici.
-4. INFO VIAGGIO BLINDATE E BILANCIATE: DEVI COMPILARE la sezione "info_viaggio". Le 4 sottosezioni (precauzioni, suggerimenti, raccomandazioni, zone_da_evitare) DEVONO esserci tutte con ESATTAMENTE 3-4 voci CONCISE ciascuna (15-30 parole a voce, lunghezze simili tra sezioni — mai una lunga e una striminzita). USA SOLO nomi propri, vie e riferimenti reali della zona. DIVIETO ASSOLUTO di frasi fatte o voci riutilizzabili per qualsiasi città.
-5. RITMO E TIMING: ${ritmoTimingRule}
+REGOLE:
+1. Ogni alternativa ha ESATTAMENTE un elemento in "giorni" per ogni giorno richiesto, con le tappe di visita di quel giorno (3-6), coerenti con il ritmo: ${ritmoTimingRule}
+2. Solo luoghi REALI ed esistenti dentro il raggio indicato; mai lo stesso luogo due volte nella stessa alternativa. Le 3 alternative esplorano zone o temi diversi.
+3. "descrizione_breve" cita i luoghi principali per nome; vietate frasi fatte valide per qualsiasi posto.
 
 Parametri dell'utente:
 - Base: ${baseLocation}
@@ -6030,27 +6238,66 @@ Parametri dell'utente:
         }
         radiusQuotaUserId = quota.userId || null;
 
-        const response = await callUniversalAi(
-          "deepseek",
-          [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: hardRulesUserMsg }
-          ],
-          {
-            response_format: { type: "json_object" },
-            temperature: 0.7
-          },
-          "generazione_alternative_raggio",
-          supabaseUrl,
-          supabaseServiceKey,
-          groq
-        );
-        result = parseSafeJSON(response.data || "{}");
-        usedEngine = "deepseek";
-        console.log("[DeepSeek Radius] Generation successful.");
+        // Parser tollerante: «alternative»/«alternatives»/array al primo livello, tappe
+        // come stringhe o oggetti con «nome»/«titolo»; scarta le idee senza titolo.
+        const estraiAlternative = (r: any): any[] => {
+          const lista = Array.isArray(r) ? r
+            : (r?.alternative || r?.alternatives || r?.alternativa || Object.values(r || {}).find((v: any) => Array.isArray(v)) || []);
+          if (!Array.isArray(lista)) return [];
+          return lista.map((a: any, i: number) => {
+            if (!a || typeof a !== 'object') return null;
+            const titolo = String(a.titolo || a.title || a.nome || '').trim();
+            if (!titolo) return null;
+            const giorniGrezzi = a?.dati_itinerario?.giorni || a?.giorni || [];
+            const giorni = (Array.isArray(giorniGrezzi) ? giorniGrezzi : []).map((g: any, gi: number) => ({
+              giorno: Number(g?.giorno) || gi + 1,
+              tappe: (Array.isArray(g?.tappe) ? g.tappe : [])
+                .map((t: any) => ({ titolo_tappa: String(typeof t === 'string' ? t : (t?.titolo_tappa || t?.titolo || t?.nome || '')).trim() }))
+                .filter((t: any) => t.titolo_tappa),
+            }));
+            return {
+              id_alternativa: String(a.id_alternativa || i + 1),
+              titolo,
+              descrizione_breve: String(a.descrizione_breve || a.descrizione || a.description || '').trim(),
+              dati_itinerario: { giorni },
+            };
+          }).filter(Boolean);
+        };
+
+        // Un nuovo tentativo su risposta non valida o vuota (entro ~70 s).
+        const inizioRa = Date.now();
+        for (let tentativo = 1; tentativo <= 2 && !result; tentativo++) {
+          if (tentativo > 1 && Date.now() - inizioRa > 70000) break;
+          try {
+            const response = await callUniversalAi(
+              "deepseek",
+              [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: hardRulesUserMsg }
+              ],
+              {
+                response_format: { type: "json_object" },
+                temperature: 0.7,
+                max_tokens: 4000
+              },
+              "generazione_alternative_raggio",
+              supabaseUrl,
+              supabaseServiceKey,
+              groq
+            );
+            let alt: any[] = [];
+            try { alt = estraiAlternative(parseSafeJSON(response.data || "{}")); } catch { alt = []; }
+            if (alt.length > 0) { result = { alternative: alt.slice(0, 3) }; usedEngine = "deepseek"; }
+            else console.warn(`[DeepSeek Radius] tentativo ${tentativo}: nessuna alternativa valida`);
+          } catch (err: any) {
+            console.error(`[DeepSeek Radius] tentativo ${tentativo} fallito:`, err?.message);
+          }
+        }
+        if (!result) throw new Error("I motori AI hanno restituito dati troncati o JSON invalido dopo multipli tentativi.");
+        console.log(`[DeepSeek Radius] ${result.alternative.length} alternative in ${Date.now() - inizioRa} ms.`);
       } catch (err: any) {
         console.error("[DeepSeek Radius] failed:", err.message);
-        throw new Error("I motori AI hanno restituito dati troncati o JSON invalido dopo multipli tentativi.");
+        throw err;
       }
 
       // Contatore sull'utente VERIFICATO dal token (mai req.body.userId), a
@@ -6122,19 +6369,43 @@ Parametri dell'utente:
         }
       } catch { /* fail-open: la sostituzione vive anche senza biglietti */ }
 
+      // SOLO LA TAPPA NUOVA (25/09/2026). Prima al modello andava TUTTO l'itinerario
+      // (~12.000 token) da riscrivere per intero: 28 s per 3 giorni (il client
+      // abbandonava a 20), tappe perse per strada (28 → 26 nel collaudo) e oltre
+      // 4-5 giorni risposta troncata (500). Ora il modello vede il contesto della
+      // giornata e restituisce una tappa sola; l'inserimento lo fa il server.
+      let gIdxR = -1, tIdxR = -1;
+      (currentItinerary?.giorni || []).forEach((g: any, gi: number) => (g?.tappe || []).forEach((t: any, ti: number) => {
+        if (String(t?.id_tappa) === String(tappaId)) { gIdxR = gi; tIdxR = ti; }
+      }));
+      if (gIdxR < 0) {
+        if (replCost > 0) { await refundServer(replUserId, replCost); replCost = 0; }
+        return res.status(400).json({ error: 'TAPPA_NON_TROVATA' });
+      }
+      const giornoR = currentItinerary.giorni[gIdxR];
+      const tappaR = giornoR.tappe[tIdxR];
+      const prevR = giornoR.tappe[tIdxR - 1], nextR = giornoR.tappe[tIdxR + 1];
+      const destinazioneR = String(currentItinerary?.destinazione || currentItinerary?.citta || currentItinerary?.titolo || '').slice(0, 120);
+      const riassuntoGiorno = (giornoR.tappe || []).map((t: any) => `- ${t?.ora || ''} ${t?.titolo_tappa || ''}${t?.tipo ? ` (${t.tipo})` : ''}`).join('\n');
+      const sintesi = (t: any) => t ? `«${t.titolo_tappa || ''}» alle ${t.ora || '?'}${t?.coordinate?.lat ? ` (${t.coordinate.lat}, ${t.coordinate.lng ?? t.coordinate.lon})` : ''}` : 'nessuna';
+      // La tappa da sostituire senza i campi del nostro database (poi_id, verifica…): il modello ne copia le chiavi.
+      const { poi_id: _pid, verifica: _ver, nota_verifica: _nv, visited: _vis, ...tappaModello } = tappaR || {};
       const systemPrompt = `Sei un esperto di routing turistico.
-L'utente vuole sostituire una tappa specifica del suo itinerario.
+L'utente vuole sostituire UNA tappa del suo itinerario a ${destinazioneR || 'destinazione indicata'} (giorno ${giornoR?.giorno ?? gIdxR + 1}).
 REGOLE:
-1. Sostituisci la tappa con id_tappa "${tappaId}" con un'alternativa coerente per tipologia e ottimizzazione geografica rispetto alle tappe precedenti e successive.
-2. L'alternativa deve avere lo STESSO TEMPO DI VISITA (durata) della tappa originale per non scombussolare il resto dell'itinerario.
-3. Mantieni lo stesso formato JSON dell'itinerario originale.
-4. Rispondi SOLO con il JSON completo aggiornato.
-5. I testi nuovi (titolo, attivita, consiglio_guida) vanno scritti in ${replLangName}; le chiavi del JSON restano invariate.
-6. L'alternativa NON deve essere un luogo GIA' PRESENTE nell'itinerario, in NESSUN giorno (nemmeno con un nome leggermente diverso). Luoghi gia' in programma: ${'${GIA_IN_PROGRAMMA}'}.
+1. Proponi UN luogo alternativo coerente per tipologia con la tappa da sostituire (se e' un pasto, un altro locale per lo stesso pasto) e vicino alle tappe precedente e successiva.
+2. Stesso orario ("ora": "${tappaR?.ora || ''}") e STESSA durata della tappa originale, per non scombussolare il resto della giornata.
+3. Rispondi SOLO con un JSON {"tappa": {...}} con le STESSE chiavi della tappa originale qui sotto (coordinate reali {"lat","lng"} del luogo nuovo).
+4. I testi nuovi (titolo_tappa, attivita, consiglio_guida…) vanno scritti in ${replLangName}; le chiavi restano invariate.
+5. L'alternativa NON deve essere un luogo GIA' PRESENTE nell'itinerario, in NESSUN giorno (nemmeno con un nome leggermente diverso). Luoghi gia' in programma: ${'${GIA_IN_PROGRAMMA}'}.
 ${ANTI_HALLUCINATION_RULES}${replaceTicketsBlock}
 
-JSON Originale:
-${JSON.stringify(currentItinerary)}
+GIORNATA ATTUALE:
+${riassuntoGiorno}
+Tappa precedente: ${sintesi(prevR)}. Tappa successiva: ${sintesi(nextR)}.
+
+TAPPA DA SOSTITUIRE (JSON):
+${JSON.stringify(tappaModello)}
 `;
 
       // LA SOSTITUTA NON PUO' ESSERE UN DOPPIONE (20/09/2026, collaudo: a Greve
@@ -6160,53 +6431,123 @@ ${JSON.stringify(currentItinerary)}
         const [corto, lungo] = A.size <= B.size ? [A, B] : [B, A];
         return corto.size >= 2 && [...corto].every(w => lungo.has(w));
       };
-      const doppioneIn = (r: any): string | null => {
-        for (const g of r?.giorni || []) for (const t of g?.tappe || []) {
-          const titolo = String(t?.titolo_tappa || '').trim();
-          if (!titolo || titoliOriginali.has(titolo.toLowerCase())) continue; // non e' la tappa nuova
-          if (titoliAltri.some(x => stessoLuogo(x, titolo))) return titolo;
-        }
-        return null;
+      // Doppione della TAPPA NUOVA: stesso luogo di un'altra tappa o della sostituita.
+      const titoloVecchio = String(tappaR?.titolo_tappa || '').trim();
+      const doppioneDi = (t: any): string | null => {
+        const titolo = String(t?.titolo_tappa || '').trim();
+        if (!titolo) return null;
+        if (titolo.toLowerCase() === titoloVecchio.toLowerCase() || stessoLuogo(titoloVecchio, titolo)) return titolo;
+        return titoliAltri.some(x => x.toLowerCase() === titolo.toLowerCase() || stessoLuogo(x, titolo)) ? titolo : null;
       };
       // Sostituzione con FUNZIONE: un titolo con «$&» non deve diventare un comando di replace.
       const promptCon = (extra: string) => systemPrompt.replace('${GIA_IN_PROGRAMMA}', () => titoliAltri.map(t => `«${t}»`).join(', ') + extra);
 
-      let result;
-      try {
-        console.log("[DeepSeek Replace] Using DeepSeek for step replacement...");
-        let daEvitare = '';
-        for (let tentativo = 1; tentativo <= 2; tentativo++) {
+      // Il client se ne va (timeout, app chiusa): il lavoro finito non gli arriva,
+      // quindi l'addebito si restituisce invece di consegnare nel vuoto.
+      let clienteAndato = false;
+      res.on('close', () => { if (!res.writableFinished) clienteAndato = true; });
+
+      // Estrae la tappa dalla risposta anche se il modello la mette sotto un'altra chiave («nuova_tappa»,
+      // «alternativa»…) o al primo livello, o chiama il titolo «titolo»/«nome». Niente dati incompleti:
+      // serve il nome e coordinate valide (l'aggancio al database può correggerle, ma ci vuole un punto).
+      const estraiTappa = (r: any): any => {
+        if (!r || typeof r !== 'object') return null;
+        const cand = [r.tappa, r.nuova_tappa, r.alternativa, r.sostituta, r, ...Object.values(r)]
+          .find((x: any) => x && typeof x === 'object' && !Array.isArray(x) && String(x.titolo_tappa || x.titolo || x.nome || '').trim());
+        if (!cand) return null;
+        const t = { ...cand };
+        if (!String(t.titolo_tappa || '').trim()) t.titolo_tappa = String(t.titolo || t.nome).trim();
+        const la = Number(t?.coordinate?.lat), lo = Number(t?.coordinate?.lng ?? t?.coordinate?.lon);
+        if (!Number.isFinite(la) || !Number.isFinite(lo) || (la === 0 && lo === 0)) return null;
+        t.coordinate = { lat: la, lng: lo };
+        return t;
+      };
+
+      // UN NUOVO TENTATIVO PER OGNI FALLIMENTO (25/09/2026, collaudo: 1 su 3 dava 502 in ~5 s). Prima si
+      // riprovava solo su risposta vuota o doppione immediato; il doppione dopo l'aggancio (che rinomina) e
+      // la tappa scartata dalla verifica chiudevano subito con rimborso. Fino a 3 tentativi entro ~60 s,
+      // così la consegna resta sotto i 90 s del client.
+      let nuova: any = null;
+      const inizioR = Date.now();
+      let daEvitare = '';
+      for (let tentativo = 1; tentativo <= 3 && !nuova; tentativo++) {
+        if (tentativo > 1 && Date.now() - inizioR > 60000) break;
+        let cand: any = null;
+        try {
+          console.log(`[DeepSeek Replace] solo la tappa nuova (tentativo ${tentativo})...`);
           const response = await callUniversalAi(
             "deepseek",
             [
               { role: "system", content: promptCon(daEvitare) },
-              { role: "user", content: `Sostituisci la tappa ${tappaId} con un'ottima alternativa.` }
+              { role: "user", content: `Proponi l'alternativa a «${titoloVecchio}».` }
             ],
-            { response_format: { type: "json_object" }, temperature: 0.7 },
+            { response_format: { type: "json_object" }, temperature: 0.7, max_tokens: 1500 },
             "modifica_itinerari",
             supabaseUrl,
             supabaseServiceKey,
             groq,
             replUserId
           );
-          result = parseSafeJSON(response.data || "{}");
-          const doppione = doppioneIn(result);
-          if (!doppione) break;
+          try { cand = estraiTappa(parseSafeJSON(response.data || "{}")); } catch { cand = null; }
+        } catch (err: any) {
+          console.error(`[DeepSeek Replace] tentativo ${tentativo} fallito:`, err?.message);
+          continue;
+        }
+        if (!cand) { console.warn(`[DeepSeek Replace] tentativo ${tentativo}: risposta senza una tappa valida`); continue; }
+        const doppione = doppioneDi(cand);
+        if (doppione) {
           console.warn(`[DeepSeek Replace] tentativo ${tentativo}: «${doppione}» e' gia' in programma`);
           daEvitare = `. HAI APPENA PROPOSTO «${doppione}», che e' gia' in programma: scegli un ALTRO luogo`;
-          if (tentativo === 2) result = null;
+          continue;
         }
-      } catch (err: any) {
-        console.error("[DeepSeek Replace] failed:", err.message);
-        throw new Error("I motori AI hanno restituito dati troncati o JSON invalido.");
+        // Chiavi della vecchia (per non rompere il formato), testi e luogo della
+        // nuova; mai ereditare poi_id/verifica di un altro posto. Stesso id_tappa:
+        // lucchetto ed espansione del client restano sulla stessa riga.
+        let prova: any = { ...tappaModello, ...cand, id_tappa: tappaR.id_tappa, ora: tappaR?.ora ?? cand.ora };
+        delete prova.poi_id; delete prova.verifica; delete prova.nota_verifica;
+        if (tappaR?.durata != null && prova.durata == null) prova.durata = tappaR.durata;
+        // Stesso controllo del generatore (aggancio al nostro database + «esiste? e DOVE?»),
+        // su un itinerario di una tappa sola. Tetto 20 s (15 s dal secondo tentativo).
+        const mini = { titolo: currentItinerary?.titolo, giorni: [{ giorno: giornoR?.giorno, tappe: [prova] }] };
+        try {
+          const cLat = Number(tappaR?.coordinate?.lat), cLon = Number(tappaR?.coordinate?.lng ?? tappaR?.coordinate?.lon);
+          await Promise.race([
+            verifyItineraryAntiHallucination(mini, { destination: destinazioneR, lat: Number.isFinite(cLat) ? cLat : undefined, lon: Number.isFinite(cLon) ? cLon : undefined, language, inDiretta: true }),
+            new Promise((resolve) => setTimeout(resolve, tentativo === 1 ? 20000 : 15000)),
+          ]);
+        } catch (e: any) { console.warn('[DeepSeek Replace] verifica della tappa nuova fallita:', e?.message); }
+        const verificata = mini.giorni[0].tappe[0];
+        if (!verificata) {
+          // La verifica l'ha tolta (luogo inesistente o in un'altra città): si chiede un altro luogo.
+          console.warn(`[DeepSeek Replace] tentativo ${tentativo}: «${prova.titolo_tappa}» scartata dalla verifica`);
+          daEvitare = `. «${prova.titolo_tappa}» NON va bene (non verificabile in questa città): scegli un ALTRO luogo reale`;
+          continue;
+        }
+        prova = verificata;
+        // L'aggancio puo' aver rinominato la tappa col nome del database: si ricontrolla il doppione.
+        const doppioneDopo = doppioneDi(prova);
+        if (doppioneDopo) {
+          console.warn(`[DeepSeek Replace] tentativo ${tentativo}: dopo l'aggancio «${doppioneDopo}» e' un doppione`);
+          daEvitare = `. «${doppioneDopo}» e' gia' in programma: scegli un ALTRO luogo`;
+          continue;
+        }
+        nuova = prova;
       }
 
-      // Consegna valida = itinerario con giorni; altrimenti rimborso.
-      if (!result || !Array.isArray(result.giorni) || result.giorni.length === 0) {
+      // Consegna valida = una tappa nuova; altrimenti rimborso.
+      if (!nuova) {
         if (replCost > 0) { await refundServer(replUserId, replCost); replCost = 0; }
         return res.status(502).json({ error: 'INVALID_RESPONSE' });
       }
+      if (clienteAndato) {
+        if (replCost > 0) { await refundServer(replUserId, replCost); replCost = 0; }
+        console.warn('[DeepSeek Replace] client disconnesso prima della consegna: addebito restituito');
+        return;
+      }
 
+      // Stesso itinerario di prima con UNA tappa cambiata: il client riceve la forma di sempre.
+      const result = JSON.parse(JSON.stringify(currentItinerary));
+      result.giorni[gIdxR].tappe[tIdxR] = nuova;
       res.json(result);
     } catch (e: any) {
       console.error("Groq Replace Error:", e);
@@ -8138,6 +8479,21 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     return comuni / Math.max(ta.length, tb.length);
   };
 
+  // La voce Wikipedia di un'OPERA vale solo se è l'opera di QUESTO museo (25/09/2026, collaudo: il
+  // «Compianto» di Santo Stefano diventava quello di Giotto). Stessa regola di /api/museums/artwork-guide
+  // per confronto, approfondimenti e domande: il testo nomina il museo (2 parole proprie) e, per i titoli
+  // che al mondo hanno centinaia di opere, anche l'autore detto quando lo sappiamo.
+  const voceDellOperaDelMuseo = (testo: string, titolo: string, museo: string, autore = ''): boolean => {
+    const n = ` ${normalizzaTesto(testo)} `;
+    const ha = (t: string) => n.includes(` ${t} `);
+    const tokMuseo = tokenSignificativi(museo);
+    if (tokMuseo.length && tokMuseo.filter(ha).length < Math.min(2, tokMuseo.length)) return false;
+    const generico = /^(compianto|annunciazione|madonna|crocifission|crocifisso|deposizione|ritratto|autoritratto|nativita|adorazione|pieta|sacra famiglia|sacra conversazione|cristo|natura morta|paesaggio|veduta|polittico|trittico|pala|assunzione|resurrezione|ultima cena|battesimo|trasfigurazione)/.test(normalizzaTesto(titolo)) || tokenSignificativi(titolo).length <= 3;
+    const tokAutore = tokenSignificativi(autore);
+    if (generico && tokAutore.length && !tokAutore.some(ha)) return false;
+    return true;
+  };
+
   // ── Sezioni della voce Wikipedia utili a un PERCORSO ────────────────────
   // `exsectionformat=plain` restituisce i titoli di sezione su riga propria.
   // Le sezioni che descrivono sale, piani e collezioni valgono più
@@ -8875,6 +9231,48 @@ ORDER BY DESC(?fama)`;
       .replace(/\s+/g, ' ')
       .trim();
   }
+  // ACCETTAZIONE DI UNA PAGINA DEL WEB APERTO (25/09/2026, collaudo: il «Compianto sul Cristo
+  // morto» di Santo Stefano a Bologna prendeva come fascia A la voce «Compianto sul Cristo morto
+  // (Giotto)»: del museo restava solo «stefano», che quella voce nomina tra le opere di Giotto).
+  // La regola non cambia — la pagina nomina l'opera E il museo — ma il museo va nominato con le sue
+  // parole proprie (almeno due; con una sola serve anche la città, se nota), un titolo generico
+  // vuole anche l'autore detto, e una voce Wikipedia col disambiguante di un ALTRO nome (artista,
+  // luogo) è un'omonima. Collaudo: scratch/collaudo-cerca-materiale-web-museo.mjs.
+  function titoloOperaGenerico(t: string): boolean {
+    return /^(compianto|annunciazione|madonna|crocifission|crocifisso|deposizione|ritratto|autoritratto|nativita|adorazione|pieta|sacra famiglia|sacra conversazione|cristo|natura morta|paesaggio|veduta|polittico|trittico|pala|assunzione|resurrezione|ultima cena|battesimo|trasfigurazione)/.test(normalizzaTesto(t)) || tokenSignificativi(t).length <= 3;
+  }
+  function disambiguanteEstraneo(url: string, ammessi: string[]): boolean {
+    let titolo = '';
+    try {
+      const u = new URL(url);
+      if (!/(^|\.)(wikipedia|wikivoyage)\.org$/i.test(u.hostname)) return false;
+      titolo = decodeURIComponent(u.pathname.replace(/^\/wiki\//, '')).replace(/_/g, ' ');
+    } catch { return false; }
+    const m = titolo.match(/\(([^)]+)\)\s*$/);
+    if (!m) return false;
+    // Nomi = parole con la maiuscola (Giotto, Bologna); «dipinto», «affresco», un anno non contano.
+    const propri = (m[1].match(/\p{Lu}[\p{L}'’]+/gu) || []).flatMap((w) => normalizzaTesto(w).split(' ')).filter((w) => w.length >= 3);
+    if (!propri.length) return false;
+    const ok = new Set(ammessi);
+    return !propri.some((w) => ok.has(w));
+  }
+  function paginaWebDellOpera(o: { url: string; testo: string; tokOpera: string[]; titolo: string; museo: string; citta?: string; autore?: string }): boolean {
+    const n = ` ${normalizzaTesto(o.testo)} `;
+    const ha = (t: string) => n.includes(` ${t} `);
+    if (o.tokOpera.filter((t) => n.includes(t)).length < Math.min(2, o.tokOpera.length)) return false;
+    const paroleDi = (s?: string) => normalizzaTesto(s || '').split(' ').filter((w) => w.length >= 3);
+    if (disambiguanteEstraneo(o.url, [...paroleDi(o.museo), ...paroleDi(o.citta), ...paroleDi(o.autore)])) return false;
+    const tokMuseo = tokenSignificativi(o.museo);
+    const tokCitta = tokenSignificativi(o.citta || '');
+    const perNome = tokMuseo.length > 0 && tokMuseo.filter(ha).length >= Math.min(2, tokMuseo.length);
+    const perCitta = tokCitta.length > 0 && tokCitta.every(ha);
+    if (tokMuseo.length >= 2 && !perNome) return false;
+    if (tokMuseo.length === 1 && !(perNome && (!tokCitta.length || perCitta))) return false;
+    if (!tokMuseo.length && tokCitta.length && !perCitta) return false;
+    const tokAutore = tokenSignificativi(o.autore || '');
+    if (tokAutore.length && titoloOperaGenerico(o.titolo) && !tokAutore.some(ha)) return false;
+    return true;
+  }
   /**
    * MATERIALE DAL WEB APERTO (19/09/2026, committente: «può prendere il sito
    * del museo, un blog ecc. e riempire» — e «deve essere una regola per le
@@ -8895,7 +9293,7 @@ ORDER BY DESC(?fama)`;
    */
   async function cercaMaterialeWeb(o: {
     nomi: string[]; museo: string; lingue: string[]; tokOpera: string[];
-    hostSitoMuseo?: string; escludiUrl?: string[];
+    hostSitoMuseo?: string; escludiUrl?: string[]; citta?: string; autore?: string;
   }): Promise<{ materialeWeb: string; fontiWeb: { url: string; host: string; tier: 'A' | 'B' }[]; haFontiTerzi: boolean }> {
     const vuoto = { materialeWeb: '', fontiWeb: [] as { url: string; host: string; tier: 'A' | 'B' }[], haFontiTerzi: false };
     if (!process.env.SEARXNG_URL || !o.tokOpera.length) return vuoto;
@@ -8915,12 +9313,13 @@ ORDER BY DESC(?fama)`;
         if (!/^https?:\/\//i.test(url) || visti.has(url) || /\.(pdf|jpe?g|png|gif|webp|mp4)(\?|$)/i.test(url)) continue;
         let host = ''; try { host = new URL(url).hostname.replace(/^www\./, ''); } catch { continue; }
         if (HOST_SCARTATI.test(host)) continue;
+        // Voce omonima di un altro artista/luogo: non si scarica nemmeno.
+        if (disambiguanteEstraneo(url, [o.museo, o.citta, o.autore].flatMap((s) => normalizzaTesto(s || '').split(' ')).filter((w) => w.length >= 3))) continue;
         visti.add(url);
         candidati.push({ url, host, tier: (HOST_AFFIDABILI.test(host) || (o.hostSitoMuseo && host.endsWith(o.hostSitoMuseo))) ? 'A' : 'B' });
       }
       // Prima le affidabili, poi al piu' tre di terzi; 8 pagine al massimo da scaricare.
       const daScaricare = [...candidati.filter((c) => c.tier === 'A').slice(0, 5), ...candidati.filter((c) => c.tier === 'B').slice(0, 3)];
-      const tokMuseo = tokenSignificativi(o.museo);
       // Il pezzo di pagina che nomina l'opera, non l'inizio: un blog sul Duomo
       // parla di cento cose, e l'inizio sarebbe di un'altra opera.
       const passaggioIntorno = (testo: string, tokens: string[], lung = 3000): string => {
@@ -8941,10 +9340,7 @@ ORDER BY DESC(?fama)`;
           if (!/html|text/i.test(String(p.headers?.['content-type'] || 'text/html'))) return null;
           const testo = testoPaginaMuseo(String(p.data || ''));
           if (testo.length < 500) return null;
-          const norm = normalizzaTesto(testo);
-          const nOpera = o.tokOpera.filter((t) => norm.includes(t)).length;
-          if (nOpera < Math.min(2, o.tokOpera.length)) return null;
-          if (tokMuseo.length && !tokMuseo.some((t) => norm.includes(t))) return null;
+          if (!paginaWebDellOpera({ url: c.url, testo, tokOpera: o.tokOpera, titolo: nomiWeb[0] || '', museo: o.museo, citta: o.citta, autore: o.autore })) return null;
           return { ...c, passo: passaggioIntorno(testo, o.tokOpera) };
         } catch { return null; }
       }));
@@ -11130,7 +11526,7 @@ ${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeF
             if (!daScript && msRimasti() < 60_000) break;
             const w = await cercaMaterialeWeb({
               nomi: [t.nomeFonte || t.nome, t.nome], museo: String(venue.name), lingue: [...new Set([langCfg.wiki, 'en'])],
-              tokOpera: tokenSignificativi(t.nome || t.nomeFonte), hostSitoMuseo: hostMuseo,
+              tokOpera: tokenSignificativi(t.nome || t.nomeFonte), hostSitoMuseo: hostMuseo, autore: t.autore || '',
             });
             if (w.materialeWeb.length < 400) continue;
             const promptVuoto = `Sei l'autore di una guida museale. Scrivi la SPIEGAZIONE BREVE di UNA tappa: l'opera "${t.nome}"${t.autore ? ` di ${t.autore}` : ''}${t.anno ? ` (${t.anno})` : ''}, ${venue.name}.
@@ -11393,13 +11789,47 @@ Rispondi ESCLUSIVAMENTE con JSON: {"perche": "la spiegazione", "curiosita": "un 
       let fonteOpera: { lang: string; title: string; url: string } | null = null;
       let datiWikidata = '';
       let fotoOpera = '';
+      // L'OPERA DEL SUO MUSEO (25/09/2026, collaudo: «Compianto sul Cristo morto» di Santo Stefano
+      // a Bologna diventava quello di Giotto agli Scrovegni — titolo uguale al 100%, museo mai
+      // controllato). La voce Wikipedia passa solo se appartiene a QUESTO museo: il testo nomina il
+      // museo o la sua città, oppure Wikidata mette l'opera in una collezione/luogo che è il museo.
+      let cittaMuseo = '', qidMuseo = '';
+      const poiIdMuseo = venueKeyArt.startsWith('poi_') ? venueKeyArt.slice(4) : '';
+      if (poiIdMuseo) {
+        try {
+          const r = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiIdMuseo)}&select=city,wikidata&limit=1`,
+            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 5000 });
+          cittaMuseo = String(r.data?.[0]?.city || '').trim();
+          qidMuseo = /^Q\d+$/.test(String(r.data?.[0]?.wikidata || '')) ? String(r.data[0].wikidata) : '';
+        } catch { /* senza città e QID resta il controllo sul nome del museo */ }
+      }
+      const tokMuseo = tokenSignificativi(museo);
+      const tokCitta = normalizzaTesto(cittaMuseo).split(' ').filter((t) => t.length >= 4);
+      const tokAutore = tokenSignificativi(autoreDetto);
+      // Titoli che al mondo hanno centinaia di opere: serve anche l'autore detto, se lo sappiamo.
+      const titoloGenerico = titoloOperaGenerico;
+      const parlaDelMuseo = (testo: string, wdColl: { qid: string; label: string }[]): boolean => {
+        const n = ` ${normalizzaTesto(testo)} `;
+        const haParola = (t: string) => n.includes(` ${t} `);
+        const perNome = tokMuseo.length > 0 && tokMuseo.filter(haParola).length >= Math.min(2, tokMuseo.length);
+        const perCitta = tokCitta.length > 0 && tokCitta.every(haParola);
+        const perWikidata = wdColl.some((c) => (qidMuseo && c.qid === qidMuseo) || (c.label && Math.max(sovrapposizioneNomi(museo, c.label), sovrapposizioneNomi(c.label, museo)) >= 0.6));
+        return perNome || perCitta || perWikidata;
+      };
+      const coerenteConAutore = (testo: string, titolo: string): boolean => {
+        if (!tokAutore.length || !titoloGenerico(titolo)) return true;
+        const n = ` ${normalizzaTesto(testo)} `;
+        return tokAutore.some((t) => n.includes(` ${t} `));
+      };
+      // Si cerca sempre col museo; poi, se c'è, anche con l'autore (prima era l'uno O l'altro).
+      const aggiunteRicerca = [...new Set([museo, autoreDetto].filter(Boolean))];
       for (const wl of [...new Set([langCfg.wiki, 'en', 'it'])]) {
         try {
-          // Il nome del museo nella ricerca è ciò che tiene l'opera al SUO
-          // museo: "Annunciazione" da sola pesca quella sbagliata.
           for (const nomeCerca of nomiRicerca) {
           if (testoOpera) break;
-          const s = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srlimit=5&format=json&srsearch=${encodeURIComponent(`${nomeCerca} ${autoreDetto || museo}`)}`, ua);
+          for (const aggiunta of aggiunteRicerca) {
+          if (testoOpera) break;
+          const s = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srlimit=5&format=json&srsearch=${encodeURIComponent(`${nomeCerca} ${aggiunta}`)}`, ua);
           for (const h of (s.data?.query?.search || [])) {
             const sim = Math.max(sovrapposizioneNomi(nomeCerca, h.title), sovrapposizioneNomi(h.title, nomeCerca));
             if (sim < 0.6) continue;
@@ -11410,14 +11840,14 @@ Rispondi ESCLUSIVAMENTE con JSON: {"perche": "la spiegazione", "curiosita": "un 
             const page: any = Object.values(ext.data?.query?.pages || {})[0];
             const testo = String(page?.extract || '').replace(/\s+/g, ' ').trim();
             if (testo.length < 300) continue;
-            testoOpera = testo.slice(0, 14000);
-            fonteOpera = { lang: wl, title: h.title, url: `https://${wl}.wikipedia.org/wiki/${encodeURIComponent(String(h.title).replace(/ /g, '_'))}` };
-            // Scheda tecnica da Wikidata: materiale, misure, inventario,
-            // collezione. Sono i dati che un'audioguida vera cita.
+            // Scheda tecnica da Wikidata PRIMA di accettare la voce: collezione (P195) e luogo (P276)
+            // servono a dire se l'opera sta davvero in questo museo.
             const qid = String(page?.pageprops?.wikibase_item || '');
+            let b: any = {};
+            const wdColl: { qid: string; label: string }[] = [];
             if (/^Q\d+$/.test(qid)) {
               try {
-                const sparql = `SELECT ?autoreLabel ?anno ?materialeLabel ?altezza ?larghezza ?inv ?collezioneLabel ?movimentoLabel ?immagine WHERE {
+                const sparql = `SELECT ?autoreLabel ?anno ?materialeLabel ?altezza ?larghezza ?inv ?collezione ?collezioneLabel ?luogo ?luogoLabel ?movimentoLabel ?immagine WHERE {
   OPTIONAL { wd:${qid} wdt:P18 ?immagine . }
   OPTIONAL { wd:${qid} wdt:P170 ?autore . }
   OPTIONAL { wd:${qid} wdt:P571 ?data . BIND(YEAR(?data) AS ?anno) }
@@ -11426,13 +11856,31 @@ Rispondi ESCLUSIVAMENTE con JSON: {"perche": "la spiegazione", "curiosita": "un 
   OPTIONAL { wd:${qid} p:P2049/psv:P2049 ?wN . ?wN wikibase:quantityAmount ?larghezza . }
   OPTIONAL { wd:${qid} wdt:P217 ?inv . }
   OPTIONAL { wd:${qid} wdt:P195 ?collezione . }
+  OPTIONAL { wd:${qid} wdt:P276 ?luogo . }
   OPTIONAL { wd:${qid} wdt:P135 ?movimento . }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "${langCfg.wiki},it,en". }
 } LIMIT 5`;
                 const wd = await axios.get(`https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`, {
                   headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)', Accept: 'application/sparql-results+json' }, timeout: 12000,
                 });
-                const b = wd.data?.results?.bindings?.[0] || {};
+                const righe: any[] = wd.data?.results?.bindings || [];
+                b = righe[0] || {};
+                for (const r of righe) {
+                  for (const [k, kl] of [['collezione', 'collezioneLabel'], ['luogo', 'luogoLabel']] as const) {
+                    if (r[k]?.value) wdColl.push({ qid: String(r[k].value).split('/').pop() || '', label: String(r[kl]?.value || '') });
+                  }
+                }
+              } catch { /* senza Wikidata restano nome del museo e città */ }
+            }
+            if (!parlaDelMuseo(testo, wdColl) || !coerenteConAutore(testo, h.title)) {
+              console.log(`[ArtworkGuide] «${h.title}» (${wl}) scartata: non è l'opera di «${museo}»${cittaMuseo ? ` (${cittaMuseo})` : ''}`);
+              continue;
+            }
+            testoOpera = testo.slice(0, 14000);
+            fonteOpera = { lang: wl, title: h.title, url: `https://${wl}.wikipedia.org/wiki/${encodeURIComponent(String(h.title).replace(/ /g, '_'))}` };
+            // Scheda tecnica e foto solo dalla voce ACCETTATA (sopra).
+            if (/^Q\d+$/.test(qid)) {
+              try {
                 const campi = [
                   b.autoreLabel?.value && `autore: ${b.autoreLabel.value}`,
                   b.anno?.value && `anno: ${b.anno.value}`,
@@ -11450,6 +11898,7 @@ Rispondi ESCLUSIVAMENTE con JSON: {"perche": "la spiegazione", "curiosita": "un 
             }
             break;
           }
+          } // fine del ciclo su museo/autore aggiunti alla ricerca
           } // fine del ciclo sui nomiRicerca
           if (testoOpera) break;
         } catch { /* si prova la lingua successiva */ }
@@ -11500,6 +11949,7 @@ Rispondi ESCLUSIVAMENTE con JSON: {"perche": "la spiegazione", "curiosita": "un 
         const w = await cercaMaterialeWeb({
           nomi: [nomeAlt || opera, senzaMuseo || opera], museo, lingue: [...new Set([langCfg.wiki, 'en'])],
           tokOpera: tokenSignificativi(nomeAlt || opera), hostSitoMuseo, escludiUrl: [urlSchedaMuseo],
+          citta: cittaMuseo, autore: autoreDetto,
         });
         ({ materialeWeb, fontiWeb, haFontiTerzi } = w);
       }
@@ -11856,6 +12306,34 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
    * redirect /api/out, che li conta: nessun link diretto e nessuna
    * ricostruzione a mano dei parametri.
    */
+  // LA CITTÀ DEL MUSEO (25/09/2026, collaudo: il biglietto di Santo Stefano a Bologna era il
+  // salta-fila di Santo Stefano a BUDAPEST). Viator e GetYourGuide si cercavano col NOME del luogo
+  // in tutto il mondo; ora Viator si cerca nella città del punto e GetYourGuide deve nominarla.
+  // Nomi della città (locale, inglese, lingua dell'utente) da Nominatim, in memoria per istanza.
+  const cittaMuseoMemo = new Map<string, string[]>();
+  const nomiCittaDelPunto = async (lat: number, lon: number, lang: string): Promise<string[]> => {
+    const k = `${lat.toFixed(2)},${lon.toFixed(2)}`;
+    if (cittaMuseoMemo.has(k)) return cittaMuseoMemo.get(k)!;
+    try {
+      const r = await axios.get(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=jsonv2&zoom=10&namedetails=1&accept-language=${lang}`, {
+        timeout: 5000, headers: { 'User-Agent': 'WIP-WorldInPocket/1.0 (https://wip.guide)' },
+      });
+      const a = r.data?.address || {};
+      const nd = r.data?.namedetails || {};
+      const nomi = [...new Set([nd['name:en'], nd.name, nd[`name:${lang}`], nd['name:it'], a.city, a.town, a.village, a.municipality]
+        .map((x: any) => String(x || '').trim()).filter(Boolean))];
+      if (nomi.length) cittaMuseoMemo.set(k, nomi);
+      return nomi;
+    } catch { return []; }
+  };
+  /** Il prodotto GetYourGuide è nella città (slug dell'url o titolo)? Senza città nota: no. */
+  const gygNellaCitta = (url: string, titolo: string, nomi: string[]): boolean => {
+    if (!nomi.length) return false;
+    const u = normalizzaTesto(decodeURIComponent(String(url || '')).replace(/[-_/]+/g, ' '));
+    const t = normalizzaTesto(titolo);
+    return nomi.some(n => { const c = normalizzaTesto(n); return !!c && (` ${u} `.includes(` ${c} `) || ` ${t} `.includes(` ${c} `)); });
+  };
+
   app.get("/api/museums/experiences", rateLimiter, async (req, res) => {
     try {
       const userId = await verifyUserToken(req);
@@ -11876,7 +12354,8 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
 
       // Cache per (museo, lingua): i prodotti cambiano lentamente e le API
       // hanno tetti mensili. Un giorno è il compromesso giusto.
-      const cacheKey = `museum_exp:v1:${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 50)}:${lang}`;
+      // v2 (25/09/2026): Viator per città del punto, GetYourGuide solo se nomina la città.
+      const cacheKey = `museum_exp:v2:${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 50)}:${lang}`;
       const cached = await getFromCache(cacheKey);
       if (cached?.text_content) {
         try {
@@ -11894,15 +12373,17 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
 
       // Raggio stretto: deve essere il biglietto di QUESTO museo, non un tour
       // della città a venti chilometri.
-      const [tiqets, viatorRaw, gyg] = await Promise.all([
+      const nomiCitta = haGeo ? await nomiCittaDelPunto(lat, lon, lang) : [];
+      const [tiqets, viatorRaw, gygTutti] = await Promise.all([
         conTimeout(haGeo
           ? fetchTiqetsProducts({ lat, lon, radiusKm: 3, lang, pageSize: 12 })
           : fetchTiqetsProducts({ cityName: museo, lang, pageSize: 12 }), [] as any[]),
-        conTimeout(haGeo
-          ? agentTools.searchViatorExperiences(lat, lon, 5, undefined, undefined, museo)
+        conTimeout(nomiCitta.length
+          ? agentTools.searchViatorExperiences(lat, lon, 5, undefined, undefined, nomiCitta[0], lang, 30)
           : Promise.resolve('[]'), '[]'),
         conTimeout(museo ? fetchGygExperiencesScraped(museo, lang) : Promise.resolve([] as any[]), [] as any[]),
       ]);
+      const gyg = (gygTutti as any[]).filter((p: any) => gygNellaCitta(p?.url, p?.titolo || p?.title, nomiCitta));
 
       let viator: any[] = [];
       try { const a = JSON.parse(String(viatorRaw || '[]')); if (Array.isArray(a)) viator = a; } catch { /* fail-open */ }
@@ -12067,7 +12548,9 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
       // rotta legge «u=» → «Compra il biglietto» dava 400. In più si
       // restituiscono TUTTE le esperienze del museo (visita guidata, salta
       // la fila, combinati), non solo il biglietto scelto.
-      const cacheKey = `museum_ticket:v3:${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 50)}:${lang}`;
+      // v4 (25/09/2026): il biglietto deve nominare il luogo nel titolo; le risposte v3 si rifanno.
+      // v5 (25/09/2026): e deve essere nella città del punto (Santo Stefano di Bologna → Budapest).
+      const cacheKey = `museum_ticket:v5:${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 50)}:${lang}`;
       const inCache = await getFromCache(cacheKey, 'museum_ticket', 24 * 60 * 60 * 1000);
       if (inCache) {
         try {
@@ -12080,13 +12563,15 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
       const conTimeout = <T,>(p: Promise<T>, fallback: T) => Promise.race([
         p, new Promise<T>((r) => setTimeout(() => r(fallback), 9000)),
       ]).catch(() => fallback);
-      const [tiqets, viatorRaw, gyg] = await Promise.all([
+      const nomiCitta = haGeo ? await nomiCittaDelPunto(lat, lon, lang) : [];
+      const [tiqets, viatorRaw, gygTutti] = await Promise.all([
         conTimeout(haGeo
           ? fetchTiqetsProducts({ lat, lon, radiusKm: 3, lang, pageSize: 12 })
           : fetchTiqetsProducts({ cityName: museo, lang, pageSize: 12 }), [] as any[]),
-        conTimeout(haGeo ? agentTools.searchViatorExperiences(lat, lon, 5, undefined, undefined, museo) : Promise.resolve('[]'), '[]'),
+        conTimeout(nomiCitta.length ? agentTools.searchViatorExperiences(lat, lon, 5, undefined, undefined, nomiCitta[0], lang, 30) : Promise.resolve('[]'), '[]'),
         conTimeout(fetchGygExperiencesScraped(museo, lang), [] as any[]),
       ]);
+      const gyg = (gygTutti as any[]).filter((p: any) => gygNellaCitta(p?.url, p?.titolo || p?.title, nomiCitta));
       let viator: any[] = [];
       try { const a = JSON.parse(String(viatorRaw || '[]')); if (Array.isArray(a)) viator = a; } catch { /* fail-open */ }
 
@@ -12101,6 +12586,17 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
       const RE_INGRESSO = /(bigliett|ticket|entrada|billet|entry|admission|ingresso|eintritt|skip[- ]the[- ]line|salta[- ]la[- ]fila|fast[- ]track|priority|reserved|prenotat)/i;
       const RE_NON_INGRESSO = /(tour|guided|guidat|guidée|guiada|geführt|walking|city|cena|dinner|show|cooking|workshop|laboratori|class|combo|bus|boat|barca|bike|segway|wine)/i;
       const prezzoNum = (s: string): number => { const m = String(s || '').replace(',', '.').match(/(\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : Number.POSITIVE_INFINITY; };
+      // IL BIGLIETTO NOMINA IL LUOGO NEL TITOLO (25/09/2026, collaudo: a Santo Stefano, Bologna,
+      // «Compra il biglietto» portava a un prodotto Viator di un altro luogo). Il filtro sopra basta
+      // per le esperienze (un giro che passa di qui ne parla nella descrizione), non per un INGRESSO:
+      // almeno metà delle parole proprie del nome, intere, nel titolo del prodotto.
+      const nominaIlLuogo = (titolo: string): boolean => {
+        const tok = tokenMuseo.length ? tokenMuseo : tokenTutti(museo);
+        if (!tok.length) return true;
+        const tt = ` ${normalizzaTesto(titolo)} `;
+        return tok.filter(x => tt.includes(` ${x} `)).length >= Math.ceil(tok.length / 2);
+      };
+      const eIngresso = (e: any) => RE_INGRESSO.test(e.titolo) && !RE_NON_INGRESSO.test(e.titolo) && nominaIlLuogo(e.titolo);
 
       const delMuseo = [
         ...tiqets.map((p: any) => ({ fonte: 'tiqets', id: String(p.id || ''), titolo: String(p.name || ''), descrizione: String(p.description || '').slice(0, 240), prezzo: String(p.price || ''), immagine: String(p.imageUrl || ''), voto: String(p.rating || ''), durata: String(p.duration || ''), url: String(p.bookingUrl || p.product_url || p.url || '') })),
@@ -12110,7 +12606,7 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
         .filter(e => e.titolo && e.url && libIsBookableHost(e.url))
         .filter(e => parlaDelMuseo(e.titolo, e.descrizione));
       const candidati = delMuseo
-        .filter(e => RE_INGRESSO.test(e.titolo) && !RE_NON_INGRESSO.test(e.titolo))
+        .filter(eIngresso)
         // Il più economico con un prezzo; a parità Tiqets, che vende ingressi.
         .sort((a, b) => (prezzoNum(a.prezzo) - prezzoNum(b.prezzo)) || (a.fonte === 'tiqets' ? -1 : 1));
 
@@ -12125,7 +12621,7 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
         .sort((a, b) => (a === scelto ? -1 : b === scelto ? 1 : 0) || (prezzoNum(a.prezzo) - prezzoNum(b.prezzo)))
         .filter(e => { const k = normalizzaTesto(e.titolo).slice(0, 60); if (vistiTitoli.has(k)) return false; vistiTitoli.add(k); return true; })
         .slice(0, 8)
-        .map(e => ({ fonte: e.fonte, titolo: e.titolo, prezzo: e.prezzo, immagine: e.immagine, voto: e.voto, durata: e.durata, tipo: RE_INGRESSO.test(e.titolo) && !RE_NON_INGRESSO.test(e.titolo) ? 'biglietto' : 'esperienza', url: viaAffiliazione(e) }));
+        .map(e => ({ fonte: e.fonte, titolo: e.titolo, prezzo: e.prezzo, immagine: e.immagine, voto: e.voto, durata: e.durata, tipo: eIngresso(e) ? 'biglietto' : 'esperienza', url: viaAffiliazione(e) }));
       await saveToCache(cacheKey, 'museum_ticket', JSON.stringify({ ticket, esperienze }));
       const disponibilita = ticket?.fonte === 'tiqets' && ticket?.id ? await fasceDi(String(ticket.id)) : null;
       res.set('Cache-Control', 'private, max-age=600');
@@ -12205,7 +12701,7 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
       const out: Record<string, string> = {};
       await Promise.all(nomi.map(async (nome) => {
         try {
-          const c = await getFromCache(`museum_ticket:v3:${normalizzaTesto(nome).replace(/ /g, '_').slice(0, 50)}:${lang}`, 'museum_ticket', 24 * 60 * 60 * 1000);
+          const c = await getFromCache(`museum_ticket:v4:${normalizzaTesto(nome).replace(/ /g, '_').slice(0, 50)}:${lang}`, 'museum_ticket', 24 * 60 * 60 * 1000);
           if (!c) return;
           const p = JSON.parse(c);
           if (p?.ticket?.prezzo) out[nome] = String(p.ticket.prezzo);
@@ -12612,14 +13108,14 @@ Rispondi SOLO con JSON: {"testo": "..."}`;
         }
         for (const wl of [...new Set([WIKI[outLang] || 'it', 'en', 'it'])]) {
           try {
-            const s = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srlimit=3&format=json&srsearch=${encodeURIComponent(`${o.nomeFonte} ${o.autore || museo}`)}`, ua);
+            const s = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srlimit=3&format=json&srsearch=${encodeURIComponent(`${o.nomeFonte} ${museo}`)}`, ua);
             for (const h of (s.data?.query?.search || [])) {
               const sim = Math.max(sovrapposizioneNomi(o.nomeFonte, h.title), sovrapposizioneNomi(h.title, o.nomeFonte));
               if (sim < 0.6) continue;
               const ext = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exsectionformat=plain&exlimit=1&format=json&titles=${encodeURIComponent(h.title)}`, ua);
               const page: any = Object.values(ext.data?.query?.pages || {})[0];
               const testo = String(page?.extract || '').replace(/\s+/g, ' ').trim();
-              if (testo.length >= 300) return testo.slice(0, 4000);
+              if (testo.length >= 300 && voceDellOperaDelMuseo(testo, o.nomeFonte, museo, o.autore)) return testo.slice(0, 4000);
             }
           } catch { /* prossima lingua */ }
         }
@@ -12743,12 +13239,15 @@ Rispondi SOLO con JSON: {"testo": "..."}`;
       for (const wl of [...new Set([langCfg.wiki, 'en', 'it'])]) {
         try {
           const s = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srlimit=3&format=json&srsearch=${encodeURIComponent(`${opera} ${museo}`)}`, ua);
-          const hit = (s.data?.query?.search || []).find((h: any) => Math.max(sovrapposizioneNomi(opera, h.title), sovrapposizioneNomi(h.title, opera)) >= 0.6);
-          if (!hit) continue;
-          const ext = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exsectionformat=plain&exlimit=1&format=json&titles=${encodeURIComponent(hit.title)}`, ua);
-          const page: any = Object.values(ext.data?.query?.pages || {})[0];
-          const testo = String(page?.extract || '').replace(/\s+/g, ' ').trim();
-          if (testo.length > 300) { pezzi.push(`VOCE ENCICLOPEDICA (${hit.title}):\n${testo.slice(0, 9000)}`); break; }
+          // Solo la voce dell'opera di QUESTO museo (voceDellOperaDelMuseo), non la prima con lo stesso titolo.
+          let trovata = false;
+          for (const hit of (s.data?.query?.search || []).filter((h: any) => Math.max(sovrapposizioneNomi(opera, h.title), sovrapposizioneNomi(h.title, opera)) >= 0.6)) {
+            const ext = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exsectionformat=plain&exlimit=1&format=json&titles=${encodeURIComponent(hit.title)}`, ua);
+            const page: any = Object.values(ext.data?.query?.pages || {})[0];
+            const testo = String(page?.extract || '').replace(/\s+/g, ' ').trim();
+            if (testo.length > 300 && voceDellOperaDelMuseo(testo, opera, museo)) { pezzi.push(`VOCE ENCICLOPEDICA (${hit.title}):\n${testo.slice(0, 9000)}`); trovata = true; break; }
+          }
+          if (trovata) break;
         } catch { /* lingua successiva */ }
       }
       const materiale = pezzi.join('\n\n');
@@ -12840,12 +13339,15 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
       for (const wl of [...new Set([langCfg.wiki, 'en', 'it'])]) {
         try {
           const s = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srlimit=3&format=json&srsearch=${encodeURIComponent(`${opera} ${museo}`)}`, ua);
-          const hit = (s.data?.query?.search || []).find((h: any) => Math.max(sovrapposizioneNomi(opera, h.title), sovrapposizioneNomi(h.title, opera)) >= 0.6);
-          if (!hit) continue;
-          const ext = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exsectionformat=plain&exlimit=1&format=json&titles=${encodeURIComponent(hit.title)}`, ua);
-          const page: any = Object.values(ext.data?.query?.pages || {})[0];
-          const testo = String(page?.extract || '').replace(/\s+/g, ' ').trim();
-          if (testo.length > 300) { pezzi.push(`VOCE ENCICLOPEDICA (${hit.title}):\n${testo.slice(0, 9000)}`); break; }
+          // Solo la voce dell'opera di QUESTO museo (voceDellOperaDelMuseo), non la prima con lo stesso titolo.
+          let trovata = false;
+          for (const hit of (s.data?.query?.search || []).filter((h: any) => Math.max(sovrapposizioneNomi(opera, h.title), sovrapposizioneNomi(h.title, opera)) >= 0.6)) {
+            const ext = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exsectionformat=plain&exlimit=1&format=json&titles=${encodeURIComponent(hit.title)}`, ua);
+            const page: any = Object.values(ext.data?.query?.pages || {})[0];
+            const testo = String(page?.extract || '').replace(/\s+/g, ' ').trim();
+            if (testo.length > 300 && voceDellOperaDelMuseo(testo, opera, museo)) { pezzi.push(`VOCE ENCICLOPEDICA (${hit.title}):\n${testo.slice(0, 9000)}`); trovata = true; break; }
+          }
+          if (trovata) break;
         } catch { /* lingua successiva */ }
       }
       const materiale = pezzi.join('\n\n');
@@ -20346,6 +20848,20 @@ ${description}
       runCheck('OSRM (router.project-osrm.org)', async () => {
         await axios.get('https://router.project-osrm.org/route/v1/driving/12.4922,41.8902;12.4964,41.9028?overview=false', { timeout: TIMEOUT_MS });
       }),
+      // SearXNG di produzione (droplet 201, INDISPENSABILE per ordine del
+      // committente 23/09/2026): serve al volo schede dei luoghi, guide museo,
+      // eventi e report del clima. Una ricerca vera, col token: se cade, rosso
+      // qui e su Sentry, non «schede vuote» scoperte dagli utenti.
+      runCheck('SearXNG (droplet 201, ricerca di prova)', async () => {
+        if (!process.env.SEARXNG_URL) throw new Error('SEARXNG_URL mancante');
+        const r = await axios.get(`${String(process.env.SEARXNG_URL).replace(/\/$/, '')}/search`, {
+          params: { q: 'Colosseo Roma', format: 'json', language: 'it' },
+          headers: { 'X-Searx-Token': process.env.SEARXNG_TOKEN || '', 'User-Agent': 'WorldInPocket/1.0 canary' }, timeout: TIMEOUT_MS,
+        });
+        const n = Array.isArray(r.data?.results) ? r.data.results.length : 0;
+        if (!n) throw new Error('nessun risultato: motori a monte spenti o istanza degradata');
+        return `${n} risultati`;
+      }),
       runCheck('Azure TTS (elenco voci)', async () => {
         if (!azureKey) throw new Error('AZURE_SPEECH_KEY mancante');
         const r = await axios.get(`https://${azureRegion}.tts.speech.microsoft.com/cognitiveservices/voices/list`, {
@@ -23074,7 +23590,7 @@ out center tags 120;`;
     // Idem per quelle senza `oreMeteo` (23/09/2026): il widget meteo ne ha
     // bisogno per la finestra senza pioggia.
     if (inCache?.text_content && eta < CACHE_MS && inCache.text_content.nuvole != null
-      && inCache.text_content.oreMeteo != null) {
+      && inCache.text_content.oreMeteo != null && inCache.text_content.giorni != null) {
       return { fonte: 'cache', ...inCache.text_content };
     }
 
@@ -23210,8 +23726,40 @@ out center tags 120;`;
         ? Math.round(nuvoleNotteOre.reduce((s: number, o: any) => s + o.nuvole, 0) / nuvoleNotteOre.length)
         : null;
 
+      // I PROSSIMI 7 GIORNI (24/09/2026): massima, minima e pioggia di ogni
+      // giorno locale, per il confronto «adesso rispetto alla media del mese»
+      // del livello Clima. MET dà ore per i primi 2-3 giorni e poi passi di
+      // 6 ore: si sommano le precipitazioni di next_6_hours quando manca
+      // next_1_hours, senza contare due volte lo stesso intervallo.
+      const perGiorno = new Map<string, { tmax: number; tmin: number; mm: number; codici: number[] }>();
+      let ultimoConteggio = -Infinity;
+      for (const p of serie) {
+        const ts = Date.parse(String(p?.time || ''));
+        if (!Number.isFinite(ts)) continue;
+        const q = new Date(ts + offsetOreUv * msOraPerUv);
+        const giorno = q.toISOString().slice(0, 10);
+        const t = Number(p?.data?.instant?.details?.air_temperature);
+        const g = perGiorno.get(giorno) || { tmax: -Infinity, tmin: Infinity, mm: 0, codici: [] };
+        if (Number.isFinite(t)) { g.tmax = Math.max(g.tmax, t); g.tmin = Math.min(g.tmin, t); }
+        const n1 = p?.data?.next_1_hours, n6 = p?.data?.next_6_hours;
+        if (n1?.details?.precipitation_amount != null) { g.mm += Number(n1.details.precipitation_amount) || 0; ultimoConteggio = ts + msOraPerUv; }
+        else if (n6?.details?.precipitation_amount != null && ts >= ultimoConteggio) { g.mm += Number(n6.details.precipitation_amount) || 0; ultimoConteggio = ts + 6 * msOraPerUv; }
+        const sym = n1?.summary?.symbol_code || n6?.summary?.symbol_code;
+        if (sym && q.getUTCHours() >= 9 && q.getUTCHours() <= 18) g.codici.push(wmo(sym));
+        perGiorno.set(giorno, g);
+      }
+      const giorni = [...perGiorno.entries()].slice(0, 7).map(([data, g]) => ({
+        data,
+        tmax: Number.isFinite(g.tmax) ? Math.round(g.tmax * 10) / 10 : null,
+        tmin: Number.isFinite(g.tmin) ? Math.round(g.tmin * 10) / 10 : null,
+        mm: Math.round(g.mm * 10) / 10,
+        // il codice "di giorno" più frequente
+        code: g.codici.length ? [...g.codici].sort((a, b) => g.codici.filter((x) => x === b).length - g.codici.filter((x) => x === a).length)[0] : null,
+      }));
+
       const payload = {
         temp: t0,
+        giorni,
         code: wmo(ora0?.data?.next_1_hours?.summary?.symbol_code || ora0?.data?.next_6_hours?.summary?.symbol_code),
         rainProb,
         uv: Number(d0.ultraviolet_index_clear_sky ?? 0),
@@ -23311,7 +23859,8 @@ out center tags 120;`;
     const CACHE_MS = 365 * 24 * 60 * 60 * 1000;
     const inCache = await getFromCache(chiave);
     const eta = inCache?.created_at ? Date.now() - new Date(inCache.created_at).getTime() : Infinity;
-    if (inCache?.text_content?.mesi && eta < CACHE_MS) return { fonte: 'cache', ...inCache.text_content };
+    // Le copie senza `mare` sono di prima del 24/09: si rifanno.
+    if (inCache?.text_content?.mesi && eta < CACHE_MS && 'mare' in inCache.text_content) return { fonte: 'cache', ...inCache.text_content };
 
     const url = 'https://power.larc.nasa.gov/api/temporal/climatology/point'
       + `?parameters=T2M,T2M_RANGE,PRECTOTCORR,ALLSKY_SFC_SW_DWN,RH2M&community=RE&longitude=${lon.toFixed(3)}&latitude=${lat.toFixed(3)}&format=JSON`;
@@ -23332,6 +23881,67 @@ out center tags 120;`;
         mm, sole: sole == null ? null : Math.round(sole * 10) / 10, umidita: umidita == null ? null : Math.round(umidita), punteggio: climaPunteggio(tmax, tmin, mm, sole) };
     });
     if (mesi.every((x) => x.tmax == null)) throw new Error('NASA POWER senza dati per questo punto');
+
+    // LA TENDENZA DEGLI ULTIMI ANNI (24/09/2026): gli anni singoli, sempre da
+    // NASA POWER, contro la media 2001-2020. Dice se «gli ultimi anni sono
+    // stati più caldi/secchi del solito». Se la chiamata fallisce il resto
+    // non ne risente.
+    let tendenza: any = null;
+    try {
+      const annoFine = new Date().getUTCFullYear() - 1;
+      const annoInizio = annoFine - 4;
+      const rs = await axios.get('https://power.larc.nasa.gov/api/temporal/monthly/point'
+        + `?parameters=T2M,PRECTOTCORR&community=RE&longitude=${lon.toFixed(3)}&latitude=${lat.toFixed(3)}&start=${annoInizio}&end=${annoFine}&format=JSON`,
+        { timeout: 20000, headers: { 'User-Agent': 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)' } });
+      const ps = rs.data?.properties?.parameter || {};
+      const mediaT = CLIMA_MESI.map((k) => leggi('T2M', k)).filter((v) => v != null) as number[];
+      const climaT = mediaT.length ? mediaT.reduce((a, b) => a + b, 0) / mediaT.length : null;
+      const climaMm = mesi.reduce((a, x) => a + (x.mm || 0), 0);
+      const anni: any[] = [];
+      for (let a = annoInizio; a <= annoFine; a++) {
+        const t: number[] = [], mm: number[] = [];
+        for (let m = 1; m <= 12; m++) {
+          const k = `${a}${String(m).padStart(2, '0')}`;
+          const tv = Number(ps?.T2M?.[k]), pv = Number(ps?.PRECTOTCORR?.[k]);
+          if (Number.isFinite(tv) && tv > -900) t.push(tv);
+          if (Number.isFinite(pv) && pv > -900) mm.push(pv * CLIMA_GIORNI[m - 1]);
+        }
+        if (t.length === 12 && climaT != null) {
+          anni.push({ anno: a, deltaT: Math.round((t.reduce((x, y) => x + y, 0) / 12 - climaT) * 10) / 10,
+            deltaMmPct: climaMm > 0 && mm.length === 12 ? Math.round((mm.reduce((x, y) => x + y, 0) / climaMm - 1) * 100) : null });
+        }
+      }
+      if (anni.length >= 3) {
+        tendenza = { anni, deltaTMedio: Math.round(anni.reduce((s, x) => s + x.deltaT, 0) / anni.length * 10) / 10,
+          deltaMmPctMedio: anni.every((x) => x.deltaMmPct != null) ? Math.round(anni.reduce((s, x) => s + x.deltaMmPct, 0) / anni.length) : null };
+      }
+    } catch (e: any) { console.warn('[clima] tendenza non disponibile:', e?.message); }
+
+    // I MESI PER IL BAGNO (24/09/2026): temperatura del mare mese per mese
+    // dalle medie mensili di NASA JPL MUR (via NOAA ERDDAP, dominio pubblico,
+    // la stessa fonte del livello Mare), sulle celle di mare entro ~30 km
+    // dal punto, media degli ultimi due anni pieni. Città senza mare vicino:
+    // `mare` = null. Balneabile = acqua ad almeno 22°.
+    let mare: any = null;
+    try {
+      const annoFine = new Date().getUTCFullYear() - 1;
+      const box = (v: number, d: number) => (v + d).toFixed(2);
+      const urlM = 'https://coastwatch.pfeg.noaa.gov/erddap/griddap/jplMURSST41mday.json'
+        + `?sst%5B(${annoFine - 1}-01-16):1:(${annoFine}-12-16)%5D%5B(${box(lat, -0.3)}):6:(${box(lat, 0.3)})%5D%5B(${box(lon, -0.3)}):6:(${box(lon, 0.3)})%5D`;
+      const rm = await axios.get(urlM, { timeout: 25000, headers: { 'User-Agent': 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)' } });
+      const somme = Array.from({ length: 12 }, () => ({ s: 0, n: 0 }));
+      for (const riga of (rm.data?.table?.rows || [])) {
+        const t = riga[3];
+        if (t == null || !Number.isFinite(Number(t))) continue;
+        const m = new Date(String(riga[0])).getUTCMonth();
+        if (m >= 0) { somme[m].s += Number(t); somme[m].n++; }
+      }
+      if (somme.some((x) => x.n > 0)) {
+        const mesiMare = somme.map((x, i) => ({ m: i + 1, t: x.n ? Math.round((x.s / x.n) * 10) / 10 : null }));
+        mare = { mesi: mesiMare, bagno: mesiMare.filter((x) => x.t != null && x.t >= 22).map((x) => x.m), attribuzione: 'NASA JPL MUR via NOAA ERDDAP' };
+      }
+    } catch (e: any) { console.warn('[clima] mare non disponibile:', e?.message); }
+
     const punteggi = mesi.map((x) => x.punteggio);
     const max = Math.max(...punteggi), min = Math.min(...punteggi);
     const con = (f: (x: any) => number | null, dir: 1 | -1) => mesi.reduce((b: any, x: any) => (f(x) != null && (b == null || dir * (f(x) as number) > dir * (f(b) as number)) ? x : b), null)?.m ?? null;
@@ -23341,6 +23951,8 @@ out center tags 120;`;
       migliori: climaPeriodi(mesi, (x) => x.punteggio >= max - 10),
       peggiori: max - min < 15 ? [] : climaPeriodi(mesi, (x) => x.punteggio <= min + 10),
       piuPiovoso: con((x) => x.mm, 1), piuCaldo: con((x) => x.tmax, 1), piuFreddo: con((x) => x.tmin, -1),
+      tendenza,
+      mare,
       attribuzione: 'NASA POWER · medie 2001-2020',
     };
     saveToCache(chiave, 'clima', dati).catch(() => {});
@@ -23367,8 +23979,9 @@ out center tags 120;`;
       if (c?.text_content?.testo) analisi = String(c.text_content.testo);
     } catch { /* niente */ }
     if (!analisi) {
-      let uid: string | null = null;
-      try { uid = await verifyUserToken(req); } catch { uid = null; }
+      const sfondo = !!(SCRIPT_SHARED_SECRET && req.headers?.['x-script-secret'] === SCRIPT_SHARED_SECRET);
+      let uid: string | null = sfondo ? 'background-script' : null;
+      if (!sfondo) { try { uid = await verifyUserToken(req); } catch { uid = null; } }
       if (!uid) analisiRichiedeAccesso = true;
       else {
         const nomeM = (m: number) => new Date(2000, m - 1, 1).toLocaleString(lang, { month: 'long' });
@@ -23381,15 +23994,374 @@ Periodo migliore secondo il punteggio: ${dati.migliori.map(periodo).join(', ') |
 Scrivi 90-130 parole in ${nomeLingua(lang)}, prosa continua, per chi deve scegliere QUANDO visitare questa zona a piedi. Di': il periodo migliore e perché (temperature e pioggia con i numeri), cosa aspettarsi nei mesi peggiori, un consiglio pratico (orari della giornata, abbigliamento, ombrello) ricavato dai numeri.
 REGOLE: usa SOLO i numeri della tabella; niente nomi di luoghi, eventi, feste, prezzi, folla, stagioni turistiche o altro che non sia nella tabella; niente frasi di cerimonia; nessun titolo, nessun elenco.`;
         try {
-          const r = await callUniversalAi('groq', [{ role: 'user', content: prompt }], { temperature: 0.3, max_tokens: 450, groqOnTheFly: true, excludeEngines: ['agnes'] },
-            'clima_analisi', supabaseUrl, supabaseServiceKey, groq);
+          // Pre-caricamento (24/09/2026): in sfondo Gonka pool «clima» per primo — il pool Groq a rotazione
+          // lo consuma wip-citta e a metà giornata è al tetto dei 200k token.
+          // In diretta (25/09/2026): Gonka «clima» in coda ai gratuiti, se Groq on-the-fly e gli altri non rispondono.
+          const r = await callUniversalAi('groq', [{ role: 'user', content: prompt }], { temperature: 0.3, max_tokens: 450, groqOnTheFly: !sfondo, excludeEngines: ['agnes'], ...(sfondo ? { gonkaPool: 'clima', gonkaPrimo: true, gonkaTimeoutMs: 120000, gonkaRiprova: true, gonkaMaxTokens: 2000 } : { gonkaPool: 'clima', gonkaAncheInDiretta: true, gonkaTimeoutMs: 60000, gonkaMaxTokens: 2000 }) },
+            'clima_analisi', supabaseUrl, supabaseServiceKey, groq, sfondo ? 'background-script' : uid);
           const testo = String(r?.data || '').replace(/^["\s]+|["\s]+$/g, '').trim();
           if (testo.length > 120) { analisi = testo; saveToCache(chiaveAi, 'clima_ai', { testo, lang }).catch(() => {}); }
         } catch (e: any) { console.warn('[clima] analisi non generata:', e?.message); }
       }
     }
-    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
     res.json({ ok: true, ...dati, analisi, analisiRichiedeAccesso });
+  });
+
+  /**
+   * COSA DICE IL WEB SU QUANDO VISITARE UNA CITTÀ (committente 24/09/2026:
+   * «consigli e statistiche, non da utenti WIP: da info sul web», «un report
+   * su tutto quello che si trova sul web»).
+   *
+   * Stessa strada delle guide museo (cercaMaterialeWeb): SearXNG, mai un
+   * motore a pagamento; pagine scaricate e lette, non solo gli snippet; due
+   * livelli di fonte (A = Wikivoyage, Wikipedia, enti pubblici; B = blog e
+   * guide di terzi, marcate NON VERIFICATA); si tiene solo la parte della
+   * pagina che parla di clima e stagioni. Il testo delle pagine non si
+   * mostra mai: l'AI lo riscrive, con la fonte accanto (regoleMaterialeWeb).
+   */
+  /**
+   * WIKIVOYAGE, LETTA DIRETTAMENTE (committente 24/09/2026): la guida libera
+   * (CC BY-SA) ha per quasi ogni città la sezione «Quando andare» con la
+   * tabella del clima. Si cerca l'articolo nella lingua dell'utente e in
+   * inglese e si tiene solo quella sezione (o «Clima»/«Climate»), come fonte
+   * affidabile di livello A, prima ancora della ricerca web.
+   */
+  async function sezioneClimaWikivoyage(nome: string, lang: string): Promise<{ url: string; host: string; tier: 'A'; passo: string } | null> {
+    const l = /^(it|en|fr|es|de|ru|zh)$/.test(lang) ? lang : 'en';
+    const TITOLI = /^(Quando andare|Clima|When to (go|visit)|Climate|Weather|Quand (partir|y aller)|Climat|Cuándo ir|Clima|Wann (hin|reisen)|Klima|Когда ехать|Климат|何时前往|气候)/i;
+    try {
+      const cerca = await axios.get(`https://${l}.wikivoyage.org/w/api.php`, { params: { action: 'opensearch', search: nome, limit: 3, namespace: 0, format: 'json' }, headers: { 'User-Agent': WIKI_UA }, timeout: 8000 });
+      const titolo = (cerca.data?.[1] || [])[0];
+      if (!titolo) return null;
+      const r = await axios.get(`https://${l}.wikivoyage.org/w/api.php`, { params: { action: 'parse', page: titolo, prop: 'sections|wikitext', redirects: 1, format: 'json' }, headers: { 'User-Agent': WIKI_UA }, timeout: 10000 });
+      const sezioni: any[] = r.data?.parse?.sections || [];
+      const testo: string = String(r.data?.parse?.wikitext?.['*'] || '');
+      const sez = sezioni.find((s) => TITOLI.test(String(s.line || '').replace(/<[^>]+>/g, '').trim()));
+      if (!sez) return null;
+      // Il pezzo di wikitext da quel titolo al titolo successivo dello stesso livello o superiore.
+      const livello = Number(sez.level) || 2;
+      const re = new RegExp(`^={${livello}}\\s*${sez.line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*={${livello}}\\s*$`, 'm');
+      const m = re.exec(testo);
+      if (!m) return null;
+      const dopo = testo.slice(m.index + m[0].length);
+      const fine = dopo.search(new RegExp(`^={2,${livello}}[^=]`, 'm'));
+      let pezzo = fine > 0 ? dopo.slice(0, fine) : dopo.slice(0, 6000);
+      // Wikitext → testo: si tolgono template, link e marcatori; le righe delle
+      // tabelle clima («|gen=…») restano come «chiave valore».
+      pezzo = pezzo.replace(/\{\{[^{}]*\}\}/g, (t) => t.replace(/[{}]/g, ' ').replace(/\|/g, '\n')).replace(/\[\[([^|\]]*\|)?([^\]]+)\]\]/g, '$2').replace(/'{2,}/g, '').replace(/<[^>]+>/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+      if (pezzo.length < 200) return null;
+      const url = `https://${l}.wikivoyage.org/wiki/${encodeURIComponent(String(titolo).replace(/ /g, '_'))}`;
+      return { url, host: `${l}.wikivoyage.org`, tier: 'A', passo: pezzo.slice(0, 4000) };
+    } catch { return null; }
+  }
+
+  async function materialeClimaWeb(citta: { locale: string; en: string; utente: string; cc: string; lingua_locale?: string }, lang: string, mese?: number): Promise<{ materialeWeb: string; fontiWeb: { url: string; host: string; tier: 'A' | 'B' | 'C' }[]; haFontiTerzi: boolean }> {
+    const vuoto = { materialeWeb: '', fontiWeb: [] as { url: string; host: string; tier: 'A' | 'B' | 'C' }[], haFontiTerzi: false };
+    const nome = citta.utente || citta.locale || citta.en;
+    if (!nome) return vuoto;
+    // MODO MESE (24/09/2026): le domande sono sul mese («Roma ad agosto»,
+    // «Rome in August crowds»), così le pagine trovate parlano di quel mese.
+    const nomeMeseIn = (l: string) => (mese ? new Date(2000, mese - 1, 1).toLocaleString(l, { month: 'long' }) : '');
+    const DOMANDE_MESE: Record<string, string[]> = {
+      it: ['{citta} a {mese}', '{citta} {mese} clima cosa fare', 'forum {citta} {mese} esperienza'],
+      en: ['{citta} in {mese}', '{citta} {mese} weather crowds what to expect', 'forum {citta} {mese} trip experience'],
+      fr: ['{citta} en {mese}', '{citta} {mese} météo affluence'],
+      es: ['{citta} en {mese}', '{citta} {mese} clima qué esperar'],
+      de: ['{citta} im {mese}', '{citta} {mese} Wetter Erfahrungen'],
+      ru: ['{citta} в {mese}', '{citta} {mese} погода отзывы'],
+      zh: ['{citta} {mese}', '{citta} {mese} 天气 游记'],
+    };
+    // Wikivoyage prima di tutto: nella lingua dell'utente, e in inglese se diversa.
+    const wv = (await Promise.all([sezioneClimaWikivoyage(nome, lang), lang !== 'en' && citta.en ? sezioneClimaWikivoyage(citta.en, 'en') : Promise.resolve(null)])).filter(Boolean) as any[];
+    if (!process.env.SEARXNG_URL) {
+      return wv.length ? { materialeWeb: wv.map((c) => `PAGINA DI FONTE AFFIDABILE (${c.host}, ${c.url}):\n${c.passo}`).join('\n\n'), fontiWeb: wv.map((c) => ({ url: c.url, host: c.host, tier: 'A' as const })), haFontiTerzi: false } : vuoto;
+    }
+    // Due tipi di domanda: le GUIDE (quando andare, clima) e le ESPERIENZE
+    // (forum e recensioni: «ci sono stato ad agosto e…»).
+    const DOMANDE: Record<string, string[]> = {
+      it: ['quando andare a', 'periodo migliore per visitare', 'clima mese per mese', 'forum esperienze viaggio in che mese'],
+      en: ['best time to visit', 'when to go to', 'weather by month', 'forum trip experience which month'],
+      fr: ['quand partir à', 'meilleure période pour visiter', 'forum voyage quel mois'],
+      es: ['mejor época para visitar', 'cuándo ir a', 'foro viaje qué mes'],
+      de: ['beste Reisezeit für', 'wann nach', 'forum reise welcher monat'],
+      ru: ['когда лучше ехать в', 'лучшее время для поездки', 'отзывы в каком месяце'],
+      zh: ['最佳旅游时间', '什么时候去', '游记 几月'],
+    };
+    try {
+      // Social e negozi restano fuori. I FORUM e le recensioni (Reddit, forum
+      // di TripAdvisor, Quora) entrano come livello C: esperienze di
+      // viaggiatori, mai fatti — il prompt le può solo riportare come tali.
+      const HOST_SCARTATI = /facebook|instagram|youtube|youtu\.be|twitter|x\.com|tiktok|pinterest|linkedin|booking\.|expedia|airbnb|amazon|ebay|tiqets|getyourguide|viator|civitatis|musement|klook|trip\.com|eventbrite|mapcarta|openstreetmap|flickr|wikimedia|wikidata/i;
+      const HOST_ESPERIENZE = /(^|\.)(reddit\.com|tripadvisor\.[a-z.]+|quora\.com|lonelyplanet\.com|forum\.)/i;
+      const HOST_AFFIDABILI = /(^|\.)(wikipedia\.org|wikivoyage\.org|treccani\.it|britannica\.com|unesco\.org)$|\.(gov|edu)(\.[a-z]{2})?$|\.(gob|gouv)\.[a-z]{2}$|(^|\.)(italia\.it|enit\.it)$/i;
+      const query: { q: string; lang: string }[] = [];
+      if (mese) {
+        const riempi = (t: string, c: string, l: string) => t.replace('{citta}', c).replace('{mese}', nomeMeseIn(l));
+        for (const d of (DOMANDE_MESE[lang] || DOMANDE_MESE.it)) query.push({ q: riempi(d, nome, lang), lang });
+        if (lang !== 'en' && citta.en) for (const d of DOMANDE_MESE.en) query.push({ q: riempi(d, citta.en, 'en'), lang: 'en' });
+      } else {
+        for (const d of (DOMANDE[lang] || DOMANDE.it)) query.push({ q: `${d} ${nome}`, lang });
+        if (lang !== 'en' && citta.en) for (const d of DOMANDE.en) query.push({ q: `${d} ${citta.en}`, lang: 'en' });
+      }
+      // Anche nella lingua del PAESE, col nome locale (Vienna in tedesco, Città
+      // del Messico in spagnolo): le guide migliori di un posto sono spesso
+      // scritte lì. Solo per le lingue di cui abbiamo le domande.
+      const locale = String((citta as any).lingua_locale || '').slice(0, 2).toLowerCase();
+      if (locale && locale !== lang && locale !== 'en' && DOMANDE[locale] && citta.locale) {
+        const lista = mese ? (DOMANDE_MESE[locale] || []).map((t) => t.replace('{citta}', citta.locale).replace('{mese}', nomeMeseIn(locale))) : DOMANDE[locale].map((d) => `${d} ${citta.locale}`);
+        for (const q of lista.slice(0, 2)) query.push({ q, lang: locale });
+      }
+      const ricerche = await Promise.all(query.map((x) => eventiFeed.ricercaWeb(x.q, { lang: x.lang, count: 6, provider: 'searxng', senzaCache: true, senzaRiserva: true }).catch(() => [] as any[])));
+      const visti = new Set<string>();
+      const candidati: { url: string; host: string; tier: 'A' | 'B' }[] = [];
+      for (const t of ricerche.flat() as any[]) {
+        const url = String(t?.url || '');
+        if (!/^https?:\/\//i.test(url) || visti.has(url) || /\.(pdf|jpe?g|png|gif|webp|mp4)(\?|$)/i.test(url)) continue;
+        let host = ''; try { host = new URL(url).hostname.replace(/^www\./, ''); } catch { continue; }
+        if (HOST_SCARTATI.test(host)) continue;
+        visti.add(url);
+        candidati.push({ url, host, tier: HOST_AFFIDABILI.test(host) ? 'A' : HOST_ESPERIENZE.test(host) ? 'C' : 'B' });
+      }
+      const daScaricare = [...candidati.filter((c) => c.tier === 'A').slice(0, 4), ...candidati.filter((c) => c.tier === 'B').slice(0, 6), ...candidati.filter((c) => c.tier === 'C').slice(0, 5)];
+      const tokCitta = tokenSignificativi(`${nome} ${citta.en}`);
+      const RE_CLIMA = /(clima|climat|weather|wetter|tiempo|meteo|météo|pioggi|rain|pluie|lluvia|regen|temperatur|stagion|season|saison|temporada|jahreszeit|mese|month|mois|mes\b|monat|погод|климат|сезон|气候|天气|季节|月份)/i;
+      // Il pezzo di pagina dove si parla di clima e stagioni, non l'inizio.
+      const passaggiClima = (testo: string, lung = 3500): string => {
+        const paragrafi = testo.split(/\n+/).map((p) => p.trim()).filter((p) => p.length > 60);
+        const utili = paragrafi.filter((p) => RE_CLIMA.test(p));
+        const scelti = (utili.length ? utili : paragrafi).join('\n');
+        return scelti.slice(0, lung);
+      };
+      const pagine = await Promise.all(daScaricare.map(async (c) => {
+        try {
+          const p = await axios.get(c.url, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 8000, maxRedirects: 2, maxContentLength: 2_000_000, responseType: 'text', validateStatus: (s) => s < 400 });
+          if (!/html|text/i.test(String(p.headers?.['content-type'] || 'text/html'))) return null;
+          const testo = testoPaginaMuseo(String(p.data || ''));
+          if (testo.length < 500) return null;
+          const norm = normalizzaTesto(testo);
+          if (tokCitta.length && !tokCitta.some((t) => norm.includes(t))) return null;   // deve parlare di QUESTA città
+          if (!RE_CLIMA.test(testo)) return null;
+          return { ...c, passo: passaggiClima(testo) };
+        } catch { return null; }
+      }));
+      const buone = pagine.filter(Boolean) as any[];
+      const wvUrl = new Set(wv.map((c) => c.url));
+      const scelte = [...wv, ...buone.filter((c) => c.tier === 'A' && !wvUrl.has(c.url)).slice(0, 3), ...buone.filter((c) => c.tier === 'B').slice(0, 4), ...buone.filter((c) => c.tier === 'C').slice(0, 4)];
+      const fontiWeb = scelte.map((c) => ({ url: c.url as string, host: c.host as string, tier: c.tier as 'A' | 'B' | 'C' }));
+      const materialeWeb = scelte.map((c) =>
+        `${c.tier === 'A' ? `PAGINA DI FONTE AFFIDABILE (${c.host}, ${c.url})` : c.tier === 'C' ? `FORUM O RECENSIONI DI VIAGGIATORI, OPINIONI PERSONALI (${c.host}, ${c.url})` : `PAGINA DI BLOG O SITO DI TERZI, NON VERIFICATA (${c.host}, ${c.url})`}:\n${c.passo}`
+      ).join('\n\n');
+      console.log(`[ClimaWeb] «${nome}»: ${candidati.length} candidati, ${buone.length} pagine buone, usate ${scelte.length} (${scelte.map((c) => `${c.tier}:${c.host}`).join(', ') || 'nessuna'})`);
+      return { materialeWeb, fontiWeb, haFontiTerzi: fontiWeb.some((f) => f.tier !== 'A') };
+    } catch (e: any) {
+      console.warn('[ClimaWeb] ricerca fallita:', e?.message);
+      return vuoto;
+    }
+  }
+
+  /**
+   * TRADUZIONE AL VOLO DEI REPORT (committente 24/09/2026: «sistema per
+   * traduzione on the fly»). Il report si genera UNA volta (ricerca web +
+   * AI): per un'altra lingua non si rifà tutto, si traducono i testi del JSON
+   * con una chiamata leggera, mantenendo chiavi, struttura, numeri e fonti.
+   * Stesso principio delle schede dei luoghi (1 lingua generata + 6 tradotte).
+   * Restituisce null se non trova nulla da tradurre o se la traduzione fallisce.
+   */
+  async function reportClimaTradotto(prefisso: string, cella: string, lang: string, sfondo: boolean, suffisso = ''): Promise<any | null> {
+    const daProvare = ['it', 'en', 'es', 'fr', 'de', 'ru', 'zh'].filter((l) => l !== lang);
+    let sorgente: any = null, daLang = '';
+    for (const l of daProvare) {
+      try {
+        const c = await getFromCache(`${prefisso}_${cella}_${l}${suffisso}`);
+        if (c?.text_content?.sezioni) { sorgente = c.text_content; daLang = l; break; }
+      } catch { /* prossima */ }
+    }
+    if (!sorgente) return null;
+    const prompt = `Traduci in ${nomeLingua(lang)} TUTTI i testi (valori stringa) di questo JSON, campo per campo, comprese le stringhe dentro gli array. Regole: le CHIAVI restano identiche; numeri, temperature, millimetri, percentuali, nomi di luoghi, nomi di mesi (tradotti nella lingua di arrivo) e i campi "fonte" restano com'erano; nessuna aggiunta, nessun taglio, stessa lunghezza. Rispondi SOLO con il JSON tradotto.
+${JSON.stringify(sorgente.sezioni)}`;
+    try {
+      const r = await callUniversalAi('groq', [{ role: 'user', content: prompt }], { temperature: 0.1, max_tokens: 3500, response_format: { type: 'json_object' }, groqOnTheFly: !sfondo, excludeEngines: ['agnes'], ...(sfondo ? { gonkaPool: 'clima', gonkaPrimo: true, gonkaTimeoutMs: 120000, gonkaRiprova: true } : {}) },
+        'clima_traduzione', supabaseUrl, supabaseServiceKey, groq, sfondo ? 'background-script' : undefined);
+      const raw = String(r?.data || '');
+      const sezioni = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+      if (!sezioni || typeof sezioni !== 'object' || Object.keys(sezioni).length < Object.keys(sorgente.sezioni).length - 1) return null;
+      const out = { ...sorgente, sezioni: { ...sorgente.sezioni, ...sezioni }, lang, tradottoDa: daLang, generatoIl: new Date().toISOString() };
+      saveToCache(`${prefisso}_${cella}_${lang}${suffisso}`, prefisso, out).catch(() => {});
+      return out;
+    } catch (e: any) { console.warn('[clima] traduzione non riuscita:', e?.message); return null; }
+  }
+
+  /**
+   * IL REPORT COMPLETO: statistiche di vent'anni + tutto quello che il web
+   * dice su quando visitare la città, riscritto dall'AI con le fonti.
+   * Generato una volta per cella e lingua da chi ha l'account (regola
+   * «ospiti no»), poi in cache per tutti per 6 mesi (24/09/2026). Il modello vede
+   * SOLO la tabella e le pagine trovate: ciò che non c'è non si dice.
+   */
+  // Limite per minuto di Groq (8.000 token per chiave, 25/09/2026): prompt + risposta di un report
+  // lo sforavano. Il report più lungo in cache è ~7.400 caratteri (~2.100 token): 2.600 lasciano
+  // margine al ragionamento di gpt-oss. Il materiale web oltre ~9.000 caratteri si taglia.
+  const MAX_TOKENS_REPORT_CLIMA = 2600;
+  const MAX_MATERIALE_WEB_CLIMA = 9000;
+  const materialeClimaPerPrompt = (t: string) => (t && t.length > MAX_MATERIALE_WEB_CLIMA ? `${t.slice(0, MAX_MATERIALE_WEB_CLIMA)}\n[…materiale tagliato]` : t);
+  app.get("/api/meteo/clima/report", rateLimiter, async (req, res) => {
+    const q: any = req.query || {};
+    const lat = Number(q.lat), lon = Number(q.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return res.status(400).json({ ok: false, error: 'lat e lon richiesti' });
+    const lang = (String(q.lang || 'it').slice(0, 2).toLowerCase().match(/^[a-z]{2}$/) || ['it'])[0];
+    const chiave = `clima_report_v2_${climaCella(lat, lon)}_${lang}`;
+    try {
+      const c = await getFromCache(chiave);
+      const eta = c?.created_at ? Date.now() - new Date(c.created_at).getTime() : Infinity;
+      if (c?.text_content?.sezioni && eta < 180 * 24 * 60 * 60 * 1000) return res.json({ ok: true, fonte: 'cache', ...c.text_content });
+    } catch { /* si genera */ }
+    // Il pre-caricamento delle città (scripts/pre-clima-citta.mjs) passa col
+    // segreto di infrastruttura e vale come background-script: chiavi del
+    // pool, mai quelle dedicate a chi aspetta in diretta.
+    const sfondo = !!(SCRIPT_SHARED_SECRET && req.headers?.['x-script-secret'] === SCRIPT_SHARED_SECRET);
+    if (sfondo) req.userId = 'background-script';
+    else if (!(await cancelloGenerazione(req, res))) return;
+    // Esiste già in un'altra lingua? Si traduce, non si rigenera.
+    const tradotto = await reportClimaTradotto('clima_report_v2', climaCella(lat, lon), lang, sfondo);
+    if (tradotto) return res.json({ ok: true, fonte: 'tradotto', ...tradotto });
+    let dati: any;
+    try { dati = await climaPunto(lat, lon); }
+    catch (e: any) { return res.status(503).json({ ok: false, error: e?.message || 'clima non disponibile' }); }
+    const citta = await eventiFeed.cittaInTreNomi(lat, lon, lang).catch(() => null);
+    const nomeCitta = citta?.utente || citta?.locale || citta?.en || '';
+    const web = citta ? await materialeClimaWeb(citta, lang) : { materialeWeb: '', fontiWeb: [], haFontiTerzi: false };
+
+    const nomeM = (m: number) => new Date(2000, m - 1, 1).toLocaleString(lang, { month: 'long' });
+    const tabella = dati.mesi.map((x: any) => `${nomeM(x.m)}: max ${x.tmax ?? '?'}°, min ${x.tmin ?? '?'}°, pioggia ${x.mm ?? '?'} mm, sole ${x.sole ?? '?'} kWh/m²/giorno, umidità ${x.umidita ?? '?'}%, punteggio ${x.punteggio}/100`).join('\n');
+    const periodo = (p: { da: number; a: number }) => (p.da === p.a ? nomeM(p.da) : `${nomeM(p.da)}–${nomeM(p.a)}`);
+    const prompt = `Sei il consulente di viaggio di un'app. Devi scrivere un REPORT completo per chi deve scegliere QUANDO visitare ${nomeCitta || 'questa zona'}. Hai due materiali e NIENT'ALTRO.
+
+1) MEDIE 2001-2020 (NASA POWER, cella di 50 km):
+${tabella}
+Periodo migliore secondo il punteggio: ${dati.migliori.map(periodo).join(', ') || 'nessuno'}. Da evitare: ${dati.peggiori.map(periodo).join(', ') || 'nessuno'}.
+${dati.tendenza ? `TENDENZA DEGLI ULTIMI ANNI rispetto alla media 2001-2020: ${dati.tendenza.anni.map((a: any) => `${a.anno} ${a.deltaT > 0 ? '+' : ''}${a.deltaT}°${a.deltaMmPct != null ? `, pioggia ${a.deltaMmPct > 0 ? '+' : ''}${a.deltaMmPct}%` : ''}`).join('; ')} (media ${dati.tendenza.deltaTMedio > 0 ? '+' : ''}${dati.tendenza.deltaTMedio}°${dati.tendenza.deltaMmPctMedio != null ? `, pioggia ${dati.tendenza.deltaMmPctMedio > 0 ? '+' : ''}${dati.tendenza.deltaMmPctMedio}%` : ''}).` : ''}
+
+2) <materiale> — pagine web su quando visitare ${nomeCitta || 'la zona'}:
+${materialeClimaPerPrompt(web.materialeWeb) || '(nessuna pagina trovata)'}
+</materiale>
+
+Rispondi SOLO con un JSON con queste chiavi, tutti i testi in ${nomeLingua(lang)}:
+{"panoramica": "70-110 parole: come si presenta il clima nell'anno, i contrasti principali con i numeri della tabella, e se c'è la tendenza degli ultimi anni (più caldi, secchi o piovosi del solito)",
+ "periodo_migliore": "70-110 parole: il periodo consigliato e perché, con temperature e pioggia; se le pagine web indicano un periodo diverso o aggiungono motivi (alta stagione, folla, eventi ricorrenti) dillo citando la fonte tra parentesi, es. (wikivoyage.org)",
+ "dal_web": [{"testo": "un consiglio, un suggerimento o una statistica trovati nelle pagine di guide e siti, riscritti con parole tue, 1-3 frasi", "fonte": "host della pagina"}, ... da 4 a 12 voci, tutte diverse: stagioni, folla, prezzi, eventi ricorrenti, mesi da evitare, cosa portare, consigli pratici, curiosità sul clima; NIENTE se le pagine non ci sono],
+ "esperienze": [{"testo": "l'esperienza di un viaggiatore presa da un forum o da una recensione (le pagine marcate OPINIONI PERSONALI), riscritta in terza persona: in che mese è andato e com'è andata, 1-2 frasi", "fonte": "host"}, ... da 0 a 8 voci; sono opinioni: riportale come tali («un viaggiatore racconta che…»), mai come dati],
+ "mese_per_mese": [{"m": 1, "testo": "1-2 frasi con i numeri di quel mese, più ciò che le pagine dicono di quel mese se c'è"}, ... tutti i 12 mesi],
+ "cosa_portare": "50-80 parole ricavate da temperature, escursione, pioggia e dai consigli delle pagine",
+ "orari_migliori": "40-70 parole: quali ore della giornata preferire nei mesi caldi e in quelli freddi",
+ "avvertenze": "40-70 parole: i mesi con pioggia o caldo forti, e gli avvisi trovati nelle pagine",
+ "statistiche": [{"voce": "es. Mese più piovoso", "valore": "es. novembre, 96 mm"}, ... 5-8 voci dalla tabella e, se le pagine ne danno di confermate, anche da lì con la fonte nel valore],
+ "conclusioni": "70-110 parole: il TUO verdetto, netto e motivato, che mette insieme numeri, consigli del web ed esperienze: quando andare e perché, per chi va bene ogni periodo (famiglie, chi soffre il caldo, chi cerca poca folla…), e l'alternativa migliore se il periodo consigliato non è possibile"}
+REGOLE: i numeri vengono dalla tabella; tutto il resto SOLO dalle pagine, ognuno con la sua fonte; se una cosa non è né nella tabella né nelle pagine NON si dice. Niente frasi di cerimonia. Le chiavi del JSON restano in italiano.${regoleMaterialeWeb(web.haFontiTerzi)}`;
+    try {
+      // In diretta (25/09/2026): Gonka «clima» primo (90 s + un secondo tentativo), Groq on-the-fly dietro.
+      const r = await callUniversalAi('groq', [{ role: 'user', content: prompt }], { temperature: 0.3, max_tokens: MAX_TOKENS_REPORT_CLIMA, response_format: { type: 'json_object' }, groqOnTheFly: !sfondo, excludeEngines: ['agnes'], ...(sfondo ? { gonkaPool: 'clima', gonkaPrimo: true, gonkaTimeoutMs: 120000, gonkaRiprova: true, gonkaMaxTokens: 4500 } : { gonkaPool: 'clima', gonkaAncheInDiretta: true, gonkaTimeoutMs: 90000, gonkaRiprova: true, gonkaMaxTokens: 4500 }) },
+        'clima_report', supabaseUrl, supabaseServiceKey, groq, sfondo ? 'background-script' : req.userId);
+      const raw = String(r?.data || '');
+      const j = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+      const testo = (v: any) => String(v || '').trim();
+      const sezioni = {
+        panoramica: testo(j.panoramica), periodo_migliore: testo(j.periodo_migliore),
+        dal_web: Array.isArray(j.dal_web) ? j.dal_web.filter((x: any) => x && testo(x.testo)).slice(0, 12).map((x: any) => ({ testo: testo(x.testo), fonte: testo(x.fonte) })) : [],
+        esperienze: Array.isArray(j.esperienze) ? j.esperienze.filter((x: any) => x && testo(x.testo)).slice(0, 8).map((x: any) => ({ testo: testo(x.testo), fonte: testo(x.fonte) })) : [],
+        mese_per_mese: Array.isArray(j.mese_per_mese) ? j.mese_per_mese.filter((x: any) => x && x.m >= 1 && x.m <= 12).map((x: any) => ({ m: Number(x.m), testo: testo(x.testo) })) : [],
+        cosa_portare: testo(j.cosa_portare), orari_migliori: testo(j.orari_migliori), avvertenze: testo(j.avvertenze),
+        statistiche: Array.isArray(j.statistiche) ? j.statistiche.filter((x: any) => x && testo(x.voce)).slice(0, 10).map((x: any) => ({ voce: testo(x.voce), valore: testo(x.valore) })) : [],
+        conclusioni: testo(j.conclusioni),
+      };
+      if (sezioni.panoramica.length < 80) throw new Error('report vuoto');
+      const out = { sezioni, citta: nomeCitta, lang, fontiWeb: web.fontiWeb, generatoIl: new Date().toISOString(), attribuzione: dati.attribuzione };
+      saveToCache(chiave, 'clima_report', out).catch(() => {});
+      res.json({ ok: true, fonte: 'nuovo', ...out });
+    } catch (e: any) {
+      console.warn('[clima] report non generato:', e?.message);
+      res.status(503).json({ ok: false, error: 'report non disponibile ora' });
+    }
+  });
+
+  /**
+   * IL REPORT DI UN MESE (24/09/2026, modo «Mese»): la città in QUEL mese.
+   * Numeri del mese e dei due vicini, mare se c'è, e pagine web cercate sul
+   * mese («Roma ad agosto», forum «ci sono stato ad agosto»). Stesse regole
+   * del report annuale; cache 6 mesi per cella, lingua e mese; generato
+   * solo con account (o dal pre-caricamento col segreto).
+   */
+  app.get("/api/meteo/clima/mese", rateLimiter, async (req, res) => {
+    const q: any = req.query || {};
+    const lat = Number(q.lat), lon = Number(q.lon), m = Number(q.m);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !(m >= 1 && m <= 12)) return res.status(400).json({ ok: false, error: 'lat, lon e m (1-12) richiesti' });
+    const lang = (String(q.lang || 'it').slice(0, 2).toLowerCase().match(/^[a-z]{2}$/) || ['it'])[0];
+    const chiave = `clima_mese_v1_${climaCella(lat, lon)}_${lang}_${m}`;
+    try {
+      const c = await getFromCache(chiave);
+      const eta = c?.created_at ? Date.now() - new Date(c.created_at).getTime() : Infinity;
+      if (c?.text_content?.sezioni && eta < 180 * 24 * 60 * 60 * 1000) return res.json({ ok: true, fonte: 'cache', ...c.text_content });
+    } catch { /* si genera */ }
+    const sfondo = !!(SCRIPT_SHARED_SECRET && req.headers?.['x-script-secret'] === SCRIPT_SHARED_SECRET);
+    if (sfondo) req.userId = 'background-script';
+    else if (!(await cancelloGenerazione(req, res))) return;
+    // Scheda del mese già scritta in un'altra lingua? Si traduce.
+    const tradotto = await reportClimaTradotto('clima_mese_v1', climaCella(lat, lon), lang, sfondo, `_${m}`);
+    if (tradotto) return res.json({ ok: true, fonte: 'tradotto', ...tradotto });
+    let dati: any;
+    try { dati = await climaPunto(lat, lon); }
+    catch (e: any) { return res.status(503).json({ ok: false, error: e?.message || 'clima non disponibile' }); }
+    const citta = await eventiFeed.cittaInTreNomi(lat, lon, lang).catch(() => null);
+    const nomeCitta = citta?.utente || citta?.locale || citta?.en || '';
+    const web = citta ? await materialeClimaWeb(citta, lang, m) : { materialeWeb: '', fontiWeb: [], haFontiTerzi: false };
+
+    const nomeM = (k: number) => new Date(2000, k - 1, 1).toLocaleString(lang, { month: 'long' });
+    const riga = (x: any) => `${nomeM(x.m)}: max ${x.tmax ?? '?'}°, min ${x.tmin ?? '?'}°, pioggia ${x.mm ?? '?'} mm, sole ${x.sole ?? '?'} kWh/m²/giorno, umidità ${x.umidita ?? '?'}%, punteggio ${x.punteggio}/100`;
+    const prima = dati.mesi[(m + 10) % 12], questo = dati.mesi[m - 1], dopo = dati.mesi[m % 12];
+    const classifica = [...dati.mesi].sort((a: any, b: any) => b.punteggio - a.punteggio).findIndex((x: any) => x.m === m) + 1;
+    const mareRiga = dati.mare?.mesi?.[m - 1]?.t != null ? `Temperatura del mare a ${nomeM(m)}: ${dati.mare.mesi[m - 1].t}° (balneabile da 22°).` : '';
+    const migliore = [...dati.mesi].sort((a: any, b: any) => b.punteggio - a.punteggio)[0];
+    const prompt = `Sei il consulente di viaggio di un'app. Devi scrivere la SCHEDA di ${nomeCitta || 'questa zona'} per chi ci va a ${nomeM(m)}. Hai due materiali e NIENT'ALTRO.
+
+1) MEDIE 2001-2020 (NASA POWER):
+${riga(questo)}  ← IL MESE
+Mese prima — ${riga(prima)}
+Mese dopo — ${riga(dopo)}
+${nomeM(m)} è il ${classifica}° mese migliore su 12 per visitare a piedi; il migliore in assoluto è ${nomeM(migliore.m)} (${migliore.punteggio}/100). ${mareRiga}
+
+2) <materiale> — pagine web su ${nomeCitta || 'la zona'} a ${nomeM(m)}:
+${materialeClimaPerPrompt(web.materialeWeb) || '(nessuna pagina trovata)'}
+</materiale>
+
+Rispondi SOLO con un JSON con queste chiavi, tutti i testi in ${nomeLingua(lang)}:
+{"cosa_aspettarsi": "60-90 parole: il tempo di quel mese con i numeri, il confronto con il mese prima e dopo, e cosa cambia per chi visita a piedi",
+ "dal_web": [{"testo": "consiglio, suggerimento o statistica trovati nelle pagine su QUESTO mese, riscritti con parole tue", "fonte": "host"}, ... 3-10 voci; NIENTE se le pagine non ci sono],
+ "esperienze": [{"testo": "l'esperienza di chi c'è stato in questo mese, da forum o recensioni (pagine OPINIONI PERSONALI), riscritta in terza persona", "fonte": "host"}, ... 0-6 voci; opinioni, mai dati],
+ "eventi": [{"testo": "un evento o una ricorrenza di questo mese citati nelle pagine (nome e periodo), 1 frase", "fonte": "host"}, ... 0-6 voci; SOLO se sono nelle pagine],
+ "cosa_portare": "40-60 parole per questo mese",
+ "orari_migliori": "30-50 parole: le ore della giornata da preferire in questo mese",
+ "alternativa": "30-60 parole: se il mese non è tra i migliori, il mese vicino che conviene di più e perché con i numeri; se è tra i migliori, dillo",
+ "conclusioni": "50-80 parole: il TUO verdetto su ${nomeCitta || 'la zona'} a ${nomeM(m)}: per chi va bene, per chi no, cosa aspettarsi in una riga"}
+REGOLE: i numeri vengono dalla tabella; tutto il resto SOLO dalle pagine, con la fonte; ciò che non c'è non si dice. Niente frasi di cerimonia. Le chiavi del JSON restano in italiano.${regoleMaterialeWeb(web.haFontiTerzi)}`;
+    try {
+      const r = await callUniversalAi('groq', [{ role: 'user', content: prompt }], { temperature: 0.3, max_tokens: 2200, response_format: { type: 'json_object' }, groqOnTheFly: !sfondo, excludeEngines: ['agnes'], ...(sfondo ? { gonkaPool: 'clima', gonkaPrimo: true, gonkaTimeoutMs: 120000, gonkaRiprova: true, gonkaMaxTokens: 4500 } : { gonkaPool: 'clima', gonkaAncheInDiretta: true, gonkaTimeoutMs: 90000, gonkaRiprova: true, gonkaMaxTokens: 4500 }) },
+        'clima_mese', supabaseUrl, supabaseServiceKey, groq, sfondo ? 'background-script' : req.userId);
+      const raw = String(r?.data || '');
+      const j = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+      const testo = (v: any) => String(v || '').trim();
+      const lista = (v: any, max: number) => (Array.isArray(v) ? v.filter((x: any) => x && testo(x.testo)).slice(0, max).map((x: any) => ({ testo: testo(x.testo), fonte: testo(x.fonte) })) : []);
+      const sezioni = {
+        cosa_aspettarsi: testo(j.cosa_aspettarsi), dal_web: lista(j.dal_web, 10), esperienze: lista(j.esperienze, 6), eventi: lista(j.eventi, 6),
+        cosa_portare: testo(j.cosa_portare), orari_migliori: testo(j.orari_migliori), alternativa: testo(j.alternativa), conclusioni: testo(j.conclusioni),
+      };
+      if (sezioni.cosa_aspettarsi.length < 60) throw new Error('scheda vuota');
+      const out = { sezioni, citta: nomeCitta, lang, m, classifica, fontiWeb: web.fontiWeb, generatoIl: new Date().toISOString(), attribuzione: dati.attribuzione };
+      saveToCache(chiave, 'clima_mese', out).catch(() => {});
+      res.json({ ok: true, fonte: 'nuovo', ...out });
+    } catch (e: any) {
+      console.warn('[clima] scheda del mese non generata:', e?.message);
+      res.status(503).json({ ok: false, error: 'scheda non disponibile ora' });
+    }
   });
 
   /**
@@ -33122,9 +34094,9 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
   // doppia AI per quella città+angolo+1 giorno) il costo scende a metà e la
   // differenza viene rimborsata subito — percorso quasi gratuito e quasi
   // istantaneo. Altrimenti si genera un giorno fresco: 1 SOLA chiamata AI
-  // + verifica in codice (schema, distanza dal centro, minimo tappe);
-  // NIENTE revisore AI separato (troppo lento/costoso per una semplice
-  // aggiunta — a differenza della semina della Libreria).
+  // + verifica in codice (schema, distanza dal centro, minimo tappe).
+  // Dal 25/09/2026 (ordine del committente) anche gli stessi controlli del
+  // generatore: aggancio al DB, doppioni, verifica e revisore dei fatti.
   // ═══════════════════════════════════════════════════════════════════════
 
   /** Istruzioni editoriali sintetiche per i temi esposti in UI — gli STESSI
@@ -33347,12 +34319,25 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
       // guarda DOPO i due punti e, se ci sono più città separate da virgola,
       // si prende l'ULTIMA — un giorno si aggiunge tipicamente in fondo al
       // viaggio, dove il roadtrip finisce.
-      const baseCityGrezza = String(dati.destinazione || dati.destination || itin.titolo || '');
-      const baseCityDopoIDuePunti = baseCityGrezza.includes(':') ? baseCityGrezza.split(':').slice(1).join(':') : baseCityGrezza;
-      const baseCityParte = baseCityDopoIDuePunti.split(' — ')[0];
-      const baseCityElenco = baseCityParte.split(',').map((s) => s.trim()).filter(Boolean);
-      const baseCity = (baseCityElenco.length ? baseCityElenco[baseCityElenco.length - 1] : baseCityParte.trim()) || 'la destinazione';
+      // 25/09/2026 (collaudo Bologna): per i titoli normali («Bologna in 2 giorni: arte, storia e sapori con Lucio
+      // Dalla») il testo DOPO i due punti dava la città «storia e sapori con Lucio Dalla»: `cittaDiscordante`
+      // scartava ogni poi_id e verifica/revisore ricevevano una destinazione falsa. Ordine: destinazione salvata,
+      // città vera dell'ultima tappa (reverse geocoding in cache), titolo (prima dei due punti; dopo solo nei roadtrip).
       const baseCoords = extItineraryCoords(dati);
+      const titoloItin = String(itin.titolo || dati.titolo || '');
+      const eRoadtrip = /road\s*-?\s*trip/i.test(titoloItin);
+      const baseCityParte = (eRoadtrip && titoloItin.includes(':') ? titoloItin.split(':').slice(1).join(':') : titoloItin.split(':')[0]).split(' — ')[0];
+      const baseCityElenco = baseCityParte.split(',').map((s) => s.trim()).filter(Boolean);
+      const baseCityDaTitolo = String((eRoadtrip ? baseCityElenco[baseCityElenco.length - 1] : baseCityElenco[0]) || '')
+        .replace(/\s+(in|a|ad|per)\s+\d+\s+giorn[oi]\b.*$/i, '')
+        .replace(/^\s*\d+\s+giorn[oi]\s+(a|ad|in|tra)\s+/i, '')
+        .replace(/^\s*(week-?end|un giorno|una giornata)\s+(a|ad|in)\s+/i, '')
+        .trim();
+      let baseCityDaCoord = '';
+      if (!dati.destinazione && !dati.destination && baseCoords) {
+        try { baseCityDaCoord = (await eventiFeed.cittaInTreNomi(baseCoords.lat, baseCoords.lon, language)).utente || ''; } catch { /* titolo */ }
+      }
+      const baseCity = String(dati.destinazione || dati.destination || baseCityDaCoord || baseCityDaTitolo || '').trim() || 'la destinazione';
 
       // (b) Città/coordinate target del nuovo giorno + eventuale blocco di
       // trasferimento (gita fuori porta), km/durata calcolati QUI, mai
@@ -33450,6 +34435,52 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
           if (problems.length === 0) newDay = gen;
           else console.warn('[itinerary/extend] Verifica in codice fallita:', problems.join(' | '));
         }
+      }
+
+      // (d-bis) CONTROLLI COMPLETI anche sul giorno aggiunto (25/09/2026, ordine del committente; collaudo
+      // Bologna: «Osteria Bartolini» a pranzo e cena, «Vecchia Dogana» fuori città, niente verifica). Come il
+      // generatore: aggancio al database, «doppioni mai» (tolti SOLO dal giorno nuovo, i giorni vecchi restano),
+      // un nuovo tentativo se il giorno scende sotto il minimo, verifica anti-allucinazione e revisore dei fatti.
+      const controllaGiorno = async (day: any): Promise<void> => {
+        const cancel = { cancelled: false };
+        let timer: any;
+        try {
+          await Promise.race([
+            agganciaTappeAlDatabase({ giorni: [day] }, targetCoords, targetCity, cancel),
+            new Promise((r) => { timer = setTimeout(() => { cancel.cancelled = true; r(null); }, 12000); }),
+          ]);
+        } catch { /* fail-open */ } finally { clearTimeout(timer); }
+        try {
+          const tolti = togliDoppioniItinerario({ giorni: [...giorniEsistenti, day] }, new Set([giorniEsistenti.length]));
+          if (tolti) console.log(`[itinerary/extend] ${tolti} doppioni tolti dal giorno nuovo`);
+        } catch { /* fail-open */ }
+      };
+      if (newDay) {
+        await controllaGiorno(newDay);
+        if (extVerifyDay(newDay, targetCoords).length) {
+          const gen2 = await extGenerateFreshDay({
+            city: targetCity, coords: targetCoords, dayNumber: nextDayNum, theme, language,
+            avoidTitles: [...avoidTitles, ...(newDay.tappe || []).map((t: any) => t?.titolo_tappa).filter(Boolean)], transferBlock,
+          });
+          if (gen2 && !extVerifyDay(gen2, targetCoords).length) {
+            await controllaGiorno(gen2);
+            newDay = extVerifyDay(gen2, targetCoords).length ? null : gen2;
+            servedFromCache = false;
+          } else newDay = null;
+          if (!newDay) console.warn('[itinerary/extend] giorno sotto il minimo anche dopo il nuovo tentativo');
+        }
+      }
+      if (newDay) {
+        try {
+          await Promise.race([
+            verifyItineraryAntiHallucination({ giorni: [newDay] }, { destination: targetCity, lat: targetCoords.lat, lon: targetCoords.lon, radiusKm: 60, language, inDiretta: true }),
+            new Promise((r) => setTimeout(r, 20000)),
+          ]);
+        } catch { /* fail-open */ }
+        try {
+          const rf = await revisoreFattiItinerario({ giorni: [newDay] }, { destination: targetCity, language, userId: extUserId, tettoMs: 40000 });
+          newDay.qualita = { ...(newDay.qualita || {}), revisore_fatti: rf };
+        } catch { newDay.qualita = { ...(newDay.qualita || {}), revisore_fatti: { esito: 'non_eseguito', controllate: 0, frasi_tolte: 0 } }; }
       }
 
       if (!newDay) {
@@ -36850,13 +37881,13 @@ out center tags;`;
         if (!confirmPurchase) {
           return res.status(402).json({ error: 'no_messages_left', needsPurchase: true, cost: CHAT_PACK_COST, packSize: CHAT_PACK_SIZE });
         }
-        const rpcRes = await axios.post(
-          `${supabaseUrl}/rest/v1/rpc/consume_credits`,
-          { p_user_id: authUserId, p_amount: CHAT_PACK_COST },
-          { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' } }
-        );
-        if (rpcRes.data !== true) {
-          return res.status(402).json({ error: 'insufficient_credits', cost: CHAT_PACK_COST });
+        // Con la causale (25/09/2026, collaudo): la RPC chiamata a due argomenti lasciava
+        // `description` vuota nel registro crediti, e i 3 crediti comparivano senza motivo.
+        const esitoPack = await consumeCreditsServer(authUserId, CHAT_PACK_COST, 'chat_session');
+        if (esitoPack !== 'ok') {
+          return esitoPack === 'insufficient'
+            ? res.status(402).json({ error: 'insufficient_credits', cost: CHAT_PACK_COST })
+            : res.status(503).json({ error: 'chat_pack_failed', retryLater: true });
         }
         chatMessagesLeft = CHAT_PACK_SIZE;
         // (20/09/2026, verifica pagamenti) Il pacchetto si scrive SUBITO: prima
@@ -37066,13 +38097,12 @@ RISPONDI SOLO con questo JSON, nient'altro:
         if (!confirmPurchase) {
           return res.status(402).json({ error: "no_messages_left", needsPurchase: true, cost: CHAT_PACK_COST, packSize: CHAT_PACK_SIZE });
         }
-        const rpcRes = await axios.post(
-          `${supabaseUrl}/rest/v1/rpc/consume_credits`,
-          { p_user_id: authUserId, p_amount: CHAT_PACK_COST },
-          { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, "Content-Type": "application/json" } }
-        );
-        if (rpcRes.data !== true) {
-          return res.status(402).json({ error: "insufficient_credits", cost: CHAT_PACK_COST });
+        // Con la causale nel registro crediti (25/09/2026), come /api/itinerary/converse.
+        const esitoPack = await consumeCreditsServer(authUserId, CHAT_PACK_COST, 'chat_session');
+        if (esitoPack !== 'ok') {
+          return esitoPack === 'insufficient'
+            ? res.status(402).json({ error: "insufficient_credits", cost: CHAT_PACK_COST })
+            : res.status(503).json({ error: "chat_pack_failed", retryLater: true });
         }
         chatMessagesLeft = CHAT_PACK_SIZE;
         // (20/09/2026, verifica pagamenti) Pacchetto scritto SUBITO, come in
@@ -38945,6 +39975,9 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
           const righe: any[] = Array.isArray(r.data) ? r.data : [];
           let migliore: any = null, punteggio = 0;
           for (const riga of righe) {
+            // Confronto RIGOROSO (25/09/2026, collaudo Bologna): con la sola somiglianza ≥ 0,5 «Casa di Lucio Dalla»
+            // si agganciava a «Casa Morandi» (una parola in comune, «casa») e ne prendeva indirizzo e foto.
+            if (!nomiStessoLuogo(poi.titolo, riga.name, destination)) continue;
             const s = somiglianza(poi.titolo, riga.name);
             if (s > punteggio) { punteggio = s; migliore = riga; }
           }

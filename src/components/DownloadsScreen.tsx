@@ -46,7 +46,7 @@ import { notify } from '../lib/toast';
 import { supabase } from '../lib/supabase';
 import OfflineMapsTab from './OfflineMapsTab';
 import { useRaccontoViaggio } from './RaccontoViaggio';
-import { elencoPdf, leggiPdf, eliminaPdf, idPdf, type PdfVoce, type PdfTipo } from '../lib/pdfArchivio';
+import { elencoPdf, eliminaPdf, idPdf, riapriPdf, type PdfVoce, type PdfTipo } from '../lib/pdfArchivio';
 import { saveBlobAsFile, getLocalGuide, saveGuideLocally } from '../services/premiumGuideService';
 import { Capacitor } from '@capacitor/core';
 
@@ -440,18 +440,12 @@ export default function DownloadsScreen({ language, cartellaIniziale, onApriAsco
   const pdfDi = (tipo: PdfTipo, nome: string) => pdf.find(v => v.id === idPdf(tipo, nome));
 
   /** Riapre un PDF gia' stampato, senza rigenerarlo. */
+  // (23/09/2026) Il corpo sta in pdfArchivio.riapriPdf: lo usa anche il widget «Guida stampata».
   const apriPdf = async (v: PdfVoce) => {
-    const blob = await leggiPdf(v.id);
-    if (!blob) { notify(t('pf_pdf_non_riuscito')); void ricarica(); return; }
-    if (Capacitor.isNativePlatform()) {
-      const ok = await saveBlobAsFile(blob, v.file);
-      notify(t(ok ? (Capacitor.isNativePlatform() ? 'pf_pdf_salvato' : 'pf_pdf_salvato_web') : 'pf_pdf_non_riuscito'));
-      return;
-    }
-    const url = URL.createObjectURL(blob);
-    const finestra = window.open(url, '_blank');
-    if (!finestra) await saveBlobAsFile(blob, v.file);
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    const esito = await riapriPdf(v.id);
+    if (esito === 'assente') { notify(t('pf_pdf_non_riuscito')); void ricarica(); return; }
+    if (esito === 'salvato') notify(t('pf_pdf_salvato'));
+    else if (esito === 'errore') notify(t('pf_pdf_non_riuscito'));
   };
 
   const nomeFilePdf = (titolo: string) => `WIP - ${String(titolo).replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 60)}.pdf`;

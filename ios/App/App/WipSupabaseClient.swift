@@ -606,9 +606,17 @@ final class WipSupabaseClient {
         if uiCategories.isEmpty {
             return pois.filter { $0.isGem || PoiCategories.culturalCats.contains($0.poiType ?? "") }
         }
+        // (23/09/2026, batteria) Le gemme passano SOLO se non c'è la sentinella
+        // "gemme:off" (PoiCategories.areGemsActive), come CategoryMap.isActive
+        // su Android: `if (isGem) return !selected.contains("gemme:off")`.
+        // Prima passavano sempre, e in «modalità navigatore» (categories =
+        // ['gemme:off']) il radar si riempiva di gemme che non potevano parlare
+        // ma costavano file, region, batch-teaser e notifiche di scoperta.
+        let gemmeAttive = PoiCategories.areGemsActive(selected: uiCategories)
         return pois.filter { poi in
+            if poi.isGem { return gemmeAttive }
             let cat = (poi.poiType ?? "").lowercased()
-            return poi.isGem || targetDbCategories.contains(cat) || uiCategories.contains(cat)
+            return targetDbCategories.contains(cat) || uiCategories.contains(cat)
         }
     }
 }

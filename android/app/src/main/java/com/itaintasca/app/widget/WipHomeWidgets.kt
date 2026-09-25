@@ -36,10 +36,18 @@ object WipHomeWidgets {
     private val provider = listOf(
         WipItinerarioWidget::class.java, WipVisitaWidget::class.java,
         WipCreditiWidget::class.java, WipViciniWidget::class.java,
+        // Undici widget nuovi (23/09/2026), in WipHomeWidgets2.kt
+        WipUltimoAscoltoWidget::class.java, WipLuogoGiornoWidget::class.java,
+        WipVisionWidget::class.java, WipMeteoWidget::class.java,
+        WipAscoltaWidget::class.java, WipEventiWidget::class.java,
+        WipGemmaRegioneWidget::class.java, WipConfrontoWidget::class.java,
+        WipAltraLinguaWidget::class.java, WipGuidaStampataWidget::class.java,
+        WipFotoCommunityWidget::class.java,
     )
 
     /** Chiede a ogni provider con almeno un widget in home di ridisegnarsi. */
     fun aggiornaTutti(context: Context) {
+        pulisciUnaVoltaAlGiorno(context)
         val mgr = AppWidgetManager.getInstance(context)
         for (p in provider) {
             try {
@@ -51,6 +59,17 @@ object WipHomeWidgets {
                 })
             } catch (e: Exception) { Log.w(TAG, "aggiornamento ${p.simpleName} fallito: ${e.message}") }
         }
+    }
+
+    /** Pulizia delle miniature vecchie (14 giorni), al massimo una volta al giorno. */
+    private fun pulisciUnaVoltaAlGiorno(context: Context) {
+        try {
+            val prefs = WipWidgetsPlugin.prefs(context)
+            val adesso = System.currentTimeMillis()
+            if (adesso - prefs.getLong("pulizia", 0L) < 24L * 3600 * 1000) return
+            prefs.edit().putLong("pulizia", adesso).apply()
+            Thread { WipWidgetDati.pulisciMiniature(context.applicationContext) }.start()
+        } catch (e: Exception) { Log.w(TAG, "pulizia miniature: ${e.message}") }
     }
 
     fun apri(context: Context, azione: String, requestCode: Int): PendingIntent {

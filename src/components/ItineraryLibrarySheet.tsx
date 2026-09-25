@@ -31,6 +31,30 @@ import { guidePerTappe, apriGuidaMuseo, GuidaPerTappa } from '../lib/museumVisit
  * su quel museo. Stesso stile dei badge minuscoli che stanno sopra
  * (consiglio, tempo): niente altro cambia nella card.
  */
+/**
+ * Chip «☀️ Periodo migliore: apr–giu» (24/09/2026): clima NASA POWER della città, solo numeri,
+ * nessuna AI. Se la città non si trova o il clima non risponde la chip semplicemente non c'è.
+ */
+function ChipPeriodoMigliore({ city, country, coords, language }: { city?: string; country?: string; coords?: { lat: number; lon: number } | null; language: Language }) {
+  const [testo, setTesto] = useState('');
+  useEffect(() => {
+    if (!city && !coords) return;
+    let vivo = true;
+    import('../lib/climaIndex').then(async (c) => {
+      const migliori = await c.periodoMiglioreCitta(city || '', country, language, coords);
+      const t = migliori?.length ? c.testoPeriodi(migliori, language) : '';
+      if (vivo && t) setTesto(getTranslation('mp_clima_periodo_migliore', language).replace('{periodo}', t));
+    }).catch(() => {});
+    return () => { vivo = false; };
+  }, [city, country, coords?.lat, coords?.lon, language]);
+  if (!testo) return null;
+  return (
+    <span className="text-[10px] font-black bg-sky-50 text-sky-700 border border-sky-200 px-2 py-0.5 rounded-full" title="NASA POWER 2001-2020">
+      ☀️ {testo}
+    </span>
+  );
+}
+
 function BadgeGuidaMuseo({ tappa, language }: { tappa: any; language: Language }) {
   const [guida, setGuida] = useState<GuidaPerTappa | null>(null);
   const id = String(tappa?.poi_id || '').trim();
@@ -1072,8 +1096,11 @@ export default function ItineraryLibrarySheet({
   }, [vociVisibili, language]);
 
   const verifiedBadge = (r: LibraryResult) => {
-    const n = Array.isArray(r.verifiedBy) ? r.verifiedBy.length : Number(r.verifiedBy) || 0;
-    if (n < 2) return null;
+    // Motori DIVERSI (25/09/2026): «agnes → agnes» non sono 2 AI, è una sola.
+    const n = Array.isArray(r.verifiedBy)
+      ? new Set(r.verifiedBy.map((m) => String(m || '').toLowerCase().split(/[\s:(/]/)[0]).filter(Boolean)).size
+      : Number(r.verifiedBy) || 0;
+    if (n < 1) return null;
     return (
       <span className="shrink-0 flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
         <CheckCircle2 className="w-2.5 h-2.5" /> {t('verified_by')} {n} AI
@@ -1155,6 +1182,16 @@ export default function ItineraryLibrarySheet({
                       ★ {Number(detail.meta.score).toFixed(1)}
                     </span>
                   )}
+                  <ChipPeriodoMigliore
+                    city={detail.meta?.city} country={detail.meta?.country} language={language}
+                    coords={(() => {
+                      // Le coordinate della prima tappa, se l'item le ha: più precise della città geocodificata.
+                      const t = (detail.itinerary?.giorni || []).flatMap((g: any) => g?.tappe || [])
+                        .map((x: any) => ({ lat: Number(x?.coordinate?.lat), lon: Number(x?.coordinate?.lng ?? x?.coordinate?.lon) }))
+                        .find((x: any) => Number.isFinite(x.lat) && Number.isFinite(x.lon) && x.lat !== 0);
+                      return t || null;
+                    })()}
+                  />
                 </div>
               </div>
 
@@ -1457,6 +1494,7 @@ export default function ItineraryLibrarySheet({
                           {angleOf(v.r)}
                         </span>
                       )}
+                      <ChipPeriodoMigliore city={v.r.city} country={v.r.country} language={language} />
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">

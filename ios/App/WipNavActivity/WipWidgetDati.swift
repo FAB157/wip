@@ -13,6 +13,7 @@
 
 import Foundation
 import UIKit
+import ImageIO
 
 struct WipWidgetEtichette: Decodable {
     var itinerario = "Itinerario di oggi"
@@ -156,16 +157,63 @@ struct WipWidgetSnapshot: Decodable {
     var itinerario: WipWidgetItinerario?
     var vicini: [WipWidgetVicino] = []
     var posizione: WipWidgetPosizione?
-    private enum K: String, CodingKey { case v, ts, lingua, etichette, crediti, visita, itinerario, vicini, posizione }
+    // Widget nuovi (23/09/2026, snapshot `rev: 2`, `v` resta 1): tutti
+    // opzionali, uno snapshot vecchio decodifica lo stesso.
+    /// Tutte le etichette, per chiave: i widget nuovi non hanno una proprieta'
+    /// per chiave in WipWidgetEtichette (che resta per i 4 di prima).
+    var testi: [String: String] = [:]
+    var sessione: Bool = false
+    var ultimoAscolto: WipWidgetUltimoAscolto?
+    var linguaAlt: WipWidgetLinguaAlt?
+    var luogoGiorno: [WipWidgetLuogo] = []
+    var meteo: WipWidgetMeteo?
+    var garanzia: WipWidgetGaranzia?
+    var ascoltaOra: WipWidgetAscolta?
+    var eventi: [WipWidgetEvento] = []
+    var gemmaRegione: WipWidgetGemma?
+    var confronto: WipWidgetConfronto?
+    var guidaStampata: WipWidgetPdf?
+    var fotoCommunity: WipWidgetFotoCommunity?
+    private enum K: String, CodingKey {
+        case v, ts, lingua, etichette, crediti, visita, itinerario, vicini, posizione
+        case sessione, ultimoAscolto, linguaAlt, luogoGiorno, meteo, garanzia, ascoltaOra, eventi, gemmaRegione, confronto, guidaStampata, fotoCommunity
+    }
     init() {}
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         v = c.v(.v, 0); ts = c.v(.ts, 0); lingua = c.v(.lingua, "it"); etichette = c.v(.etichette, WipWidgetEtichette())
         crediti = c.o(.crediti); visita = c.o(.visita); itinerario = c.o(.itinerario)
         vicini = c.v(.vicini, []); posizione = c.o(.posizione)
+        testi = c.v(.etichette, [String: String]())
+        sessione = c.v(.sessione, false)
+        ultimoAscolto = c.o(.ultimoAscolto); linguaAlt = c.o(.linguaAlt); luogoGiorno = c.v(.luogoGiorno, [])
+        meteo = c.o(.meteo); garanzia = c.o(.garanzia); ascoltaOra = c.o(.ascoltaOra); eventi = c.v(.eventi, [])
+        gemmaRegione = c.o(.gemmaRegione); confronto = c.o(.confronto); guidaStampata = c.o(.guidaStampata)
+        fotoCommunity = c.o(.fotoCommunity)
     }
 
     var data: Date { Date(timeIntervalSince1970: ts / 1000) }
+
+    /// Etichetta tradotta dall'app; vuota o assente = il default italiano.
+    func t(_ k: String, _ def: String) -> String {
+        let s = testi[k] ?? ""
+        return s.isEmpty ? def : s
+    }
+
+    /// Il «luogo del giorno» della data data (la voce della timeline: a
+    /// mezzanotte il widget passa da solo a quello di domani). La data e'
+    /// quella locale AAAA-MM-GG del JS: calendario gregoriano, non
+    /// `Calendar.current` (con il calendario giapponese o buddista «yyyy»
+    /// darebbe l'anno dell'era e nessuna voce combacerebbe).
+    func luogoDi(_ data: Date) -> WipWidgetLuogo? {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone.current
+        f.dateFormat = "yyyy-MM-dd"
+        let giorno = f.string(from: data)
+        return luogoGiorno.first { $0.giorno == giorno }
+    }
 
     /// Legge lo snapshot dall'App Group. `nil` = l'app non ha mai scritto
     /// (primo avvio, App Group assente): il widget mostra l'invito ad aprire WIP.
@@ -231,23 +279,275 @@ enum WipWidgetMiniature {
         return String(h, radix: 16) + ".jpg"
     }
 
-    /// Restituisce la miniatura (max ~160 px) scaricandola una volta sola.
-    /// Tempo massimo per immagine: 4 s; oltre, niente foto (mai un errore).
+    /// Restituisce la miniatura (lato massimo `lato` px) scaricandola una volta
+    /// sola. Tempo massimo per immagine: 4 s; oltre, niente foto (mai un errore).
+    /// Il file in cache porta il lato nel nome (tranne 160: le miniature gia'
+    /// salvate dai 4 widget di prima restano valide). La riduzione passa da
+    /// ImageIO, senza decodificare l'originale intero: l'estensione ha un
+    /// tetto di memoria basso e una foto da 4000 px lo sfonderebbe.
     static func carica(_ url: String, lato: CGFloat = 160) async -> UIImage? {
         guard !url.isEmpty, let u = URL(string: url), let dir = cartella else { return nil }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent(nomeFile(url))
+        let file = dir.appendingPathComponent(nomeFile(url + (lato == 160 ? "" : "#\(Int(lato))")))
         if let d = try? Data(contentsOf: file), let img = UIImage(data: d) { return img }
         var req = URLRequest(url: u)
         req.timeoutInterval = 4
-        req.setValue("WIPWorldInPocket/1.0 (widget)", forHTTPHeaderField: "User-Agent")
+        req.setValue("WorldInPocket/1.0 (https://wip.guide; support@wip.guide)", forHTTPHeaderField: "User-Agent")
         guard let risposta = try? await URLSession.shared.data(for: req),
               (risposta.1 as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) ?? true,
-              let img = UIImage(data: risposta.0) else { return nil }
-        let scala = min(1, lato / max(img.size.width, img.size.height))
-        let misura = CGSize(width: img.size.width * scala, height: img.size.height * scala)
-        let piccola = UIGraphicsImageRenderer(size: misura).image { _ in img.draw(in: CGRect(origin: .zero, size: misura)) }
-        if let jpg = piccola.jpegData(compressionQuality: 0.8) { try? jpg.write(to: file) }
+              let sorgente = CGImageSourceCreateWithData(risposta.0 as CFData, nil) else { return nil }
+        let opzioni: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: lato,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(sorgente, 0, opzioni as CFDictionary) else { return nil }
+        let piccola = UIImage(cgImage: cg)
+        if let jpg = piccola.jpegData(compressionQuality: 0.8) { try? jpg.write(to: file, options: .atomic) }
         return piccola
+    }
+
+    /// Cancella le miniature piu' vecchie di 14 giorni (le foto del «luogo del
+    /// giorno» cambiano ogni giorno: senza pulizia la cartella crescerebbe
+    /// per sempre). Chiamata dal provider al massimo una volta al giorno.
+    static func pulisci() {
+        guard let dir = cartella,
+              let file = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles])
+        else { return }
+        let limite = Date().addingTimeInterval(-14 * 86400)
+        for f in file {
+            let modificato = (try? f.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date()
+            if modificato < limite { try? FileManager.default.removeItem(at: f) }
+        }
+    }
+}
+
+// MARK: - Campi dei widget nuovi (23/09/2026, contratto 0.7 della specifica)
+//
+// Stesso schema delle struct qui sopra: ogni campo ha un default, una chiave
+// assente o di tipo diverso non rompe la decodifica. Date e ore arrivano gia'
+// formattate dal JS nella lingua dell'app (campi `quando`, `testo`, `ora`).
+
+struct WipWidgetUltimoAscolto: Decodable {
+    var tipo: String = "poi"          // 'poi' | 'opera'
+    var id: String = ""               // id del POI, oppure chiave `k` dell'opera
+    var nome: String = ""
+    var luogo: String = ""            // museo o citta'
+    var foto: String = ""
+    var ts: Double = 0
+    var quando: String = ""
+    var posSec: Double = 0
+    var durSec: Double = 0
+    var lingua: String = "it"
+    private enum K: String, CodingKey { case tipo, id, nome, luogo, foto, ts, quando, posSec, durSec, lingua }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        tipo = c.v(.tipo, "poi"); id = c.v(.id, ""); nome = c.v(.nome, ""); luogo = c.v(.luogo, "")
+        foto = c.v(.foto, ""); ts = c.v(.ts, 0); quando = c.v(.quando, ""); posSec = c.v(.posSec, 0)
+        durSec = c.v(.durSec, 0); lingua = c.v(.lingua, "it")
+    }
+    /// «Riprendi» ha senso solo su un POI a meta' traccia (per le opere la
+    /// posizione non e' registrata: il tasto fa «Riascolta»).
+    var riprendibile: Bool { tipo == "poi" && durSec > 0 && posSec > 5 && posSec < durSec - 5 }
+}
+
+struct WipWidgetLinguaAlt: Decodable {
+    var codice: String = ""
+    var nome: String = ""
+    var disponibile: Bool?            // nil = non ancora verificato
+    private enum K: String, CodingKey { case codice, nome, disponibile }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        codice = c.v(.codice, ""); nome = c.v(.nome, ""); disponibile = c.o(.disponibile)
+    }
+}
+
+struct WipWidgetLuogo: Decodable, Hashable {
+    var giorno: String = ""           // AAAA-MM-GG locale
+    var id: String = ""
+    var nome: String = ""
+    var citta: String = ""
+    var foto: String = ""
+    var attribuzione: String = ""
+    var metri: Double?
+    var lat: Double = 0
+    var lon: Double = 0
+    private enum K: String, CodingKey { case giorno, id, nome, citta, foto, attribuzione, metri, lat, lon }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        giorno = c.v(.giorno, ""); id = c.v(.id, ""); nome = c.v(.nome, ""); citta = c.v(.citta, "")
+        foto = c.v(.foto, ""); attribuzione = c.v(.attribuzione, ""); metri = c.o(.metri)
+        lat = c.v(.lat, 0); lon = c.v(.lon, 0)
+    }
+}
+
+struct WipWidgetOraMeteo: Decodable, Hashable {
+    var ts: Double = 0
+    var ora: String = ""              // HH:MM locale del punto, dal server
+    var temp: Double = 0
+    var code: Int = 0                 // codice WMO
+    var pioggia: Double = 0           // probabilita' %
+    private enum K: String, CodingKey { case ts, ora, temp, code, pioggia }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        ts = c.v(.ts, 0); ora = c.v(.ora, ""); temp = c.v(.temp, 0); code = c.v(.code, 0); pioggia = c.v(.pioggia, 0)
+    }
+}
+
+struct WipWidgetFinestra: Decodable {
+    var da: Double = 0
+    var a: Double = 0
+    var testo: String = ""            // «14:00–16:00»
+    private enum K: String, CodingKey { case da, a, testo }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        da = c.v(.da, 0); a = c.v(.a, 0); testo = c.v(.testo, "")
+    }
+}
+
+struct WipWidgetMeteo: Decodable {
+    var luogo: String = ""
+    var fonte: String = "posizione"   // 'tappa' | 'posizione'
+    var temp: Double = 0
+    var code: Int = 0
+    var descr: String = ""
+    var pioggiaProb: Double = 0
+    var ore: [WipWidgetOraMeteo] = []
+    var oraMigliore: WipWidgetFinestra?
+    var esito: String = ""            // 'finestra' | 'tuttoIlGiorno' | 'musei'
+    var attribuzione: String = ""     // obbligatoria per MET Norway
+    var ts: Double = 0
+    private enum K: String, CodingKey { case luogo, fonte, temp, code, descr, pioggiaProb, ore, oraMigliore, esito, attribuzione, ts }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        luogo = c.v(.luogo, ""); fonte = c.v(.fonte, "posizione"); temp = c.v(.temp, 0); code = c.v(.code, 0)
+        descr = c.v(.descr, ""); pioggiaProb = c.v(.pioggiaProb, 0); ore = c.v(.ore, [])
+        oraMigliore = c.o(.oraMigliore); esito = c.v(.esito, ""); attribuzione = c.v(.attribuzione, ""); ts = c.v(.ts, 0)
+    }
+}
+
+struct WipWidgetGaranzia: Decodable {
+    var stato: String = "attiva"      // 'attiva' | 'reclamabile'
+    var finoAl: Double = 0
+    var testo: String = ""
+    private enum K: String, CodingKey { case stato, finoAl, testo }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        stato = c.v(.stato, "attiva"); finoAl = c.v(.finoAl, 0); testo = c.v(.testo, "")
+    }
+}
+
+struct WipWidgetAscolta: Decodable {
+    var id: String = ""
+    var nome: String = ""
+    var metri: Double = 0
+    var foto: String = ""
+    var categoria: String = ""
+    var pronta: Bool = false          // testo gia' in cache nella lingua dell'app
+    private enum K: String, CodingKey { case id, nome, metri, foto, categoria, pronta }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        id = c.v(.id, ""); nome = c.v(.nome, ""); metri = c.v(.metri, 0); foto = c.v(.foto, "")
+        categoria = c.v(.categoria, ""); pronta = c.v(.pronta, false)
+    }
+}
+
+struct WipWidgetEvento: Decodable, Hashable {
+    var k: String = ""
+    var titolo: String = ""
+    var quando: String = ""
+    var ts: Double = 0
+    var luogo: String = ""
+    var metri: Double?
+    var biglietto: Bool = false
+    var categoria: String = ""
+    private enum K: String, CodingKey { case k, titolo, quando, ts, luogo, metri, biglietto, categoria }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        k = c.v(.k, ""); titolo = c.v(.titolo, ""); quando = c.v(.quando, ""); ts = c.v(.ts, 0)
+        luogo = c.v(.luogo, ""); metri = c.o(.metri); biglietto = c.v(.biglietto, false); categoria = c.v(.categoria, "")
+    }
+}
+
+struct WipWidgetGemma: Decodable {
+    var id: String = ""
+    var nome: String = ""
+    var regione: String = ""
+    var citta: String = ""
+    var foto: String = ""
+    var attribuzione: String = ""
+    var metri: Double = 0
+    private enum K: String, CodingKey { case id, nome, regione, citta, foto, attribuzione, metri }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        id = c.v(.id, ""); nome = c.v(.nome, ""); regione = c.v(.regione, ""); citta = c.v(.citta, "")
+        foto = c.v(.foto, ""); attribuzione = c.v(.attribuzione, ""); metri = c.v(.metri, 0)
+    }
+}
+
+struct WipWidgetOpera: Decodable {
+    var k: String = ""
+    var nome: String = ""
+    var autore: String = ""
+    var foto: String = ""
+    private enum K: String, CodingKey { case k, nome, autore, foto }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        k = c.v(.k, ""); nome = c.v(.nome, ""); autore = c.v(.autore, ""); foto = c.v(.foto, "")
+    }
+}
+
+struct WipWidgetConfronto: Decodable {
+    var giorno: String = ""
+    var museo: String = ""
+    var a = WipWidgetOpera()
+    var b = WipWidgetOpera()
+    private enum K: String, CodingKey { case giorno, museo, a, b }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        giorno = c.v(.giorno, ""); museo = c.v(.museo, "")
+        a = c.v(.a, WipWidgetOpera()); b = c.v(.b, WipWidgetOpera())
+    }
+}
+
+struct WipWidgetPdf: Decodable {
+    var k: String = ""
+    var tipo: String = ""             // 'itinerario' | 'guida' | 'museo'
+    var nome: String = ""
+    var quando: String = ""
+    var ts: Double = 0
+    private enum K: String, CodingKey { case k, tipo, nome, quando, ts }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        k = c.v(.k, ""); tipo = c.v(.tipo, ""); nome = c.v(.nome, ""); quando = c.v(.quando, ""); ts = c.v(.ts, 0)
+    }
+}
+
+struct WipWidgetFotoCommunity: Decodable {
+    var poiId: String = ""
+    var nome: String = ""
+    var citta: String = ""
+    var foto: String = ""
+    var metri: Double = 0
+    var quando: String = ""
+    private enum K: String, CodingKey { case poiId, nome, citta, foto, metri, quando }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        poiId = c.v(.poiId, ""); nome = c.v(.nome, ""); citta = c.v(.citta, ""); foto = c.v(.foto, "")
+        metri = c.v(.metri, 0); quando = c.v(.quando, "")
     }
 }

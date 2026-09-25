@@ -55,6 +55,9 @@ import { decodeSegments } from "../lib/polyline";
 import type { ZtlAlertEvent } from "../lib/ztlAlert";
 import { fetchDatiSole, livelloUv, consiglioSole } from "../lib/sunIndex";
 import type { DatiSole } from "../lib/sunIndex";
+import { fetchDatiClima, fetchConfrontoAdesso, coloreClima, livelloClima, nomeMese, testoPeriodi, consiglioMeseCorrente } from "../lib/climaIndex";
+import type { DatiClima, ConfrontoAdesso } from "../lib/climaIndex";
+import ClimaReportSheet from "./ClimaReportSheet";
 import { orariSole, oraBreve, mancaAllOraOro, fusoDelPunto } from "../lib/sunTimes";
 import type { OrariSole } from "../lib/sunTimes";
 import { fetchBathingSites, aggiungiMisure, BATHING_QUALITY_COLOR } from "../lib/bathingWater";
@@ -2968,6 +2971,61 @@ function MapArea({
       clearInterval(timer);
     };
   }, [soleActive]);
+
+  // ── Clima: il periodo migliore per visitare (src/lib/climaIndex.ts) ───
+  // Medie 2001-2020 di NASA POWER per la cella di 0,5° al centro della
+  // mappa: la stessa per tutta la città, quindi si ricarica solo dopo uno
+  // spostamento di 15 km, mai a ogni fix. Analisi AI per chi ha l'account
+  // (poi in cache per tutti). Committente, 24/09/2026.
+  const [climaActive, setClimaActive] = useState(() => {
+    try { return localStorage.getItem('wip_clima_enabled') === '1'; } catch { return false; }
+  });
+  const [climaLoading, setClimaLoading] = useState(false);
+  const [datiClima, setDatiClima] = useState<DatiClima | null>(null);
+  const [climaVuoto, setClimaVuoto] = useState(false);
+  const [climaEspansa, setClimaEspansa] = useState(false);
+  // Il report completo: si apre sul centro della mappa del momento.
+  const [climaReport, setClimaReport] = useState<{ lat: number; lon: number } | null>(null);
+  // «Questa settimana rispetto al solito»: i prossimi 7 giorni di MET Norway
+  // contro la media del mese. Si carica dopo le statistiche, per lo stesso punto.
+  const [climaAdesso, setClimaAdesso] = useState<ConfrontoAdesso | null>(null);
+
+  const toggleClima = useCallback(() => {
+    setClimaActive((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('wip_clima_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+      if (!next) { setDatiClima(null); setClimaVuoto(false); }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!climaActive) return;
+    let vivo = true;
+    let ultimoCentro: { lat: number; lon: number } | null = null;
+    const carica = async () => {
+      const map = mapRef.current;
+      if (!map) return;
+      const c = map.getCenter();
+      ultimoCentro = { lat: c.lat, lon: c.lng };
+      setClimaLoading(true);
+      const d = await fetchDatiClima(c.lat, c.lng, language);
+      if (vivo) { setDatiClima(d); setClimaVuoto(!d); setClimaLoading(false); }
+      if (vivo && d) { const a = await fetchConfrontoAdesso(c.lat, c.lng, d); if (vivo) setClimaAdesso(a); }
+      else if (vivo) setClimaAdesso(null);
+    };
+    carica();
+    const map = mapRef.current;
+    const onMoveEnd = () => {
+      const mp = mapRef.current;
+      if (!mp) return;
+      const c = mp.getCenter();
+      if (ultimoCentro && getDistanceFromLatLonInM(ultimoCentro.lat, ultimoCentro.lon, c.lat, c.lng) < 15000) return;
+      void carica();
+    };
+    map?.on('moveend', onMoveEnd);
+    return () => { vivo = false; map?.off('moveend', onMoveEnd); };
+  }, [climaActive, language]);
 
   // ── Allarme ZTL (src/lib/ztlAlert.ts) ─────────────────────────────────
   // Toggle 🚫 nei controlli mappa: in auto (>20 km/h) avvisa quando la
@@ -6442,6 +6500,13 @@ function MapArea({
       dettaglio: '', onClick: toggleSole,
     },
     {
+      id: 'clima', gruppo: 'condizioni', on: climaActive, loading: climaLoading, emoji: '📅',
+      tinta: 'bg-teal-600 border-teal-400', zoomMin: 0,
+      nome: getTranslation('mp_layer_clima_nome', language),
+      dettaglio: getTranslation('mp_layer_clima_det', language),
+      onClick: toggleClima,
+    },
+    {
       id: 'balneazione', gruppo: 'condizioni', on: bathingActive, loading: bathingLoading, emoji: '🏖',
       tinta: 'bg-cyan-600 border-cyan-400', zoomMin: 0,
       nome: getTranslation('mp_layer_balneazione_nome', language),
@@ -6481,9 +6546,9 @@ function MapArea({
   ], [
     language, sentieriActive, sentieriLoading, ciclabiliActive, ciclabiliLoading,
     stradeGustoActive, stradeGustoLoading, servicesActive, servicesLoading,
-    neveActive, neveLoading, soleActive, soleLoading, bathingActive, bathingLoading,
+    neveActive, neveLoading, soleActive, soleLoading, climaActive, climaLoading, bathingActive, bathingLoading,
     areeActive, areeLoading, AREE_MIN_ZOOM, shoppingActive, shoppingLoading, lussoActive, lussoLoading,
-    toggleSentieri, toggleCiclabili, toggleStradeGusto, toggleServices, toggleNeve, toggleSole, toggleBathing, toggleAree,
+    toggleSentieri, toggleCiclabili, toggleStradeGusto, toggleServices, toggleNeve, toggleSole, toggleClima, toggleBathing, toggleAree,
     toggleShopping, toggleLusso, satelliteActive, toggleSatellite,
   ]);
 
@@ -6936,7 +7001,9 @@ function MapArea({
           tocchi alla mappa. In fondo alla colonna sta il blocco dei livelli
           (`order-first` piu' sotto: in col-reverse il primo e' in basso),
           pioggia e «al coperto» gli stanno sopra. */}
-      <div className={`absolute top-[calc(env(safe-area-inset-top)+0.5rem)] bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 ${serviziAperti ? 'z-[2100]' : 'z-[1000]'} flex flex-col-reverse items-start gap-2 pointer-events-none transition-opacity ${(ricercaAperta || activePoi) ? 'opacity-0 pointer-events-none invisible' : ''}`}>
+      {/* 24/09/2026 (committente: «quando selezionato deve sovrapporsi alle chips»): anche con la scheda del
+          clima o del sole aperta la colonna sale sopra le chip, come per il pannello dei livelli. */}
+      <div className={`absolute top-[calc(env(safe-area-inset-top)+0.5rem)] bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 ${(serviziAperti || (climaActive && (datiClima || climaVuoto)) || (soleActive && (datiSole || oreLuce))) ? 'z-[2100]' : 'z-[1000]'} flex flex-col-reverse items-start gap-2 pointer-events-none transition-opacity ${(ricercaAperta || activePoi) ? 'opacity-0 pointer-events-none invisible' : ''}`}>
         {/* Banner pioggia: propone l'evidenziazione dei luoghi al coperto */}
         <AnimatePresence>
           {meteo && meteo.rainProb >= 50 && !rainBannerDismissed && !indoorMode && (
@@ -7250,10 +7317,118 @@ function MapArea({
               </motion.div>
             )}
           </AnimatePresence>
+
+          {/* Scheda clima: i dodici mesi con il punteggio per chi visita a
+              piedi, il periodo migliore, i mesi estremi e l'analisi AI.
+              Una scheda sola perché il clima medio è lo stesso per tutta la
+              città: quello che cambia è il MESE, non il punto sulla mappa. */}
+          <AnimatePresence>
+            {climaActive && (datiClima || climaVuoto) && (
+              <motion.div
+                key="scheda-clima"
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                className="shrink-0 bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 px-3 py-2.5 max-w-[240px]"
+              >
+                {!datiClima ? (
+                  <p className="text-[10px] text-primary/70 dark:text-white/70">{getTranslation('mp_clima_non_disp', language)}</p>
+                ) : (
+                  <>
+                    <p className="text-[11px] font-black text-[#1e3a8a] dark:text-white leading-tight">
+                      📅 {getTranslation('mp_clima_migliore', language)}: <span className="text-teal-700 dark:text-teal-300">{testoPeriodi(datiClima.migliori, language) || '—'}</span>
+                    </p>
+                    {datiClima.peggiori.length > 0 && (
+                      <p className="text-[10px] text-primary/60 dark:text-white/60 leading-tight mt-0.5">
+                        {getTranslation('mp_clima_evitare', language)}: {testoPeriodi(datiClima.peggiori, language)}
+                      </p>
+                    )}
+                    <p className="text-[10px] text-primary/70 dark:text-white/70 mt-1 leading-snug">{consiglioMeseCorrente(datiClima, language)}</p>
+                    {climaAdesso && climaAdesso.deltaTmax != null && (
+                      <p className="text-[10px] text-primary/70 dark:text-white/70 mt-0.5 leading-snug">
+                        🌡 {getTranslation('mp_clima_adesso', language)}: {climaAdesso.deltaTmax > 0 ? '+' : ''}{climaAdesso.deltaTmax}° {getTranslation(Math.abs(climaAdesso.deltaTmax) < 1.5 ? 'mp_clima_nella_media' : climaAdesso.deltaTmax > 0 ? 'mp_clima_sopra_media' : 'mp_clima_sotto_media', language)}
+                        {climaAdesso.mmAttesi != null && ` · ☔ ${climaAdesso.mmPrevisti} mm ${getTranslation('mp_clima_pioggia_prevista', language)} (${climaAdesso.mmAttesi} ${getTranslation('mp_clima_attesa_mese', language)})`}
+                      </p>
+                    )}
+
+                    {/* I dodici mesi: barra = punteggio, colore = livello; tocco = dettaglio del mese. */}
+                    <div className="flex gap-[3px] mt-2 items-end h-9">
+                      {datiClima.mesi.map((x) => {
+                        const oggi = x.m === new Date().getMonth() + 1;
+                        return (
+                          <button
+                            key={x.m}
+                            type="button"
+                            onClick={() => setClimaEspansa((e) => !e)}
+                            className="flex-1 flex flex-col items-center justify-end gap-0.5 h-full"
+                            title={`${nomeMese(x.m, language, true)}: ${x.punteggio}/100`}
+                          >
+                            <span className="w-full rounded-sm" style={{ height: `${Math.max(8, x.punteggio * 0.28)}px`, background: coloreClima(x.punteggio), outline: oggi ? '2px solid #1e3a8a' : 'none' }} />
+                            <span className={`text-[8px] leading-none ${oggi ? 'font-black text-[#1e3a8a] dark:text-white' : 'text-primary/60 dark:text-white/60'}`}>{nomeMese(x.m, language).slice(0, 1).toUpperCase()}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {climaEspansa && (
+                      <div className="mt-1.5 grid grid-cols-[auto_1fr_1fr_1fr] gap-x-2 gap-y-0.5 text-[9px] text-primary/70 dark:text-white/70">
+                        {datiClima.mesi.map((x) => (
+                          <Fragment key={x.m}>
+                            <span className="font-bold">{nomeMese(x.m, language)}</span>
+                            <span>🌡 {x.tmin ?? '?'}–{x.tmax ?? '?'}°</span>
+                            <span>☔ {x.mm ?? '?'} mm</span>
+                            <span style={{ color: coloreClima(x.punteggio) }} className="font-bold">{getTranslation(`mp_clima_${livelloClima(x.punteggio)}`, language)}</span>
+                          </Fragment>
+                        ))}
+                      </div>
+                    )}
+
+                    <p className="text-[9px] text-primary/60 dark:text-white/60 mt-1.5 leading-snug">
+                      {datiClima.piuPiovoso && `☔ ${getTranslation('mp_clima_piovoso', language)}: ${nomeMese(datiClima.piuPiovoso, language)} (${datiClima.mesi[datiClima.piuPiovoso - 1]?.mm ?? '?'} mm)`}
+                      {datiClima.piuCaldo && ` · 🔥 ${getTranslation('mp_clima_caldo', language)}: ${nomeMese(datiClima.piuCaldo, language)} ${datiClima.mesi[datiClima.piuCaldo - 1]?.tmax ?? '?'}°`}
+                      {datiClima.piuFreddo && ` · ❄️ ${getTranslation('mp_clima_freddo', language)}: ${nomeMese(datiClima.piuFreddo, language)} ${datiClima.mesi[datiClima.piuFreddo - 1]?.tmin ?? '?'}°`}
+                    </p>
+
+                    {datiClima.analisi ? (
+                      <p className="text-[10px] text-primary/80 dark:text-white/80 mt-2 pt-2 border-t border-black/5 dark:border-white/10 leading-snug">
+                        ✨ {datiClima.analisi}
+                      </p>
+                    ) : datiClima.analisiRichiedeAccesso ? (
+                      <button
+                        type="button"
+                        onClick={() => { try { window.dispatchEvent(new CustomEvent('wip-auth-required', { detail: { url: '/api/meteo/clima' } })); } catch { /* niente */ } }}
+                        className="text-[10px] font-bold text-[#1e3a8a] dark:text-blue-300 mt-2 pt-2 border-t border-black/5 dark:border-white/10 text-left leading-snug"
+                      >
+                        🔒 {getTranslation('mp_clima_accedi', language)}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => { const c = mapRef.current?.getCenter(); if (c) setClimaReport({ lat: c.lat, lon: c.lng }); }}
+                      className="mt-2 w-full rounded-xl bg-[#1e3a8a] text-white text-[11px] font-black py-1.5"
+                    >
+                      📋 {getTranslation('mp_clima_report', language)}
+                    </button>
+                    <p className="text-[8px] text-primary/45 dark:text-white/45 mt-1.5">{datiClima.attribuzione}</p>
+                  </>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
       </>,
       mapShellEl)}
+
+      <ClimaReportSheet
+        aperto={!!climaReport}
+        onClose={() => setClimaReport(null)}
+        lat={climaReport?.lat ?? 0}
+        lon={climaReport?.lon ?? 0}
+        dati={datiClima}
+        adesso={climaAdesso}
+        language={language}
+      />
 
       <AnimatePresence>
         {followMode && (

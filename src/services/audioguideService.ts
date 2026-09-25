@@ -154,6 +154,25 @@ export async function getOrCreateAudioguideText(
   return null;
 }
 
+/**
+ * SOLO LETTURA (23/09/2026, widget «Ascolta ora» e «In un'altra lingua»):
+ * il testo gia' scritto in poi_audioguides per poi+lingua+personaggio, o
+ * null. Mai /api/poi/audioguide, mai /api/regenerate, mai play_count: un
+ * widget che si aggiorna ogni 10 minuti non deve ne' generare ne' contare
+ * ascolti. Stessa cautela della cache di sopra sull'italiano sospetto.
+ */
+export async function leggiTestoInCache(poiId: string, language: string, character: GuideCharacter): Promise<string | null> {
+  try {
+    if (!poiId) return null;
+    const languageDb = String(language || 'IT').toUpperCase();
+    const cached = await getAudioguide(String(poiId), languageDb, character);
+    const testo = cached?.audio_text;
+    if (!testo || testo.trim().length < 30) return null;
+    if (languageDb === 'IT' && !sembraItaliano(testo)) return null;
+    return testo;
+  } catch { return null; }
+}
+
 async function getOrCreateAudioguideTextInterno(
   poi: EnrichInput,
   language: string,

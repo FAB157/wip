@@ -548,6 +548,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     // Navigazione finita o annullata: anche il follower nativo la lascia
     // (solo il PROPRIO percorso: quello del giro non si tocca).
     ritiraPercorsoNativo('tappa');
+    // E i luoghi del modale escono dal geofencing nativo (voce 2): solo i
+    // loro, le tappe del giro e i preferiti restano. No-op se non c'erano.
+    try { locationService.togliLuoghiWipNavNativi(); } catch { /* best-effort */ }
     // Il posto di 'tappa' nel servizio si lascia SEMPRE (no-op se non c'era):
     // anche uno stop durante l'attesa di assicuraServizioNativoPerNav, a
     // cruscotto mai acceso, deve toglierlo, o il servizio resta acceso.
@@ -817,6 +820,12 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   const checkRoutePois = (here: LatLon) => {
     const pending = pendingPoisRef.current;
     if (pending.length === 0) return;
+    // Sul telefono, con i luoghi consegnati al nativo (voce 2, 23/09/2026),
+    // l'arrivo lo dichiara il servizio ('poi-arrived' → wip-poi-trigger),
+    // come per le tappe del giro (giroDriver): emetterlo anche da qui farebbe
+    // aprire e parlare lo stesso luogo due volte. Il luogo esce solo dai
+    // pendenti; sul web (o se la consegna non c'e`) tutto come prima.
+    const arrivoDalNativo = Capacitor.isNativePlatform() && locationService.haLuoghiWipNavNativi();
     const stillPending: RoutePoi[] = [];
     for (const p of pending) {
       // Dall'INGRESSO quando lo conosciamo, non dal centroide: su un edificio
@@ -825,6 +834,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       const arrivo = puntoArrivo(p);
       const d = haversineMeters(here.lat, here.lon, arrivo.lat, arrivo.lon);
       if (d <= POI_TRIGGER_M) {
+        if (arrivoDalNativo) continue;
         const lastTrig = (window as any).__wipLastPoiTrigger;
         const isDup = lastTrig && String(lastTrig.id) === String(p.id) && Date.now() - lastTrig.ts < 60000;
         // Telemetria web: trigger scattato o soppresso dal dedupe (cooldown 60s)
@@ -1276,6 +1286,23 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       // 'tappa': il servizio ha due proprietari (con il giro), vedi locationService.
       try { await locationService.assicuraServizioNativoPerNav('tappa'); } catch { /* si va avanti col ripiego */ }
       if (targetRef.current !== target) return;
+      // I LUOGHI SCELTI NEL MODALE ANCHE A SCHERMO SPENTO (23/09/2026, voce 2).
+      // Prima vivevano solo in checkRoutePois, dentro la WebView: a telefono in
+      // tasca passavano in silenzio. Sul telefono entrano nel geofencing
+      // nativo come tappe d'itinerario (uniti a tappe del giro e preferiti,
+      // mai al loro posto); l'arrivo lo dichiara il nativo, come nel giro.
+      if (Capacitor.isNativePlatform()) {
+        try {
+          locationService.impostaLuoghiWipNavNativi(pendingPoisRef.current.map(p => {
+            const a = puntoArrivo(p);
+            const suCentro = a.lat === p.lat && a.lon === p.lon;
+            return {
+              id: p.id, name: p.name, nome: p.nome, lat: p.lat, lon: p.lon,
+              ...(suCentro ? {} : { entranceLat: a.lat, entranceLon: a.lon }),
+            };
+          }));
+        } catch { /* best-effort: resta il controllo in pagina */ }
+      }
       bannerFirmaRef.current = '';
       aggiornaBannerNav(target, first?.instruction ?? null, null, Math.round(route.distance), etaIniziale,
         first ? { type: first.maneuverType, modifier: first.maneuverModifier, street: first.name } : null);

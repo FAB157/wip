@@ -47,6 +47,16 @@ object ActivityMonitor {
 
     private const val REQUEST_CODE = 7101
 
+    /**
+     * (23/09/2026, REVISIONE 3 — batteria) Hook in-process, come
+     * ItaintaBackgroundPoiService.onNavRouteChanged: invocato dal receiver a
+     * ogni ENTER di un'attivita' di MOVIMENTO (WALKING / ON_FOOT /
+     * IN_VEHICLE). Il servizio lo usa per uscire subito dai profili GPS da
+     * fermo (R-FERMO, R-SOSTA). null quando il servizio non e' vivo. Non
+     * cambia nulla di quello che il receiver scrive nelle prefs.
+     */
+    @Volatile var onMovimento: (() -> Unit)? = null
+
     /** Su API < 29 il permesso runtime non esiste (c'è solo quello GMS install-time). */
     fun hasPermission(context: Context): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
@@ -166,6 +176,10 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
                 it.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER
             } ?: return
             ActivityMonitor.record(context, last.activityType)
+            // (23/09/2026) Ripartenza: il servizio torna al ritmo pieno.
+            if (last.activityType != DetectedActivity.STILL) {
+                try { ActivityMonitor.onMovimento?.invoke() } catch (_: Exception) { }
+            }
         } catch (e: Exception) {
             Log.w("ActivityMonitor", "Transizione non processata: ${e.message}")
         }

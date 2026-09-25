@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget «Meteo e garanzia pioggia» (23/09/2026): tempo della tappa di oggi
+     (o della posizione), ora migliore, pillola della garanzia solo se il server
+     l'ha confermata. Attribuzione MET Norway sempre visibile. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_me_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/wip_widget_bg"
+    android:padding="12dp">
+
+    <TextView android:id="@+id/w_me_titolo" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" android:textStyle="bold" />
+
+    <TextView android:id="@+id/w_me_vuoto" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:gravity="center" android:textColor="#B8FFFFFF" android:textSize="12sp" android:textStyle="bold" android:visibility="gone" />
+
+    <LinearLayout android:id="@+id/w_me_corpo" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="vertical" android:layout_marginTop="4dp">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
+            <TextView android:id="@+id/w_me_icona" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textSize="26sp" />
+            <TextView android:id="@+id/w_me_temp" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="6dp"
+                android:textColor="#FFFFFF" android:textSize="28sp" android:textStyle="bold" />
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginStart="10dp">
+                <TextView android:id="@+id/w_me_descr" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end"
+                    android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+                <TextView android:id="@+id/w_me_luogo" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end"
+                    android:textColor="#B8FFFFFF" android:textSize="10sp" />
+            </LinearLayout>
+        </LinearLayout>
+        <TextView android:id="@+id/w_me_ora" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end"
+            android:layout_marginTop="4dp" android:textColor="#D4AF37" android:textSize="11sp" android:textStyle="bold" android:visibility="gone" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="vertical" android:gravity="bottom">
+            <TextView android:id="@+id/w_me_garanzia" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/wip_w_pillola"
+                android:singleLine="true" android:ellipsize="end" android:paddingStart="8dp" android:paddingEnd="8dp" android:paddingTop="2dp" android:paddingBottom="2dp"
+                android:textColor="#1E3A8A" android:textSize="9sp" android:textStyle="bold" android:visibility="gone" />
+            <TextView android:id="@+id/w_me_attrib" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end"
+                android:layout_marginTop="2dp" android:textColor="#80FFFFFF" android:textSize="8sp" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

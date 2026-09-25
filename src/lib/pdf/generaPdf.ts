@@ -200,6 +200,33 @@ export const ET_MUSEO: Record<Lang, import('./MuseumGuidaPdf').MuseumPdfEtichett
   DE: { pagina: 'Seite', museo: 'Museumsführer', nOpere: '{n} Werke', conSale: 'mit Sälen', mappa: 'Museumsplan', ancheCollezione: 'Auch in der Sammlung', nessunaSala: 'Das Museum veröffentlicht keine Saalnummern: fragen Sie an der Kasse.', guardaAnche: 'Achten Sie auf', curiosita: 'Wissenswertes', soloCollezione: 'In der Sammlung, außerhalb der Hauptroute', suEtichetta: 'Auf dem Schild' },
 };
 
+export const ET_CLIMA: Record<Lang, import('./ClimaPdf').ClimaPdfEtichette> = {
+  IT: { pagina: 'Pagina', titolo: 'Quando visitare', numeri: 'In numeri', mese: 'Mese', temp: 'Min / max', pioggia: 'Pioggia', sole: 'Sole', umidita: 'Umidità', voto: 'Voto', migliore: 'Periodo migliore', evitare: 'Da evitare', panoramica: 'Panoramica', web: 'Consigli e suggerimenti dal web', esperienze: 'Esperienze dei viaggiatori', mesi: 'Mese per mese', portare: 'Cosa portare', orari: 'Orari migliori', avvertenze: 'Avvertenze', statistiche: 'Statistiche', conclusioni: 'Conclusioni dell\'AI', fonti: 'Fonti', aspettarsi: 'Cosa aspettarsi', eventi: 'Cosa succede in questo mese', alternativa: 'Se non è il mese giusto', mare: 'Temperatura del mare', tendenza: 'Ultimi anni rispetto alla media 2001-2020', generato: 'Generato il' },
+  EN: { pagina: 'Page', titolo: 'When to visit', numeri: 'In numbers', mese: 'Month', temp: 'Min / max', pioggia: 'Rain', sole: 'Sun', umidita: 'Humidity', voto: 'Score', migliore: 'Best time', evitare: 'Avoid', panoramica: 'Overview', web: 'Tips and advice from the web', esperienze: 'Travellers\' experiences', mesi: 'Month by month', portare: 'What to pack', orari: 'Best hours', avvertenze: 'Warnings', statistiche: 'Statistics', conclusioni: 'AI conclusions', fonti: 'Sources', aspettarsi: 'What to expect', eventi: 'What happens this month', alternativa: 'If it\'s not the right month', mare: 'Sea temperature', tendenza: 'Recent years vs the 2001-2020 average', generato: 'Generated on' },
+  FR: { pagina: 'Page', titolo: 'Quand visiter', numeri: 'En chiffres', mese: 'Mois', temp: 'Min / max', pioggia: 'Pluie', sole: 'Soleil', umidita: 'Humidité', voto: 'Note', migliore: 'Meilleure période', evitare: 'À éviter', panoramica: 'Aperçu', web: 'Conseils et suggestions du web', esperienze: 'Expériences de voyageurs', mesi: 'Mois par mois', portare: 'Quoi emporter', orari: 'Meilleures heures', avvertenze: 'Avertissements', statistiche: 'Statistiques', conclusioni: 'Conclusions de l\'IA', fonti: 'Sources', aspettarsi: 'À quoi s\'attendre', eventi: 'Ce qui se passe ce mois-ci', alternativa: 'Si ce n\'est pas le bon mois', mare: 'Température de la mer', tendenza: 'Dernières années vs la moyenne 2001-2020', generato: 'Généré le' },
+  ES: { pagina: 'Página', titolo: 'Cuándo visitar', numeri: 'En cifras', mese: 'Mes', temp: 'Mín / máx', pioggia: 'Lluvia', sole: 'Sol', umidita: 'Humedad', voto: 'Nota', migliore: 'Mejor época', evitare: 'A evitar', panoramica: 'Panorámica', web: 'Consejos y sugerencias de la web', esperienze: 'Experiencias de viajeros', mesi: 'Mes a mes', portare: 'Qué llevar', orari: 'Mejores horas', avvertenze: 'Advertencias', statistiche: 'Estadísticas', conclusioni: 'Conclusiones de la IA', fonti: 'Fuentes', aspettarsi: 'Qué esperar', eventi: 'Qué pasa este mes', alternativa: 'Si no es el mes adecuado', mare: 'Temperatura del mar', tendenza: 'Últimos años frente a la media 2001-2020', generato: 'Generado el' },
+  DE: { pagina: 'Seite', titolo: 'Wann reisen', numeri: 'In Zahlen', mese: 'Monat', temp: 'Min / max', pioggia: 'Regen', sole: 'Sonne', umidita: 'Luftfeuchte', voto: 'Wert', migliore: 'Beste Zeit', evitare: 'Vermeiden', panoramica: 'Überblick', web: 'Tipps und Hinweise aus dem Web', esperienze: 'Erfahrungen von Reisenden', mesi: 'Monat für Monat', portare: 'Was mitnehmen', orari: 'Beste Tageszeiten', avvertenze: 'Hinweise', statistiche: 'Statistiken', conclusioni: 'Fazit der KI', fonti: 'Quellen', aspettarsi: 'Was zu erwarten ist', eventi: 'Was in diesem Monat los ist', alternativa: 'Falls es nicht der richtige Monat ist', mare: 'Meerestemperatur', tendenza: 'Letzte Jahre gegenüber dem Mittel 2001-2020', generato: 'Erstellt am' },
+};
+
+/** Il report «Quando visitare» (annuale o di un mese) come PDF; null se la lingua non è latina (niente glifi). */
+export async function generaPdfClima(
+  citta: string,
+  dati: import('../climaIndex').DatiClima,
+  report: import('../climaIndex').ReportClima | null,
+  mese: import('../climaIndex').ReportMese | null,
+  language: unknown,
+): Promise<Blob | null> {
+  const l = lingua(language);
+  const campione = citta + (report?.sezioni.panoramica || '') + (mese?.sezioni.cosa_aspettarsi || '');
+  if (haCaratteriNonLatini(campione)) return null;
+  const [{ pdf }, { default: ClimaPdf }, React] = await Promise.all([
+    import('@react-pdf/renderer'), import('./ClimaPdf'), import('react'),
+  ]);
+  const nomiMesi = Array.from({ length: 12 }, (_, i) => new Intl.DateTimeFormat(l.toLowerCase(), { month: 'long' }).format(new Date(2000, i, 1)));
+  const doc = React.createElement(ClimaPdf, { citta, dati, report, mese, nomiMesi, etichette: ET_CLIMA[l] });
+  return numeraPagine(await pdf(doc as any).toBlob(), ET_CLIMA[l].pagina, 2);
+}
+
 export async function generaPdfMuseo(
   visit: import('../museumVisit').MuseumVisit,
   opere: Record<number, import('../museumVisit').ArtworkGuide>,

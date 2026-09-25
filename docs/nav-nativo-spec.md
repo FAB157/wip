@@ -418,3 +418,81 @@ riprende.
   giro resta muto fino al risveglio (canale nativo unico, riconsegna dal JS).
 - Salta/Ricalcola dal cruscotto aprono l'app (sblocco): su Android il `ts` è
   l'istante in cui MainActivity riceve l'intent, non quello del tocco.
+
+## REVISIONE 3 — batteria (23/09/2026) — PREVALE su «Frequenza dei fix» qui sopra
+Ordine del committente «risolvi tutto» sull'audit batteria dell'audioguida.
+Vincolo fisso: la logica dell'audioguida dei POI (quando scatta, cosa dice,
+teaser, ordine incipit→AI) NON cambia; il ritmo del GPS si abbassa solo dove
+non può ritardare un trigger, e torna quello di prima al primo movimento. Il
+codice dei trigger e del follower non cambia. Valori IDENTICI su Kotlin e Swift.
+
+### R-FERMO — percorso attivo, utente fermo (normativa per il follower)
+- **Condizione d'ingresso**: percorso di navigazione attivo (`haPercorsoAttivo`
+  / `richiedeFixFitti`), nessun POI in rotta che abbia armato il GPS, e nelle
+  ultime **120 s** lo spostamento dal punto di ancoraggio è **< 20 m** e la
+  velocità del fix corrente è **< 0,5 m/s**.
+- **Ancora**: il primo fix della sosta. Ogni fix oltre 20 m dall'ancora, o con
+  velocità > 0,8 m/s, mette l'ancora lì e la sosta riparte da zero; si entra
+  quando l'ancora ha almeno 120 s E il fix corrente è < 0,5 m/s. Il tempo è
+  quello del fix (Android `elapsedRealtimeNanos`, monotono; iOS l'istante di
+  consegna, che senza lotti coincide). Un fix senza velocità dichiarata (iOS:
+  `speed < 0`) vale velocità 0 (l'uscita la dà comunque lo spostamento).
+- **«Armato» vince**: Android = il predittore ha armato per un POI (`isArmed`);
+  iOS = il tier sarebbe armato (POI attivo entro `alertRad×3+150`, radar non
+  ancora interrogato). In entrambi i casi il profilo «fermo» non si applica.
+- **Profilo «fermo»**: Android `PRIORITY_BALANCED_POWER_ACCURACY`, intervallo
+  **10 s** (min 10 s, nessun lotto); iOS `desiredAccuracy =
+  kCLLocationAccuracyNearestTenMeters`, `distanceFilter = 10`.
+- **Uscita, SUBITO**: al primo fix a **> 20 m** dall'ancora o con velocità
+  **> 0,8 m/s** si torna al profilo di navigazione (Android HIGH_ACCURACY 2 s a
+  piedi / 1 s in auto; iOS BestForNavigation, filtro 5 m). Isteresi voluta fra
+  0,5 e 0,8 m/s: dentro quella fascia si resta nel profilo in cui si è.
+- **Follower invariato**: riceve ogni fix come prima (uno ogni ~10 s da fermi),
+  conta le manovre e le dice con le stesse regole; il gate dei fix vecchi
+  (15 s) resta. Se un POI arma il GPS, vince la richiesta armata (come prima);
+  quando disarma si torna al profilo deciso da R-FERMO.
+- **Rete in più, facoltativa per piattaforma, solo per USCIRE prima**: se il
+  riconoscimento dell'attività (Android Activity Recognition, iOS
+  CoreMotion/MotionActivityGate) segnala camminata/corsa/bici/auto, le ancore si
+  azzerano e il profilo di navigazione torna subito, senza aspettare il fix
+  (che nel profilo «fermo» può arrivare dopo 10 s). Non fa MAI entrare in sosta.
+  Android: `ActivityMonitor.onMovimento` → `ripartenzaDalSensore`.
+- Costo atteso in cambio: alla ripartenza il navigatore resta al ritmo lento
+  per 10–20 s al massimo (i primi 15–25 m), meno se l'attività la segnala prima.
+- Android: `ItaintaBackgroundPoiService.aggiornaSoste` / `applyLocationRate` /
+  `syncNavRate`, ancora in `service/AncoraFermo.kt`. iOS:
+  `BackgroundPoiManager.aggiornaFermoNav` / `applyLocationTier` (chiave
+  `navfermo-…`); ancore azzerate da `azzeraRiposiDaFermo` a ogni consegna,
+  ritiro, pausa o ripresa del percorso e all'avvio. iOS non usa la rete
+  dell'attività (facoltativa).
+
+### R-SOSTA — fermi fra luoghi già raccontati (servizio POI)
+Vale anche con un percorso attivo: lì toglie solo l'«armato», il profilo resta
+quello da navigatore e R-FERMO decide se abbassarlo (uguale sulle due
+piattaforme).
+Nello stato ARMATO, se TUTTI i POI candidati che armano (finestra di attenzione
+o raggio di armamento) sono già stati raccontati (Android `ARRIVED_FIRED`, iOS
+lo stato equivalente «arrivedFired/done») e da **180 s** lo spostamento
+dall'ancora è **< 25 m**, si passa al profilo di RIPOSO esistente (Android
+BALANCED 20 s con lotti a piedi; iOS il tier economico). Al primo fix a
+**> 25 m** dall'ancora si torna alla valutazione normale, che ri-arma se serve.
+Mai se nel raggio c'è un POI non ancora raccontato. La valutazione dei trigger
+continua su ogni fix, solo più radi. Stessa rete facoltativa dell'attività.
+
+### R-BUSSOLA — gate di direzione
+La bussola si spegne appena il gate di direzione ha deciso per il candidato
+corrente (esito diverso da RIMANDA), o dopo **120 s** senza candidati; si
+riaccende alla richiesta successiva del gate. Per non spostare i tempi della
+guida, se nella stessa finestra armata la bussola era già stata chiesta e resta
+un candidato non raccontato (non tappa d'itinerario), si riaccende un fix prima
+(pre-riscaldamento), così all'arrivo seguente la lettura c'è come col sensore
+sempre acceso; la PRIMA accensione di una finestra armata resta della sola
+richiesta del gate. Un riposo per R-SOSTA non chiude la finestra armata.
+«Candidato» = uno dei 5 più vicini valutati dal motore dei trigger, non tappa,
+non `ARRIVED_FIRED`/`arrivedFired`, esclusi quelli per cui il gate ha appena
+deciso in questo fix. La finestra armata si chiude quando il GPS torna davvero
+a riposo (non per sosta).
+Android: `BearingGate.decisa / preRiscalda / spegniSeInattiva / disattiva`.
+iOS: `BearingGate.valuta` (spegne dopo la decisione se nessun altro rinvio è in
+sospeso) / `preRiscalda` / `spegniBussolaSeInattiva` / `chiudiFinestra`,
+chiamate da `evaluateTriggers` e `aggiornaProssimitaEDistanze`.

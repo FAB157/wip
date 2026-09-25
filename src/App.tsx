@@ -44,7 +44,8 @@ const CameraScreen = lazy(() => import("./components/CameraScreen"));
 import VisionCardSheet from "./components/VisionCardSheet";
 import MuseumVisitSheet from "./components/MuseumVisitSheet";
 import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit } from "./lib/museumVisit";
-import { avviaSincronizzazioneWidget, azioneDaWidget } from "./lib/widgetDati";
+import { avviaSincronizzazioneWidget, azioneDaWidget, aggiornaWidget, etichettaWidget, hash8, leggiUltimoAscolto, linguaAltDi, puntoMeteoWidget, trovaEventoWidget, trovaOperaWidget, type AzioneWidget } from "./lib/widgetDati";
+import { matchTappa } from "./lib/museumVisit";
 import { getLocalMuseumPassExpiry } from "./lib/museumPass";
 import GeofenceAudioGuide from "./components/GeofenceAudioGuide";
 import PoiRadarPanel from "./components/PoiRadarPanel";
@@ -1232,6 +1233,9 @@ export default function App() {
     } catch { /* Cache API non disponibile */ }
 
     wipeLocalUserData();
+    // Widget della home: ultimo ascolto, confronto, gemma e foto della zona
+    // erano dell'account uscente (23/09/2026).
+    void aggiornaWidget(true);
   }, [language]);
 
   // Centro mappa dal viewport (emesso da MapArea a fine movimento). Aggiorniamo
@@ -1532,6 +1536,185 @@ export default function App() {
   // (14/09/2026) I widget della home: lo snapshot (crediti, visita, itinerario,
   // vicini) si consegna al nativo a ogni evento che lo cambia.
   useEffect(() => { avviaSincronizzazioneWidget(); }, []);
+  // Cambio lingua: le etichette e le date dei widget seguono subito (23/09/2026).
+  useEffect(() => { void aggiornaWidget(true); }, [language]);
+
+  // ── TOCCO SU UN WIDGET (23/09/2026) ─────────────────────────────────────
+  // azioneDaWidget riconosce soltanto; qui si esegue, in UN punto per
+  // l'avvio a freddo (getLaunchUrl) e per l'app aperta (appUrlOpen).
+  // L'azione va in coda e parte solo dopo il gate d'accesso: con authLoading
+  // o senza sessione né ospite c'è solo LoginScreen, e gli ascoltatori delle
+  // schede non esistono. Su iOS a freddo la stessa URL arriva due volte
+  // (getLaunchUrl + appUrlOpen trattenuto): la seconda entro 3 s si scarta.
+  const azioneWidgetRef = useRef<{ a: AzioneWidget; url: string; t: number } | null>(null);
+  const ultimaUrlWidgetRef = useRef<{ url: string; t: number } | null>(null);
+  const [azioneWidgetSeq, setAzioneWidgetSeq] = useState(0);
+  const accodaAzioneWidget = useCallback((url: string, a: AzioneWidget) => {
+    if (!a) return;
+    const ora = Date.now();
+    const u = ultimaUrlWidgetRef.current;
+    if (u && u.url === url && ora - u.t < 3000) return;
+    ultimaUrlWidgetRef.current = { url, t: ora };
+    azioneWidgetRef.current = { a, url, t: ora };
+    setAzioneWidgetSeq(n => n + 1);
+  }, []);
+
+  const eseguiAzioneWidget = async (a: AzioneWidget) => {
+    if (!a) return;
+    const emetti = (nome: string, detail?: any) => {
+      try { window.dispatchEvent(detail === undefined ? new CustomEvent(nome) : new CustomEvent(nome, { detail })); } catch { /* ok */ }
+    };
+    const L = String(language || 'IT').toLowerCase().slice(0, 2);
+    // Prima l'evento, poi la scheda: con la fotocamera non ancora in primo
+    // piano il foglio della visita lo apre App (listener sempre montato),
+    // come faceva il widget dal 14/09.
+    const apriVisita = () => { emetti(OPEN_MUSEUM_VISIT_EVENT); setActiveTab('camera'); };
+    const sbloccaVoce = async () => { try { (await import('./services/ttsService')).unlockSpeech(); } catch { /* niente */ } };
+    const apriPoi = (id: string, extra: Record<string, unknown>) => {
+      setActiveTab('map');
+      emetti('wip-poi-trigger', { poiId: id, manual: true, ...extra });
+    };
+    // Opera: riapre la visita (o la guida dall'archivio) e ripete
+    // 'wip-museum-play-index' finché la scheda montata non risponde handled.
+    const apriVisitaDi = (u: NonNullable<ReturnType<typeof leggiUltimoAscolto>>) => {
+      if (!u.venueKey || getVisit()?.venueKey === u.venueKey) apriVisita();
+      else { apriGuidaMuseo({ poiId: null, venueKey: u.venueKey, venueName: u.museo || u.luogo || '', language: u.lingua }); setActiveTab('camera'); }
+    };
+    const riascoltaOpera = (u: NonNullable<ReturnType<typeof leggiUltimoAscolto>>) => {
+      apriVisitaDi(u);
+      if (!u.venueKey) return;
+      const inizio = Date.now();
+      const prova = () => {
+        const v = getVisit();
+        const indice = v && v.venueKey === u.venueKey ? matchTappa(v.guide, u.nome) : -1;
+        if (indice >= 0) {
+          const detail: any = { index: indice, handled: false, daCapo: true };
+          emetti('wip-museum-play-index', detail);
+          if (detail.handled) return;
+        }
+        if (Date.now() - inizio < 12_000) setTimeout(prova, 300);
+      };
+      setTimeout(prova, 300);
+    };
+
+    switch (a.tipo) {
+      case 'visita': case 'confronto': apriVisita(); return;
+      case 'itinerario': setActiveTab('plan'); return;
+      case 'crediti': setActiveTab('profile'); return;
+      case 'vicini': setActiveTab('map'); return;
+      // poi e luogo sono sinonimi (poi resta per i widget già installati):
+      // la scheda si apre SENZA audio e senza cambiare personaggio.
+      case 'poi': case 'luogo': apriPoi(a.id, { autoPlay: false }); return;
+      // Niente alreadyPaid: decide il gate di toggleSpeech (sbloccato → gratis,
+      // Day Pass, modale crediti; ospite → accesso richiesto).
+      case 'ascolta': await sbloccaVoce(); apriPoi(a.id, { autoPlay: true }); return;
+      case 'riascolta': case 'riprendi': {
+        const u = leggiUltimoAscolto();
+        if (!u) { setActiveTab('map'); return; }
+        if (u.tipo === 'opera') { riascoltaOpera(u); return; }
+        if (a.tipo === 'riprendi' && u.posSec > 5 && (!u.durSec || u.posSec < u.durSec - 5)) locationService.impostaRipresa(u.id, u.posSec);
+        await sbloccaVoce();
+        // Il POI è nello storico: già sbloccato (schema di ProfileScreen.handleRelisten).
+        apriPoi(u.id, { alreadyPaid: true, autoPlay: true });
+        return;
+      }
+      case 'lingua': {
+        const u = leggiUltimoAscolto();
+        if (!u) { setActiveTab('map'); return; }
+        const alt = linguaAltDi(L);
+        const pers = u.personaggio === 'dante' ? 'dante' : 'nicky';
+        const nonC = () => notify(`${etichettaWidget('nonDisponibileIn')} ${alt.nome}`, 'info');
+        // SOLO testi già scritti: nessuna generazione, né per chi ha l'account né per gli ospiti.
+        if (u.tipo === 'poi') {
+          let testo: string | null = null;
+          try { testo = await (await import('./services/audioguideService')).leggiTestoInCache(u.id, alt.codice.toUpperCase(), pers); } catch { testo = null; }
+          if (!testo) { nonC(); apriPoi(u.id, { autoPlay: false }); return; }
+          await sbloccaVoce();
+          // Se suonava lo stesso POI, playAudio riprenderebbe la traccia vecchia.
+          try { locationService.stopGuideAudio(); } catch { /* niente */ }
+          void locationService.playAudio(testo, u.nome, u.categoria, u.id, pers, undefined, u.foto || undefined, alt.codice.toUpperCase() as Language);
+          return;
+        }
+        let g: any = null;
+        try {
+          const { operaDallArchivio } = await import('./lib/pacchettoMuseo');
+          g = u.venueKey ? (operaDallArchivio(u.venueKey, alt.codice, u.nome) || (u.nomeFonte ? operaDallArchivio(u.venueKey, alt.codice, u.nomeFonte) : null)) : null;
+        } catch { g = null; }
+        // Mai fetchArtworkGuide: traduce lato server (AI) ed è dietro il pass.
+        if (!g?.testo) { nonC(); apriVisitaDi(u); return; }
+        await sbloccaVoce();
+        try { await (await import('./services/ttsService')).speakAudioguide(g.testo, alt.codice, pers, undefined, u.nome); } catch { /* voce assente */ }
+        return;
+      }
+      case 'vision':
+        if (cameraEnabled) { try { localStorage.setItem('wip_richiesta_vision', String(Date.now())); } catch { /* niente */ } }
+        setActiveTab('camera');
+        if (cameraEnabled) emetti('wip-apri-vision');
+        return;
+      case 'meteo': {
+        const p = puntoMeteoWidget();
+        setActiveTab('map');
+        if (p) setTimeout(() => emetti('wip-open-map-area', { lat: p.lat, lon: p.lon, zoom: 14 }), 300);
+        return;
+      }
+      case 'garanzia':
+        setActiveTab('profile');
+        // ProfileScreen è lazy: al primo accesso il pezzo può arrivare dopo i 400 ms.
+        setTimeout(() => emetti('wip-open-profilo-sezione', { sezione: 'itinerari' }), 400);
+        setTimeout(() => emetti('wip-open-profilo-sezione', { sezione: 'itinerari' }), 1500);
+        return;
+      case 'eventi': setActiveTab('events'); return;
+      case 'evento': {
+        const e = trovaEventoWidget(a.k);
+        if (!e) { setActiveTab('events'); return; }
+        try { const { Browser } = await import('@capacitor/browser'); await Browser.open({ url: getApiUrl(e.link) }); }
+        catch { setActiveTab('events'); }
+        return;
+      }
+      case 'voto': {
+        const vince = trovaOperaWidget(a.vince), perde = trovaOperaWidget(a.perde);
+        if (!vince || !perde) { notify(etichettaWidget('nessunConfronto'), 'info', 3000); return; }
+        try {
+          const { registraVoto } = await import('./lib/gustiOpere');
+          if (registraVoto(vince, perde)) notify(`${etichettaWidget('votoSalvato')}: ${vince.nome}`, 'success', 3000);
+        } catch { /* niente */ }
+        void aggiornaWidget(true);
+        return;
+      }
+      case 'pdf': case 'archivio': {
+        const apriArchivio = () => {
+          try { sessionStorage.setItem('wip_apri_archivio', 'guide'); } catch { /* niente */ }
+          setActiveTab('plan');
+          setTimeout(() => emetti('wip-apri-archivio'), 1200);
+        };
+        if (a.tipo !== 'pdf') { apriArchivio(); return; }
+        try {
+          const m = await import('./lib/pdfArchivio');
+          const lista = await m.elencoPdf();
+          if (!lista.length) { apriArchivio(); return; }
+          const voce = lista.find(v => hash8(v.id) === a.k) ?? lista[0];
+          const esito = a.condividi ? await m.condividiPdf(voce.id) : await m.riapriPdf(voce.id);
+          if (esito === 'salvato') notify(getTranslation('pf_pdf_salvato', language), 'info');
+          else if (esito === 'errore' || esito === 'assente') notify(getTranslation('pf_pdf_non_riuscito', language));
+        } catch { apriArchivio(); }
+        return;
+      }
+    }
+  };
+
+  // Consuma l'azione in coda appena si è oltre la schermata d'accesso.
+  useEffect(() => {
+    if (authLoading || isRecovering || (!session && !ospite)) return;
+    const q = azioneWidgetRef.current;
+    if (!q) return;
+    azioneWidgetRef.current = null;
+    // Al turno dopo: nello stesso commit un effetto dichiarato più sotto
+    // (il listener 'wip-poi-trigger' dipende da handleSelectPoi) può essere
+    // appena stato smontato e non ancora rimontato, e l'evento andrebbe perso.
+    // (Nessun clearTimeout alla pulizia: la coda è già vuota e l'azione si perderebbe.)
+    setTimeout(() => { void eseguiAzioneWidget(q.a); }, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading, isRecovering, session?.user?.id, ospite, azioneWidgetSeq]);
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
@@ -1544,23 +1727,17 @@ export default function App() {
           const lancio = await CapApp.getLaunchUrl();
           if (lancio?.url) {
             const daWidget = azioneDaWidget(lancio.url);
-            if (daWidget?.tipo === 'visita') setActiveTab('camera');
-            else if (daWidget?.tipo === 'itinerario') setActiveTab('plan');
-            else if (daWidget?.tipo === 'crediti') setActiveTab('profile');
+            if (daWidget) accodaAzioneWidget(lancio.url, daWidget);
           }
         } catch { /* nessun URL di lancio */ }
         handle = await CapApp.addListener('appUrlOpen', async ({ url }: { url: string }) => {
           try {
             const parsed = new URL(url);
-            // (14/09/2026) Tocco su un widget della home: itainta://widget/<azione>.
-            // widgetDati riconosce l'azione ed emette gli eventi già esistenti
-            // (visita museo, POI); qui si cambia solo scheda.
+            // Tocco su un widget della home: itainta://widget/<azione>, in coda
+            // ed eseguito da eseguiAzioneWidget (vedi sopra).
             const daWidget = azioneDaWidget(parsed);
             if (daWidget) {
-              if (daWidget.tipo === 'visita') setActiveTab('camera');
-              else if (daWidget.tipo === 'itinerario') setActiveTab('plan');
-              else if (daWidget.tipo === 'crediti') setActiveTab('profile');
-              else setActiveTab('map');
+              accodaAzioneWidget(url, daWidget);
               return;
             }
             const query = new URLSearchParams(parsed.search);

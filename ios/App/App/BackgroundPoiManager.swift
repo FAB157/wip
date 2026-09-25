@@ -354,6 +354,11 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         arrivalRadiusWalk = min(max(prefs.object(forKey: "arrivalRadiusWalk") as? Double ?? 30, 15), 100)
         alertRadiusCar = min(max(prefs.object(forKey: "alertRadiusCar") as? Double ?? 300, 100), 600)
         arrivalRadiusCar = min(max(prefs.object(forKey: "arrivalRadiusCar") as? Double ?? 50, 20), 150)
+        // (23/09/2026, parità con restoreItineraryFromPrefs di Android) Le tappe
+        // del giro vivevano solo in memoria: se iOS chiudeva l'app a metà giro e
+        // la rilanciava per un evento di posizione, il servizio ripartiva senza
+        // tappe e quelle fuori dalle categorie del radar non scattavano più.
+        ripristinaTappeDaPrefs()
         // Anche il rilancio a freddo passa dal controllo del permesso: se nel
         // frattempo è stato revocato, si avvisa invece di restare ciechi.
         avviaConControlloPermesso()
@@ -394,6 +399,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         }
         impostaPoiCorrenti([])
         itineraryPois = []
+        prefs.removeObject(forKey: Self.chiaveTappeItinerario)
         lastQueryLocation = nil
         ultimaPosizioneNota = nil
     }
@@ -404,6 +410,24 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// e dai trigger. Ora vengono sempre unite al radar (mergedPois) e
     /// svuotate solo quando il JS manda una selezione vuota o allo stop.
     private var itineraryPois: [Poi] = []
+
+    /// Chiave delle tappe salvate (stessa di Android: PREF_ITINERARY_POIS).
+    /// Contiene il JSON ricevuto dal JS, che si ridecodifica al ripristino
+    /// esattamente come in syncManualSelectionConfinato.
+    private static let chiaveTappeItinerario = "itineraryPoisJson"
+
+    /// Rilancio a freddo: rimette le tappe salvate (workQueue). Non tocca le
+    /// tappe già in memoria, come restoreItineraryFromPrefs di Android.
+    private func ripristinaTappeDaPrefs() {
+        guard itineraryPois.isEmpty,
+              let json = prefs.string(forKey: Self.chiaveTappeItinerario), !json.isEmpty,
+              let data = json.data(using: .utf8),
+              var pois = try? JSONDecoder().decode([Poi].self, from: data),
+              !pois.isEmpty else { return }
+        for i in pois.indices { pois[i].isFromItinerary = true }
+        itineraryPois = pois
+        impostaPoiCorrenti(mergedPois(currentPois.filter { !$0.isFromItinerary }))
+    }
 
     /// UNICO punto di scrittura del radar attivo (workQueue, come tutto il
     /// resto dello stato). Tiene allineati i punti d'arrivo e pota le distanze
@@ -445,6 +469,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
               var pois = try? JSONDecoder().decode([Poi].self, from: data) else { return }
         for i in pois.indices { pois[i].isFromItinerary = true }
         store.insertPois(pois)
+        // Tappe salvate per il rilancio a freddo (vedi ripristinaTappeDaPrefs).
+        if pois.isEmpty { prefs.removeObject(forKey: Self.chiaveTappeItinerario) }
+        else { prefs.set(poisJson, forKey: Self.chiaveTappeItinerario) }
         // Selezione vuota = clear: le tappe escono e resta il solo radar.
         let radarOnly = currentPois.filter { !$0.isFromItinerary }
         itineraryPois = pois
@@ -456,6 +483,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // initialTrigger: se l'utente parte già dentro il raggio della prima
         // tappa, il teaser parte subito.
         if let loc = ultimaPosizioneNota { evaluateTriggers(at: loc) }
+        // (23/09/2026, R-SOSTA) Tappe nuove = POI non ancora raccontati: se il
+        // GPS era a riposo per sosta torna armato SUBITO, senza aspettare un
+        // fix che col filtro a 80 m arriverebbe tardi.
+        esciDaSostaSubito()
     }
 
     /// Fine del giro (locationService.unsyncTappeGiroFromNative → plugin
@@ -469,6 +500,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     }
 
     private func clearManualSelectionConfinato() {
+        prefs.removeObject(forKey: Self.chiaveTappeItinerario)
         guard !itineraryPois.isEmpty else { return }
         itineraryPois = []
         // Le tappe escono anche dal set monitorato: resta il solo radar.
@@ -500,11 +532,17 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // Anche il gate di bussola dimentica i rinvii pendenti del POI:
             // altrimenti un rinvio scaduto potrebbe farlo riparlare.
             BearingGate.shared.azzera(poiId: id)
+            // (23/09/2026, R-SOSTA) EXITED non è «raccontato»: fra 10 minuti
+            // l'arrivo torna possibile, quindi niente più riposo per sosta.
+            self.esciDaSostaSubito()
         }
     }
 
     private func startActiveMonitoring() {
         isRunning = true
+        // (23/09/2026) Si parte sempre dal profilo pieno: nessun riposo da
+        // fermo ereditato da una sessione precedente.
+        azzeraRiposiDaFermo()
         // Mirror storico ascolti: scarica gli id già ascoltati dal cloud
         // (best-effort). Serve al check "già acquistato = gratis" del trigger,
         // che così funziona anche offline.
@@ -702,7 +740,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // valuta i trigger sulla posizione snappata sul percorso; senza tile o
         // strada vicina resta il GPS grezzo. Refresh area, tiering e notifica
         // usano la posizione reale.
-        if RoadSnap.shared.shouldRefresh(location) { RoadSnap.shared.refresh(location) }
+        // (23/09/2026, batteria) In «modalità navigatore» nessun POI può
+        // scattare: il tile strade serve solo a evaluateTriggers, non si scarica.
+        if !soloNavigatore && RoadSnap.shared.shouldRefresh(location) { RoadSnap.shared.refresh(location) }
         let evalLoc = RoadSnap.shared.snap(location, isDriving: guideMode == "driving") ?? location
         evaluateTriggers(at: evalLoc)
         // Tiering GPS e distanze in tempo reale: una passata sola, sulla
@@ -753,11 +793,23 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         let alertRad = guideMode == "driving" ? alertRadiusCar : alertRadiusWalk
         let armWindow = alertRad * 3.0 + 150.0 // margine per ri-armare in tempo
 
+        // (23/09/2026, R-BUSSOLA) A ogni fix: bussola giù dopo 120 s senza
+        // richieste del gate. Non tocca nessuna decisione.
+        BearingGate.shared.spegniBussolaSeInattiva()
+        // (23/09/2026, R-FERMO) Da fermi con un percorso attivo: va PRIMA del
+        // guard qui sotto, perché in «modalità navigatore» il radar è vuoto.
+        aggiornaFermoNav(location)
+
         guard !currentPois.isEmpty else {
             // POI non ancora noti → alta precisione (sicuro); radar già
             // interrogato e zona vuota → posizione economica. Nessuna
             // distanza da dichiarare, come prima.
+            // (R-SOSTA) Radar vuoto: nessuna sosta da ricordare.
+            sostaAttiva = false
+            ancoraSosta = nil
             applyLocationTier(armed: lastQueryLocation == nil)
+            // (R-BUSSOLA) GPS a riposo: finestra armata chiusa (Android: disattiva).
+            if lastQueryLocation != nil { BearingGate.shared.chiudiFinestra() }
             return
         }
 
@@ -765,10 +817,36 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         var closestPoi: Poi?
         var closestDist = Double.greatestFiniteMagnitude
         var approaching: [[String: Any]] = []
+        // (23/09/2026, R-SOSTA) Tutti i POI attivi nella finestra di armamento
+        // sono già stati raccontati? Solo `.arrivedFired` entro il TTL di 24 h
+        // conta come «raccontato»: è l'unico stato da cui, restando nei
+        // dintorni, nessun avviso e nessun arrivo può più partire. Un POI in
+        // avvicinamento, superato, uscito o mai visto tiene il GPS armato.
+        let adessoMs = nowMs()
+        var tuttiRaccontati = true
+        var poiConPerimetroDaVerificare: [Poi] = []
 
         for (indice, poi) in currentPois.enumerated() {
             let dist = location.distance(from: puntoArrivo(indice, poi))
             if dist < closestDist { closestDist = dist; closestPoi = poi }
+            if tuttiRaccontati, PoiCategories.isActive(poi: poi, selected: selectedCategories) {
+                let raccontato: Bool
+                if let rec = states[poi.id], rec.state == .arrivedFired,
+                   adessoMs - rec.updatedAt < arrivalRetriggerTtlMs {
+                    raccontato = true
+                } else {
+                    raccontato = false
+                }
+                if !raccontato {
+                    if dist <= armWindow {
+                        tuttiRaccontati = false
+                    } else if poi.footprint?.isEmpty == false {
+                        // Un perimetro può stare molto più vicino del suo
+                        // punto d'arrivo: si controlla dopo, solo se serve.
+                        poiConPerimetroDaVerificare.append(poi)
+                    }
+                }
+            }
             if states[poi.id]?.state == .approachFired && dist <= alertRad * 2 {
                 approaching.append([
                     "poiId": poi.id, "name": poi.nome,
@@ -780,7 +858,23 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
 
         // Nel dubbio (POI non ancora caricati) resta ad alta precisione: il
         // caso peggiore è "risparmia meno", mai "manca un trigger".
-        applyLocationTier(armed: lastQueryLocation == nil || closestDist <= armWindow)
+        let armato = lastQueryLocation == nil || closestDist <= armWindow
+        if armato && tuttiRaccontati {
+            for poi in poiConPerimetroDaVerificare {
+                let dMuro = PoiFootprints.distanzaDalPerimetro(
+                    poiId: poi.id, footprint: poi.footprint,
+                    lat: location.coordinate.latitude, lon: location.coordinate.longitude,
+                    entro: armWindow)
+                if dMuro <= armWindow { tuttiRaccontati = false; break }
+            }
+        }
+        aggiornaSosta(location, armato: armato && lastQueryLocation != nil, tuttiRaccontati: tuttiRaccontati)
+        applyLocationTier(armed: armato && !sostaAttiva)
+        // (23/09/2026, R-BUSSOLA, parità Android applyLocationRate) GPS davvero
+        // a riposo = finestra armata chiusa; riposo per SOSTA = bussola giù ma
+        // finestra ancora «già chiesta» (la pre-riscalda l'arrivo dopo).
+        if !armato { BearingGate.shared.chiudiFinestra() }
+        else if sostaAttiva { BearingGate.shared.spegniBussola() }
 
         if !approaching.isEmpty {
             sendEvent("wip-poi-distance-update", json: ["entries": approaching])
@@ -792,6 +886,149 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 ? "Prossimo: \(poi.nome) (\(distRounded)m)"
                 : "\(currentPois.count) luoghi monitorati"
             updateStatus("Audioguida attiva", statusText)
+        }
+    }
+
+    // MARK: - Batteria da fermi (23/09/2026, REVISIONE 3 della spec nav)
+    //
+    // Due regole COMUNI, identiche su Android (vedi docs/nav-nativo-spec.md,
+    // «REVISIONE 3 — batteria»). Nessuna tocca il codice dei trigger: cambiano
+    // solo la frequenza e la precisione dei fix, e solo quando nessun trigger
+    // può essere ritardato.
+    //
+    // R-FERMO — con un percorso di navigazione attivo, se da 120 s lo
+    // spostamento dall'ancora è < 20 m e la velocità < 0,5 m/s, profilo
+    // «fermo» (NearestTenMeters, filtro 10 m). Si torna SUBITO al profilo da
+    // navigatore al primo fix a > 20 m dall'ancora o a > 0,8 m/s. Il follower
+    // non cambia logica: conta e dice le manovre come prima.
+    //
+    // R-FERMO non si applica mai con un POI che tiene armato il GPS.
+    //
+    // R-SOSTA — nello stato ARMATO (con un percorso attivo toglie solo
+    // l'«armato»: resta il profilo da navigatore), se TUTTI i POI attivi nella
+    // finestra di armamento sono già stati raccontati e da 180 s lo
+    // spostamento è < 25 m, profilo di RIPOSO esistente (HundredMeters, filtro
+    // 80 m). Al primo fix a > 25 m dall'ancora si torna alla valutazione
+    // normale. Mai con un POI non ancora raccontato nella finestra.
+    //
+    // Stato confinato nella workQueue, come tutto il resto.
+
+    private static let fermoNavRaggioM: Double = 20
+    private static let fermoNavDurataMs: Double = 120_000
+    private static let fermoNavVelocitaIngressoMs: Double = 0.5
+    private static let fermoNavVelocitaUscitaMs: Double = 0.8
+    private static let sostaRaggioM: Double = 25
+    private static let sostaDurataMs: Double = 180_000
+
+    private var ancoraFermoNav: CLLocation?
+    private var ancoraFermoNavDaMs: Double = 0
+    private var fermoNavAttivo = false
+    private var ancoraSosta: CLLocation?
+    private var ancoraSostaDaMs: Double = 0
+    private var sostaAttiva = false
+
+    /// Dimentica ancore e profili da fermo: il prossimo fix riparte dal
+    /// comportamento normale. Chiamata quando cambia qualcosa che non passa
+    /// dal fix (percorso consegnato/tolto, tappe nuove, banner chiuso, avvio).
+    /// R-SOSTA interrotta da un evento che non è un fix (tappe nuove, banner
+    /// chiuso): se il GPS era a riposo per sosta, torna armato adesso.
+    private func esciDaSostaSubito() {
+        guard sostaAttiva else { return }
+        sostaAttiva = false
+        ancoraSosta = nil
+        ancoraSostaDaMs = 0
+        if isRunning { applyLocationTier(armed: true) }
+    }
+
+    private func azzeraRiposiDaFermo() {
+        let eraInRiposo = fermoNavAttivo || sostaAttiva
+        ancoraFermoNav = nil
+        ancoraFermoNavDaMs = 0
+        fermoNavAttivo = false
+        ancoraSosta = nil
+        ancoraSostaDaMs = 0
+        sostaAttiva = false
+        if eraInRiposo { appliedTierKey = "" }
+    }
+
+    /// R-FERMO. Sulla workQueue, a ogni fix (aggiornaProssimitaEDistanze).
+    /// Velocità negativa = «non disponibile» su iOS: non conta né per entrare
+    /// né per uscire (decide lo spostamento). Fix senza precisione: ignorati.
+    private func aggiornaFermoNav(_ location: CLLocation) {
+        guard NavFollower.shared.richiedeFixFitti else {
+            if ancoraFermoNav != nil || fermoNavAttivo {
+                let era = fermoNavAttivo
+                ancoraFermoNav = nil
+                ancoraFermoNavDaMs = 0
+                fermoNavAttivo = false
+                if era { appliedTierKey = "" }
+            }
+            return
+        }
+        guard location.horizontalAccuracy >= 0 else { return }
+        let adesso = nowMs()
+        // Spec REVISIONE 3 (identica ad Android aggiornaSoste): velocità non
+        // dichiarata (negativa su iOS) vale 0.
+        let v = (location.speed.isFinite && location.speed > 0) ? location.speed : 0
+        guard let ancora = ancoraFermoNav else {
+            ancoraFermoNav = location
+            ancoraFermoNavDaMs = adesso
+            return
+        }
+        let d = location.distance(from: ancora)
+        // Ancora nuova (e sosta da capo) al primo fix oltre 20 m o sopra
+        // 0,8 m/s: se si era nel profilo «fermo», si esce SUBITO (la chiave
+        // cambia e applyLocationTier lo riapplica in questo stesso fix).
+        if d > Self.fermoNavRaggioM || v > Self.fermoNavVelocitaUscitaMs {
+            fermoNavAttivo = false
+            ancoraFermoNav = location
+            ancoraFermoNavDaMs = adesso
+            return
+        }
+        // Isteresi 0,5–0,8 m/s: dentro la fascia si resta nel profilo in cui
+        // si è; si ENTRA solo dopo 120 s entro 20 m e con il fix < 0,5 m/s.
+        if !fermoNavAttivo, adesso - ancoraFermoNavDaMs >= Self.fermoNavDurataMs,
+           v < Self.fermoNavVelocitaIngressoMs {
+            fermoNavAttivo = true
+        }
+    }
+
+    /// R-SOSTA. `armato` = il tier sarebbe armato per prossimità (radar già
+    /// interrogato); `tuttiRaccontati` come calcolato in
+    /// aggiornaProssimitaEDistanze. Con un percorso attivo vale lo stesso, come
+    /// su Android: la sosta toglie solo l'«armato», il profilo resta quello da
+    /// navigatore e R-FERMO decide se abbassarlo.
+    private func aggiornaSosta(_ location: CLLocation, armato: Bool, tuttiRaccontati: Bool) {
+        guard armato, tuttiRaccontati,
+              location.horizontalAccuracy >= 0 else {
+            ancoraSosta = nil
+            ancoraSostaDaMs = 0
+            sostaAttiva = false
+            return
+        }
+        let adesso = nowMs()
+        guard let ancora = ancoraSosta else {
+            ancoraSosta = location
+            ancoraSostaDaMs = adesso
+            return
+        }
+        let d = location.distance(from: ancora)
+        if sostaAttiva {
+            if d > Self.sostaRaggioM {
+                // Ripartito: valutazione normale (tier armato) da questo fix.
+                sostaAttiva = false
+                ancoraSosta = location
+                ancoraSostaDaMs = adesso
+            }
+            return
+        }
+        if d > Self.sostaRaggioM {
+            ancoraSosta = location
+            ancoraSostaDaMs = adesso
+            return
+        }
+        if adesso - ancoraSostaDaMs >= Self.sostaDurataMs {
+            sostaAttiva = true
         }
     }
 
@@ -808,12 +1045,22 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // passaggio di qui (e subito a clearNavRoute, vedi
         // aggiornaProfiloNavigatore). Senza percorso: tutto identico a prima.
         let percorsoNav = NavFollower.shared.richiedeFixFitti
-        let key = percorsoNav ? "nav-\(isDriving)" : "\(armed)-\(isDriving)"
+        // (23/09/2026, R-FERMO) Percorso attivo ma utente fermo da 120 s:
+        // profilo «fermo» (10 m / filtro 10 m) fino al primo movimento. MAI
+        // con un POI che tiene armato il GPS (spec REVISIONE 3, come Android):
+        // lì resta il profilo da navigatore, che è anche quello dei trigger.
+        let fermoNav = percorsoNav && fermoNavAttivo && !armed
+        let key = percorsoNav
+            ? (fermoNav ? "navfermo-\(isDriving)" : "nav-\(isDriving)")
+            : "\(armed)-\(isDriving)"
         guard key != appliedTierKey else { return }
         appliedTierKey = key
         DispatchQueue.main.async {
             self.locationManager.activityType = isDriving ? .automotiveNavigation : .fitness
-            if percorsoNav {
+            if fermoNav {
+                self.locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+                self.locationManager.distanceFilter = 10
+            } else if percorsoNav {
                 self.locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
                 self.locationManager.distanceFilter = 5
             } else if armed {
@@ -985,6 +1232,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     }
 
     private func aggiornaProfiloNavigatoreConfinato() {
+        // (23/09/2026, REVISIONE 3) Percorso consegnato, tolto, in pausa o
+        // ripreso: le ancore da fermo (R-FERMO, R-SOSTA) ripartono da zero,
+        // si riparte dal profilo pieno.
+        azzeraRiposiDaFermo()
         // Chiave azzerata: il prossimo applyLocationTier riscrive comunque.
         appliedTierKey = ""
         // Manager non ancora avviato (o fermo per permesso): il profilo lo
@@ -1011,12 +1262,36 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Refresh POI (port di checkRefreshGeofences)
 
+    /// «Modalità navigatore» (percorso su misura senza audioguida): il JS
+    /// avvia il servizio con la sola sentinella "gemme:off" e promette che il
+    /// servizio non monitora nessun POI. Vero solo senza tappe dell'itinerario
+    /// (che sono sempre attive). Stato confinato: si legge sulla workQueue.
+    private var soloNavigatore: Bool {
+        !selectedCategories.isEmpty
+            && selectedCategories.allSatisfy { $0 == "gemme:off" }
+            && itineraryPois.isEmpty
+    }
+
     private func checkRefreshPois(at location: CLLocation) {
         let isDriving = guideMode == "driving"
         let refreshThreshold: Double = isDriving ? 1000 : 200
         let radiusKm: Double = isDriving ? 10 : 5
 
         if let last = lastQueryLocation, last.distance(from: location) <= refreshThreshold { return }
+        // (23/09/2026, batteria, parità Android) «Modalità navigatore»
+        // (categories = ['gemme:off'], nessuna tappa): nessun POI può parlare
+        // né notificare, quindi niente RPC, niente file, niente region, niente
+        // batch-teaser. Si segna la posizione come interrogata (radar vuoto):
+        // così il tier del GPS non resta «POI non ancora noti = alta precisione»
+        // e il refresh si riprova solo dopo i soliti 200 m / 1 km.
+        if soloNavigatore {
+            lastQueryLocation = location
+            if !currentPois.isEmpty {
+                impostaPoiCorrenti(mergedPois([]))
+                refreshMonitoredRegions(around: location)
+            }
+            return
+        }
         if nowMs() - lastFetchFailedAt < fetchRetryBackoffMs { return }
         guard !isFetching else { return }
         isFetching = true
@@ -1101,12 +1376,22 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     // Al server solo i 10 POI più vicini ANCORA senza teaser:
                     // prima partiva tutto il radar (fino a 1.000 id) a ogni
                     // refresh, quasi tutti già con teaser o mai raggiunti.
+                    // (23/09/2026, batteria) Mai due volte lo stesso id (per
+                    // lingua) entro `teaserRichiestaPausaMs`: dove il server
+                    // rifiuta il teaser (niente fonti) ogni refresh rimandava
+                    // gli stessi 10 id e rifaceva 10 chiamate AI a vuoto.
+                    let adessoTeaser = nowMs()
                     let missingTeaser = pois
                         .filter { $0.teaserText?.isEmpty != false }
+                        .filter { p in
+                            guard let ultimo = self.teaserChiestiMs["\(p.id)|\(self.appLanguage)"] else { return true }
+                            return adessoTeaser - ultimo >= Self.teaserRichiestaPausaMs
+                        }
                         .sorted { location.distance(from: $0.coordinate) < location.distance(from: $1.coordinate) }
                         .prefix(10)
                         .map { $0.id }
                     if !missingTeaser.isEmpty {
+                        self.segnaTeaserChiesti(Array(missingTeaser), adesso: adessoTeaser)
                         self.generateTeasersInBackground(poiIds: Array(missingTeaser))
                     }
                     // DISATTIVATO (03/09/2026, committente: notifiche a
@@ -1438,6 +1723,12 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
 
         approachSpokenInBatch = false
         arrivalSpokenInBatch = false
+        // (23/09/2026, R-BUSSOLA, parità Android `bussolaServe`) Candidati
+        // (i 5 vicini, non tappe, non raccontati) che potrebbero chiedere il
+        // gate ai prossimi fix, meno quelli per cui il gate ha appena deciso.
+        // Misura sola: nessuna decisione qui sotto la legge.
+        var candidatiGate: [String] = []
+        var decisiGate = Set<String>()
 
         for c in candidates {
             // Raggi calibrati sul perimetro (footprint OSM) del singolo POI,
@@ -1448,6 +1739,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             let exitRad = alertRad * 1.5
             let record = store.getTriggerState(c.poi.id)
             let state = record?.state ?? .pending
+            if keptIds.contains(c.poi.id), !c.poi.isFromItinerary, state != .arrivedFired {
+                candidatiGate.append(c.poi.id)
+            }
 
             // A 30 METRI DAL PERIMETRO dell'edificio (poi_footprints, poligono
             // OSM; 0 m = dentro). Decisione del 22/08/2026: la guida parte a
@@ -1593,6 +1887,8 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                             dentroPerimetro: dentroPerimetro, distanzaM: c.dist
                         )
                     if esitoGate != .rimanda {
+                        // (23/09/2026, R-BUSSOLA) Deciso: niente pre-riscaldamento per lui.
+                        decisiGate.insert(c.poi.id)
                         // (28/08/2026, AUD-04) UNA guida completa per fix. I
                         // candidati sono ordinati (itinerario > gemma > più
                         // vicino): il primo che arriva riceve teaser, pass e
@@ -1633,6 +1929,14 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     approachSpokenInBatch = true
                 }
             }
+        }
+
+        // (23/09/2026, R-BUSSOLA, parità Android) Resta un candidato in gioco:
+        // bussola pronta, ma solo se il gate l'aveva già chiesta in questa
+        // finestra armata (mai la prima accensione). Senza candidati la spegne
+        // spegniBussolaSeInattiva dopo 120 s (aggiornaProssimitaEDistanze).
+        if candidatiGate.contains(where: { !decisiGate.contains($0) }) {
+            BearingGate.shared.preRiscalda()
         }
     }
 
@@ -2514,6 +2818,19 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     }
 
     // MARK: - Teaser batch (stesso endpoint del server Vercel)
+
+    /// (23/09/2026, batteria) Ultimo invio a batch-teaser per "id|lingua"
+    /// (workQueue, solo in memoria: un riavvio può al più rimandarli una
+    /// volta). Il server a sua volta ricorda i rifiuti di contenuto per giorni.
+    private var teaserChiestiMs: [String: Double] = [:]
+    private static let teaserRichiestaPausaMs: Double = 45 * 60 * 1000
+
+    private func segnaTeaserChiesti(_ ids: [String], adesso: Double) {
+        if teaserChiestiMs.count > 500 {
+            teaserChiestiMs = teaserChiestiMs.filter { adesso - $0.value < Self.teaserRichiestaPausaMs }
+        }
+        for id in ids { teaserChiestiMs["\(id)|\(appLanguage)"] = adesso }
+    }
 
     private func generateTeasersInBackground(poiIds: [String]) {
         guard let url = URL(string: "\(WipApi.base)/api/poi/batch-teaser") else { return }

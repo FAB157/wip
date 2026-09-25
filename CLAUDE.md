@@ -431,6 +431,20 @@ verificare sia il contenuto che la grafica»):
   - Known and left: new POIs are created by the CLIENT when the app opens the plan (an
     itinerary generated in the background queue creates them only once opened), with the
     AI's own coordinates, unverified — a Photon check by name is the next step, not done.
+  - **CONTROLLI COMPLETI ANCHE SU «AGGIUNGI GIORNO»** (committente 25/09/2026): `/api/itinerary/extend`
+    runs the same checks as the generator on the new day — `agganciaTappeAlDatabase`, «doppioni mai»
+    (`togliDoppioniItinerario` with `soloGiorni`: stops are removed only from the new day), one more try
+    if it drops under the minimum, `verifyItineraryAntiHallucination`, fact reviewer. The doppioni key is
+    `chiaveNomeTappa`: when a name has no significant words («Trattoria da Me») the whole normalized name
+    is the key (it used to pass unchecked); purely generic names («Pranzo») have no key. A stop without
+    `poi_id` and without a web signature is `poco_noto`, never `verificata` on the AI's word alone.
+  - **REVISORE DEI FATTI DEL TESTO** (committente 25/09/2026, collaudo Bologna: «Pietà di Michelangelo» in
+    San Petronio, Lucio Dalla «visse e morì» in via d'Azeglio): `revisoreFattiItinerario` — a second engine
+    via `chiamaRevisore` (never DeepSeek, never Gonka) reads each stop's `attivita`/`consiglio_guida` and
+    flags sentences with false or unverifiable facts; they are REMOVED, never rewritten. Runs in the
+    generator (45 s cap) and in «Aggiungi giorno» (40 s). The outcome is recorded in
+    `qualita.revisore_fatti` (`ok` / `parziale` / `non_eseguito`, controllate, frasi_tolte). Offline test:
+    `scratch/collaudo-revisore-fatti.mjs`.
   - Nothing else in the itinerary pipeline changes without an explicit order.
 
 ## Print rules (itinerary PDF and Premium Guide)

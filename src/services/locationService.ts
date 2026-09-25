@@ -117,6 +117,11 @@ class LocationService {
   private currentCharacter: 'nicky' | 'dante' = 'nicky';
   /** Foto del POI in riproduzione, per la copertina su MediaSession/Now Playing. */
   private currentPoiPhotoUrl: string | null = null;
+  /** (23/09/2026) Lingua forzata della traccia corrente (languageOverride), per il widget «Ultima audioguida». */
+  private linguaUltimaTraccia: Language | null = null;
+  /** (23/09/2026) «Riprendi» dal widget: al primo avvio dello stesso POI si salta a posSec. */
+  private ripresa: { poiId: string; posSec: number; scade: number } | null = null;
+  private ripresaStacca: (() => void) | null = null;
   /** Utterance Web Speech del fallback degradato (TTS server irraggiungibile). */
   private fallbackUtterance: SpeechSynthesisUtterance | null = null;
   /** Timer del progresso stimato per il fallback Web Speech (nessun evento nativo). */
@@ -272,6 +277,18 @@ class LocationService {
       };
       document.addEventListener('touchstart', unlock, { once: true });
       document.addEventListener('click', unlock, { once: true });
+
+      // WATCH JS A PAGINA NASCOSTA (23/09/2026, batteria, voci 3+4). Su
+      // Android il plugin Geolocation non ha un onPause: la sua richiesta
+      // HIGH_ACCURACY restava viva a schermo spento e annullava il RIPOSO
+      // bilanciato del servizio nativo (FusedLocation serve la richiesta piu`
+      // esigente del processo). Vedi sospendiWatchSeNascosta.
+      if (Capacitor.getPlatform() === 'android') {
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'hidden') void this.sospendiWatchSeNascosta();
+          else if (document.visibilityState === 'visible') void this.riapriWatchAlRitorno();
+        });
+      }
 
       // NATIVE PLUGIN LISTENERS (Only on Native)
       if (ItaintaBackgroundPoiPlugin) {
@@ -977,6 +994,10 @@ class LocationService {
   public syncSettings(itinerary: any[], guideMode: 'nicky' | 'dante', language: Language, isTourActive: boolean, isMuted?: boolean) {
     this.guideMode = guideMode;
     this.language = language;
+    // Lo spazio «tappe» del nativo e` uno solo: si ricorda l'ultimo elenco
+    // (preferiti) e si consegna UNITO alle tappe del giro e ai luoghi di WIP
+    // Nav (voce 1, 23/09/2026) — prima lo sostituiva.
+    this.ultimoItinerario = Array.isArray(itinerary) ? itinerary : [];
     const wasActive = this.isTourActive;
     this.isTourActive = isTourActive;
     if (isMuted !== undefined && isMuted !== this.isGuideMuted) {
@@ -1028,7 +1049,9 @@ class LocationService {
           // spegnera` piu` quando finisce (vedi rilasciaServizioNativoPerNav).
           this.servizioPerNav = false;
           await this.startNativeBackgroundService();
-          this.syncItineraryToNative(itinerary);
+          // Unione tappe del giro + luoghi WIP Nav + preferiti (voce 1): i
+          // preferiti non scalzano piu` le tappe del giro nel nativo.
+          this.inviaSelezioneNativa();
         })().catch(() => {});
       } else if (this.lastLocation) {
         // Su PWA, se abbiamo già una posizione, triggeriamo subito il fetch
@@ -1111,16 +1134,26 @@ class LocationService {
    * piano AI ({id_tappa, titolo_tappa, coordinate:{lat,lng}}) al formato Poi
    * atteso dal nativo ({id, nome, lat, lon}). Best-effort.
    */
-  private syncItineraryToNative(itinerary: any[]) {
-    if (!ItaintaBackgroundPoiPlugin || !Array.isArray(itinerary) || itinerary.length === 0) return;
+  private syncItineraryToNative(itinerary: any[]): boolean {
+    if (!ItaintaBackgroundPoiPlugin || !Array.isArray(itinerary) || itinerary.length === 0) return false;
     try {
+      // Senza doppioni per id (voce 1): nell'unione vince la PRIMA occorrenza,
+      // cioe` la tappa del giro sul preferito dello stesso luogo.
+      const visti = new Set<string>();
       const pois = itinerary
         .map((t: any) => {
           const lat = t?.coordinate?.lat ?? t?.lat;
           const lon = t?.coordinate?.lng ?? t?.coordinate?.lon ?? t?.lon;
           if (typeof lat !== 'number' || typeof lon !== 'number' || (!lat && !lon)) return null;
+          // 25/09/2026: id del LUOGO (stessa regola di idPoiDaTappa in PlanScreen), mai
+          // `id_tappa` «t1_0»: il nativo ci cerca teaser e audioguida in poi_audioguides.
+          const poiVero = String(t?.poi_id || '');
+          const idLuogo = poiVero && !poiVero.startsWith('ov-') ? poiVero
+            : t?.titolo_tappa
+              ? `iti-${String(t.titolo_tappa).replace(/[^a-zA-Z0-9]/g, '').toLowerCase()}-${lat.toFixed(3)}_${lon.toFixed(3)}`.replace(/\./g, 'p')
+              : String(t.id || `iti_${lat.toFixed(5)}_${lon.toFixed(5)}`);
           return {
-            id: String(t.id_tappa || t.id || `iti_${lat.toFixed(5)}_${lon.toFixed(5)}`),
+            id: idLuogo,
             nome: t.titolo_tappa || t.name || t.nome || 'Tappa',
             lat, lon,
             isFromItinerary: true,
@@ -1133,10 +1166,92 @@ class LocationService {
               : {}),
           };
         })
-        .filter(Boolean);
-      if (pois.length === 0) return;
+        .filter((p: any) => {
+          if (!p || visti.has(p.id)) return false;
+          visti.add(p.id);
+          return true;
+        });
+      if (pois.length === 0) return false;
       ItaintaBackgroundPoiPlugin.syncManualSelection({ poisJson: JSON.stringify(pois) });
+      return true;
     } catch (e) { /* best-effort */ }
+    return false;
+  }
+
+  /**
+   * LO SPAZIO «TAPPE» DEL NATIVO E` UNO SOLO (23/09/2026, voci 1 e 2).
+   * syncManualSelection SOSTITUISCE la selezione (Kotlin e Swift, uguali):
+   * ogni syncSettings con i preferiti cancellava le tappe del giro, e i luoghi
+   * scelti nel modale WIP Nav non ci arrivavano proprio. Ora il JS tiene le
+   * tre sorgenti e consegna sempre la loro UNIONE — tappe del giro per prime,
+   * poi i luoghi WIP Nav, poi i preferiti (questi solo a guida accesa, come
+   * prima) — senza doppioni per id. Nessun cambio nativo.
+   */
+  private tappeGiroNative: any[] = [];
+  private luoghiWipNavNative: any[] = [];
+  private ultimoItinerario: any[] = [];
+
+  /** true se ha consegnato qualcosa; false se l'unione e` vuota (niente inviato). */
+  private inviaSelezioneNativa(opz: { conPreferiti?: boolean } = {}): boolean {
+    const conPreferiti = opz.conPreferiti ?? this.isTourActive;
+    return this.syncItineraryToNative([
+      ...this.tappeGiroNative,
+      ...this.luoghiWipNavNative,
+      ...(conPreferiti ? this.ultimoItinerario : []),
+    ]);
+  }
+
+  /** Svuota la selezione nativa (tappe d'itinerario), senza spegnere il servizio. */
+  private svuotaSelezioneNativa() {
+    if (!ItaintaBackgroundPoiPlugin) return;
+    (async () => {
+      try {
+        if (typeof ItaintaBackgroundPoiPlugin.clearManualSelection === 'function') {
+          await ItaintaBackgroundPoiPlugin.clearManualSelection();
+        }
+      } catch { /* best-effort: la fine del giro non deve mai fallire per questo */ }
+    })();
+  }
+
+  /**
+   * META SINGOLA WIP NAV (23/09/2026, voce 2): i luoghi spuntati nel modale
+   * «A piedi» entrano nel geofencing nativo come tappe d'itinerario, cosi`
+   * si annunciano anche a schermo spento (prima vivevano solo nel JS, e a
+   * WebView congelata passavano in silenzio). Solo sul telefono.
+   */
+  public impostaLuoghiWipNavNativi(luoghi: Array<{ id: string | number; name?: string; nome?: string; lat: number; lon: number; entranceLat?: number | null; entranceLon?: number | null }>) {
+    if (!ItaintaBackgroundPoiPlugin) return;
+    const aveva = this.luoghiWipNavNative.length > 0;
+    this.luoghiWipNavNative = (Array.isArray(luoghi) ? luoghi : [])
+      .filter(p => p && p.id != null && typeof p.lat === 'number' && typeof p.lon === 'number')
+      .map(p => ({
+        id: p.id,
+        nome: p.nome || p.name || 'Tappa',
+        lat: p.lat,
+        lon: p.lon,
+        entranceLat: typeof p.entranceLat === 'number' ? p.entranceLat : undefined,
+        entranceLon: typeof p.entranceLon === 'number' ? p.entranceLon : undefined,
+        // Teaser vuoto: lo chiede il nativo al server nella lingua giusta.
+        descrizione: '',
+      }));
+    // Nuova meta senza luoghi dopo una che li aveva: quelli vecchi escono.
+    if (this.luoghiWipNavNative.length > 0 || aveva) {
+      if (!this.inviaSelezioneNativa()) this.svuotaSelezioneNativa();
+    }
+  }
+
+  /** I luoghi WIP Nav sono consegnati al nativo (lì l'arrivo lo dichiara lui). */
+  public haLuoghiWipNavNativi(): boolean { return this.luoghiWipNavNative.length > 0; }
+
+  /**
+   * Fine della meta singola (stop, arrivo, fallimento): via i SOLI luoghi WIP
+   * Nav. Resta il resto dell'unione; se non resta niente si svuota, mai alla
+   * cieca quando non c'era nulla da togliere.
+   */
+  public togliLuoghiWipNavNativi() {
+    if (this.luoghiWipNavNative.length === 0) return;
+    this.luoghiWipNavNative = [];
+    if (!this.inviaSelezioneNativa()) this.svuotaSelezioneNativa();
   }
 
   /**
@@ -1147,16 +1262,24 @@ class LocationService {
    * c'e', e' il punto a cui il nativo deve far scattare l'arrivo.
    */
   public syncTappeGiroToNative(tappe: Array<{ id: string | number; nome: string; lat: number; lon: number; ingresso?: { lat: number; lon: number } | null; testo?: string | null }>) {
-    if (!ItaintaBackgroundPoiPlugin || !Array.isArray(tappe) || tappe.length === 0) return;
-    this.syncItineraryToNative(tappe.map(t => ({
+    if (!ItaintaBackgroundPoiPlugin || !Array.isArray(tappe)) return;
+    this.tappeGiroNative = tappe.map(t => ({
       id: t.id,
       nome: t.nome,
       lat: t.lat,
       lon: t.lon,
       entranceLat: t.ingresso?.lat,
       entranceLon: t.ingresso?.lon,
-      descrizione: t.testo ? String(t.testo).slice(0, 200) : '',
-    })));
+      // Mai il testo della guida come teaser (voce 5, 23/09/2026): dopo il
+      // pre-scarico `testo` e` la guida INTEGRALE, e troncata a 200 caratteri
+      // diventava «Sei arrivato a X. <mezza frase>», poi l'MP3 ripeteva la
+      // stessa frase. Vuoto = il nativo chiede il teaser vero al server nella
+      // lingua giusta, come gia` al primo avvio del giro.
+      descrizione: '',
+    }));
+    // Unione con luoghi WIP Nav e preferiti (voce 1). Lista vuota (ultima
+    // tappa fatta, voce 7): resta il resto dell'unione, o si svuota.
+    if (!this.inviaSelezioneNativa() && tappe.length === 0) this.svuotaSelezioneNativa();
   }
 
   /**
@@ -1167,15 +1290,16 @@ class LocationService {
    * native gia' installate che il metodo non ce l'hanno: li' non succede nulla
    * e le tappe se ne vanno al prossimo riavvio del servizio.
    */
-  public unsyncTappeGiroFromNative() {
+  public unsyncTappeGiroFromNative(opz: { conPreferiti?: boolean } = {}) {
     if (!ItaintaBackgroundPoiPlugin) return;
-    (async () => {
-      try {
-        if (typeof ItaintaBackgroundPoiPlugin.clearManualSelection === 'function') {
-          await ItaintaBackgroundPoiPlugin.clearManualSelection();
-        }
-      } catch { /* best-effort: la fine del giro non deve mai fallire per questo */ }
-    })();
+    this.tappeGiroNative = [];
+    // (23/09/2026, voce 1) Via le SOLE tappe del giro: i luoghi WIP Nav, e a
+    // fine giro con la guida accesa i preferiti, si riconsegnano invece di
+    // sparire col clear. Alla sospensione (cuffie spente) i preferiti no: il
+    // servizio sta per spegnersi o passare a navigatore. Se non resta niente,
+    // clear come prima.
+    const conPreferiti = !!opz.conPreferiti && this.isTourActive;
+    if (!this.inviaSelezioneNativa({ conPreferiti })) this.svuotaSelezioneNativa();
   }
 
   /**
@@ -1500,8 +1624,62 @@ class LocationService {
     // Un avvio gia' in corso NON ne apre un secondo (MAP-07): prima ogni
     // subscribe durante l'await del permesso lanciava un altro watchPosition
     // e il primo restava zombie (mai piu' cancellabile, doppio consumo GPS).
-    if (this.watchId === null && !this.starting) this.startWatching();
+    // Watch sospeso a pagina nascosta (voci 3+4): si riapre al ritorno visibile.
+    if (this.watchId === null && !this.starting && !this.watchSospesoDaNascosta) this.startWatching();
     return () => { this.listeners.delete(listener); };
+  }
+
+  /**
+   * (23/09/2026, batteria, voci 3+4) Il watch del JS era aperto prima che la
+   * pagina si nascondesse, ed e` stato chiuso da sospendiWatchSeNascosta:
+   * alla pagina visibile si riapre (anche se l'aveva aperto
+   * tourService.startWatching e non un subscribe).
+   */
+  private watchSospesoDaNascosta = false;
+
+  /**
+   * Solo Android nativo, a pagina nascosta: il GPS lo tiene il servizio
+   * nativo e basta. Si chiude il watch JS SOLO se il servizio c'e` (guida
+   * accesa o navigatore), navNativo non ha un percorso consegnato (lì resta
+   * il battito «dai fix veri» della REVISIONE 2) e non c'e` un giro/percorso
+   * in corso (tourService lo riaccende apposta per il driver). Mai durante il
+   * replay GPS. I trigger dell'audioguida su Android li fa gia` solo il
+   * nativo (foregroundTriggers e` spento sul telefono): il codice dei trigger
+   * non cambia.
+   */
+  private async sospendiWatchSeNascosta() {
+    if (Capacitor.getPlatform() !== 'android' || this.watchId === null || this.starting) return;
+    if (!this.isTourActive && !this.servizioPerNav) return;
+    try {
+      const { isReplaying } = await import('../lib/geofencing/gpsReplay');
+      if (isReplaying()) return;
+      const { proprietarioNativo } = await import('../lib/nav/navNativo');
+      if (proprietarioNativo() !== null) return;
+      const { tourService } = await import('./tourService');
+      if (tourService.inCorso()) return;
+    } catch { return; /* nel dubbio il watch resta com'era */ }
+    // Nel frattempo la pagina e` tornata visibile, o il watch e` cambiato.
+    if (typeof document === 'undefined' || document.visibilityState !== 'hidden' || this.watchId === null || this.starting) return;
+    await this.stopWatching();
+    // DOPO lo stop: stopWatching azzera il segno (uno stop esplicito — logout,
+    // replay — non va annullato dal ritorno visibile).
+    this.watchSospesoDaNascosta = true;
+    // La pagina e` tornata visibile DURANTE lo stop (clearWatch e` async): il
+    // suo riapriWatchAlRitorno ha trovato il segno ancora spento. Si riapre qui,
+    // altrimenti il watch resterebbe chiuso a pagina visibile.
+    // (cast: dopo l'await TypeScript crede ancora che lo stato sia 'hidden')
+    if ((document.visibilityState as DocumentVisibilityState) === 'visible') void this.riapriWatchAlRitorno();
+  }
+
+  private async riapriWatchAlRitorno() {
+    if (!this.watchSospesoDaNascosta) return;
+    this.watchSospesoDaNascosta = false;
+    try {
+      const { isReplaying } = await import('../lib/geofencing/gpsReplay');
+      if (isReplaying()) return; // il replay lo riapre da se` a fine corsa
+    } catch { /* si riapre comunque */ }
+    // startWatchingInterno fa subito un getCurrentPosition: fix fresco al ritorno.
+    this.startWatching(this.isHighAccuracy).catch(() => {});
   }
 
   /** Promise dell'avvio in corso: le chiamate concorrenti la condividono. */
@@ -1774,6 +1952,9 @@ class LocationService {
   }
 
   public async stopWatching() {
+    // Uno stop esplicito (logout, replay, riavvio) vince sulla sospensione a
+    // pagina nascosta: al ritorno visibile non si riapre niente (voci 3+4).
+    this.watchSospesoDaNascosta = false;
     // `watchId !== null` e non truthy: il watch web puo' avere id 0.
     if (this.watchId === null) return;
     // Si azzera PRIMA dell'await (MAP-07): durante clearWatch un subscribe
@@ -1795,6 +1976,39 @@ class LocationService {
   private vibra(pattern: number[]) {
     if (!this.isVibrationEnabled) return;
     try { (navigator as any).vibrate?.(pattern); } catch { /* niente vibrazione */ }
+  }
+
+  /**
+   * «RIPRENDI» DAL WIDGET (23/09/2026). Il widget «Ultima audioguida» ricorda
+   * il secondo a cui ci si era fermati; qui lo si mette da parte e, alla prima
+   * riproduzione dello STESSO POI entro 90 s (quella che la scheda avvia dopo
+   * il tocco), si salta lì. Solo additivo: chi non chiama questo metodo non
+   * vede alcuna differenza. Vicino all'inizio (< 5 s) o alla fine (ultimi
+   * 5 s) non si salta: tanto vale ripartire da capo.
+   */
+  public impostaRipresa(poiId: string, posSec: number): void {
+    try { this.ripresaStacca?.(); } catch { /* niente */ }
+    this.ripresaStacca = null;
+    this.ripresa = null;
+    if (!poiId || !Number.isFinite(posSec) || posSec < 5) return;
+    this.ripresa = { poiId: String(poiId), posSec, scade: Date.now() + 90_000 };
+    const ascolta: AudioStateListener = (s) => {
+      const r = this.ripresa;
+      if (!r || Date.now() > r.scade) { this.ripresa = null; this.ripresaStacca?.(); this.ripresaStacca = null; return; }
+      if (s.poiId !== r.poiId || !s.isPlaying || !(s.duration > 0)) return;
+      this.ripresa = null;
+      this.ripresaStacca?.();
+      this.ripresaStacca = null;
+      if (r.posSec >= s.duration - 5) return;
+      try {
+        if (this.isNativePlayback) WipBackgroundAudio.seek({ position: r.posSec }).catch(() => {});
+        else if (this.activeGuideAudio) this.activeGuideAudio.currentTime = r.posSec;
+      } catch { /* seek non riuscito: si ascolta da capo */ }
+    };
+    // Non observeAudioState: quello chiama subito il listener con lo stato
+    // attuale, e un'audioguida gia' in corso dello stesso POI salterebbe ora.
+    this.audioListeners.add(ascolta);
+    this.ripresaStacca = () => { this.audioListeners.delete(ascolta); };
   }
 
   /**
@@ -1875,6 +2089,7 @@ class LocationService {
     // Playing iOS): letta da playAudioBlob al momento di avviare il player
     // nativo, come currentCharacter qui sopra.
     this.currentPoiPhotoUrl = poiPhotoUrl || null;
+    this.linguaUltimaTraccia = languageOverride || null;
     // Origine trigger → a fine ascolto (o allo stop) parte la barra feedback.
     this.currentPlaybackFromTrigger = fromTrigger;
     // 🎧 Coordinate del POI per il pan direzionale (best-effort, async).
@@ -2169,6 +2384,7 @@ class LocationService {
     this.audioState.poiId = poiId || null;
     this.audioState.poiName = poiName || null;
     this.currentPoiPhotoUrl = poiPhotoUrl || null;
+    this.linguaUltimaTraccia = null;
     // 🎧 Coordinate per il pan direzionale anche sugli MP3 offline/acquistati
     if (poiId) this.resolveCurrentPoiCoords(String(poiId));
     this.notifyAudioState();
@@ -2340,6 +2556,23 @@ class LocationService {
           image_url: this.currentPoiPhotoUrl || undefined,
         }, currentUserId);
       }
+      // (23/09/2026) Widget «Ultima audioguida» / «In un'altra lingua»: un
+      // solo record con lingua e personaggio, che lo storico non ha. Import
+      // dinamico: widgetDati importa gia' questo modulo.
+      try {
+        const { registraUltimoAscolto } = await import('../lib/widgetDati');
+        const p: any = poi || {};
+        registraUltimoAscolto({
+          tipo: 'poi',
+          id: String(poiId),
+          nome: String(p.name || this.audioState.poiName || ''),
+          luogo: String(p.city || ''),
+          foto: String(this.currentPoiPhotoUrl || p.image_url || p.photo_url || ''),
+          categoria: String(p.category || ''),
+          lingua: String(this.linguaUltimaTraccia || this.language || 'IT').toLowerCase(),
+          personaggio: this.currentCharacter,
+        });
+      } catch { /* il widget resta com'era */ }
     } catch (e) {
       console.warn("[LocationService] recordPlaybackStart failed", e);
     }

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 小组件选择器和应用快捷方式（中文，23/09/2026）。小组件内部的文字
+     来自应用的快照，已经翻译好。 -->
+<resources>
+    <string name="wip_widget_name">WIP — 口袋雷达</string>
+    <string name="wip_widget_description">一眼看到积分余额、行程的下一站和最近的兴趣点。</string>
+
+    <string name="wip_w_itinerario_nome">WIP · 行程</string>
+    <string name="wip_w_itinerario_desc">今天的下一站，附带时间和步行分钟数。</string>
+    <string name="wip_w_visita_nome">WIP · 博物馆参观</string>
+    <string name="wip_w_visita_desc">正在参观的博物馆：已收听的作品和下一件。</string>
+    <string name="wip_w_crediti_nome">WIP · 积分与通行证</string>
+    <string name="wip_w_crediti_desc">积分余额，以及当前有效的 Day Pass 和到期时间。</string>
+    <string name="wip_w_vicini_nome">WIP · 附近</string>
+    <string name="wip_w_vicini_desc">你附近有语音导览的珍宝和地点：轻点一下即开始讲解。</string>
+
+    <string name="wip_w_ultimo_nome">WIP · 最近的导览</string>
+    <string name="wip_w_ultimo_desc">重听或继续最近的语音导览</string>
+    <string name="wip_w_luogo_nome">WIP · 今日地点</string>
+    <string name="wip_w_luogo_desc">附近的一处珍宝，每天不同</string>
+    <string name="wip_w_vision_nome">WIP · 我看到的是什么？</string>
+    <string name="wip_w_vision_desc">打开相机，识别你眼前的事物</string>
+    <string name="wip_w_vision_breve">我看到的是什么？</string>
+    <string name="wip_w_meteo_nome">WIP · 天气</string>
+    <string name="wip_w_meteo_desc">今日站点的天气、最佳时间、雨天保障</string>
+    <string name="wip_w_ascolta_nome">WIP · 立即收听</string>
+    <string name="wip_w_ascolta_desc">轻点一下：最近地点的语音导览</string>
+    <string name="wip_w_ascolta_breve">立即收听</string>
+    <string name="wip_w_eventi_nome">WIP · 附近活动</string>
+    <string name="wip_w_eventi_desc">未来几天的活动和展览</string>
+    <string name="wip_w_regione_nome">WIP · 地区珍宝</string>
+    <string name="wip_w_regione_desc">你所在地区的一处珍宝</string>
+    <string name="wip_w_confronto_nome">WIP · 作品对比</string>
+    <string name="wip_w_confronto_desc">今天收听的两件作品：你更喜欢哪一件？</string>
+    <string name="wip_w_lingua_nome">WIP · 换一种语言</string>
+    <string name="wip_w_lingua_desc">用另一种语言收听最近的导览</string>
+    <string name="wip_w_pdf_nome">WIP · 打印版导览</string>
+    <string name="wip_w_pdf_desc">最新的 PDF 导览，可重新打开或分享</string>
+    <string name="wip_w_community_nome">WIP · 社区照片</string>
+    <string name="wip_w_community_desc">在你附近拍摄的最新已验证照片</string>
+</resources>

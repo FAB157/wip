@@ -445,6 +445,35 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // WIDGET «COSA VEDO?» (23/09/2026): App lascia `wip_richiesta_vision` e
+  // poi emette 'wip-apri-vision'. Se la richiesta ha meno di 15 s si apre
+  // Vision sul luogo e si prova la fotocamera live. Senza gesto dell'utente
+  // getUserMedia può essere rifiutato: si resta sulla schermata Vision col
+  // suo tasto, e MAI cameraInputRef.click() (senza gesto è bloccato comunque).
+  useEffect(() => {
+    const apriVision = async () => {
+      let ts = 0;
+      try { ts = Number(localStorage.getItem('wip_richiesta_vision') || 0); } catch { /* storage bloccato */ }
+      if (!ts || Date.now() - ts > 15_000) return;
+      try { localStorage.removeItem('wip_richiesta_vision'); } catch { /* niente */ }
+      setMode('vision');
+      setVisionTarget('place');
+      try {
+        if (!navigator.mediaDevices?.getUserMedia || streamRef.current) return;
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+        streamRef.current = stream;
+        setShowCamera(true);
+      } catch (e) {
+        console.warn('[Camera] widget Vision: fotocamera non aperta senza gesto', e);
+      }
+    };
+    void apriVision();
+    const h = () => { void apriVision(); };
+    window.addEventListener('wip-apri-vision', h);
+    return () => window.removeEventListener('wip-apri-vision', h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const onVisit = () => setVisit(getVisit());
     const onOpen = () => { setVisit(getVisit()); setVisitOpen(true); };

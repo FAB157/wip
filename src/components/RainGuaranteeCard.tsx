@@ -56,9 +56,18 @@ export default function RainGuaranteeCard({ itinerary, language }: RainGuarantee
   // Itinerario troppo vecchio (o offline/mock): nessuna garanzia da mostrare.
   if (eligibleDays.length === 0) return null;
 
+  // Itinerari salvati prima del 25/09 non hanno `destinazione`: dal titolo si prende la città solo
+  // se ne resta un nome corto («Ravenna 2 giorni — Gastronomica» → Ravenna); una frase intera
+  // («Tre giorni tra arte e sapori») non è una città, meglio la parola generica.
+  const cittaDalTitolo = (() => {
+    const s = String(itinerary?.titolo || '').split(/:|\s[—–|]\s/)[0]
+      .replace(/\b(in\s+)?\d+\s*(giorni|giorno|days?|jours?|días?|dias?|tage?n?|дн\S*|天)/gi, '')
+      .replace(/\s{2,}/g, ' ').trim();
+    return s && s.split(/\s+/).length <= 3 ? s : '';
+  })();
   const destName: string = itinerary?.dati_itinerario?.destinazione
     || itinerary?.dati_itinerario?.destination
-    || String(itinerary?.titolo || '').split(':')[0].trim()
+    || cittaDalTitolo
     || t('vr_b_rg_dest_fallback');
 
   const fmtDay = (iso: string) => {

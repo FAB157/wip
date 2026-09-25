@@ -10,6 +10,33 @@ import './index.css';
 // Request, non solo le stringhe come faceva la versione inline qui.
 import { installNativeApiFetch } from './lib/api';
 installNativeApiFetch();
+
+// TRADUTTORE DEL BROWSER (23/09/2026, Sentry fatal ripetuto: «Failed to
+// execute 'insertBefore' on 'Node'», Chrome Mobile, pagina aperta su Mardin).
+// Chi legge in una lingua che l'app non ha (turco, arabo…) si vede proporre da
+// Chrome «Traduci questa pagina»: Google Traduttore sostituisce i nodi di
+// testo con suoi <font>, alle spalle di React, e al primo aggiornamento React
+// non trova più il nodo dove l'aveva lasciato — e l'app crolla intera. È il
+// difetto noto di React con i traduttori (facebook/react#11538): si tollera
+// il nodo spostato invece di lanciare. Tradurre la pagina resta possibile.
+if (typeof Node === 'function' && Node.prototype) {
+  const removeChildOrig = Node.prototype.removeChild;
+  Node.prototype.removeChild = function <T extends Node>(this: Node, child: T): T {
+    if (child.parentNode !== this) {
+      console.warn('[dom] removeChild su un nodo spostato (traduttore del browser?)');
+      return child;
+    }
+    return removeChildOrig.call(this, child) as T;
+  };
+  const insertBeforeOrig = Node.prototype.insertBefore;
+  Node.prototype.insertBefore = function <T extends Node>(this: Node, newNode: T, referenceNode: Node | null): T {
+    if (referenceNode && referenceNode.parentNode !== this) {
+      console.warn('[dom] insertBefore con un riferimento spostato (traduttore del browser?)');
+      return newNode;
+    }
+    return insertBeforeOrig.call(this, newNode, referenceNode) as T;
+  };
+}
 // SENTRY (30/08/2026): attivo solo se VITE_SENTRY_DSN è impostata — senza
 // chiave l'app funziona identica a prima. Nessuna integrazione automatica
 // (integrations:[] sostituisce i default, non li aggiunge): gli errori

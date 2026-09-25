@@ -17,6 +17,7 @@ import { printScoped } from '../lib/printScoped';
 import MuseumPrintView from './MuseumPrintView';
 import { getGuideCharacter } from '../lib/guideSettings';
 import { formatPassRemaining } from '../lib/museumPass';
+import { hash8, registraUltimoAscolto, registraOperaAscoltata } from '../lib/widgetDati';
 
 interface MuseumVisitSheetProps {
   /** Cambia col museo: la scheda si rimonta quando «E poi?» apre la visita successiva. */
@@ -376,7 +377,15 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   // Dalla griglia «è una di queste?» della fotocamera: si apre e parte
   // l'opera scelta con gli occhi.
   useEffect(() => {
-    const onPlay = (e: any) => { const i = Number(e?.detail?.index); if (Number.isFinite(i) && visit.guide.tappe[i]) void handleOpera(i); };
+    // (23/09/2026) `handled`: il «Riascolta» del widget ripete l'evento finché
+    // la scheda non è montata; qui si segna che è arrivato. `daCapo`: dal
+    // widget si riparte dall'inizio, mai un toggle di pausa.
+    const onPlay = (e: any) => {
+      const i = Number(e?.detail?.index);
+      if (!Number.isFinite(i) || !visit.guide.tappe[i]) return;
+      try { if (e?.detail) e.detail.handled = true; } catch { /* detail congelato */ }
+      void handleOpera(i, e?.detail?.daCapo ? { daCapo: true } : undefined);
+    };
     window.addEventListener('wip-museum-play-index', onPlay);
     return () => window.removeEventListener('wip-museum-play-index', onPlay);
   });
@@ -1206,6 +1215,22 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         setOperaParla(i);
         // Ascoltata = vista: la spunta parte con l'ascolto, non alla fine.
         markStopListened(i);
+        // (23/09/2026) Widget «Ultima audioguida», «In un'altra lingua» e
+        // «Confronto opere»: si ricorda l'opera (chiave corta = hash del
+        // museo e del titolo della fonte, mai l'id grezzo nel deep link).
+        try {
+          const k = hash8(`${visit.venueKey}|${tappa.nomeFonte || tappa.nome}`);
+          const foto = String(tappa.foto || tappa.fotoIcona || guida.foto || '');
+          registraUltimoAscolto({
+            tipo: 'opera', id: k, venueKey: visit.venueKey, museo: visit.venue.name,
+            nome: tappa.nome, nomeFonte: tappa.nomeFonte, luogo: visit.venue.name, foto,
+            lingua, personaggio: getGuideCharacter(),
+          });
+          registraOperaAscoltata({
+            k, venueKey: visit.venueKey, museo: visit.venue.name, nome: tappa.nome, nomeFonte: tappa.nomeFonte,
+            autore: String(tappa.autore || ''), anno: String(tappa.anno ?? ''), tipo: String(tappa.tipo || ''), foto, ts: Date.now(),
+          });
+        } catch { /* il widget resta com'era */ }
       };
       // ACCESSIBILITÀ (12/09/2026): con la preferenza accesa, prima si dice
       // cosa si vede — lentamente — e poi parte il racconto.

@@ -65,6 +65,62 @@ export async function leggiPdf(id: string): Promise<Blob | null> {
   } catch { return null; }
 }
 
+/**
+ * Esito di una riapertura: 'salvato' = sull'app nativa il PDF e' stato
+ * riscritto nei Documenti (non c'e' un visore), 'aperto' = nuova scheda del
+ * browser, 'scaricato' = scheda bloccata e file scaricato, 'errore' = file
+ * non scrivibile, 'assente' = il PDF non e' piu' in archivio. I messaggi li
+ * mostra il chiamante nella sua lingua.
+ */
+export type EsitoRiapertura = 'salvato' | 'aperto' | 'scaricato' | 'errore' | 'assente';
+
+/**
+ * Riapre un PDF gia' stampato, senza rigenerarlo (23/09/2026: spostata qui da
+ * DownloadsScreen, la usa anche il widget «Guida stampata»).
+ */
+export async function riapriPdf(id: string): Promise<EsitoRiapertura> {
+  const voce = (await elencoPdf()).find(v => v.id === id);
+  const blob = await leggiPdf(id);
+  if (!blob || !voce) return 'assente';
+  const { saveBlobAsFile } = await import('../services/premiumGuideService');
+  const { Capacitor } = await import('@capacitor/core');
+  if (Capacitor.isNativePlatform()) {
+    const ok = await saveBlobAsFile(blob, voce.file);
+    return ok ? 'salvato' : 'errore';
+  }
+  const url = URL.createObjectURL(blob);
+  const finestra = window.open(url, '_blank');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  if (finestra) return 'aperto';
+  return (await saveBlobAsFile(blob, voce.file)) ? 'scaricato' : 'errore';
+}
+
+/**
+ * Condivide un PDF dell'archivio con il foglio di condivisione del sistema
+ * (navigator.share con file). Dove non c'e' (la WebView Android di norma non
+ * lo espone) si riapre: sul nativo il file finisce nei Documenti e il
+ * chiamante lo dice con un avviso. 'annullato' = l'utente ha chiuso il foglio.
+ */
+export async function condividiPdf(id: string): Promise<'condiviso' | 'annullato' | EsitoRiapertura> {
+  const voce = (await elencoPdf()).find(v => v.id === id);
+  const blob = await leggiPdf(id);
+  if (!blob || !voce) return 'assente';
+  try {
+    const f = new File([blob], voce.file, { type: 'application/pdf' });
+    const nav: any = typeof navigator !== 'undefined' ? navigator : null;
+    if (nav?.canShare?.({ files: [f] }) && typeof nav.share === 'function') {
+      try {
+        await nav.share({ files: [f], title: voce.nome });
+        return 'condiviso';
+      } catch (e: any) {
+        if (e?.name === 'AbortError') return 'annullato';
+        /* condivisione rifiutata: si ripiega sulla riapertura */
+      }
+    }
+  } catch { /* File o share non disponibili */ }
+  return riapriPdf(id);
+}
+
 export async function eliminaPdf(id: string): Promise<void> {
   try {
     await del(chiaveBlob(id));

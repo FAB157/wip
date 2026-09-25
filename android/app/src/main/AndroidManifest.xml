@@ -87,6 +87,10 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="wip.guide" android:pathPrefix="/auth" />
             </intent-filter>
+
+            <!-- Scorciatoie dell'icona (23/09/2026): «Cosa vedo?» e «Ascolta ora»,
+                 al posto dei widget da schermata di blocco che Android non ammette. -->
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
 
         <provider
@@ -160,6 +164,55 @@
         <receiver android:name=".widget.WipViciniWidget" android:exported="true" android:label="@string/wip_w_vicini_nome">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_vicini_info" />
+        </receiver>
+
+        <!-- Undici widget nuovi (23/09/2026, WipHomeWidgets2.kt): ultima audioguida,
+             luogo del giorno, cosa vedo, meteo e garanzia, ascolta ora, eventi,
+             gemma della regione, confronto opere, altra lingua, guida stampata,
+             foto dalla community. Stesso snapshot, stesso schema di tocco. -->
+        <receiver android:name=".widget.WipUltimoAscoltoWidget" android:exported="true" android:label="@string/wip_w_ultimo_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_ultimo_info" />
+        </receiver>
+        <receiver android:name=".widget.WipLuogoGiornoWidget" android:exported="true" android:label="@string/wip_w_luogo_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_luogo_info" />
+        </receiver>
+        <receiver android:name=".widget.WipVisionWidget" android:exported="true" android:label="@string/wip_w_vision_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_vision_info" />
+        </receiver>
+        <receiver android:name=".widget.WipMeteoWidget" android:exported="true" android:label="@string/wip_w_meteo_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_meteo_info" />
+        </receiver>
+        <receiver android:name=".widget.WipAscoltaWidget" android:exported="true" android:label="@string/wip_w_ascolta_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_ascolta_info" />
+        </receiver>
+        <receiver android:name=".widget.WipEventiWidget" android:exported="true" android:label="@string/wip_w_eventi_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_eventi_info" />
+        </receiver>
+        <receiver android:name=".widget.WipGemmaRegioneWidget" android:exported="true" android:label="@string/wip_w_regione_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_regione_info" />
+        </receiver>
+        <receiver android:name=".widget.WipConfrontoWidget" android:exported="true" android:label="@string/wip_w_confronto_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_confronto_info" />
+        </receiver>
+        <receiver android:name=".widget.WipAltraLinguaWidget" android:exported="true" android:label="@string/wip_w_lingua_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_lingua_info" />
+        </receiver>
+        <receiver android:name=".widget.WipGuidaStampataWidget" android:exported="true" android:label="@string/wip_w_pdf_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_pdf_info" />
+        </receiver>
+        <receiver android:name=".widget.WipFotoCommunityWidget" android:exported="true" android:label="@string/wip_w_community_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_community_info" />
         </receiver>
 
         <!-- Transizioni Activity Recognition (Play Services, via PendingIntent):

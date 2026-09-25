@@ -30,6 +30,7 @@ import PrintView from './PrintView';
 import { FAVORITES_EVENT } from '../lib/favorites';
 import { useWalkingNavigation } from '../hooks/useWalkingNavigation';
 import NavigationOverlay from './NavigationOverlay';
+import ClimaReportSheet from './ClimaReportSheet';
 import PlanMap from './PlanMap';
 import PremiumGuideModal from './PremiumGuideModal';
 import AgentControls from './AgentControls';
@@ -219,7 +220,8 @@ function describePlanError(err: unknown, language: Language): string {
   const code = (err as any)?.code || (err instanceof Error ? err.message : String(err || ''));
   const key = PLAN_ERROR_KEYS[code];
   if (key) return getTranslation(key, language);
-  if ((err as any)?.name === 'AbortError') return getTranslation('err_ai_timeout', language);
+  // apiFetch interrompe con TimeoutError (non AbortError): senza, il timeout finiva nel messaggio generico.
+  if ((err as any)?.name === 'AbortError' || (err as any)?.name === 'TimeoutError') return getTranslation('err_ai_timeout', language);
   const detail = (err as any)?.detail || (err instanceof Error ? err.message : '');
   return detail
     ? `${getTranslation('err_generation_failed', language)} (${String(detail).slice(0, 120)})`
@@ -578,6 +580,10 @@ interface GeneratedItinerary {
   id?: string;
   titolo: string;
   giorni: ItineraryDay[];
+  /** Mese del viaggio scelto nel form ('Gennaio'…): salvato nel piano per il clima dei giorni (24/09/2026). */
+  mese?: string;
+  /** Data di partenza YYYY-MM-DD, se nota (form o modalina del calendario). Non va al generatore. */
+  data_inizio?: string;
   info_viaggio?: {
     zone_da_evitare?: string[];
     raccomandazioni?: string[];
@@ -745,6 +751,25 @@ function idPoiDaTappa(t: any, lat: number, lon: number): string {
   return `iti-${slug}-${lat.toFixed(3)}_${lon.toFixed(3)}`.replace(/\./g, 'p');
 }
 
+/**
+ * Il numero di giorni nel titolo («Bologna in 2 giorni», «3 Days in Rome», «Рим за 2 дня», «北京3天»)
+ * portato a `n`. Se il titolo non ha il numero di giorni resta com'e'. Il singolare passa al plurale.
+ */
+const PLURALE_GIORNI: Record<string, string> = { giorno: 'giorni', day: 'days', jour: 'jours', 'día': 'días', dia: 'dias', tag: 'Tage', 'день': 'дня' };
+function titoloConGiorni(titolo: string, n: number): string {
+  const re = /(\d+)(\s*)(giorni|giorno|days|day|jours|jour|días|día|dias|dia|tage|tag|дней|дня|день|天)(?![\p{L}])/iu;
+  const m = titolo.match(re);
+  if (!m) return titolo;
+  let unita = m[3];
+  const chiave = unita.toLowerCase();
+  if (n > 1 && PLURALE_GIORNI[chiave]) {
+    const pl = PLURALE_GIORNI[chiave];
+    unita = unita[0] === unita[0].toUpperCase() && unita[0] !== unita[0].toLowerCase() ? pl[0].toUpperCase() + pl.slice(1) : pl;
+  }
+  if (/^(дня|дней)$/i.test(unita)) unita = n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'дня' : 'дней';
+  return titolo.replace(re, `${n}${m[2]}${unita}`);
+}
+
 export default function PlanScreen({
   resetCounter,
   guideMode,
@@ -759,7 +784,12 @@ export default function PlanScreen({
   setExternalPlan
 }: PlanScreenProps & { externalPlan?: any, setExternalPlan?: (p: any) => void }) {
   const isOnline = useNetworkStatus();
-  const [plannerMode, setPlannerMode] = useState<'selection' | 'form_a' | 'form_b' | 'form_c' | 'tinder_form' | 'tinder_swipe' | 'tinder_review' | 'alternatives_view' | 'view' | 'offline_list' | 'my_itineraries' | 'group_plan' | 'wip_agent'>(isOnline ? 'selection' : 'offline_list');
+  const [plannerMode, setPlannerMode] = useState<'selection' | 'form_a' | 'form_b' | 'form_c' | 'tinder_form' | 'tinder_swipe' | 'tinder_review' | 'alternatives_view' | 'view' | 'offline_list' | 'my_itineraries' | 'group_plan' | 'wip_agent' | 'quando_andare'>(isOnline ? 'selection' : 'offline_list');
+  // «QUANDO ANDARE» (24/09/2026): la scheda Anno/Mese del clima, aperta su
+  // una città cercata qui o sulla destinazione del pianificatore.
+  const [quandoAndare, setQuandoAndare] = useState<{ lat: number; lon: number; nome: string; mese?: number | null } | null>(null);
+  const [quandoAndareTesto, setQuandoAndareTesto] = useState('');
+  const [quandoAndareCerca, setQuandoAndareCerca] = useState<'idle' | 'cerco' | 'non_trovata'>('idle');
   // L'agente WIP ha consegnato i parametri: il form è stato riempito con
   // setState e la generazione deve partire al render SUCCESSIVO, quando gli
   // stati sono davvero aggiornati (handleGenerateAutomatic legge
@@ -874,6 +904,11 @@ export default function PlanScreen({
   // al server arrivava solo il nome come testo libero e l'AI "reinterpretava"
   // la città (Giza→Milano, Tallinn→Olbia). Si azzera se l'utente ridigita.
   const [destCoords, setDestCoords] = useState<{ lat: number; lon: number; label: string } | null>(null);
+  /** Ora dell'ultima scelta dalla tendina degli indirizzi (vedi pickSuggestion). */
+  const sceltaSuggerimentoRef = useRef(0);
+  // Avviso sul clima del mese scelto (livello Clima della mappa, stesse medie
+  // NASA POWER): l'effetto sta più sotto, dopo la dichiarazione di `mese`.
+  const [climaAvviso, setClimaAvviso] = useState<{ tipo: 'migliore' | 'peggiore' | 'medio'; testo: string } | null>(null);
   const [focusedDestIdx, setFocusedDestIdx] = useState<number | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [suggestions, setSuggestions] = useState<any[]>([]);
@@ -913,6 +948,49 @@ export default function PlanScreen({
   const [ritmo, setRitmo] = useState<'rilassato' | 'standard' | 'intenso'>(() => loadPlanPref('ritmo', 'standard' as const));
   const [guida, setGuida] = useState<'NICKY' | 'DANTE' | 'ENTRAMBI'>(() => loadPlanPref('guida', 'NICKY' as const));
   const [mese, setMese] = useState('');
+  // Data di partenza facoltativa (24/09/2026): se scelta, imposta anche il mese. Resta nel client: al
+  // generatore continua ad andare solo il mese; la data finisce nel piano come data_inizio.
+  const [dataPartenza, setDataPartenza] = useState('');
+  // Mese e data del form scritti nel piano appena generato (mai sopra quelli che il piano ha già).
+  const timbraViaggio = (p: any, precedente?: any) => {
+    if (!p || typeof p !== 'object') return p;
+    const m = p.mese || precedente?.mese || mese || '';
+    const d = p.data_inizio || precedente?.data_inizio || dataPartenza || '';
+    if (m) p.mese = m;
+    if (d) p.data_inizio = d;
+    // La città del form (25/09/2026): la garanzia pioggia diceva «dati meteo reali di <titolo>».
+    // Sostituendo una tappa resta quella del piano, mai il form (che può essere già un altro viaggio).
+    const dest = p.destinazione || precedente?.destinazione
+      || (precedente ? '' : String(destinations.find((x) => String(x || '').trim()) || '').split(',')[0].trim());
+    if (dest) p.destinazione = dest;
+    return p;
+  };
+  // Voce della conferma crediti nella lingua dell'utente e al singolare con 1 giorno (era «1 giorni» in italiano fisso).
+  const etichettaItinerarioPro = (n: number) =>
+    `${getTranslation('itinerary', language)} AI PRO (${n} ${getTranslation(n === 1 ? 'giorno' : 'giorni', language)})`;
+  // Clima del mese scelto per la destinazione risolta (24/09/2026): medie
+  // NASA POWER 2001-2020 dal livello Clima, per non scoprire ad agosto che
+  // erano 38°. Nessuna AI, nessun costo: solo la cache delle statistiche.
+  useEffect(() => {
+    const idx = MONTH_VALUES.indexOf(mese as (typeof MONTH_VALUES)[number]);
+    if (idx < 0 || !destCoords) { setClimaAvviso(null); return; }
+    let vivo = true;
+    import('../lib/climaIndex').then(async (c) => {
+      // Solo numeri (niente Bearer): l'avviso non mostra l'analisi AI, generarla qui costerebbe per nulla.
+      const d = await c.fetchDatiClima(destCoords.lat, destCoords.lon, language, true);
+      if (!vivo || !d) { if (vivo) setClimaAvviso(null); return; }
+      const m = idx + 1;
+      const x = d.mesi.find((y) => y.m === m);
+      if (!x) { setClimaAvviso(null); return; }
+      const tipo = c.giudizioMese(d, m);
+      const testo = getTranslation(tipo === 'peggiore' ? 'mp_clima_avviso_peggiore' : tipo === 'migliore' ? 'mp_clima_avviso_migliore' : 'mp_clima_avviso_medio', language)
+        .replace('{mese}', c.nomeMese(m, language, true)).replace('{citta}', destCoords.label.split(',')[0].trim())
+        .replace('{tmax}', String(x.tmax == null ? '?' : Math.round(x.tmax))).replace('{tmin}', String(x.tmin == null ? '?' : Math.round(x.tmin)))
+        .replace('{mm}', String(x.mm ?? '?')).replace('{migliori}', c.testoPeriodi(d.migliori, language) || '—');
+      setClimaAvviso({ tipo, testo });
+    }).catch(() => { if (vivo) setClimaAvviso(null); });
+    return () => { vivo = false; };
+  }, [mese, destCoords?.lat, destCoords?.lon, language]);
   const [radius, setRadius] = useState(() => loadPlanPref('radius', '300'));
   // ── Tinder mode ──
   const [likedCandidates, setLikedCandidates] = useState<any[]>([]);
@@ -1143,9 +1221,11 @@ export default function PlanScreen({
   }, [generatedPlan, loading]);
 
   // ── Piano B pioggia (ondata 6) ─────────────────────────────────────────
-  // Previsioni Open-Meteo (gratuite): badge sul giorno con probabilità di
-  // pioggia ≥50%, assumendo Giorno 1 = oggi (la data è mostrata nel badge).
-  const [rainByDay, setRainByDay] = useState<Record<number, { prob: number; dateLabel: string }>>({});
+  // Previsioni MET Norway via /api/meteo/punto (24/09/2026: prima Open-Meteo dal
+  // client, piano gratuito vietato all'uso commerciale): badge sul giorno con
+  // almeno 1 mm previsto o un codice di pioggia. Con la data di partenza del
+  // piano vale la data vera; senza, Giorno 1 = oggi (la data è nel badge).
+  const [rainByDay, setRainByDay] = useState<Record<number, { mm: number; dateLabel: string }>>({});
   const [rainLoadingDay, setRainLoadingDay] = useState<number | null>(null);
   const [rainPreview, setRainPreview] = useState<{ gIdx: number; giornoNum: number; tappe: any[] } | null>(null);
   useEffect(() => {
@@ -1154,25 +1234,89 @@ export default function PlanScreen({
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=precipitation_probability_max&timezone=auto&forecast_days=14`);
-        if (!r.ok) return;
-        const data = await r.json();
-        const probs: number[] = data?.daily?.precipitation_probability_max || [];
-        const dates: string[] = data?.daily?.time || [];
-        if (cancelled) return;
-        const out: Record<number, { prob: number; dateLabel: string }> = {};
+        const c = await import('../lib/climaIndex');
+        const prev = await c.previsioneGiorni(lat as number, lon as number);
+        if (cancelled || !prev?.length) { if (!cancelled) setRainByDay({}); return; }
+        const dataInizio = /^\d{4}-\d{2}-\d{2}$/.test(String(generatedPlan.data_inizio || '')) ? String(generatedPlan.data_inizio) : '';
+        const out: Record<number, { mm: number; dateLabel: string }> = {};
         (generatedPlan.giorni || []).forEach((g: any, i: number) => {
-          const p = probs[i];
-          if (typeof p === 'number' && p >= 50) {
-            const d = dates[i] ? new Date(dates[i]) : null;
-            out[g.giorno] = { prob: p, dateLabel: d ? d.toLocaleDateString(localeForLanguage(language), { weekday: 'short', day: '2-digit', month: '2-digit' }) : '' };
+          let p = prev[i];
+          if (dataInizio) {
+            const d = new Date(`${dataInizio}T00:00:00Z`);
+            d.setUTCDate(d.getUTCDate() + i);
+            p = prev.find((x) => x.data === d.toISOString().slice(0, 10)) as any;
+          }
+          if (p && ((p.mm || 0) >= 1 || c.codicePioggia(p.code))) {
+            out[g.giorno] = { mm: Math.round((p.mm || 0) * 10) / 10, dateLabel: new Date(`${p.data}T12:00:00Z`).toLocaleDateString(localeForLanguage(language), { weekday: 'short', day: '2-digit', month: '2-digit' }) };
           }
         });
         setRainByDay(out);
       } catch { /* meteo irraggiungibile: nessun badge */ }
     })();
     return () => { cancelled = true; };
-  }, [generatedPlan?.id, generatedPlan?.giorni?.length, destCoords?.lat, destCoords?.lon, language]);
+  }, [generatedPlan?.id, generatedPlan?.giorni?.length, generatedPlan?.data_inizio, destCoords?.lat, destCoords?.lon, language]);
+
+  // ── Meteo/clima sotto ogni giorno (24/09/2026) ──────────────────────────
+  // Con la data di partenza del piano: il giorno N che cade nei 7 giorni di MET
+  // Norway mostra la PREVISIONE; gli altri il clima tipico del loro mese (NASA
+  // POWER 2001-2020). Senza data, il mese del piano o del form; senza mese,
+  // niente. Nessuna data inventata. Poche chiamate: cache per cella in climaIndex.
+  const [climaGiorni, setClimaGiorni] = useState<Record<number, { lat: number; lon: number; nome: string; m: number; testo: string; consiglio: string | null; fonte: string }>>({});
+  useEffect(() => {
+    const giorni = generatedPlan?.giorni || [];
+    const dataInizio = /^\d{4}-\d{2}-\d{2}$/.test(String(generatedPlan?.data_inizio || '')) ? String(generatedPlan!.data_inizio) : '';
+    const meseBase = MONTH_VALUES.indexOf((generatedPlan?.mese || mese) as (typeof MONTH_VALUES)[number]) + 1;
+    const coordTappa = (t: any) => {
+      const la = Number(t?.coordinate?.lat ?? t?.lat), lo = Number(t?.coordinate?.lng ?? t?.coordinate?.lon ?? t?.lon);
+      return Number.isFinite(la) && Number.isFinite(lo) && la !== 0 ? { lat: la, lon: lo } : null;
+    };
+    const primaDelPiano = giorni.flatMap((g: any) => g?.tappe || []).map(coordTappa).find(Boolean) || null;
+    const base = destCoords ? { lat: destCoords.lat, lon: destCoords.lon } : primaDelPiano;
+    if (!giorni.length || !base || (!dataInizio && meseBase < 1)) { setClimaGiorni({}); return; }
+    const nome = destCoords?.label?.split(',')[0].trim() || generatedPlan?.titolo || '';
+    let vivo = true;
+    import('../lib/climaIndex').then(async (c) => {
+      const out: Record<number, { lat: number; lon: number; nome: string; m: number; testo: string; consiglio: string | null; fonte: string }> = {};
+      for (let i = 0; i < giorni.length; i++) {
+        const g: any = giorni[i];
+        const pos = (g?.tappe || []).map(coordTappa).find(Boolean) || base;
+        // Data del giorno N (UTC, così l'ora legale non sposta il giorno)
+        let dataG = '';
+        if (dataInizio) {
+          const d = new Date(`${dataInizio}T00:00:00Z`);
+          d.setUTCDate(d.getUTCDate() + i);
+          dataG = d.toISOString().slice(0, 10);
+        }
+        const m = dataG ? Number(dataG.slice(5, 7)) : meseBase;
+        if (dataG) {
+          const prev = await c.previsioneGiorni(pos.lat, pos.lon);
+          const p = prev?.find((x) => x.data === dataG);
+          if (p) {
+            const etichetta = new Date(`${dataG}T12:00:00Z`).toLocaleDateString(localeForLanguage(language), { weekday: 'short', day: '2-digit', month: '2-digit' });
+            const testo = `${c.iconaMeteo(p.code)} ` + getTranslation('mp_clima_giorno_previsione', language)
+              .replace('{data}', etichetta)
+              .replace('{tmin}', String(p.tmin == null ? '?' : Math.round(p.tmin))).replace('{tmax}', String(p.tmax == null ? '?' : Math.round(p.tmax)))
+              .replace('{mm}', String(Math.round((p.mm || 0) * 10) / 10));
+            const k = c.consiglioPrevisione(p);
+            out[g.giorno] = { lat: pos.lat, lon: pos.lon, nome, m, testo, consiglio: k ? getTranslation(k, language) : null, fonte: 'MET Norway' };
+            continue;
+          }
+        }
+        if (m < 1 || m > 12) continue;
+        const d = await c.fetchDatiClima(pos.lat, pos.lon, language, true);
+        const x = d?.mesi.find((y) => y.m === m);
+        if (!x) continue;
+        const testo = '📅 ' + getTranslation('mp_clima_giorno_solito', language)
+          .replace('{mese}', c.nomeMese(m, language, true))
+          .replace('{tmin}', String(x.tmin == null ? '?' : Math.round(x.tmin))).replace('{tmax}', String(x.tmax == null ? '?' : Math.round(x.tmax)))
+          .replace('{mm}', String(x.mm ?? '?'));
+        const k = c.consiglioMese(x);
+        out[g.giorno] = { lat: pos.lat, lon: pos.lon, nome, m, testo, consiglio: k ? getTranslation(k, language) : null, fonte: 'NASA POWER 2001-2020' };
+      }
+      if (vivo) setClimaGiorni(out);
+    }).catch(() => { if (vivo) setClimaGiorni({}); });
+    return () => { vivo = false; };
+  }, [mese, generatedPlan?.id, generatedPlan?.giorni?.length, generatedPlan?.mese, generatedPlan?.data_inizio, destCoords?.lat, destCoords?.lon, language]);
 
   const handleRainPlan = async (gIdx: number) => {
     const giorno = generatedPlan?.giorni?.[gIdx];
@@ -1536,6 +1680,7 @@ export default function PlanScreen({
     setSuggestions([]);
     setDays(2);
     setMese('');
+    setDataPartenza('');
     setStartTime('09:00');
     setEndTime('20:00');
     setSelectedInterests([]);
@@ -1960,9 +2105,8 @@ export default function PlanScreen({
         // ciò che PoiDetailSheet userà per LEGGERE (poi.id). Prima il bundle
         // salvava con `iti-<slug>` mentre la scheda leggeva `id_tappa`/`ai_...`:
         // audio e testo pagati (20 crediti/tappa) restavano introvabili.
-        const stableId = tappa.id_tappa && !tappa.id_tappa.startsWith('custom-')
-          ? tappa.id_tappa
-          : `ai_${lat.toFixed(5)}_${lon.toFixed(5)}`.replace(/\./g, '_');
+        // 25/09/2026: stesso id del luogo della scheda (idPoiDaTappa), non `id_tappa`.
+        const stableId = idPoiDaTappa(tappa, lat, lon);
 
         // 1. Otteniamo il testo
         // Per gli itinerari salviamo il POI in shared_pois, quindi simuliamo lo stesso fetch di PoiDetailSheet
@@ -1973,7 +2117,7 @@ export default function PlanScreen({
         // bundle locale invece che al server.
         // apiFetch: col Bearer /api/poi/details risponde completo (all'anonimo
         // in forma degradata con auth_required: true).
-        const res = await apiFetch(getApiUrl(`/api/poi/details?id=${poiId}&lat=${lat}&lon=${lon}&name=${encodeURIComponent(tappa.titolo_tappa)}`), undefined, 20000);
+        const res = await apiFetch(getApiUrl(`/api/poi/details?id=${encodeURIComponent(stableId)}&lat=${lat}&lon=${lon}&name=${encodeURIComponent(tappa.titolo_tappa)}`), undefined, 20000);
         if (!res.ok) continue;
         const details = await res.json();
         
@@ -2512,7 +2656,9 @@ export default function PlanScreen({
              // L'id della tappa COM'E' (ITI-01): `parseInt(id.replace(/\D/g,''))`
              // esplodeva se id_tappa mancava (lo schema AI non lo produce) e
              // trasformava "lib_1_2_ab12cd" in 12, cioe' un POI a caso.
-             poiId: nextStop.id_tappa || undefined,
+             // 25/09/2026: id del luogo (idPoiDaTappa), non la posizione «t1_0»: la frase
+             // d'arrivo nativa ci cerca il teaser. Il check-in resta su giorno/indice.
+             poiId: idPoiDaTappa(nextStop, nextStop.coordinate.lat, nextStop.coordinate.lng),
              poiName: nextStop.titolo_tappa,
              dayIndex: navDayIndex,
              stopIndex: nextIdx,
@@ -2577,7 +2723,7 @@ export default function PlanScreen({
     // 10 crediti/giorno per la pianificazione; le audioguide si pagano a
     // parte (per luogo a prezzo pieno, oppure Day Pass 24h).
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
-    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
+    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, etichettaItinerarioPro(numDaysForPricing), bal.total);
     if (!confirmed) {
        return;
     }
@@ -2630,6 +2776,7 @@ export default function PlanScreen({
       
       if (data && data.giorni) {
         warnIfFewerDays(data, numDaysForPricing);
+        timbraViaggio(data);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         notifyCreditsChanged({ userId: currentUserId }); // addebito/conguaglio server-side: si riallinea il saldo
@@ -2806,7 +2953,8 @@ export default function PlanScreen({
               let isMatch = false;
               if (dayIdx != null && stopIdx != null) {
                 isMatch = gi === dayIdx && ti === stopIdx;
-              } else if (poiId != null && String(t.id_tappa) === String(poiId)) {
+              } else if (poiId != null && (String(t.id_tappa) === String(poiId)
+                || (t.coordinate && String(idPoiDaTappa(t, t.coordinate.lat, t.coordinate.lng ?? (t.coordinate as any).lon)) === String(poiId)))) {
                 isMatch = true;
               } else if (poiName && t.titolo_tappa === poiName) {
                 isMatch = dayIdx == null || gi === dayIdx;
@@ -3314,7 +3462,7 @@ export default function PlanScreen({
     // 10 crediti/giorno per la pianificazione; le audioguide si pagano a
     // parte (per luogo a prezzo pieno, oppure Day Pass 24h).
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
-    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
+    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, etichettaItinerarioPro(numDaysForPricing), bal.total);
     if (!confirmed) {
        return;
     }
@@ -3466,6 +3614,7 @@ export default function PlanScreen({
 
       if (data && data.giorni) {
         warnIfFewerDays(data, numDaysForPricing);
+        timbraViaggio(data);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         notifyCreditsChanged({ userId: currentUserId }); // addebito/conguaglio server-side: si riallinea il saldo
@@ -3539,7 +3688,7 @@ export default function PlanScreen({
     setCurrentBalance(bal.total);
     const numDaysForPricing = clampDays(alt?.dati_itinerario?.giorni?.length || days);
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
-    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
+    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, etichettaItinerarioPro(numDaysForPricing), bal.total);
     if (!confirmed) return;
     // Addebito SERVER-SIDE (14/08/2026): /api/groq/itinerary-stream pre-addebita
     // e fa il conguaglio sui giorni consegnati. Il gate di saldo qui sotto è solo
@@ -3585,6 +3734,7 @@ export default function PlanScreen({
 
       if (data && data.giorni) {
         warnIfFewerDays(data, numDaysForPricing);
+        timbraViaggio(data);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         notifyCreditsChanged({ userId: currentUserId }); // addebito/conguaglio server-side: si riallinea il saldo
@@ -3783,20 +3933,12 @@ export default function PlanScreen({
         // Un episodio = un giorno = un addebito (il server scala 1 unità).
         const numDaysPodcast = 1;
         const podcastCost = PRICING_LIST.podcast_daily * numDaysPodcast;
-        
-        // Saldo passato al modale: senza, mostrava sempre "0 crediti disponibili"
-        const balPodcast = await getWalletBalance(currentUserId);
-        const confirmed = await creditConfirm.requestConfirmation(podcastCost, `Podcast AI (${numDaysPodcast} giorni)`, balPodcast.total);
-        if (!confirmed) {
-          setIsGeneratingPodcast(null);
-          return;
-        }
-        
+
         // ADDEBITO E RIMBORSO ORA SERVER-SIDE: la rotta scala 15 crediti in
         // modo atomico (cache-first: niente addebito se già generato) e li
         // restituisce se la generazione fallisce. Il client non addebita più
         // (niente slot podcastChargeRef unico e niente crediti persi al
-        // refresh); passa solo il token. La modale di conferma sopra resta.
+        // refresh); passa solo il token.
         // Normalizza tappe per diversi formati salvati
         const tappaFallback = getTranslation('vr_b_stop_fallback', language);
         const tappeNorm = tappe.map(t => ({
@@ -3805,23 +3947,48 @@ export default function PlanScreen({
         })).filter(t => t.name !== tappaFallback || t.description);
 
         const destination = generatedPlan?.titolo || generatedPlan?.citta || 'la tua destinazione';
-        console.log(`[Podcast] Genero per "${destination}" Day ${dayNum} (${tappeNorm.length} tappe)`);
-
+        const corpoPodcast = {
+          destination,
+          dayNum,
+          tappe: tappeNorm.length > 0 ? tappeNorm : tappe.map(t => ({ name: t.titolo_tappa || t.name || 'Visita', description: '' })),
+          language: language || 'IT',
+          isLastDay,
+        };
         const { data: podSess } = await supabase.auth.getSession();
-        const res = await fetch('/api/generate-daily-podcast', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${podSess?.session?.access_token || ''}`,
-          },
-          body: JSON.stringify({
-            destination,
-            dayNum,
-            tappe: tappeNorm.length > 0 ? tappeNorm : tappe.map(t => ({ name: t.titolo_tappa || t.name || 'Visita', description: '' })),
-            language: language || 'IT',
-            isLastDay
-          })
-        });
+        const intestazioniPodcast = {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${podSess?.session?.access_token || ''}`,
+        };
+
+        // Riascolto (25/09/2026, collaudo: chiedeva «15 crediti» anche quando il podcast era già pronto):
+        // prima si chiede al server se è in cache — gratis, niente conferma. 204 = va generato.
+        let giaPronto: string | null = null;
+        try {
+          const probe = await fetch(getApiUrl('/api/generate-daily-podcast'), {
+            method: 'POST', headers: intestazioniPodcast, body: JSON.stringify({ ...corpoPodcast, soloCache: true }),
+          });
+          if (probe.status === 200) giaPronto = String((await probe.json())?.text || '').trim() || null;
+        } catch { /* rete: si procede come prima, con la conferma */ }
+
+        let res: Response;
+        if (giaPronto) {
+          res = new Response(JSON.stringify({ text: giaPronto, cached: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        } else {
+          // Saldo passato al modale: senza, mostrava sempre "0 crediti disponibili"
+          const balPodcast = await getWalletBalance(currentUserId);
+          const confirmed = await creditConfirm.requestConfirmation(podcastCost, `Podcast AI (${numDaysPodcast} giorni)`, balPodcast.total);
+          if (!confirmed) {
+            setIsGeneratingPodcast(null);
+            return;
+          }
+          console.log(`[Podcast] Genero per "${destination}" Day ${dayNum} (${tappeNorm.length} tappe)`);
+          // getApiUrl: con un percorso relativo l'app nativa non arrivava al server (25/09/2026).
+          res = await fetch(getApiUrl('/api/generate-daily-podcast'), {
+            method: 'POST',
+            headers: intestazioniPodcast,
+            body: JSON.stringify(corpoPodcast),
+          });
+        }
 
         if (res.status === 402) {
           notify(getTranslation('err_insufficient_credits', language));
@@ -4129,7 +4296,13 @@ export default function PlanScreen({
     setShowSuggestions(false);
     setFocusedDestIdx(null);
     setActiveSuggestIdx(-1);
+    // Scelta fatta = campo lasciato (25/09/2026, collaudo Raggio: la tendina restava aperta sotto
+    // l'indirizzo scelto). Il fuoco restava nel campo e un onFocus successivo la riapriva; col blur
+    // si chiude anche la tastiera sul telefono, e per mezzo secondo l'onFocus non riapre nulla.
+    sceltaSuggerimentoRef.current = Date.now();
+    try { (document.activeElement as HTMLElement | null)?.blur?.(); } catch { /* niente fuoco */ }
   };
+  const appenaScelto = () => Date.now() - sceltaSuggerimentoRef.current < 500;
 
   /**
    * Navigazione da tastiera del combobox: prima non esisteva (né frecce, né
@@ -4410,7 +4583,7 @@ export default function PlanScreen({
     // 10 crediti/giorno per la pianificazione; le audioguide si pagano a
     // parte (per luogo a prezzo pieno, oppure Day Pass 24h).
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
-    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
+    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, etichettaItinerarioPro(numDaysForPricing), bal.total);
     if (!confirmed) {
       return;
     }
@@ -4504,6 +4677,7 @@ export default function PlanScreen({
             }
           }
         }
+        timbraViaggio(data);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         setPlannerMode('view');
@@ -4583,7 +4757,7 @@ export default function PlanScreen({
     // 10 crediti/giorno per la pianificazione; le audioguide si pagano a
     // parte (per luogo a prezzo pieno, oppure Day Pass 24h).
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
-    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
+    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, etichettaItinerarioPro(numDaysForPricing), bal.total);
     if (!confirmed) {
        return;
     }
@@ -4637,6 +4811,7 @@ export default function PlanScreen({
 
       if (data && data.giorni) {
         warnIfFewerDays(data, numDaysForPricing);
+        timbraViaggio(data);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         setPlannerMode('view');
@@ -5016,7 +5191,9 @@ export default function PlanScreen({
           giornoNum: Number(dayKey),
           language
         })
-      });
+      // 90 s (25/09/2026): con il default di 20 s il client abbandonava una
+      // sostituzione che il server completava in ~28 s.
+      }, 90000);
       if (!res.ok) throw await planErrorFromResponse(res);
       const data = await res.json();
       if (data?.error && PLAN_ERROR_KEYS[data.error]) throw new PlanError(data.error);
@@ -5036,6 +5213,8 @@ export default function PlanScreen({
         } else {
           data.free_replacements = (generatedPlan as any).free_replacements;
         }
+        // Sostituzione di una tappa: mese e data restano quelli del piano, non del form.
+        timbraViaggio(data, generatedPlan);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         // L'addebito (solo a pagamento) è già avvenuto sul server: qui si
@@ -5208,8 +5387,11 @@ export default function PlanScreen({
       });
       const data = await res.json();
       if (res.ok && data?.giorno) {
+        const nGiorni = generatedPlan.giorni.length + 1;
         const newPlan = {
           ...generatedPlan,
+          // Il titolo dice «2 Giorni» anche dopo il terzo (collaudo 25/09/2026): si aggiorna il numero se c'è.
+          ...(generatedPlan.titolo ? { titolo: titoloConGiorni(generatedPlan.titolo, nGiorni) } : {}),
           giorni: [...generatedPlan.giorni, data.giorno],
           totale_viaggio: data.totale_viaggio || (generatedPlan as any).totale_viaggio,
         };
@@ -5251,15 +5433,17 @@ export default function PlanScreen({
     // shared_pois e savePlanToSupabase, evitando duplicati non deterministici.
     const lat = tappa.coordinate?.lat || 0;
     const lon = tappa.coordinate?.lng || (tappa.coordinate as any)?.lon || 0;
-    const stableId = tappa.id_tappa && !tappa.id_tappa.startsWith('custom-')
-      ? tappa.id_tappa
-      : `ai_${lat.toFixed(5)}_${lon.toFixed(5)}`.replace(/\./g, '_');
+    // 25/09/2026: l'id del LUOGO (idPoiDaTappa), mai `id_tappa`. «t1_0» era un id
+    // di posizione: la prima tappa di ogni itinerario apriva (e riscriveva) la
+    // stessa riga di shared_pois — Piazza Maggiore mostrava Greve in Chianti.
+    const stableId = idPoiDaTappa(tappa, lat, lon);
 
     const category = mapItineraryCategoryToMapCategory(tappa.tipo || 'monumenti');
     const desc = tappa.attivita || '';
 
-    // Silently upsert to Supabase to make it a real POI for audio guide support
-    if (lat !== 0 && lon !== 0) {
+    // Riga propria solo per le tappe senza POI vero (`iti-…`): un poi_id agganciato
+    // è una riga del catalogo e non si sovrascrive dal client.
+    if (lat !== 0 && lon !== 0 && stableId.startsWith('iti-')) {
       await supabase.from('shared_pois').upsert({
         id: stableId,
         name: tappa.titolo_tappa,
@@ -5306,7 +5490,11 @@ export default function PlanScreen({
       <select
         id="wip-month"
         value={mese}
-        onChange={(e) => setMese(e.target.value)}
+        onChange={(e) => {
+          setMese(e.target.value);
+          // Un mese diverso da quello della data scelta annulla la data (non restano in contraddizione).
+          if (dataPartenza && MONTH_VALUES[Number(dataPartenza.slice(5, 7)) - 1] !== e.target.value) setDataPartenza('');
+        }}
         className={`w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm ${focusRing} focus:ring-2 outline-none font-bold text-on-surface text-sm appearance-none`}
       >
         <option value="">{getTranslation('month_any', language)}</option>
@@ -5314,6 +5502,37 @@ export default function PlanScreen({
           <option key={m} value={m}>{getTranslation(`month_${i + 1}`, language)}</option>
         ))}
       </select>
+      {/* Data di partenza FACOLTATIVA (24/09/2026): imposta anche il mese; serve al meteo dei giorni. */}
+      <label htmlFor="wip-data-partenza" className="block text-[11px] font-bold text-gray-500 pl-1">
+        {getTranslation('mp_clima_data_partenza', language)}
+      </label>
+      <input
+        id="wip-data-partenza"
+        type="date"
+        value={dataPartenza}
+        min={new Date().toISOString().slice(0, 10)}
+        onChange={(e) => {
+          const v = e.target.value;
+          setDataPartenza(v);
+          const m = Number(v.slice(5, 7));
+          if (v && m >= 1 && m <= 12) setMese(MONTH_VALUES[m - 1]);
+        }}
+        className={`w-full px-4 py-3 bg-white rounded-2xl border border-outline-variant/10 shadow-sm ${focusRing} focus:ring-2 outline-none font-bold text-on-surface text-sm`}
+      />
+      {/* Clima del mese scelto (24/09/2026): le medie di vent'anni della
+          destinazione, per non scoprire ad agosto che erano 38°. Compare solo
+          con una destinazione risolta e un mese scelto. */}
+      {climaAvviso && (
+        <div className={`mt-2 text-[12px] leading-snug rounded-xl px-3 py-2 ${climaAvviso.tipo === 'peggiore' ? 'bg-orange-50 text-orange-800' : climaAvviso.tipo === 'migliore' ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-50 text-slate-700'}`}>
+          📅 {climaAvviso.testo}
+          {destCoords && (
+            <button type="button" className="block mt-1 font-black underline"
+              onClick={() => setQuandoAndare({ lat: destCoords.lat, lon: destCoords.lon, nome: destCoords.label.split(',')[0].trim(), mese: MONTH_VALUES.indexOf(mese as (typeof MONTH_VALUES)[number]) + 1 || null })}>
+              {getTranslation('mp_clima_vedi_scheda', language).replace('{mese}', new Intl.DateTimeFormat(language.toLowerCase(), { month: 'long' }).format(new Date(2000, Math.max(0, MONTH_VALUES.indexOf(mese as (typeof MONTH_VALUES)[number])), 1)))}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 
@@ -5613,6 +5832,19 @@ export default function PlanScreen({
                   <p className="text-[11px] text-gray-600 font-bold leading-snug">{getTranslation('wip_agent_mode_desc', language)}</p>
                 </div>
                 <Mic className="w-5 h-5 text-amber-600 shrink-0" />
+              </button>
+
+              {/* QUANDO ANDARE (24/09/2026): scegliere il periodo è pianificazione,
+                  non mappa. Stessa scheda Anno/Mese del livello Clima. */}
+              <button
+                onClick={() => setPlannerMode('quando_andare')}
+                className="w-full p-4 bg-gradient-to-br from-teal-50 to-cyan-50 rounded-2xl border border-teal-200/70 shadow-sm flex items-center gap-3 group hover:shadow-md hover:border-teal-400/60 focus-visible:ring-2 focus-visible:ring-teal-400/40 outline-none transition-all"
+              >
+                <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center text-2xl shrink-0 group-hover:scale-110 transition-transform shadow-sm">📅</div>
+                <div className="text-left flex-1 min-w-0">
+                  <h3 className="text-sm font-black text-gray-900 leading-tight">{getTranslation('mp_clima_quando_andare', language)}</h3>
+                  <p className="text-[11px] text-gray-600 font-bold leading-snug">{getTranslation('mp_clima_quando_andare_desc', language)}</p>
+                </div>
               </button>
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 items-stretch">
@@ -6334,6 +6566,7 @@ export default function PlanScreen({
                           setShowSuggestions(true);
                         }}
                         onFocus={() => {
+                          if (appenaScelto()) return;
                           setFocusedDestIdx(0);
                           setShowSuggestions(true);
                         }}
@@ -6637,7 +6870,7 @@ export default function PlanScreen({
 
               {/* Giorni */}
               <div>
-                <label className="block text-xs font-black text-primary uppercase tracking-widest mb-3">{getTranslation('days', language)}</label>
+                <label className="block text-xs font-black text-primary uppercase tracking-widest mb-3">{getTranslation('giorni', language)}</label>
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {[1,2,3,4,5,6,7].map(d => (
                     <button key={d} onClick={() => setDays(d)} className={`flex-1 min-w-[40px] py-3 rounded-2xl font-black text-sm transition-all ${days === d ? 'bg-primary text-white shadow-lg' : 'text-primary/40 hover:bg-primary/5'}`}>{d}</button>
@@ -7157,6 +7390,41 @@ export default function PlanScreen({
               nella cartella Itinerari. La X sta IN ALTO A DESTRA e resta
               visibile scorrendo (era in fondo alla lista: con venti itinerari
               non si trovava). */}
+          {plannerMode === 'quando_andare' && (
+            <motion.div key="quando_andare" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+              <div className="sticky top-0 z-30 -mx-6 px-6 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 bg-[#f8f5f0]/95 backdrop-blur flex justify-between items-center gap-3">
+                <h3 className="text-xl font-black text-primary truncate">📅 {getTranslation('mp_clima_quando_andare', language)}</h3>
+                <button onClick={() => setPlannerMode('selection')} aria-label="Chiudi" className="shrink-0 w-11 h-11 rounded-2xl bg-white border border-outline-variant/10 flex items-center justify-center text-primary/60 hover:text-red-500 transition-colors shadow-sm">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-sm text-on-surface-variant/80 font-bold">{getTranslation('mp_clima_quando_andare_desc', language)}</p>
+              <form className="flex gap-2" onSubmit={async (e) => {
+                e.preventDefault();
+                setQuandoAndareCerca('cerco');
+                const { cercaCitta } = await import('../lib/climaIndex');
+                const c = await cercaCitta(quandoAndareTesto, language);
+                if (!c) { setQuandoAndareCerca('non_trovata'); return; }
+                setQuandoAndareCerca('idle');
+                setQuandoAndare({ lat: c.lat, lon: c.lon, nome: c.label });
+              }}>
+                <input value={quandoAndareTesto} onChange={(e) => setQuandoAndareTesto(e.target.value)} placeholder={getTranslation('mp_clima_confronta_cerca', language)}
+                  className="flex-1 px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/30 outline-none font-bold text-on-surface text-sm" />
+                <button type="submit" disabled={quandoAndareCerca === 'cerco'} className="px-5 rounded-2xl bg-primary text-white font-black text-sm disabled:opacity-60">
+                  {quandoAndareCerca === 'cerco' ? <Loader2 className="w-4 h-4 animate-spin" /> : 'OK'}
+                </button>
+              </form>
+              {quandoAndareCerca === 'non_trovata' && <p className="text-xs font-bold text-orange-700">{getTranslation('mp_clima_confronta_non_trovata', language)}</p>}
+              {destCoords && (
+                <button type="button" onClick={() => setQuandoAndare({ lat: destCoords.lat, lon: destCoords.lon, nome: destCoords.label.split(',')[0].trim(), mese: MONTH_VALUES.indexOf(mese as (typeof MONTH_VALUES)[number]) + 1 || null })}
+                  className="w-full p-4 bg-white rounded-2xl border border-outline-variant/30 shadow-sm text-left">
+                  <p className="text-[11px] font-bold uppercase text-gray-400">{getTranslation('destination', language)}</p>
+                  <p className="text-sm font-black text-gray-900">{destCoords.label}</p>
+                </button>
+              )}
+            </motion.div>
+          )}
+
           {(plannerMode === 'my_itineraries' || plannerMode === 'offline_list') && (
             <motion.div
               key={plannerMode}
@@ -7233,6 +7501,7 @@ export default function PlanScreen({
                       // Primo giorno del mese scelto nel form (anno prossimo se
                       // il mese è già passato); la modalina ripiega su domani
                       // quando la data non è futura.
+                      if (generatedPlan?.data_inizio) return new Date(`${generatedPlan.data_inizio}T00:00:00`);
                       const idx = MONTH_VALUES.indexOf(mese as (typeof MONTH_VALUES)[number]);
                       if (idx < 0) return null;
                       const now = new Date();
@@ -7241,6 +7510,13 @@ export default function PlanScreen({
                     })()}
                     language={language}
                     destCoords={destCoords ? { lat: destCoords.lat, lon: destCoords.lon } : null}
+                    onDataScelta={(d) => {
+                      // La data del calendario diventa la partenza del piano, se il piano non ne ha una.
+                      if (!generatedPlan || generatedPlan.data_inizio) return;
+                      const agg = { ...generatedPlan, data_inizio: d };
+                      setGeneratedPlan(agg);
+                      savePlanToSupabase(agg);
+                    }}
                   />
                   <button
                     onClick={async () => {
@@ -7398,7 +7674,7 @@ export default function PlanScreen({
                       {/* Piano B pioggia (ondata 6): previsioni reali sul giorno */}
                       {rainByDay[giorno.giorno] && (
                         <span className="shrink-0 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-sky-50 border border-sky-200 text-sky-700 text-[9px] font-black uppercase tracking-widest print:hidden">
-                          🌧 {rainByDay[giorno.giorno].prob}%{rainByDay[giorno.giorno].dateLabel ? ` ${rainByDay[giorno.giorno].dateLabel}` : ''}
+                          🌧 {rainByDay[giorno.giorno].mm} mm{rainByDay[giorno.giorno].dateLabel ? ` ${rainByDay[giorno.giorno].dateLabel}` : ''}
                           <button
                             onClick={() => handleRainPlan(gIdx)}
                             disabled={rainLoadingDay === giorno.giorno}
@@ -7518,6 +7794,19 @@ export default function PlanScreen({
                       </div>
                     </div>
 
+                    {/* Meteo del giorno (24/09/2026): previsione se la data è vicina, altrimenti com'è di solito il mese. Tocco = scheda del mese. */}
+                    {climaGiorni[giorno.giorno] && (() => {
+                      const cg = climaGiorni[giorno.giorno];
+                      return (
+                        <button type="button"
+                          onClick={() => setQuandoAndare({ lat: cg.lat, lon: cg.lon, nome: cg.nome, mese: cg.m })}
+                          className="-mt-3 w-full text-left flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-sky-800 print:hidden">
+                          <span className="font-bold">{cg.testo}</span>
+                          {cg.consiglio && <span className="text-amber-700 font-bold">· {cg.consiglio}</span>}
+                          <span className="text-gray-400">· {cg.fonte}</span>
+                        </button>
+                      );
+                    })()}
 
                     <div className="space-y-8 pl-5 relative border-l border-dashed border-primary/20">
                       {/* (giorno.tappe || []): schermata bianca su un itinerario
@@ -8126,8 +8415,8 @@ export default function PlanScreen({
                           startNavigation({
                             lat: firstStop.coordinate.lat,
                             lon: firstStop.coordinate.lng,
-                            // Id com'e' (ITI-01): niente parseInt su un id che puo' mancare.
-                            poiId: firstStop.id_tappa || undefined,
+                            // Id del luogo (idPoiDaTappa, 25/09/2026), non la posizione «t1_0».
+                            poiId: idPoiDaTappa(firstStop, firstStop.coordinate.lat, firstStop.coordinate.lng),
                             poiName: firstStop.titolo_tappa,
                             dayIndex: gIdx,
                             stopIndex: firstIdx,
@@ -8193,6 +8482,17 @@ export default function PlanScreen({
         {/* L'overlay appare per QUALSIASI navigazione attiva: prima era
             vincolato a navDayIndex/navStopIndex, quindi il WIP Nav avviato
             dalla singola tappa navigava "alla cieca" senza banner. */}
+        {/* «Quando andare»: la scheda Anno/Mese del clima (stessa della mappa). */}
+        <ClimaReportSheet
+          aperto={!!quandoAndare}
+          onClose={() => setQuandoAndare(null)}
+          lat={quandoAndare?.lat ?? 0}
+          lon={quandoAndare?.lon ?? 0}
+          nome={quandoAndare?.nome}
+          dati={null}
+          meseIniziale={quandoAndare?.mese ?? null}
+          language={language}
+        />
         {navState !== 'idle' && (
           <NavigationOverlay
             state={navState}

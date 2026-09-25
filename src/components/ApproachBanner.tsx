@@ -89,10 +89,17 @@ function getBearing(lat1: number, lon1: number, lat2: number, lon2: number) {
           osc.frequency.value = count === 1 ? 760 : 920;
           gain.gain.setValueAtTime(0.4, ctx.currentTime);
           gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+          // (23/09/2026, batteria, voce 20) Il contesto si chiude dopo l'ultimo
+          // beep: prima ne restava uno «running» per ogni POI annunciato, ognuno
+          // col suo thread audio sveglio per tutta la camminata. Suono identico.
+          if (i === count - 1) osc.onended = () => { ctx.close().catch(() => {}); };
           osc.start(ctx.currentTime);
           osc.stop(ctx.currentTime + 0.25);
         }, i * 380);
       }
+      // Rete di sicurezza: se un oscillatore non parte (contesto sospeso dal
+      // browser senza gesto) onended non arriva mai.
+      setTimeout(() => { if (ctx.state !== 'closed') ctx.close().catch(() => {}); }, count * 380 + 1500);
     } catch (_) {}
   }
 

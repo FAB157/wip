@@ -23,6 +23,7 @@ import { supabase } from "../lib/supabase";
 import { getApiUrl, apiFetch } from "../lib/api";
 import { ensureAffiliateUrl, ensureGygAffiliateUrl, ensureViatorAffiliateUrl, trackAffiliateClick } from "../lib/affiliates";
 import { getLocalFavorites, toggleFavoritePoi } from "../lib/favorites";
+import { linkUscitaEvento, salvaEventiPerWidget } from "../lib/widgetDati";
 
 // klook e tripcom (affiliati, 07/09/2026) stanno nella vista Eventi;
 // tiqets_mostre (mostre temporanee dell'API Tiqets, affiliate) nella vista
@@ -1708,19 +1709,9 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   // ── Link affiliati via /api/out (tracking click server-side) ───────────
   // Solo per le fonti partner e solo se l'host è nella whitelist del server:
   // così un URL fuori whitelist resta un link diretto e non finisce in 400.
-  const AFFIL_OUT_HOST_RE = /(^|\.)((ticketmaster|livenation|getyourguide|gyg)\.[a-z]{2,3}(\.[a-z]{2})?|viator\.com|vi\.me|tiqets\.com|klook\.com|trip\.com|eventiesagre\.it|openstreetmap\.org)$/i;
-  const outUrl = (ev: EventData): string => {
-    const finalUrl = ensureAffiliateUrl(ev.url);
-    try {
-      const host = new URL(finalUrl).hostname;
-      // tiqets_mostre passa come «mostre» nel contatore (stesso partner).
-      const src = ev.source === 'tiqets_mostre' ? 'tiqets' : ev.source;
-      if (["ticketmaster", "viator", "getyourguide", "tiqets", "klook", "tripcom", "local", "mostre"].includes(src) && AFFIL_OUT_HOST_RE.test(host)) {
-        return getApiUrl(`/api/out?u=${encodeURIComponent(finalUrl)}&src=${src}`);
-      }
-    } catch { /* URL malformato: link diretto */ }
-    return finalUrl;
-  };
+  // (23/09/2026) La regola sta in widgetDati.linkUscitaEvento: la usa anche
+  // il widget «Eventi» (tiqets_mostre conta come «tiqets», stesso partner).
+  const outUrl = (ev: EventData): string => linkUscitaEvento(ev.url, ev.source);
 
   // ── «Serata perfetta» in un tap ────────────────────────────────────────
   const requestEveningPlan = async () => {
@@ -1815,6 +1806,22 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     dedupEsclusi.add(tieneENuova ? prima.id : e.id);
     if (tieneENuova) dedupVisti.set(chiave, e);
   }
+
+  // WIDGET «EVENTI E MOSTRE» (23/09/2026): le fonti con una data vera
+  // (Ticketmaster, mostre Tiqets, feste locali) passano al widget, che ne
+  // tiene 4 entro 25 km dalla posizione del telefono fra oggi e 7 giorni.
+  // Link del biglietto già passato da /api/out; niente foto dei partner.
+  useEffect(() => {
+    const conData = [...(sourceResults.ticketmaster || []), ...(sourceResults.tiqets_mostre || []), ...(sourceResults.local || [])];
+    if (!conData.length) return;
+    const pos = deviceCoords ? { lat: deviceCoords[0], lon: deviceCoords[1] } : null;
+    salvaEventiPerWidget(conData.map(ev => ({
+      id: ev.id, name: ev.name, date: ev.date, time: ev.time, endDate: ev.endDate, venueName: ev.venueName,
+      lat: ev.lat ?? null, lon: ev.lon ?? null, source: ev.source, macroCategory: ev.macroCategory, isMusic: ev.isMusic,
+      approxCoords: ev.approxCoords, link: ev.url ? outUrl(ev) : '',
+    })), pos);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceResults.ticketmaster, sourceResults.tiqets_mostre, sourceResults.local, deviceCoords]);
 
   const filteredEvents = displayEvents.filter((e) => {
     if (dedupEsclusi.has(e.id)) return false;

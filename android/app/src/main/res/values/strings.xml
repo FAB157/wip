@@ -1,5 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
-<resources>
+<!-- tools:ignore: solo nomi e descrizioni dei widget sono tradotti nelle
+     cartelle values-xx (23/09/2026); il resto resta italiano ovunque. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
     <string name="app_name">WIP</string>
     <string name="title_activity_main">WIP</string>
     <string name="package_name">com.itaintasca.app</string>
@@ -26,4 +28,36 @@
     <string name="wip_w_crediti_desc">Il saldo crediti e il Day Pass attivo con la scadenza.</string>
     <string name="wip_w_vicini_nome">WIP · Vicino a te</string>
     <string name="wip_w_vicini_desc">Gemme e luoghi con audioguida vicino a te: un tocco e parte la voce.</string>
+
+    <!-- Undici widget nuovi (23/09/2026). Tradotti in values-en|fr|es|de|ru|zh
+         (insieme ai nomi dei widget esistenti): il selettore dei widget e le
+         scorciatoie seguono la lingua del telefono. -->
+    <string name="wip_w_fotocamera" translatable="false">📷</string>
+    <string name="wip_w_documento" translatable="false">📄</string>
+    <string name="wip_w_play" translatable="false">▶</string>
+    <string name="wip_w_contro" translatable="false">vs</string>
+    <string name="wip_w_ultimo_nome">WIP · Ultima audioguida</string>
+    <string name="wip_w_ultimo_desc">Riascolta o riprendi l\'ultima audioguida</string>
+    <string name="wip_w_luogo_nome">WIP · Luogo del giorno</string>
+    <string name="wip_w_luogo_desc">Una gemma vicina, diversa ogni giorno</string>
+    <string name="wip_w_vision_nome">WIP · Cosa vedo?</string>
+    <string name="wip_w_vision_desc">Apri la fotocamera e riconosci quello che hai davanti</string>
+    <string name="wip_w_vision_breve">Cosa vedo?</string>
+    <string name="wip_w_meteo_nome">WIP · Meteo</string>
+    <string name="wip_w_meteo_desc">Meteo della tappa di oggi, ora migliore, garanzia pioggia</string>
+    <string name="wip_w_ascolta_nome">WIP · Ascolta ora</string>
+    <string name="wip_w_ascolta_desc">Un tocco: l\'audioguida del luogo più vicino</string>
+    <string name="wip_w_ascolta_breve">Ascolta ora</string>
+    <string name="wip_w_eventi_nome">WIP · Eventi vicino a te</string>
+    <string name="wip_w_eventi_desc">Eventi e mostre dei prossimi giorni</string>
+    <string name="wip_w_regione_nome">WIP · Gemma della regione</string>
+    <string name="wip_w_regione_desc">Una gemma della regione in cui ti trovi</string>
+    <string name="wip_w_confronto_nome">WIP · Confronto opere</string>
+    <string name="wip_w_confronto_desc">Due opere ascoltate oggi: quale preferisci?</string>
+    <string name="wip_w_lingua_nome">WIP · Ripeti in un\'altra lingua</string>
+    <string name="wip_w_lingua_desc">L\'ultima audioguida in un\'altra lingua</string>
+    <string name="wip_w_pdf_nome">WIP · Guida stampata</string>
+    <string name="wip_w_pdf_desc">L\'ultima guida PDF, da riaprire o condividere</string>
+    <string name="wip_w_community_nome">WIP · Foto dalla community</string>
+    <string name="wip_w_community_desc">L\'ultima foto verificata scattata vicino a te</string>
 </resources>

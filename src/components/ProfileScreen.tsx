@@ -880,9 +880,17 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     // porta al profilo, qui si apre la scheda dei pacchetti.
     const onOpenShop = () => setActiveTab('pricing');
     window.addEventListener('wip-open-shop', onOpenShop);
+    // Widget «Meteo e garanzia pioggia» (23/09/2026): la pillola della
+    // garanzia porta qui, alla sotto-scheda degli itinerari (RainGuaranteeCard).
+    const onOpenSezione = (e: Event) => {
+      const s = (e as CustomEvent).detail?.sezione;
+      if (s === 'itinerari') setActiveTab('itinerari');
+    };
+    window.addEventListener('wip-open-profilo-sezione', onOpenSezione);
     return () => {
       window.removeEventListener('wip-credits-updated', onCreditsUpdated);
       window.removeEventListener('wip-open-shop', onOpenShop);
+      window.removeEventListener('wip-open-profilo-sezione', onOpenSezione);
     };
   }, []);
 
