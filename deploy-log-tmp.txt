@@ -1,3 +1,4 @@
+/c/Program Files/nodejs/npm: line 14: [: =: unary operator expected
 
 > react-example@0.0.0 deploy
 > vercel --prod --yes && node scripts/smoke-deploy.mjs
@@ -6,27 +7,27 @@
 Vercel CLI 54.17.1 (Node.js 24.14.1)
 Retrieving project…
 Deploying fabri75715-4892s-projects/itainta
-Uploading [--------------------] (0.0B/3MB)
-Uploading [=====---------------] (774.7KB/3MB)
-Uploading [==========----------] (1.5MB/3MB)
-Uploading [===============-----] (2.2MB/3MB)
-Uploading [====================] (3.0MB/3MB)
-  Inspect         https://vercel.com/fabri75715-4892s-projects/itainta/HzmeTxFg4K3bvLYx5EoTXS8sFCtk
-  Production      https://itainta-58p98n2d9-fabri75715-4892s-projects.vercel.app
+Uploading [--------------------] (0.0B/469.9KB)
+Uploading [=====---------------] (127.9KB/469.9KB)
+Uploading [==========----------] (239.9KB/469.9KB)
+Uploading [===============-----] (367.9KB/469.9KB)
+Uploading [====================] (469.9KB/469.9KB)
+  Inspect         https://vercel.com/fabri75715-4892s-projects/itainta/47sti1D7GUQQMzYhMzdWHsAU5ebb
+  Production      https://itainta-5is04tklp-fabri75715-4892s-projects.vercel.app
 Building…
 Building…
 Running build in Washington, D.C., USA (East) – iad1
 Build machine configuration: 4 cores, 8 GB
 Retrieving list of deployment files...
-Downloading 1055 deployment files...
-Restored build cache from previous deployment (DZ5YXMmaCpFenbsNxwxHnNvKmP5d)
+Downloading 1058 deployment files...
+Restored build cache from previous deployment (HzmeTxFg4K3bvLYx5EoTXS8sFCtk)
 Running "vercel build"
 Vercel CLI 59.25.4
 Installing dependencies...
 > react-example@0.0.0 postinstall
 > node scripts/patch-revenuecat-agp9.mjs
 [patch-agp9] nessun modulo da correggere.
-up to date in 3s
+up to date in 2s
 330 packages are looking for funding
 run `npm fund` for details
 npm warn install-scripts 8 packages have install scripts not yet covered by allowScripts:
@@ -95,52 +96,52 @@ dist/manifest.webmanifest                         0.64 kB
 dist/index.html                                   6.72 kB │ gzip:     2.45 kB
 dist/assets/vendor-9Hbp8J6b.css                  17.25 kB │ gzip:     6.72 kB
 dist/assets/index-Df4CBAmR.css                  281.79 kB │ gzip:    38.94 kB
-dist/assets/gamification-DGD463Cm.js              1.64 kB │ gzip:     0.83 kB
-dist/assets/generazioniService-CLMqT5-i.js        3.30 kB │ gzip:     1.44 kB
+dist/assets/gamification-NOnS_Min.js              1.64 kB │ gzip:     0.83 kB
+dist/assets/generazioniService-DE6iOtLo.js        3.30 kB │ gzip:     1.44 kB
 dist/assets/base-DGy_GOMz.js                      4.90 kB │ gzip:     1.96 kB
 dist/assets/MuseumGuidaPdf-C_Pe0-rd.js            5.31 kB │ gzip:     2.02 kB
 dist/assets/ItinerarioPdf-Dkpj9xNf.js             6.24 kB │ gzip:     2.22 kB
 dist/assets/ClimaPdf-VRsqo91N.js                  6.42 kB │ gzip:     1.96 kB
 dist/assets/GuidaPremiumPdf-BYae-6Ye.js           7.72 kB │ gzip:     2.33 kB
-dist/assets/premiumGuideService-BfaVWz5z.js       8.55 kB │ gzip:     3.46 kB
-dist/assets/AdminNotifiche-lMqJ2wGb.js           10.94 kB │ gzip:     3.34 kB
-dist/assets/AdminMusei-CYIFKxVX.js               12.88 kB │ gzip:     4.43 kB
-dist/assets/foregroundTriggers-IrU3SgYU.js       12.98 kB │ gzip:     5.24 kB
-dist/assets/AdminFotoVerifica-CW_yb3tG.js        13.82 kB │ gzip:     4.51 kB
-dist/assets/AdminVisits-BVm0GDTS.js              19.02 kB │ gzip:     5.26 kB
+dist/assets/premiumGuideService-DObK1JlA.js       8.55 kB │ gzip:     3.46 kB
+dist/assets/AdminNotifiche-D8pDOHE2.js           10.94 kB │ gzip:     3.34 kB
+dist/assets/AdminMusei-Co4a9CD9.js               12.88 kB │ gzip:     4.43 kB
+dist/assets/foregroundTriggers-DktvCEu-.js       12.98 kB │ gzip:     5.24 kB
+dist/assets/AdminFotoVerifica-BtMNc2wz.js        13.82 kB │ gzip:     4.51 kB
+dist/assets/AdminVisits-CEkibSkZ.js              19.02 kB │ gzip:     5.26 kB
 dist/assets/generaPdf-C1hDy-kB.js                21.07 kB │ gzip:     8.30 kB
-dist/assets/AdminTransazioni-yLl_FoQd.js         24.37 kB │ gzip:     7.13 kB
-dist/assets/AdminSocialStats-wQkXtlVv.js         26.70 kB │ gzip:     6.43 kB
-dist/assets/AdminUsersPro-BR8DBZOT.js            32.12 kB │ gzip:     8.90 kB
-dist/assets/AdminOpsConsole-6dk5fu6D.js          36.42 kB │ gzip:     9.68 kB
-dist/assets/AdminContentQueue-ETe1XWeJ.js        40.29 kB │ gzip:    10.57 kB
-dist/assets/EventsScreen-9dA14snj.js             65.38 kB │ gzip:    17.97 kB
+dist/assets/AdminTransazioni-BPel0KYe.js         24.37 kB │ gzip:     7.13 kB
+dist/assets/AdminSocialStats-D1VGswLJ.js         26.70 kB │ gzip:     6.43 kB
+dist/assets/AdminUsersPro-lBO8NB1H.js            32.12 kB │ gzip:     8.90 kB
+dist/assets/AdminOpsConsole-CvZiOaeI.js          36.42 kB │ gzip:     9.68 kB
+dist/assets/AdminContentQueue-BlcQ_JrQ.js        40.29 kB │ gzip:    10.57 kB
+dist/assets/EventsScreen-Sin6rk_5.js             65.38 kB │ gzip:    17.97 kB
 dist/assets/memoria-C6db0xYd.js                  74.75 kB │ gzip:    21.58 kB
-dist/assets/CameraScreen-CRmyZ92A.js             89.46 kB │ gzip:    23.00 kB
+dist/assets/CameraScreen-CZjUOvjO.js             89.46 kB │ gzip:    23.00 kB
 dist/assets/lento-BsEduxss.js                   134.16 kB │ gzip:    39.79 kB
 dist/assets/foodFestivalsCatalog-DVDEYbv6.js    139.22 kB │ gzip:    47.22 kB
-dist/assets/LoadingQuiz-D4sTFDql.js             168.41 kB │ gzip:    36.17 kB
-dist/assets/ProfileScreen-D8O9xwvS.js           214.72 kB │ gzip:    52.27 kB
+dist/assets/LoadingQuiz-MB4D1tD9.js             168.41 kB │ gzip:    36.17 kB
+dist/assets/ProfileScreen-BXusMuxW.js           214.72 kB │ gzip:    52.26 kB
 dist/assets/fioriture-C88FP7TB.js               226.17 kB │ gzip:    68.52 kB
-dist/assets/PilgrimWaysSheet-CYpgTLOG.js        300.93 kB │ gzip:    89.37 kB
-dist/assets/AdminPanel-Dj7CGIzZ.js              327.54 kB │ gzip:    74.55 kB
+dist/assets/PilgrimWaysSheet-B_gsFHc9.js        300.93 kB │ gzip:    89.37 kB
+dist/assets/AdminPanel-CnXwEi3F.js              327.54 kB │ gzip:    74.54 kB
 dist/assets/mercati-CyUD34Bf.js                 372.67 kB │ gzip:   104.97 kB
 dist/assets/cieli-CklHIZU5.js                   423.88 kB │ gzip:   124.41 kB
 dist/assets/street_art-B2r01Qds.js              456.03 kB │ gzip:   128.78 kB
-dist/assets/PlanScreen-Cx3JNpKP.js              501.34 kB │ gzip:   140.32 kB
+dist/assets/PlanScreen-Bvkfw1w2.js              501.34 kB │ gzip:   140.31 kB
 dist/assets/cinema-DhI-ivDn.js                  987.91 kB │ gzip:   285.31 kB
-dist/assets/libraryDescriptors-Y-BEuFEh.js    1,239.73 kB │ gzip:   417.09 kB
+dist/assets/libraryDescriptors-BRNbcgVw.js    1,239.73 kB │ gzip:   417.09 kB
 dist/assets/terme-CxzqdpHO.js                 2,251.92 kB │ gzip:   408.81 kB
-dist/assets/index-BrEvh4n3.js                 2,552.65 kB │ gzip:   938.71 kB
+dist/assets/index-nqmFhre1.js                 2,553.21 kB │ gzip:   938.99 kB
 dist/assets/vendor-BBUfA8XY.js                2,997.66 kB │ gzip: 1,033.63 kB
-✓ built in 18.60s
+✓ built in 18.56s
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
 PWA v1.3.0
 mode      generateSW
-precache  55 entries (15234.25 KiB)
+precache  55 entries (15234.79 KiB)
 files generated
 dist/sw.js
 dist/workbox-7334f08a.js
@@ -150,23 +151,23 @@ Build Completed in /vercel/output [1m]
 Deploying outputs...
 Deployment completed
 Creating build cache...
-[2K[1A[2K[G  Production      https://itainta-58p98n2d9-fabri75715-4892s-projects.vercel.app
+[2K[1A[2K[G  Production      https://itainta-5is04tklp-fabri75715-4892s-projects.vercel.app
 Completing…
 ▲ Aliased         https://www.wip.guide
 {
   "status": "ok",
   "deployment": {
-    "id": "dpl_HzmeTxFg4K3bvLYx5EoTXS8sFCtk",
-    "url": "https://itainta-58p98n2d9-fabri75715-4892s-projects.vercel.app",
-    "inspectorUrl": "https://vercel.com/fabri75715-4892s-projects/itainta/HzmeTxFg4K3bvLYx5EoTXS8sFCtk",
+    "id": "dpl_47sti1D7GUQQMzYhMzdWHsAU5ebb",
+    "url": "https://itainta-5is04tklp-fabri75715-4892s-projects.vercel.app",
+    "inspectorUrl": "https://vercel.com/fabri75715-4892s-projects/itainta/47sti1D7GUQQMzYhMzdWHsAU5ebb",
     "readyState": "READY",
     "target": "production",
-    "deploymentApiUrl": "https://api.vercel.com/v13/deployments/dpl_HzmeTxFg4K3bvLYx5EoTXS8sFCtk"
+    "deploymentApiUrl": "https://api.vercel.com/v13/deployments/dpl_47sti1D7GUQQMzYhMzdWHsAU5ebb"
   },
-  "message": "Deployment itainta-58p98n2d9-fabri75715-4892s-projects.vercel.app ready.",
+  "message": "Deployment itainta-5is04tklp-fabri75715-4892s-projects.vercel.app ready.",
   "next": [
     {
-      "command": "vercel inspect itainta-58p98n2d9-fabri75715-4892s-projects.vercel.app",
+      "command": "vercel inspect itainta-5is04tklp-fabri75715-4892s-projects.vercel.app",
       "when": "Inspect deployment"
     },
     {
@@ -178,9 +179,10 @@ Completing…
 
 Verifica dopo il deploy su https://www.wip.guide
 
-  OK   200  /api/flags                 546 ms  il bundle si carica e le rotte pubbliche rispondono
-  OK   200  /api/pricing               364 ms  il listino crediti e leggibile
-  OK   403  /api/admin/users?limit=1   217 ms  il gate admin e attivo (403 atteso, non 500)
+  OK   200  /api/flags                 577 ms  il bundle si carica e le rotte pubbliche rispondono
+  OK   200  /api/pricing               165 ms  il listino crediti e leggibile
+  OK   403  /api/admin/users?limit=1   81 ms  il gate admin e attivo (403 atteso, non 500)
 
 Tutto risponde: il deploy e' vivo.
 
+EXIT=0

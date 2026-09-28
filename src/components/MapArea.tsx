@@ -4359,9 +4359,16 @@ function MapArea({
       // per chip resta contenuto (vedi fetchTassonomiaPoisInBounds) apposta,
       // perche' a scala di continente non ha senso scaricare l'intera Europa
       // — serve un campione rappresentativo, non tutto.
+      // (28/09/2026) "locali" TOLTO da qui: da oggi fetchLocaliLive (sotto,
+      // tabella locali_pois) copre gia' QUALSIASI zoom, non solo sotto 0,6°.
+      // Prima dei due fetch — questo su shared_pois (senza filtro di zoom,
+      // sempre attivo) e fetchLocaliLive sotto 0,6° — potevano gia' andare in
+      // sovrapposizione; ora che fetchLocaliLive non ha piu' limite di zoom
+      // la sovrapposizione è certa a OGNI zoom, e produce due pin per lo
+      // stesso locale con due nomi diversi (segnalato dal committente,
+      // screenshot su Viale delle Pinete/Forte dei Marmi).
       const macroFarMap: Array<{ macro: string; tipi: string[]; limite: number }> = [
         { macro: 'monumenti', tipi: [...CHIESE_TYPES, ...MUSEI_TYPES, ...PANORAMI_TYPES, ...MONUMENTI_TYPES], limite: 600 },
-        { macro: 'locali', tipi: LOCALI_TYPES, limite: 400 },
         { macro: 'utilita', tipi: UTILITA_TYPES, limite: 400 },
         { macro: 'famiglie', tipi: FAMIGLIE_TYPES, limite: 300 },
       ];
