@@ -15,7 +15,7 @@
  */
 import { db } from './db';
 import { registraDownload, rimuoviDownload, leggiDownload } from './downloadsRegistry';
-import { MuseumVisit, VenueTappa, ArtworkGuide, fetchArtworkGuide, fetchArtworkFaq, tappeAttive, ARCHIVIO_MUSEI_KEY } from './museumVisit';
+import { MuseumVisit, VenueTappa, ArtworkGuide, fetchArtworkGuide, fetchArtworkFaq, tappeAttive, ARCHIVIO_MUSEI_KEY, fotoCommonsStandard } from './museumVisit';
 import { Language } from './i18n';
 import { supabase } from './supabase';
 import { getApiUrl } from './api';
@@ -101,6 +101,9 @@ export type ArchivioMuseo = {
   venuePhotoIcon?: string;
   /** Ultima volta che ci si è stati: ordina l'elenco «le tue visite». */
   visitatoIl?: number;
+  /** Opere per cui il server ha detto che non ci sono fonti (no_source,
+   *  too_short): non si riprovano e non impediscono «Scaricata». */
+  senzaTesto?: string[];
 };
 
 const normalizza = (s: any) =>
@@ -123,6 +126,21 @@ const chiaveArchivio = (venueKey: string, lang: string) => `${venueKey}::${Strin
 /** Il museo è già scaricato in questa lingua? */
 export function museoScaricato(venueKey: string, lang: string): ArchivioMuseo | null {
   return leggiTutto()[chiaveArchivio(venueKey, lang)] || null;
+}
+
+/**
+ * Il museo è scaricato TUTTO? (28/09/2026) L'archivio nasce con le prime otto
+ * opere: da solo non basta a dire «Scaricata». Completo vuol dire che ogni
+ * opera del percorso è nel telefono, o che il server ha detto che non ha
+ * fonti per raccontarla. Si calcola ogni volta: se si aggiungono opere, il
+ * percorso torna da completare.
+ */
+export function museoCompleto(venueKey: string, lang: string): boolean {
+  const a = museoScaricato(venueKey, lang);
+  const tappe = a?.guide?.tappe || [];
+  if (!a || !tappe.length) return false;
+  const senza = new Set(a.senzaTesto || []);
+  return tappe.every(t => !!a.opere?.[normalizza(t.nome)] || senza.has(normalizza(t.nome)));
 }
 
 /**
@@ -172,6 +190,7 @@ export function conservaVisita(visit: MuseumVisit, language: Language): void {
     // torna indietro a quello di partenza.
     guide: (visit.guide?.tappe?.length || 0) >= (gia?.guide?.tappe?.length || 0) ? visit.guide : gia.guide,
     opere: gia?.opere || {},
+    ...(gia?.senzaTesto?.length ? { senzaTesto: gia.senzaTesto } : {}),
     scaricatoIl: gia?.scaricatoIl || Date.now(),
     ...(visit.venuePhotoIcon ? { venuePhotoIcon: visit.venuePhotoIcon } : (gia?.venuePhotoIcon ? { venuePhotoIcon: gia.venuePhotoIcon } : {})),
     visitatoIl: Date.now(),
@@ -289,7 +308,7 @@ export async function prescaricaPrimeOpere(
       break;
     }
     // Le foto entrano nella cache del browser: si vedono anche senza rete.
-    for (const url of [t.fotoIcona, t.foto]) {
+    for (const url of [fotoCommonsStandard(t.fotoIcona), fotoCommonsStandard(t.foto)]) {
       if (!url) continue;
       try { await fetch(url, { mode: 'cors' }); } catch { /* foto saltata */ }
     }
@@ -323,6 +342,7 @@ export async function scaricaPacchettoMuseo(
   const chiave = chiaveArchivio(visit.venueKey, language);
   const gia = archivio[chiave];
   const opere: Record<string, ArtworkGuide> = { ...(gia?.opere || {}) };
+  const senzaTesto = new Set<string>(gia?.senzaTesto || []);
 
   for (let i = 0; i < tappe.length; i++) {
     const t = tappe[i];
@@ -331,6 +351,7 @@ export async function scaricaPacchettoMuseo(
     // Già in archivio: non si riscarica e NON si ripaga. La voce, se manca
     // ancora nel telefono, si scarica adesso (cache del server: gratis).
     if (opere[k]) { opere[k] = await scaricaVoce(visit.venueKey, language, opere[k], t.nomeFonte || t.nome, visit.venue.name); esito.opere++; continue; }
+    if (senzaTesto.has(k)) { esito.mancanti.push(t.nome); continue; }
     const resp = await fetchArtworkGuide({
       artwork: t.nomeFonte || t.nome,
       venueName: visit.venue.name,
@@ -347,6 +368,7 @@ export async function scaricaPacchettoMuseo(
       esito.bytes += (resp.guide.testo || '').length * 2;
     } else {
       esito.mancanti.push(t.nome);
+      if (resp && resp.ok === false && (resp.reason === 'no_source' || resp.reason === 'too_short')) senzaTesto.add(k);
       // Pass esaurito o servizio negato: inutile insistere sulle altre.
       if (resp && resp.ok === false && (resp.reason === 'pass_exhausted' || resp.reason === 'needs_pass')) break;
     }
@@ -356,7 +378,7 @@ export async function scaricaPacchettoMuseo(
   // Le foto: si scaricano nella cache del browser, così le mostra anche
   // offline. Una foto che non arriva non è un errore.
   for (const t of tappe) {
-    for (const url of [t.foto, t.fotoIcona]) {
+    for (const url of [fotoCommonsStandard(t.foto), fotoCommonsStandard(t.fotoIcona)]) {
       if (!url) continue;
       try {
         const r = await fetch(url, { mode: 'cors' });
@@ -366,11 +388,13 @@ export async function scaricaPacchettoMuseo(
   }
 
   archivio[chiave] = {
+    ...(gia || {}),
     venueKey: visit.venueKey,
     venueName: visit.venue.name,
     language: String(language).toUpperCase(),
     guide: visit.guide,
     opere,
+    ...(senzaTesto.size ? { senzaTesto: [...senzaTesto] } : {}),
     scaricatoIl: Date.now(),
   };
   scriviTutto(archivio);
