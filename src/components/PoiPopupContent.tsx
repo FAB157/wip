@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { tracciaEvento } from "../lib/pageviewTracker";
 import {
   BookOpen, Star, Compass, Play, Pause, ChevronDown, ChevronUp,
   MapPin, Clock, Globe, Phone, Camera, Sparkles, X, ExternalLink,
@@ -22,11 +23,12 @@ import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { useFavorites } from '../lib/favorites';
 import { supabase } from '../lib/supabase';
 import { getTranslatedPoiName } from '../lib/poiNameI18n';
-import { navigaAPiediVerso, navigaInAutoVerso } from './NavChoiceSheet';
+import NavChoiceSheet from './NavChoiceSheet';
 import { traduciVoci, tradotto } from '../lib/atlanteI18n';
 import { apriScheda } from '../lib/apriScheda';
 import { fotoDaWikidata } from '../lib/wikidataFoto';
-import { tourService, MAX_TAPPE } from '../services/tourService';
+import { fotoSicura, migliorFoto } from '../lib/fotoHttps';
+import { tourService } from '../services/tourService';
 import { useBozzaGiro } from '../lib/tour/useGiro';
 
 interface PoiPopupContentProps {
@@ -47,12 +49,14 @@ interface PoiPopupContentProps {
  * essere in disaccordo. Il numero e` la posizione nel giro come lo
  * camminerai (ordine del server), non l'ordine in cui hai toccato.
  */
-function BottoneGiro({ poi, language }: { poi: any; language: Language }) {
+export function BottoneGiro({ poi, language }: { poi: any; language: Language }) {
   const bozza = useBozzaGiro();
   const id = poi?.id ?? poi?.poiId;
   const dentro = id != null && tourService.bozzaHa(id);
   const numero = dentro ? tourService.bozzaNumero(id) : null;
-  const pieno = !dentro && bozza.tappe.length >= MAX_TAPPE;
+  // Il tetto e` della bozza (dieci al giro, trenta al percorso su misura).
+  const tetto = tourService.bozzaTetto();
+  const pieno = !dentro && bozza.tappe.length >= tetto;
 
   const tocca = (e: React.SyntheticEvent) => {
     e.preventDefault();
@@ -119,8 +123,8 @@ function BottoneGiro({ poi, language }: { poi: any; language: Language }) {
       ) : (
         <>
           <Footprints className="w-4 h-4" />
-          {getTranslation("tour_aggiungi", language)}
-          <span className="text-[10px] font-bold opacity-70 tabular-nums">{bozza.tappe.length}/{MAX_TAPPE}</span>
+          {getTranslation(bozza.modo === 'percorso' ? "pc_tasto_mappa" : "tour_aggiungi", language)}
+          <span className="text-[10px] font-bold opacity-70 tabular-nums">{bozza.tappe.length}/{tetto}</span>
         </>
       )}
     </button>
@@ -151,8 +155,16 @@ function isHeritageAtlasPoi(poi: any): boolean {
 }
 
 export default function PoiPopupContent({ poi, onGuideClick, language, setMarkers, modalitaGiro, onClose }: PoiPopupContentProps) {
-  const [data, setData] = useState<any>(getCachedPoiDetails(poi.id));
-  const [loading, setLoading] = useState(!getCachedPoiDetails(poi.id));
+  // Statistiche anonime (26/09/2026): pin aperto, per categoria.
+  useEffect(() => { if (poi?.id) tracciaEvento('pin_aperto', poi.category || 'altro'); }, [poi?.id]);
+  // (22/09/2026 sera) Stato iniziale dalla cache DELLA LINGUA: prima si
+  // leggeva la chiave nuda (= italiano) per chiunque, e con l'app in francese
+  // il fumetto partiva mostrando la versione italiana messa in cache da
+  // un'altra apertura.
+  const linguaIniziale = String(language || 'IT').toLowerCase().slice(0, 2);
+  const chiaveIniziale = linguaIniziale === 'it' ? String(poi.id) : `${poi.id}::${linguaIniziale.toUpperCase()}`;
+  const [data, setData] = useState<any>(getCachedPoiDetails(chiaveIniziale));
+  const [loading, setLoading] = useState(!getCachedPoiDetails(chiaveIniziale));
   const [expanded, setExpanded] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [audioPlaying, setAudioPlaying] = useState(false);
@@ -199,7 +211,10 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
   // apertura e a ignorare `image_url`: le foto scritte non si vedevano.
   // Ordine: quella salvata sul bene → altrimenti Wikidata, che resta la
   // riserva per i beni senza immagine propria.
-  const fotoSalvata = isHeritageAtlasPoi(poi) ? ((poi as any).image_url || null) : null;
+  // fotoSicura: le foto del catalogo MiC sono salvate con schema http e il
+  // browser le blocca dentro una pagina https. Qui oltre alla mappa passano
+  // anche i POI ripescati dalla cache offline, scritti prima della correzione.
+  const fotoSalvata = isHeritageAtlasPoi(poi) ? (fotoSicura((poi as any).image_url) || null) : null;
   const [beneFoto, setBeneFoto] = useState<string | null>(fotoSalvata);
   const beneWikidataRef = isHeritageAtlasPoi(poi) ? ((poi as any).wikidata || null) : null;
   useEffect(() => {
@@ -237,7 +252,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
   // La foto chiesta della dimensione che serve, non da 800 px per un riquadro
   // alto 160 (24/08/2026): su Wikimedia costa da tre a sette volte meno byte,
   // ed e' il grosso del tempo che passava fra il tocco sul pin e la foto.
-  const heroSrc = fotoPrincipale(data?.imageUrl || poi.image_url || poi.photo_url || null);
+  const heroSrc = fotoPrincipale(data?.imageUrl || migliorFoto(poi) || null);
   useEffect(() => { setImgError(false); }, [heroSrc]);
 
   const { toggleFavorite, isFavorite: checkFavorite } = useFavorites();
@@ -290,11 +305,18 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
 
       // ── STEP 0: Mostra SUBITO foto+desc già presenti nel POI object ──
       // (dai campi che shared_pois ritorna via RPC o discovery)
-      const immediateImage = poi.image_url || poi.photo_url || null;
+      const immediateImage = migliorFoto(poi) || null;
       // Fuori dall'italiano il teaser per-lingua (gia' sul filo della RPC)
       // batte i campi description_* di shared_pois, che sono in italiano.
+      // (22/09/2026 sera) Fuori dall'italiano l'anteprima e' SOLO il teaser
+      // nella lingua della UI: i campi description_* della riga sono nella
+      // lingua di chi ha arricchito per primo (di solito italiano) e mostrarli
+      // «per un attimo» e' esattamente il pin in italiano che il committente
+      // ha visto con l'app in spagnolo. Meglio vuoto fino alla risposta.
+      const linguaRiga = String((poi as any).description_lang || '').toLowerCase().slice(0, 2);
+      const anteprimaCoerente = linguaUi === 'it' ? !linguaRiga || linguaRiga === 'it' : linguaRiga === linguaUi;
       const immediateDesc = (linguaUi !== 'it' && teaserUi(poi))
-        || poi.description_short || poi.description_ai || poi.description || null;
+        || (anteprimaCoerente ? (poi.description_short || poi.description_ai || poi.description || null) : null);
 
       const baseData: any = {
         imageUrl: immediateImage,
@@ -318,13 +340,16 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
       // Mostra subito i dati iniziali (anche vuoti)
       if (isMounted) { setData({ ...baseData }); setLoading(false); }
 
-      // Se ha già tutto (img + desc lunga), cachea e stop — ma SOLO in
-      // italiano: nelle altre lingue la descrizione lunga del POI e' quella
-      // italiana e serve il passaggio dal server che la traduce.
-      if (linguaUi === 'it' && immediateImage && immediateDesc && (poi.description_long || poi.full_description)) {
-        setCachedPoiDetails(chiavePopup(poi.id), baseData);
-        return;
-      }
+      // (22/09/2026, segnalazione del committente: pin nella lingua
+      // sbagliata) PRIMA qui si assumeva che con l'app in italiano
+      // `poi.description_long` fosse per forza italiano, e ci si fermava:
+      // il popup restava scritto nella lingua di chi aveva arricchito quel
+      // luogo per primo, MAI ricontrollata. `baseData` resta l'anteprima
+      // istantanea (già mostrata sopra) ma non si mette più in cache né si
+      // interrompe qui: si prosegue SEMPRE fino allo STEP 1
+      // (/api/poi/details), che ora conosce la lingua vera del testo
+      // (description_lang, vedi traduciCampiPoi in server.ts) e lo corregge
+      // quando serve — solo quella risposta finisce in cache.
 
       // ── UTILITY: stop qui. La card leggera non ha bisogno né di
       // /api/poi/details (le utility non stanno in shared_pois) né dello
@@ -353,21 +378,37 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
         return;
       }
 
+      // (19/09/2026) COMMERCIALI DI OVERTURE: «nessuna prosa, solo dati». Se il
+      // server lo segnala (`solo_dati`), al posto del testo va la riga dei dati
+      // — via · citta` — e l'AI non si chiama. Il tipo lo mostra gia` il
+      // sottotitolo; telefono, sito e orari hanno i loro tasti.
+      let rigaDati = "";
       try {
         // ── STEP 1: Cerca in shared_pois via /api/poi/details ──────────
         if (poi.id) {
+          // COL TOKEN (22/09/2026 sera, Pariser Platz in italiano con l'app in
+          // spagnolo): senza Bearer il server ci vedeva come OSPITE e, per la
+          // regola «ospiti solo cache», non traduceva mai su cache miss — il
+          // pin restava nella lingua di chi aveva arricchito il luogo.
           const dbRes = await fetch(
-            getApiUrl(`/api/poi/details?id=${encodeURIComponent(String(poi.id))}&lat=${poi.lat}&lon=${poi.lon}&lang=${linguaUi}`)
+            getApiUrl(`/api/poi/details?id=${encodeURIComponent(String(poi.id))}&lat=${poi.lat}&lon=${poi.lon}&lang=${linguaUi}`),
+            { headers: await bearerHeaders() }
           ).catch(() => null);
 
           if (dbRes?.ok) {
             const dbData = await dbRes.json();
             const hasDesc = dbData?.description_ai || dbData?.description_long || dbData?.description_short;
-            const hasImg = dbData?.image_url || dbData?.photo_url;
+            const hasImg = migliorFoto(dbData);
 
             if (hasDesc || hasImg) {
               const enriched: any = {
-                imageUrl: dbData.image_url || dbData.photo_url || immediateImage || null,
+                // immediateImage PRIMA, non dopo (06/09/2026): la foto e' gia'
+                // a schermo dallo STEP 0. Se qui si scriveva un'altra stringa
+                // per la STESSA foto (stessa immagine, URL leggermente
+                // diverso — dimensione, redirect...) l'<img> la ricaricava da
+                // capo: un lampo bianco a ogni apertura, anche con la foto
+                // giusta gia' visibile. Si aggiorna solo se prima non c'era.
+                imageUrl: immediateImage || hasImg || null,
                 image_attribution: dbData.image_attribution || (poi as any).image_attribution || null,
                 description: dbData.description_short || dbData.description_ai || immediateDesc || "",
                 descriptionLong: dbData.description_long || dbData.full_description || "",
@@ -385,9 +426,32 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
                 website: dbData.practical_info?.match(/Web: ([^\s|]+)/)?.[1] || null,
                 isGroqEnriched: false,
               };
-              if (isMounted) { setData(enriched); setCachedPoiDetails(chiavePopup(poi.id), enriched); }
+              // In cache SOLO se il testo e' davvero nella lingua della UI
+              // (`lingua_testo` dal server): da ospite, o se la traduzione e'
+              // fallita, il testo mostrato e' quello originale e non deve
+              // diventare «la versione francese» per il resto della sessione.
+              const linguaTesto = String(dbData.lingua_testo || '').toLowerCase().slice(0, 2);
+              const coerente = !linguaTesto || linguaTesto === linguaUi;
+              if (isMounted) { setData(enriched); if (coerente) setCachedPoiDetails(chiavePopup(poi.id), enriched); }
               // Se ha dati nel DB, stop — CACHE FIRST: non usiamo Groq se abbiamo già qualcosa
               if (hasDesc) return;
+            }
+
+            if (dbData?.solo_dati) {
+              rigaDati = String(dbData.riga_dati || "").trim() || [dbData.address, dbData.city].map((x: any) => String(x || "").trim()).filter(Boolean).join(" · ");
+              const soloDati: any = {
+                ...baseData,
+                imageUrl: immediateImage || hasImg || null,
+                image_attribution: dbData.image_attribution || (poi as any).image_attribution || null,
+                description: rigaDati,
+                address: dbData.address || (poi as any).address || null,
+                isGroqEnriched: false,
+              };
+              if (isMounted) { setData(soloDati); setLoading(false); setCachedPoiDetails(chiavePopup(poi.id), soloDati); }
+              // Con la foto gia` presente non resta niente da chiedere. Senza,
+              // si prosegue: il server, per questi POI, non genera testo ma
+              // cerca la foto dalla strada (una volta, poi se lo ricorda).
+              if (soloDati.imageUrl) return;
             }
           }
         }
@@ -403,7 +467,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
 
         // ── STEP 3: Groq on-the-fly (SOLO GROQ IN STREAMING) ──────────
         // L'utente vuole SOLO Groq. Niente fetch "fast" da Wikipedia intermedio.
-        const preGroqData = { ...baseData, subtext };
+        const preGroqData = { ...baseData, subtext, ...(rigaDati ? { description: rigaDati } : {}) };
         if (isMounted) setData({ ...preGroqData });
 
         try {
@@ -458,15 +522,20 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
               const reader = streamRes.body.getReader();
               const decoder = new TextDecoder("utf-8");
               let accumulatedJson = "";
-              
+              // Buffer di riga (come PlanScreen): i chunk HTTP non coincidono
+              // con gli eventi SSE, e senza `stream: true` una lettera
+              // accentata a cavallo di due chunk usciva corrotta.
+              let bufferRighe = "";
+
               while (true) {
                  if (!isMounted) break;
                  const { done, value } = await reader.read();
                  if (done) break;
                  resetStreamWatchdog();
-                 const chunkStr = decoder.decode(value);
-                 const lines = chunkStr.split("\n");
-                 
+                 bufferRighe += decoder.decode(value, { stream: true });
+                 const lines = bufferRighe.split("\n");
+                 bufferRighe = lines.pop() ?? "";
+
                  for (const line of lines) {
                     if (line.startsWith("data: ")) {
                        const dataStr = line.substring(6);
@@ -530,9 +599,26 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
                  const foundImage = (await wikiImagePromise) || parsedFinal.image_url || null;
                  if (foundImage) {
                     parsedFinal.image_url = foundImage;
-                    groqData.imageUrl = foundImage;
+                    // Non sovrascrive una foto GIA' a schermo (stesso motivo
+                    // di immediateImage sopra): altrimenti l'<img> ricarica
+                    // e lampeggia proprio mentre lo streaming Groq finisce,
+                    // il momento in cui l'utente sta gia' guardando la scheda.
+                    if (!groqData.imageUrl) groqData.imageUrl = foundImage;
                  }
                  
+                 // (19/09/2026) Risposte SENZA testo: «solo dati» (commerciali di
+                 // Overture) e «nessuna fonte». Non e` un errore: resta cio` che
+                 // c'era — la riga dei dati, o niente — e si mostra la foto se
+                 // il server ne ha trovata una. Mai l'etichetta «AI»: non ha
+                 // scritto nessuno.
+                 if (parsedFinal.solo_dati || parsedFinal.nessuna_fonte) {
+                    groqData.isGroqEnriched = false;
+                    if (!groqData.description) {
+                       // (21/09/2026) Mai vuota: la riga dei dati veri (tipo · via · citta`) anche per i luoghi senza fonte.
+                       groqData.description = String(parsedFinal.riga_dati || "").trim() || [parsedFinal.address, parsedFinal.city].map((x: any) => String(x || "").trim()).filter(Boolean).join(" · ");
+                    }
+                    if (isMounted) { setData({...groqData}); setCachedPoiDetails(chiavePopup(poi.id), groqData); }
+                 }
                  if (parsedFinal.description_long || parsedFinal.description_short) {
                     groqData.description = parsedFinal.description_short || parsedFinal.description_long;
                     groqData.descriptionLong = parsedFinal.description_long;
@@ -638,67 +724,21 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
     setShowNavChoice(v => !v);
   };
 
-  const navigaAPiedi = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setShowNavChoice(false);
-    // Verso la PORTA; senza porta, il civico dell'indirizzo (la via
-    // principale); altrimenti il centroide. Un solo imbuto (NavChoiceSheet)
-    // per popup, card, scheda e radar: la forma dell'evento e la scelta del
-    // punto d'arrivo restano una.
-    void navigaAPiediVerso(poi as any);
-  };
-
-  const navigaInAuto = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setShowNavChoice(false);
-    void navigaInAutoVerso(poi as any);
-  };
-
   // La scelta compare come foglio in basso invece che dentro la card: le tre
   // schede (atlante, utility, completa) hanno strutture diverse e una ha i
   // bottoni in griglia — un pannello inline la romperebbe.
-  const sceltaNav = !showNavChoice ? null : (
-    <div
-      className="fixed inset-0 z-[10000] flex items-end justify-center bg-black/40"
-      onClick={(e) => { e.stopPropagation(); setShowNavChoice(false); }}
-    >
-      <div
-        className="w-full max-w-sm m-3 rounded-2xl bg-white shadow-2xl overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <p className="px-4 pt-3 pb-2 text-[11px] font-bold uppercase tracking-wide text-gray-400 truncate">
-          {displayName(poi, language)}
-        </p>
-        <button
-          onClick={navigaAPiedi}
-          className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors border-t border-gray-100"
-        >
-          <span className="text-xl">🚶</span>
-          <span className="flex-1">
-            <span className="block text-sm font-bold text-gray-900">{getTranslation("nav_a_piedi", language)}</span>
-            <span className="block text-[11px] text-gray-500">{getTranslation("nav_a_piedi_sub", language)}</span>
-          </span>
-        </button>
-        <button
-          onClick={navigaInAuto}
-          className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors border-t border-gray-100"
-        >
-          <span className="text-xl">🚗</span>
-          <span className="flex-1">
-            <span className="block text-sm font-bold text-gray-900">{getTranslation("nav_in_auto", language)}</span>
-            <span className="block text-[11px] text-gray-500">{getTranslation("nav_in_auto_sub", language)}</span>
-          </span>
-        </button>
-        <button
-          onClick={(e) => { e.stopPropagation(); setShowNavChoice(false); }}
-          className="w-full py-3 text-sm font-bold text-gray-500 border-t border-gray-100 hover:bg-gray-50 transition-colors"
-        >
-          {getTranslation("cancel", language)}
-        </button>
-      </div>
-    </div>
+  // (14/09/2026, iPhone: «se clicco su navigazione non scorre, rimane
+  // bloccata senza poter selezionare auto») Il foglio era un `fixed` scritto
+  // QUI DENTRO, cioè dentro il popup della mappa che ha un transform: il
+  // fixed si agganciava al popup, usciva tagliato sotto la barra e senza
+  // sfondo scuro. Ora è lo stesso NavChoiceSheet di scheda, card e radar,
+  // montato con portal sul body: su iPhone offre Mappe di Apple E Google Maps.
+  const sceltaNav = (
+    <NavChoiceSheet
+      poi={showNavChoice ? ({ ...(poi as any), name: displayName(poi, language) }) : null}
+      language={language}
+      onClose={() => setShowNavChoice(false)}
+    />
   );
 
   // ── Deriva categorie per styling ──────────────────────────────────
@@ -706,7 +746,9 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
   const catHex = CATEGORY_HEX[effectiveCat] || CATEGORY_HEX[poi.category] || "#1e3a8a";
   const catGrad = CATEGORY_GRADIENT[effectiveCat] || CATEGORY_GRADIENT[poi.category] || "from-emerald-900 via-emerald-800 to-green-700";
   const catEmoji = CATEGORY_EMOJIS[effectiveCat] || CATEGORY_EMOJIS[poi.category] || "📍";
-  const isGem = !!(poi.is_gem || poi.category === "gemme");
+  // Solo il flag decide (03/09/2026): `category='gemme'` e' la categoria
+  // dell'import CSV di Wikipedia, non un giudizio. Vedi poiTaxonomy.
+  const isGem = poi.is_gem === true;
   const accessible = checkPoiAccessibility(poi);
 
   // Technical data parsed
@@ -909,7 +951,12 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
   }
 
   return (
-    <div className="w-[300px] -m-3 overflow-hidden rounded-2xl font-sans shadow-2xl bg-white flex flex-col max-h-[60vh]">
+    // LARGHEZZA PIENA (06-07/09/2026): non e' piu' un Popup di Leaflet (che
+    // imponeva minWidth/maxWidth=290 e un padding interno da compensare con
+    // -m-3), ma un pannello ancorato in basso — vedi MapArea.tsx. La card
+    // riempie il contenitore che la ospita, come le varianti atlante e
+    // utility qui sopra.
+    <div className="w-full overflow-hidden rounded-2xl font-sans shadow-2xl bg-white flex flex-col max-h-[60vh]">
       {/* Tasto tendina in alto (drag handle) per agevolare chiusura */}
       <div className="w-full flex justify-center py-1.5 bg-white/80 absolute top-0 z-50 rounded-t-2xl pointer-events-none">
         <div className="w-10 h-1.5 bg-gray-300 rounded-full" />

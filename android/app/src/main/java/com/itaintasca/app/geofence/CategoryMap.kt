@@ -105,11 +105,12 @@ object CategoryMap {
             "nature_reserve", "riserva", "geopark", "forest", "foresta", "wood", "bosco",
             "desert", "deserto", "tree", "albero", "national_park"),
         "locali" to setOf("restaurant", "cafe", "bar", "fast_food", "pub", "locali"),
-        // Sync con CategoryChips/MapArea web: esperienze_locali eliminata,
-        // i mercati (marketplace) confluiscono in utilita
+        // Sync con CategoryChips/MapArea web: esperienze_locali eliminata.
+        // marketplace/mercato TOLTI (29/08/2026, committente): sono il verticale
+        // tematico Mercatini, che come gli altri tematici non ha audioguida.
         // ev_charging (27/08/2026): colonnine EV da OpenChargeMap, nessuna audioguida
         // (e' un'utilita', non un contenuto culturale) ma visibile e filtrabile.
-        "utilita" to setOf("pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth", "ev_charging"),
+        "utilita" to setOf("pharmacy", "hospital", "police", "taxi", "utilita", "drinking_water", "station", "subway_entrance", "toll_booth", "ev_charging"),
         "famiglie" to setOf("playground", "theme_park", "aquarium", "zoo", "famiglie", "water_park"),
         // Vino e Gusto (20/08/2026): cantine, vigneti, caseifici, frantoi,
         // birrifici, botteghe del gusto e strade del vino, 199.280 nel mondo

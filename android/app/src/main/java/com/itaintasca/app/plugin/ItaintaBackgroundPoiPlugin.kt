@@ -17,6 +17,7 @@ import com.getcapacitor.annotation.PermissionCallback
 import com.itaintasca.app.geofence.BearingGate
 import com.itaintasca.app.geofence.NotificationStrings
 import com.itaintasca.app.service.ItaintaBackgroundPoiService
+import com.itaintasca.app.service.NavFollower
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -32,6 +33,14 @@ import java.util.ArrayList
                 Manifest.permission.ACCESS_COARSE_LOCATION
             ]
         ),
+        // (29/08/2026) Alias a se' per il background: chiesto DOPO il foreground,
+        // da API 30 il sistema apre direttamente la pagina «Posizione» con il
+        // radio «Consenti sempre» (un tocco), invece della scheda Info app da
+        // cui l'utente doveva trovare Autorizzazioni → Posizione da solo.
+        Permission(
+            alias = "backgroundLocation",
+            strings = [Manifest.permission.ACCESS_BACKGROUND_LOCATION]
+        ),
         Permission(
             alias = "notifications",
             strings = [Manifest.permission.POST_NOTIFICATIONS]
@@ -43,6 +52,16 @@ import java.util.ArrayList
     ]
 )
 class ItaintaBackgroundPoiPlugin : Plugin() {
+
+    companion object {
+        /**
+         * (03/09/2026) Il plugin e' vivo (WebView in piedi)? Lo legge il
+         * servizio quando un tasto del cruscotto viene toccato sulla
+         * notifica: se si', il broadcast arriva al JS; se no, annota
+         * l'azione e apre l'app (ItaintaBackgroundPoiService.inoltraAzioneNav).
+         */
+        @Volatile @JvmStatic var vivo: Boolean = false
+    }
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -58,6 +77,9 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                         val json = JSONObject(data1)
                         if (json.has("poiId")) data.put("poiId", json.getString("poiId"))
                         if (json.has("poiName")) data.put("poiName", json.getString("poiName"))
+                        // (03/09/2026) I tasti del cruscotto: azione e orario del tocco.
+                        if (json.has("action")) data.put("action", json.getString("action"))
+                        if (json.has("ts")) data.put("ts", json.getLong("ts"))
                     }
                 } catch (e: Exception) {
                     // Ignora errori di parsing, usiamo il campo 'data' raw
@@ -82,6 +104,45 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         } else {
             context.registerReceiver(receiver, filter)
         }
+        vivo = true
+        // (18/09/2026 notte, dalla revisione) PAGINA NUOVA = PERCORSO VECCHIO
+        // DA BUTTARE. Se l'Activity viene ricreata il JS riparte senza sapere
+        // di aver consegnato un percorso, e non lo ritirerebbe mai: GPS ad
+        // alta frequenza per sempre e un follower «al comando» che parla sopra
+        // al JS nuovo. Il giro in corso si riconsegna da solo al primo fix
+        // (giroDriver confronta la firma). NON in handleOnDestroy: se
+        // l'Activity muore a schermo spento la guida deve continuare.
+        try { NavFollower.clear(); avvisaServizioNav() } catch (_: Exception) { }
+        // (21/09/2026, REVISIONE 2) ...e via anche il CRUSCOTTO acceso dalla
+        // pagina di prima: la pagina nuova non sa di averlo e non lo spegneva
+        // mai (notifica ferma per sempre sull'ultima svolta, tappa singola
+        // soprattutto). Si dimentica l'ultimo stato JS ricordato (nome tappa,
+        // minuti, metri totali della navigazione vecchia) e si spegne il
+        // banner SOLO se il servizio e' vivo (hook null altrimenti): mai
+        // avviare il servizio da qui. Un giro ripreso da localStorage lo
+        // riaccende al suo primo stato.
+        try {
+            NavFollower.ricordaCruscottoJs(false, false, "", "", -1.0, -1.0, -1.0)
+            ItaintaBackgroundPoiService.onPaginaNuova?.invoke()
+        } catch (_: Exception) { }
+        // (03/09/2026) Un tasto del cruscotto toccato mentre la WebView era
+        // morta: il servizio l'ha annotato e ha aperto l'app. Si consegna
+        // adesso (retainUntilConsumed: il listener JS puo' non esserci ancora).
+        try {
+            val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+            val pendente = prefs.getString(ItaintaBackgroundPoiService.PREF_PENDING_NAV_ACTION, null)
+            if (!pendente.isNullOrBlank()) {
+                val ts = prefs.getLong(ItaintaBackgroundPoiService.PREF_PENDING_NAV_ACTION_TS, 0L)
+                prefs.edit()
+                    .remove(ItaintaBackgroundPoiService.PREF_PENDING_NAV_ACTION)
+                    .remove(ItaintaBackgroundPoiService.PREF_PENDING_NAV_ACTION_TS)
+                    .apply()
+                val data = JSObject()
+                data.put("action", pendente)
+                data.put("ts", ts)
+                notifyListeners("navBannerAction", data, true)
+            }
+        } catch (_: Exception) { /* best-effort */ }
     }
 
     @PluginMethod
@@ -102,44 +163,42 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         }
     }
 
+    private fun backgroundLocationGranted(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+            context.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /**
+     * POSIZIONE IN BACKGROUND IN UN TOCCO (29/08/2026, collaudo sul Realme).
+     * Prima: dialogo nativo di disclosure + scheda Info app, da cui l'utente
+     * doveva trovare da solo Autorizzazioni → Posizione → Consenti sempre
+     * (tre tocchi a mano, e sul telefono del committente nessuno li trovava).
+     * Ora la prominent disclosure Play la fa la schermata JS (una sola, con
+     * cosa/perché/anche ad app chiusa) PRIMA di chiamare il plugin, e qui si
+     * CHIEDE il permesso: su API 30+ il sistema apre direttamente la pagina
+     * «Posizione» col radio «Consenti sempre»; su API 29 e' un'opzione dello
+     * stesso dialogo. Il callback arriva quando l'utente torna: nessuna
+     * navigazione manuale. I valori di `status` restano quelli di prima.
+     */
     private fun checkBackgroundLocation(call: PluginCall) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            if (context.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                Handler(Looper.getMainLooper()).post {
-                    // Prominent disclosure richiesta dalla policy Play sulla
-                    // posizione in background: deve dire COSA si raccoglie,
-                    // PERCHÉ, e che avviene anche ad app chiusa.
-                    // (28/08/2026) Testo nella lingua scelta dall'utente
-                    // (NotificationStrings legge le prefs "language", non la
-                    // locale di sistema): era italiano fisso per tutto il mondo.
-                    AlertDialog.Builder(context)
-                        .setTitle(NotificationStrings.get(context, "bg_disclosure_title"))
-                        .setMessage(NotificationStrings.get(context, "bg_disclosure_text"))
-                        .setPositiveButton(NotificationStrings.get(context, "bg_disclosure_settings")) { _, _ ->
-                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                data = Uri.fromParts("package", context.packageName, null)
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            context.startActivity(intent)
-                            val ret = JSObject()
-                            ret.put("status", "requesting_background_location")
-                            call.resolve(ret)
-                        }
-                        // Nessuna richiesta di permesso qui: rifiutare deve
-                        // restare rifiutare (il consenso non cambia logica).
-                        .setNegativeButton(NotificationStrings.get(context, "bg_disclosure_later")) { dialog, _ ->
-                            dialog.dismiss()
-                            val ret = JSObject()
-                            ret.put("status", "denied_background_location")
-                            call.resolve(ret)
-                        }
-                        .setCancelable(false)
-                        .show()
-                }
-                return
-            }
+        if (!backgroundLocationGranted()) {
+            requestPermissionForAlias("backgroundLocation", call, "backgroundLocationCallback")
+            return
         }
         checkNotifications(call)
+    }
+
+    @PermissionCallback
+    private fun backgroundLocationCallback(call: PluginCall) {
+        if (backgroundLocationGranted()) {
+            checkNotifications(call)
+        } else {
+            // Rifiutare resta rifiutare: nessuna seconda richiesta, nessun
+            // dirottamento sulle Impostazioni. La schermata JS mostra lo stato
+            // e un tasto «Attiva» per riprovare quando vuole l'utente.
+            val ret = JSObject()
+            ret.put("status", "denied_background_location")
+            call.resolve(ret)
+        }
     }
 
     private fun checkNotifications(call: PluginCall) {
@@ -149,12 +208,93 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                 return
             }
         }
-        checkActivityRecognition(call)
+        checkNotificheBloccate(call)
     }
 
     @PermissionCallback
     private fun notificationCallback(call: PluginCall) {
-        checkActivityRecognition(call)
+        checkNotificheBloccate(call)
+    }
+
+    /**
+     * (29/08/2026, collaudo sul Realme) NOTIFICHE BLOCCATE DAL TELEFONO. Il
+     * permesso POST_NOTIFICATIONS era concesso, ma nelle impostazioni
+     * dell'app Realme UI aveva «Gestisci notifiche: Rifiuta»: nessuna
+     * notifica di WIP arrivava — nemmeno quella del foreground service, cioe'
+     * il cruscotto sulla lock screen, ed e' per questo che «il banner non
+     * resta a display spento». Il permesso di runtime non lo vede: lo vede
+     * areNotificationsEnabled(). Non si puo' riaccendere da codice (Android
+     * lo vieta): si spiega e si apre in un tocco la pagina esatta delle
+     * notifiche dell'app. Fa parte dell'onboarding, come la posizione
+     * «Sempre»: il committente vuole tutto all'inizio, col minimo di tocchi.
+     */
+    private fun checkNotificheBloccate(call: PluginCall) {
+        val abilitate = try {
+            androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
+        } catch (_: Exception) { true }
+        if (abilitate) {
+            // (29/08/2026) La catena dell'onboarding finisce QUI: posizione
+            // (fg+bg) e notifiche. Attivita' fisica e batteria erano altri due
+            // dialoghi/pagine di sistema in fila — e la pagina batteria OEM del
+            // Realme era pure sbagliata (interruttori «sfondo/avvio automatico»,
+            // non l'esenzione). Restano come tasti a parte nella schermata
+            // permessi (requestActivityRecognition / requestBatteryOptimization).
+            val ret = JSObject()
+            ret.put("status", "all_granted")
+            call.resolve(ret)
+            return
+        }
+        Handler(Looper.getMainLooper()).post {
+            AlertDialog.Builder(context)
+                .setTitle(NotificationStrings.get(context, "notif_blocked_title"))
+                .setMessage(NotificationStrings.get(context, "notif_blocked_text"))
+                .setPositiveButton(NotificationStrings.get(context, "bg_disclosure_settings")) { _, _ ->
+                    apriImpostazioniNotifiche()
+                    val ret = JSObject()
+                    ret.put("status", "requesting_notifications")
+                    call.resolve(ret)
+                }
+                .setNegativeButton(NotificationStrings.get(context, "bg_disclosure_later")) { dialog, _ ->
+                    dialog.dismiss()
+                    val ret = JSObject()
+                    ret.put("status", "denied_notifications")
+                    call.resolve(ret)
+                }
+                .setCancelable(false)
+                .show()
+        }
+    }
+
+    /** La pagina delle notifiche dell'app (Android 8+), non quella generale dell'app. */
+    private fun apriImpostazioniNotifiche() {
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            }
+        } else {
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", context.packageName, null)
+            }
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try { context.startActivity(intent) } catch (e: Exception) {
+            Log.w("ItaintaPoiPlugin", "Impostazioni notifiche non apribili: ${e.message}")
+        }
+    }
+
+    /** Per il JS: le notifiche arrivano davvero? (permesso E interruttore di sistema). */
+    @PluginMethod
+    fun areNotificationsEnabled(call: PluginCall) {
+        val ret = JSObject()
+        ret.put("enabled", try { androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled() } catch (_: Exception) { true })
+        call.resolve(ret)
+    }
+
+    /** Un tocco: la pagina delle notifiche dell'app nelle Impostazioni. */
+    @PluginMethod
+    fun openNotificationSettings(call: PluginCall) {
+        apriImpostazioniNotifiche()
+        call.resolve()
     }
 
     /**
@@ -204,6 +344,132 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         }
         val ret = JSObject()
         ret.put("status", "all_granted")
+        call.resolve(ret)
+    }
+
+    // ── PERMESSI GRANULARI (29/08/2026) ─────────────────────────────────────
+    // La schermata permessi ha UNA riga per permesso con un tasto «Attiva»
+    // ciascuna: ogni tasto chiama uno di questi metodi, che apre direttamente
+    // il dialogo o la pagina di sistema giusta, e getPermissionsStatus rilegge
+    // lo stato per aggiornare le spunte quando l'utente torna nell'app.
+    // checkAndRequestPermissions (la catena unica) resta per compatibilita'
+    // e per iOS, dove il plugin Swift non ha questi metodi.
+
+    /** Stato di tutto in una lettura sola: le spunte della schermata. */
+    @PluginMethod
+    fun getPermissionsStatus(call: PluginCall) {
+        val fg = getPermissionState("location") == PermissionState.GRANTED
+        val bg = fg && backgroundLocationGranted()
+        val notifPermesso = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            getPermissionState("notifications") == PermissionState.GRANTED
+        // Permesso concesso ≠ notifiche consentite: l'interruttore di sistema
+        // (Realme «Gestisci notifiche: Rifiuta») lo vede solo areNotificationsEnabled.
+        val notifAbilitate = try {
+            androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
+        } catch (_: Exception) { true }
+        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val batteria = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || pm.isIgnoringBatteryOptimizations(context.packageName)
+        val attivita = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+            getPermissionState("activity") == PermissionState.GRANTED
+        val ret = JSObject()
+        ret.put("location", if (bg) "always" else if (fg) "whileInUse" else "denied")
+        ret.put("notifications", notifPermesso && notifAbilitate)
+        ret.put("notificationsPermission", notifPermesso)
+        ret.put("notificationsEnabled", notifAbilitate)
+        ret.put("battery", batteria)
+        ret.put("activity", attivita)
+        call.resolve(ret)
+    }
+
+    /**
+     * Tasto «Attiva» della posizione: foreground e poi background, con i
+     * dialoghi di sistema (API 30+: la pagina «Posizione» col radio «Consenti
+     * sempre»). Risponde con lo stato finale: always / whileInUse / denied.
+     */
+    @PluginMethod
+    fun requestLocationPermissions(call: PluginCall) {
+        if (getPermissionState("location") != PermissionState.GRANTED) {
+            requestPermissionForAlias("location", call, "locationOnlyCallback")
+            return
+        }
+        locationOnlyCallback(call)
+    }
+
+    @PermissionCallback
+    private fun locationOnlyCallback(call: PluginCall) {
+        if (getPermissionState("location") != PermissionState.GRANTED) {
+            val ret = JSObject(); ret.put("location", "denied"); call.resolve(ret); return
+        }
+        if (!backgroundLocationGranted()) {
+            requestPermissionForAlias("backgroundLocation", call, "backgroundOnlyCallback")
+            return
+        }
+        backgroundOnlyCallback(call)
+    }
+
+    @PermissionCallback
+    private fun backgroundOnlyCallback(call: PluginCall) {
+        // Sulla pagina «Posizione» l'utente puo' anche scegliere «Non
+        // consentire»: il foreground se ne va insieme al background. Si
+        // rilegge TUTTO, non solo il background (29/08/2026, collaudo).
+        val fg = getPermissionState("location") == PermissionState.GRANTED
+        val ret = JSObject()
+        ret.put("location", if (!fg) "denied" else if (backgroundLocationGranted()) "always" else "whileInUse")
+        call.resolve(ret)
+    }
+
+    /**
+     * Tasto «Attiva» delle notifiche: il permesso di runtime (API 33+) e, se
+     * l'interruttore di sistema e' spento, la pagina notifiche dell'app.
+     * Risponde { granted, enabled, opened }.
+     */
+    @PluginMethod
+    fun requestNotificationPermission(call: PluginCall) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            getPermissionState("notifications") != PermissionState.GRANTED
+        ) {
+            requestPermissionForAlias("notifications", call, "notificationOnlyCallback")
+            return
+        }
+        notificationOnlyCallback(call)
+    }
+
+    @PermissionCallback
+    private fun notificationOnlyCallback(call: PluginCall) {
+        val granted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            getPermissionState("notifications") == PermissionState.GRANTED
+        val enabled = try {
+            androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
+        } catch (_: Exception) { true }
+        var opened = false
+        if (granted && !enabled) { apriImpostazioniNotifiche(); opened = true }
+        val ret = JSObject()
+        ret.put("granted", granted); ret.put("enabled", enabled); ret.put("opened", opened)
+        call.resolve(ret)
+    }
+
+    /** Tasto «Attiva» della batteria: la lista di sistema delle esenzioni (vedi checkBatteryOptimization). */
+    @PluginMethod
+    fun requestBatteryOptimization(call: PluginCall) {
+        checkBatteryOptimization(call)
+    }
+
+    /** Tasto facoltativo dell'attivita' fisica (sensori anti-teletrasporto). */
+    @PluginMethod
+    fun requestActivityRecognition(call: PluginCall) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            getPermissionState("activity") != PermissionState.GRANTED
+        ) {
+            requestPermissionForAlias("activity", call, "activityOnlyCallback")
+            return
+        }
+        activityOnlyCallback(call)
+    }
+
+    @PermissionCallback
+    private fun activityOnlyCallback(call: PluginCall) {
+        val ret = JSObject()
+        ret.put("granted", Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || getPermissionState("activity") == PermissionState.GRANTED)
         call.resolve(ret)
     }
 
@@ -268,16 +534,35 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
             }
         }
         
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
+        // (29/08/2026, collaudo sul Realme) MAI senza try/catch. Su Android
+        // 12+ startForegroundService da un'app NON in primo piano (schermo
+        // bloccato, ripresa in background, avvio da notifica differito)
+        // lancia ForegroundServiceStartNotAllowedException: qui era l'unico
+        // punto scoperto del plugin e faceva cadere l'intera app (FATAL su
+        // thread CapacitorPlugins). Ora si degrada come altrove: le prefs
+        // sono gia' scritte (isServiceActive=true, categorie), si arma il
+        // retry con backoff del watchdog e si risponde ok=false — il JS
+        // sa che il servizio partira' appena l'app torna davanti.
+        var avviato = true
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        } catch (e: Exception) {
+            avviato = false
+            Log.w("ItaintaPoiPlugin", "startBackgroundPoiService: avvio rifiutato (app in background?): ${e.message}")
+            com.itaintasca.app.service.ServiceWatchdog.scheduleRetry(context)
         }
         com.itaintasca.app.service.ServiceWatchdog.schedule(context)
         // Idempotente: copre il caso "permesso ACTIVITY_RECOGNITION appena
         // concesso a servizio già vivo" (onCreate non viene richiamato).
         com.itaintasca.app.geofence.ActivityMonitor.start(context)
-        call.resolve()
+        val ret = JSObject()
+        ret.put("ok", avviato)
+        if (!avviato) ret.put("reason", "foreground_start_not_allowed")
+        call.resolve(ret)
     }
 
     @PluginMethod
@@ -475,6 +760,25 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
      */
     @PluginMethod
     fun updateNavBanner(call: PluginCall) {
+        // (18/09/2026 notte) CRUSCOTTO A SCHERMO SPENTO: il follower nativo
+        // ricorda l'ultimo stato mandato dal JS — i campi separati che finora
+        // Android ignorava (li usava solo la Live Activity iOS). Gli servono
+        // quando la WebView e' congelata e il cruscotto lo ricalcola lui: nome
+        // tappa e istruzione di ripiego, passo dell'utente (minuti/metri) per
+        // l'ora d'arrivo, metri totali per l'avanzamento. Solo memoria: non
+        // cambia nulla di quello che questa funzione faceva gia'.
+        try {
+            val d = call.data
+            NavFollower.ricordaCruscottoJs(
+                attivo = call.getBoolean("attivo") ?: false,
+                inPausa = call.getBoolean("inPausa") ?: false,
+                nomeTappa = call.getString("nomeTappa") ?: "",
+                istruzione = call.getString("istruzione") ?: "",
+                metriRimanenti = d.optDouble("metriRimanenti", -1.0),
+                minutiRimanenti = d.optDouble("minutiRimanenti", -1.0),
+                metriTotali = d.optDouble("metriTotali", -1.0)
+            )
+        } catch (_: Exception) { }
         val ret = JSObject()
         val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
         if (!prefs.getBoolean("isServiceActive", false)) {
@@ -488,6 +792,13 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                 putExtra("titolo", call.getString("titolo") ?: "")
                 putExtra("corpo", call.getString("corpo") ?: "")
                 putExtra("attivo", call.getBoolean("attivo") ?: false)
+                // (29/08/2026) URL della foto della tappa: icona grande della
+                // notifica sulla lock screen. Vuoto = nessuna foto.
+                putExtra("foto", call.getString("foto") ?: "")
+                // (03/09/2026) Pausa e modo per i tasti della notifica. Solo
+                // se il JS li manda: assenti = il servizio tiene i suoi.
+                call.getBoolean("inPausa")?.let { putExtra("inPausa", it) }
+                call.getString("modo")?.let { putExtra("modo", it) }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -786,6 +1097,9 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
      * priority: 0 = massima (arrivo/itinerario), 2 = normale.
      * Se il servizio non è attivo la coda scarta gli item: si risponde
      * ok=false così il JS ripiega sul TTS di rete invece di restare muto.
+     * Con `force=true` (29/08/2026) a servizio spento si parla COMUNQUE con
+     * il motore diretto del plugin (vedi speakDirect): è il ripiego che non
+     * muore mai quando Azure/Google non rispondono.
      */
     @PluginMethod
     fun speakText(call: PluginCall) {
@@ -794,9 +1108,41 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         val ret = JSObject()
         val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
         if (!prefs.getBoolean("isServiceActive", false)) {
-            ret.put("ok", false)
-            ret.put("reason", "service_inactive")
-            return call.resolve(ret)
+            if (call.getBoolean("force") != true) {
+                ret.put("ok", false)
+                ret.put("reason", "service_inactive")
+                return call.resolve(ret)
+            }
+            val id = "direct_${System.currentTimeMillis()}"
+            initDirectTts { engine ->
+                val out = JSObject()
+                if (engine != null && speakDirect(text, id)) {
+                    out.put("ok", true)
+                    out.put("direct", true)
+                    out.put("id", id)
+                } else {
+                    out.put("ok", false)
+                    out.put("reason", "direct_tts_failed")
+                }
+                call.resolve(out)
+            }
+            return
+        }
+        val kind = call.getString("kind") ?: "nav"
+        // (22/09/2026) Svolta del navigatore con la voce della lingua dell'app
+        // GIÀ NOTA come mancante: la coda la scarterebbe (processNextSpeech,
+        // regola del 23/08) dopo aver risposto ok:true, e il JS non ripiegava
+        // sulla voce di rete — navigazione muta a schermo acceso. Si risponde
+        // ok:false e il JS parla con Azure. Solo kind "nav" e solo se la coda
+        // l'ha già accertato per QUESTA lingua: nel dubbio si accoda come prima.
+        if (kind == "nav") {
+            val muta = com.itaintasca.app.geofence.GeofenceBroadcastReceiver.voceMancante()
+            val lingua = prefs.getString("language", "it") ?: "it"
+            if (muta != null && muta == lingua) {
+                ret.put("ok", false)
+                ret.put("reason", "voice_not_installed")
+                return call.resolve(ret)
+            }
         }
         return try {
             com.itaintasca.app.geofence.GeofenceBroadcastReceiver.enqueue(
@@ -807,7 +1153,15 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                     isItinerary = false,
                     poiId = call.getString("poiId"),
                     priority = call.getInt("priority") ?: 0,
-                    kind = call.getString("kind") ?: "nav"
+                    kind = kind,
+                    // (21/09/2026, REVISIONE 2) `ttlMs` opzionale: la frase
+                    // scade adesso+ttl, come le svolte del follower. Il JS lo
+                    // manda (20000) SOLO per le svolte del navigatore: una
+                    // svolta uscita dietro a un teaser, una guida o una
+                    // telefonata e' un'indicazione sbagliata. Assente o ≤ 0 =
+                    // non scade mai, come prima (teaser, arrivi, guide).
+                    scadenzaElapsedMs = call.data.optLong("ttlMs", 0L).takeIf { it > 0L }
+                        ?.let { android.os.SystemClock.elapsedRealtime() + it }
                 )
             )
             ret.put("ok", true)
@@ -815,6 +1169,315 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         } catch (e: Exception) {
             ret.put("ok", false)
             ret.put("reason", e.message ?: "enqueue_failed")
+            call.resolve(ret)
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // VOCE DI SISTEMA DIRETTA (29/08/2026): il ripiego che non muore mai.
+    // La coda dei teaser vive nel servizio in background e, a servizio
+    // spento, scarta tutto: l'app in primo piano con Azure/Google giù
+    // restava MUTA (nella WebView Android speechSynthesis spesso non
+    // esiste). Qui un TextToSpeech tutto del plugin, indipendente dal
+    // servizio: parla finché il telefono ha una voce. Spezza i testi lunghi
+    // (il motore rifiuta oltre getMaxSpeechInputLength, 4000 caratteri) e
+    // avvisa il JS a fine lettura con l'evento directSpeechFinished {id}.
+    // ------------------------------------------------------------------
+    private var directTts: android.speech.tts.TextToSpeech? = null
+    @Volatile private var directTtsReady = false
+    @Volatile private var directSpeechId: String? = null
+    @Volatile private var directLastChunkId: String? = null
+
+    private fun initDirectTts(onReady: (android.speech.tts.TextToSpeech?) -> Unit) {
+        val existing = directTts
+        if (existing != null && directTtsReady) return onReady(existing)
+        var created: android.speech.tts.TextToSpeech? = null
+        created = android.speech.tts.TextToSpeech(context.applicationContext) { status ->
+            val engine = created
+            if (status == android.speech.tts.TextToSpeech.SUCCESS && engine != null) {
+                engine.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) { }
+                    override fun onDone(utteranceId: String?) { onDirectChunkFinished(utteranceId) }
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) { onDirectChunkFinished(utteranceId) }
+                    override fun onError(utteranceId: String?, errorCode: Int) { onDirectChunkFinished(utteranceId) }
+                    override fun onStop(utteranceId: String?, interrupted: Boolean) { onDirectChunkFinished(utteranceId) }
+                })
+                directTts = engine
+                directTtsReady = true
+                onReady(engine)
+            } else {
+                directTtsReady = false
+                Log.e("ItaintaPlugin", "TTS diretto: inizializzazione fallita ($status)")
+                onReady(null)
+            }
+        }
+    }
+
+    /** Fine dell'ULTIMO pezzo = fine della lettura: si avvisa il JS una volta sola. */
+    private fun onDirectChunkFinished(utteranceId: String?) {
+        val id = directSpeechId ?: return
+        if (utteranceId == null || utteranceId != directLastChunkId) return
+        directSpeechId = null
+        directLastChunkId = null
+        abandonDirectFocus()
+        val data = JSObject()
+        data.put("id", id)
+        notifyListeners("directSpeechFinished", data, true)
+    }
+
+    /**
+     * Fuoco audio della voce diretta: TextToSpeech da solo non lo chiede, e
+     * senza fuoco Spotify/la radio non si abbassano. Transitorio con ducking,
+     * come fa la coda dei teaser (requestFocus in GeofenceBroadcastReceiver).
+     */
+    private var directFocusRequest: android.media.AudioFocusRequest? = null
+    private fun requestDirectFocus() {
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val attrs = android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+                val req = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                    .setAudioAttributes(attrs)
+                    .build()
+                directFocusRequest = req
+                am.requestAudioFocus(req)
+            } else {
+                @Suppress("DEPRECATION")
+                am.requestAudioFocus(null, android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            }
+        } catch (_: Exception) { }
+    }
+    private fun abandonDirectFocus() {
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                directFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+                directFocusRequest = null
+            } else {
+                @Suppress("DEPRECATION")
+                am.abandonAudioFocus(null)
+            }
+        } catch (_: Exception) { }
+    }
+
+    /**
+     * Spezza il testo in pezzi che il motore accetta, ai confini di frase;
+     * una frase più lunga del tetto viene tagliata agli spazi.
+     */
+    private fun spezzaPerVoce(text: String, max: Int): List<String> {
+        val pulito = text.replace(Regex("\\s+"), " ").trim()
+        if (pulito.isEmpty()) return emptyList()
+        if (pulito.length <= max) return listOf(pulito)
+        val frasi = Regex("[^.!?…]+[.!?…]+\\s*|[^.!?…]+$").findAll(pulito).map { it.value }.toList()
+        val pezzi = ArrayList<String>()
+        val cur = StringBuilder()
+        for (f in frasi) {
+            if (f.length > max) {
+                if (cur.isNotBlank()) { pezzi.add(cur.toString().trim()); cur.setLength(0) }
+                var resto = f
+                while (resto.length > max) {
+                    val taglio = resto.lastIndexOf(' ', max).let { if (it < max / 2) max else it }
+                    pezzi.add(resto.substring(0, taglio).trim())
+                    resto = resto.substring(taglio).trim()
+                }
+                if (resto.isNotBlank()) cur.append(resto).append(' ')
+                continue
+            }
+            if (cur.length + f.length > max && cur.isNotBlank()) { pezzi.add(cur.toString().trim()); cur.setLength(0) }
+            cur.append(f)
+        }
+        if (cur.isNotBlank()) pezzi.add(cur.toString().trim())
+        return pezzi.filter { it.isNotBlank() }
+    }
+
+    /** Parla subito col motore del plugin. true = presa in carico. */
+    private fun speakDirect(text: String, id: String): Boolean {
+        val tts = directTts ?: return false
+        val appContext = context.applicationContext
+        val prefs = appContext.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+        try {
+            // Stessa classe audio del navigatore: abbassa la musica, esce in auto.
+            tts.setAudioAttributes(
+                android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+        } catch (_: Exception) { }
+        val lang = prefs.getString("language", "it") ?: "it"
+        try { tts.setLanguage(com.itaintasca.app.geofence.GeofenceBroadcastReceiver.localeForLang(lang)) } catch (_: Exception) { }
+        com.itaintasca.app.geofence.GeofenceBroadcastReceiver.applyTtsGender(tts, appContext)
+
+        val tetto = (try { android.speech.tts.TextToSpeech.getMaxSpeechInputLength() } catch (_: Exception) { 4000 })
+            .coerceIn(500, 3800) - 100
+        val pezzi = spezzaPerVoce(com.itaintasca.app.geofence.GeofenceBroadcastReceiver.speakableText(text), tetto)
+        if (pezzi.isEmpty()) return false
+
+        directSpeechId = id
+        directLastChunkId = "$id#${pezzi.size - 1}"
+        requestDirectFocus()
+        val params = android.os.Bundle()
+        params.putFloat(android.speech.tts.TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+        for ((i, pezzo) in pezzi.withIndex()) {
+            val modo = if (i == 0) android.speech.tts.TextToSpeech.QUEUE_FLUSH else android.speech.tts.TextToSpeech.QUEUE_ADD
+            val r = tts.speak(pezzo, modo, params, "$id#$i")
+            if (r != android.speech.tts.TextToSpeech.SUCCESS) {
+                if (i == 0) {
+                    directSpeechId = null
+                    directLastChunkId = null
+                    abandonDirectFocus()
+                    return false
+                }
+                // I pezzi già accodati si leggono; la fine sarà l'ultimo accettato,
+                // così il JS riceve comunque il suo evento.
+                directLastChunkId = "$id#${i - 1}"
+                break
+            }
+        }
+        return true
+    }
+
+    /** Ferma la voce diretta. Gli id vanno giù PRIMA: l'onStop non deve avvisare il JS. */
+    @PluginMethod
+    fun stopSpeakText(call: PluginCall) {
+        directSpeechId = null
+        directLastChunkId = null
+        try { directTts?.stop() } catch (_: Exception) { }
+        abandonDirectFocus()
+        call.resolve()
+    }
+
+    // ------------------------------------------------------------------
+    // NAVIGATORE A SCHERMO SPENTO (18/09/2026). Committente: «il navigatore,
+    // sia nell'audioguida che nei percorsi, deve funzionare anche a schermo
+    // spento. È fondamentale». A schermo spento la WebView è congelata e le
+    // svolte, che calcola e dice il JS, tacevano. Il JS ora CONSEGNA al nativo
+    // il percorso già pronto (testi già tradotti) e manda un battito finché è
+    // vivo; quando il battito manca da più di 12 s le svolte le dice il
+    // servizio, dalla stessa coda di speakText kind "nav".
+    // Qui c'è solo il ponte: stato e algoritmo stanno in NavFollower (memoria
+    // condivisa col servizio), la voce nel servizio (onLocationResult).
+    // Orologio: SystemClock.elapsedRealtime(), LO STESSO che usa il servizio
+    // quando passa i fix — monotono, non salta con i cambi d'ora.
+    // ------------------------------------------------------------------
+
+    /**
+     * Avvisa il servizio che il percorso è comparso/sparito, così cambia
+     * SUBITO la cadenza dei fix (a riposo ne arriva uno ogni 20-60 s: senza
+     * avviso la prima svolta passerebbe prima che se ne accorga). Se il
+     * servizio non è ancora partito l'hook è null e non serve altro: alla
+     * partenza applyLocationRate guarda NavFollower da solo.
+     */
+    private fun avvisaServizioNav() {
+        try { ItaintaBackgroundPoiService.onNavRouteChanged?.invoke() } catch (_: Exception) { }
+    }
+
+    /** I number[] del JS arrivano come JSArray: via i non-numeri e i negativi. */
+    private fun leggiIndici(call: PluginCall, chiave: String): List<Int> {
+        val arr = call.getArray(chiave) ?: return emptyList()
+        val out = ArrayList<Int>(arr.length())
+        for (i in 0 until arr.length()) {
+            val v = arr.optInt(i, -1)
+            if (v >= 0) out.add(v)
+        }
+        return out
+    }
+
+    @PluginMethod
+    fun setNavRoute(call: PluginCall) {
+        val routeJson = call.getString("routeJson").orEmpty()
+        val ok = NavFollower.setRoute(routeJson, android.os.SystemClock.elapsedRealtime())
+        // Si avvisa in ogni caso: una consegna rifiutata TOGLIE il percorso
+        // precedente (vedi NavFollower.setRoute) e la cadenza deve tornare giù.
+        avvisaServizioNav()
+        val ret = JSObject()
+        ret.put("ok", ok)
+        call.resolve(ret)
+    }
+
+    @PluginMethod
+    fun clearNavRoute(call: PluginCall) {
+        NavFollower.clear()
+        avvisaServizioNav()
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun navHeartbeat(call: PluginCall) {
+        val pausaCambiata = NavFollower.heartbeat(
+            // optInt e non getInt: un indice arrivato come 3.0 resta 3.
+            call.data.optInt("indice", -1),
+            leggiIndici(call, "dettiVicino"),
+            leggiIndici(call, "dettiLontano"),
+            android.os.SystemClock.elapsedRealtime(),
+            // (21/09/2026, REVISIONE 2) Il battito PORTA la pausa del JS:
+            // assente = false (una build vecchia si comporta come prima).
+            pausaJs = call.getBoolean("inPausa", false) ?: false
+        )
+        // In pausa il GPS torna a riposo, alla ripresa risale: subito.
+        if (pausaCambiata) avvisaServizioNav()
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun getNavProgress(call: PluginCall) {
+        val p = NavFollower.progress(android.os.SystemClock.elapsedRealtime())
+        val vicino = JSArray()
+        p.dettiVicino.forEach { vicino.put(it) }
+        val lontano = JSArray()
+        p.dettiLontano.forEach { lontano.put(it) }
+        val ret = JSObject()
+        ret.put("attivo", p.attivo)
+        ret.put("id", p.id)
+        ret.put("indice", p.indice)
+        ret.put("dettiVicino", vicino)
+        ret.put("dettiLontano", lontano)
+        ret.put("nativoAlComando", p.nativoAlComando)
+        ret.put("ultimoTestoVicino", p.ultimoTestoVicino)
+        ret.put("ultimoTestoLontano", p.ultimoTestoLontano)
+        // (21/09/2026, REVISIONE 2) `finito`: arrivo finale chiuso dal nativo
+        // (il JS chiude senza ridirlo). `terminato`: svuotato da «Termina» sul
+        // cruscotto, i campi sopra sono la fotografia presa prima.
+        ret.put("finito", p.finito)
+        ret.put("terminato", p.terminato)
+        call.resolve(ret)
+    }
+
+    /**
+     * (18/09/2026, committente: «fai che sia scaricato sempre in nativo
+     * anche») PRE-SCARICO DELLE AUDIOGUIDE DI UN GIRO nella cache NATIVA. Il
+     * JS pre-scarica già testi e MP3 delle tappe, ma nell'IndexedDB della
+     * WebView, che a schermo spento dorme: il servizio non li vede. Qui le
+     * stesse tappe vanno anche nella cache di AudioPrefetchManager, così
+     * all'arrivo l'audioguida completa c'è anche senza rete. Vedi
+     * AudioPrefetchManager.prefetchMolti. Risponde subito: lo scarico è in
+     * background, best-effort, mai un reject.
+     */
+    @PluginMethod
+    fun prefetchGuides(call: PluginCall) {
+        try {
+            val arr = call.getArray("poiIds")
+            val ids = ArrayList<String>()
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val s = arr.optString(i, "").trim()
+                    if (s.isNotEmpty() && s != "null") ids.add(s)
+                }
+            }
+            val lang = (call.getString("lang") ?: "it").lowercase().take(2).ifEmpty { "it" }
+            val character = call.getString("character")
+            val n = com.itaintasca.app.service.AudioPrefetchManager.prefetchMolti(context, ids, lang, character)
+            val ret = JSObject()
+            ret.put("ok", true)
+            ret.put("accodati", n)
+            call.resolve(ret)
+        } catch (e: Exception) {
+            val ret = JSObject()
+            ret.put("ok", false)
             call.resolve(ret)
         }
     }
@@ -1151,9 +1814,16 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
     }
 
     override fun handleOnDestroy() {
+        vivo = false
         try {
             context.unregisterReceiver(receiver)
         } catch (e: Exception) { }
+        // Il motore della voce diretta è del plugin: si chiude con lui.
+        directSpeechId = null
+        directLastChunkId = null
+        try { directTts?.stop(); directTts?.shutdown() } catch (_: Exception) { }
+        directTts = null
+        directTtsReady = false
         super.handleOnDestroy()
     }
 }

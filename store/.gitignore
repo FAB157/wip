@@ -1,0 +1,12 @@
+# Video, audio e archivi del marketing (21/09/2026): non vanno in git. Pesano ~2,3 GB e, non essendo ignorati, ogni
+# sessione di Claude Code che usa la shell Bash ne faceva una copia in %TEMP%\claude\bash-edit-diff (2,8 GB l'una):
+# il 21/09 il disco C: e' arrivato a 0 byte liberi. I file restano dove sono, git (e quella copia) non li guarda piu'.
+*.mp4
+*.mov
+*.webm
+*.mkv
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.zip

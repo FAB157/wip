@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget «Ascolta ora» (23/09/2026): un tasto tondo per l'audioguida del
+     luogo piu' vicino. Il tocco apre la scheda: dal widget non si riproduce mai. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_as_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/wip_widget_bg"
+    android:padding="12dp">
+
+    <TextView android:id="@+id/w_as_titolo" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" android:textStyle="bold" />
+
+    <TextView android:id="@+id/w_as_vuoto" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:gravity="center" android:textColor="#B8FFFFFF" android:textSize="12sp" android:textStyle="bold" android:visibility="gone" />
+
+    <LinearLayout android:id="@+id/w_as_corpo" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:orientation="vertical" android:gravity="center">
+        <TextView android:id="@+id/w_as_play" android:layout_width="64dp" android:layout_height="64dp" android:background="@drawable/wip_w_tasto_grande"
+            android:gravity="center" android:text="@string/wip_w_play" android:textColor="#1E3A8A" android:textSize="30sp" />
+        <TextView android:id="@+id/w_as_nome" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp"
+            android:singleLine="true" android:ellipsize="end" android:gravity="center" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+        <TextView android:id="@+id/w_as_dist" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:singleLine="true" android:ellipsize="end" android:gravity="center" android:textColor="#B8FFFFFF" android:textSize="10sp" />
+        <TextView android:id="@+id/w_as_nota" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:singleLine="true" android:ellipsize="end" android:gravity="center" android:textColor="#D4AF37" android:textSize="9sp" android:textStyle="bold" android:visibility="gone" />
+    </LinearLayout>
+</LinearLayout>

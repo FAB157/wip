@@ -1,0 +1,10 @@
+[0:v]fps=30,setpts=PTS-STARTPTS[v0];
+[1:v]fps=30,setpts=PTS-STARTPTS[v1];
+[2:v]fps=30,setpts=PTS-STARTPTS[v2];
+[3:v]fps=30,setpts=PTS-STARTPTS[v3];
+[v0][v1][v2][v3]concat=n=4:v=1:a=0[cat];
+[cat]split[b][f];
+[b]scale=1080:1920,boxblur=luma_radius=25:luma_power=2:chroma_radius=12:chroma_power=2[bb];
+[f]scale=858:1920[ff];
+[bb][ff]overlay=111:0[ov];
+[ov]drawtext=fontfile='C\:/Windows/Fonts/segoeuib.ttf':textfile='C\:/progetti/itainta/store/promo/settimana1/t1.txt':fontsize=62:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=22:line_spacing=10:x=(w-text_w)/2:y=400:enable='between(t,0.2,2.7)',drawtext=fontfile='C\:/Windows/Fonts/segoeuib.ttf':textfile='C\:/progetti/itainta/store/promo/settimana1/t2.txt':fontsize=52:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=20:line_spacing=10:x=(w-text_w)/2:y=400:enable='between(t,3.0,8.0)',drawtext=fontfile='C\:/Windows/Fonts/segoeuib.ttf':textfile='C\:/progetti/itainta/store/promo/settimana1/t3.txt':fontsize=52:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=20:line_spacing=10:x=(w-text_w)/2:y=340:enable='between(t,8.4,17.6)',drawtext=fontfile='C\:/Windows/Fonts/segoeuib.ttf':textfile='C\:/progetti/itainta/store/promo/settimana1/t4.txt':fontsize=58:fontcolor=white:box=1:boxcolor=0x1e3a8a@0.85:boxborderw=22:line_spacing=10:x=(w-text_w)/2:y=620:enable='between(t,18.4,26.0)',drawtext=fontfile='C\:/Windows/Fonts/segoeuib.ttf':textfile='C\:/progetti/itainta/store/promo/settimana1/t5.txt':fontsize=66:fontcolor=white:box=1:boxcolor=0x1e3a8a@0.9:boxborderw=26:x=(w-text_w)/2:y=1520:enable='between(t,26.2,29.5)'[vout]

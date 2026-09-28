@@ -22,6 +22,7 @@
 // =====================================================================
 
 import { getApiUrl } from "./api";
+import { supabase } from "./supabase";
 
 export type BathingQuality = "excellent" | "good" | "sufficient" | "poor" | "unknown";
 
@@ -253,6 +254,27 @@ export async function fetchBathingSites(bounds: MapBounds): Promise<BathingSite[
       }
     }
   } catch { /* cache corrotta: si rifà la query */ }
+
+  // ── Nostra cache prima dell'EEA (27/09/2026, «le aree sono troppo
+  // lente»): tabella `balneazione_cache` (migration 20260927090000), solo
+  // la classificazione (nome/posizione/classe/anno) — temperatura e onde
+  // restano chieste dal vivo all'apertura del popup, sono dati orari. Si
+  // usa solo se la stagione salvata combacia: altrimenti è un residuo
+  // dell'anno scorso e conviene il fetch live.
+  try {
+    const { data: dallaCache, error } = await supabase.rpc('balneazione_vicina', {
+      p_south: centerLat - BOX_HALF_LAT, p_west: centerLon - BOX_HALF_LON,
+      p_north: centerLat + BOX_HALF_LAT, p_east: centerLon + BOX_HALF_LON,
+      p_limit: MAX_SITES,
+    });
+    if (!error && Array.isArray(dallaCache) && dallaCache.length > 0 && dallaCache[0]?.stagione === stagione) {
+      const sites: BathingSite[] = dallaCache
+        .filter((r: any) => r.stagione === stagione)
+        .map((r: any) => ({ name: r.nome || '—', lat: r.lat, lon: r.lon, quality: normalizeQuality(r.qualita), year: r.stagione }));
+      try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), year: stagione, sites })); } catch { /* quota piena */ }
+      return sites;
+    }
+  } catch { /* cache non ancora riempita, o RPC non presente: si ripiega sul vivo */ }
 
   // ── Query ArcGIS: envelope fisso attorno al centro, GeoJSON, no geometrie
   // (le coordinate arrivano già come attributi latitude/longitude) ──

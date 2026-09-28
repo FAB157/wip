@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget «Luogo del giorno» (23/09/2026): una gemma vicina con la sua foto
+     a tutto campo. Senza foto l'ImageView resta GONE e resta lo sfondo blu.
+     clipToOutline arrotonda la foto da Android 12 (ignorato prima). -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_lg_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/wip_widget_bg"
+    android:clipToOutline="true">
+
+    <ImageView android:id="@+id/w_lg_foto" android:layout_width="match_parent" android:layout_height="match_parent"
+        android:scaleType="centerCrop" android:contentDescription="@null" android:visibility="gone" />
+    <ImageView android:layout_width="match_parent" android:layout_height="match_parent"
+        android:background="@drawable/wip_w_velo" android:contentDescription="@null" />
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="12dp">
+        <TextView android:id="@+id/w_lg_titolo" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" android:textStyle="bold"
+            android:shadowColor="#99000000" android:shadowRadius="3" android:shadowDx="0" android:shadowDy="1" />
+
+        <TextView android:id="@+id/w_lg_vuoto" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+            android:gravity="center" android:textColor="#B8FFFFFF" android:textSize="12sp" android:textStyle="bold" android:visibility="gone" />
+
+        <LinearLayout android:id="@+id/w_lg_corpo" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+            android:orientation="vertical" android:gravity="bottom">
+            <TextView android:id="@+id/w_lg_nome" android:layout_width="match_parent" android:layout_height="wrap_content" android:maxLines="2" android:ellipsize="end"
+                android:textColor="#FFFFFF" android:textSize="17sp" android:textStyle="bold"
+                android:shadowColor="#99000000" android:shadowRadius="3" android:shadowDx="0" android:shadowDy="1" />
+            <TextView android:id="@+id/w_lg_citta" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end"
+                android:textColor="#E6FFFFFF" android:textSize="11sp"
+                android:shadowColor="#99000000" android:shadowRadius="3" android:shadowDx="0" android:shadowDy="1" />
+            <TextView android:id="@+id/w_lg_attrib" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end"
+                android:layout_marginTop="2dp" android:textColor="#80FFFFFF" android:textSize="8sp" android:visibility="gone" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

@@ -16,6 +16,7 @@ import {
   type CruisePort, type AirportLayover, type StopOption, type StopPrefill,
 } from '../lib/transitCatalog';
 import { getApiUrl, apiFetch } from '../lib/api';
+import { chiediConsensoAi } from '../lib/aiConsent';
 import { getTranslation, type Language } from '../lib/i18n';
 
 /** Stringhe della sheet (chiavi `te_*` in i18n.ts). */
@@ -88,6 +89,7 @@ export default function TransitEscapesSheet({
 
   const generaAi = async (kind: 'port' | 'airport') => {
     if (aiLoading || query.trim().length < 2) return;
+    if (!(await chiediConsensoAi())) return; // testo digitato → modello esterno (22/09/2026)
     setAiLoading(kind);
     setAiError(null);
     aiAbortRef.current?.abort();

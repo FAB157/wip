@@ -2,7 +2,10 @@ name: Build iOS
 
 on:
   push:
-    branches: [ main, master ]
+    # (29/08/2026) Anche il ramo di lavoro: la build iOS esiste SOLO qui
+    # (niente Mac), e le modifiche al progetto Xcode fatte a mano vanno
+    # provate PRIMA di finire su main.
+    branches: [ main, master, onboarding-e-garanzia-pioggia ]
   workflow_dispatch:
 
 jobs:
@@ -53,9 +56,18 @@ jobs:
         # mappa esce con il watermark "API KEY REQUIRED" — visto sull'IPA del
         # 28/08/2026. Secret da creare come CARTO_API_KEY (chiave gratuita da
         # carto.com/basemaps/apikey, è una chiave pubblica di client).
+        # VITE_GOOGLE_IOS_CLIENT_ID / VITE_GOOGLE_WEB_CLIENT_ID (09/09/2026):
+        # abilitano l'accesso Google NATIVO (src/lib/accessoNativo.ts), quello
+        # senza finestra del browser. Non sono segreti — i client ID OAuth di
+        # Google sono pubblici per definizione, stanno dentro ogni app — ma
+        # passano da secret per non riscrivere il workflow quando cambiano.
+        # Se mancano, googleNativoDisponibile() e' falso e il login ricade sul
+        # percorso col browser di sistema, che continua a funzionare.
         env:
           VITE_REVENUECAT_IOS_KEY: ${{ secrets.REVENUECAT_IOS_KEY }}
           VITE_CARTO_API_KEY: ${{ secrets.CARTO_API_KEY }}
+          VITE_GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
+          VITE_GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
         run: npm run build
 
       - name: Sync Capacitor
@@ -66,7 +78,39 @@ jobs:
           cd ios/App
           pod install
 
+      # ─────────────────────────────────────────────────────────────────────
+      # FIRMA (30/08/2026). Senza i segreti Apple il job si comporta ESATTAMENTE
+      # come prima: archivio non firmato + artefatto, che serve a sapere se il
+      # codice compila. Con i segreti, invece, firma davvero e carica su
+      # TestFlight — nessun Mac, nessun certificato da esportare a mano.
+      #
+      # Si usa la chiave API di App Store Connect (`-allowProvisioningUpdates`):
+      # e' Xcode stesso, sul runner, a creare/scaricare certificato di
+      # distribuzione e profili per i DUE bundle id (app + estensione Live
+      # Activity). La via classica — certificato .p12 + profili esportati da un
+      # Mac e messi nei segreti — qui non e' praticabile: un Mac non c'e'.
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Chiave API App Store Connect
+        id: asc
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$ASC_KEY_P8" ] || [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            echo "::warning title=Firma iOS non configurata::Mancano i secret Apple (ASC_KEY_P8, ASC_KEY_ID, ASC_ISSUER_ID, APPLE_TEAM_ID): build NON firmata, nessun caricamento su TestFlight."
+            echo "firma=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # xcodebuild cerca le chiavi qui per nome: AuthKey_<KEYID>.p8.
+          mkdir -p ~/private_keys
+          printf '%s' "$ASC_KEY_P8" > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          echo "firma=si" >> "$GITHUB_OUTPUT"
+
       - name: Archive App (unsigned)
+        if: steps.asc.outputs.firma != 'si'
         run: |
           xcodebuild -workspace ios/App/App.xcworkspace \
                      -scheme App \
@@ -79,6 +123,7 @@ jobs:
                      archive
 
       - name: Package unsigned IPA
+        if: steps.asc.outputs.firma != 'si'
         run: |
           mkdir -p build/Payload
           cp -R build/App.xcarchive/Products/Applications/App.app build/Payload/
@@ -86,8 +131,96 @@ jobs:
           zip -qry WIP-unsigned.ipa Payload
 
       - name: Upload IPA artifact
+        if: steps.asc.outputs.firma != 'si'
         uses: actions/upload-artifact@v4
         with:
           name: WIP-iOS-unsigned
           path: build/WIP-unsigned.ipa
+          retention-days: 30
+
+      # ── Da qui in giu': solo con i segreti Apple presenti ──────────────────
+
+      - name: Numero di build progressivo
+        if: steps.asc.outputs.firma == 'si'
+        run: |
+          # App Store Connect rifiuta due caricamenti con lo stesso
+          # CFBundleVersion. Il numero del run e' unico e cresce sempre, e va
+          # scritto su ENTRAMBI i target (app ed estensione: Apple pretende
+          # che combacino). La versione utente (MARKETING_VERSION) resta
+          # quella del progetto — 1.3, come Android.
+          cd ios/App
+          agvtool new-version -all ${{ github.run_number }}
+
+      # (30/08/2026) FIRMA MANUALE VIA FASTLANE — le tre build fallite prima di
+      # arrivarci sono annotate per esteso in ios/App/fastlane/Fastfile.
+      # In breve: le impostazioni di firma passate a `xcodebuild` valgono per
+      # TUTTI i target insieme, ma qui i target sono due (l'app e l'estensione
+      # della Live Activity) e ognuno vuole il SUO profilo. La lane scrive la
+      # firma nel progetto target per target, archivia, esporta e carica.
+      # IL .p12 SE LO COSTRUISCE IL RUNNER (30/08/2026, dopo cinque build).
+      #
+      # Nel secret stanno chiave e certificato in PEM, non un .p12 gia' fatto.
+      # Il motivo e' una stranezza di macOS che ci e' costata tre giri:
+      # `security import` RIFIUTA i PKCS#12 con password vuota (fallisce la
+      # verifica del MAC), mentre OpenSSL li apre senza battere ciglio — cosi'
+      # il file sembrava sano da ogni verifica fatta sul PC e moriva solo sul
+      # runner. Con una password, invece, tornavano ad essere due segreti da
+      # far combaciare al carattere: uno spazio invisibile in coda ha fatto
+      # fallire due build con un errore che parlava d'altro.
+      # Qui la password esiste (serve a macOS) ma non passa da mani umane: la
+      # inventa il runner, vive dieci secondi e non e' scritta da nessuna parte.
+      - name: Certificato di distribuzione dal secret
+        if: steps.asc.outputs.firma == 'si'
+        env:
+          APPLE_DIST_CERT_PEM: ${{ secrets.APPLE_DIST_CERT_PEM }}
+        run: |
+          if [ -z "$APPLE_DIST_CERT_PEM" ]; then
+            echo "::error title=Certificato assente::Manca il secret APPLE_DIST_CERT_PEM: chiave privata e certificato di distribuzione, in un unico PEM codificato base64."
+            exit 1
+          fi
+          if ! printf '%s' "$APPLE_DIST_CERT_PEM" | base64 --decode > "$RUNNER_TEMP/dist.pem" 2>/dev/null; then
+            echo "::error title=Base64 non valido::Il secret non e' base64 leggibile. Succede quando il valore nuovo viene incollato IN CODA al vecchio: svuota il campo prima di incollare."
+            exit 1
+          fi
+          if ! grep -q "PRIVATE KEY" "$RUNNER_TEMP/dist.pem" || ! grep -q "BEGIN CERTIFICATE" "$RUNNER_TEMP/dist.pem"; then
+            echo "::error title=PEM incompleto::Nel secret devono esserci ENTRAMBI: la chiave privata e il certificato."
+            exit 1
+          fi
+          PW="$(/usr/bin/openssl rand -hex 16)"
+          echo "::add-mask::$PW"
+          # CIFRATURA VECCHIA, OBBLIGATORIA (build #84). `security` di macOS
+          # legge solo i PKCS#12 in 3DES con MAC SHA-1: con i default di
+          # OpenSSL 3 (AES-256, MAC SHA-256) l'import fallisce con un errore
+          # che accusa la password — «MAC verification failed during PKCS12
+          # import (wrong password?)» — mentre la password e' giustissima.
+          # Anche il binario conta: su questi runner `openssl` nel PATH e'
+          # OpenSSL 3 di Homebrew, mentre /usr/bin/openssl e' quello di Apple.
+          /usr/bin/openssl pkcs12 -export \
+                  -inkey "$RUNNER_TEMP/dist.pem" -in "$RUNNER_TEMP/dist.pem" \
+                  -name "WIP Distribution" \
+                  -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 \
+                  -passout "pass:$PW" -out "$RUNNER_TEMP/dist.p12"
+          echo "P12_PASSWORD=$PW" >> "$GITHUB_ENV"
+          echo "Certificato pronto ($(wc -c < "$RUNNER_TEMP/dist.p12") byte)."
+
+      - name: Firma, archivia e carica su TestFlight
+        if: steps.asc.outputs.firma == 'si'
+        working-directory: ios/App
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_DIST_CERT_PATH: ${{ runner.temp }}/dist.p12
+          APPLE_DIST_CERT_PASSWORD: ${{ env.P12_PASSWORD }}
+          # Senza, fastlane si ferma su domande che nessuno leggera'.
+          FASTLANE_SKIP_UPDATE_CHECK: '1'
+          FASTLANE_HIDE_CHANGELOG: '1'
+        run: fastlane beta
+
+      - name: Upload IPA artifact (firmato)
+        if: steps.asc.outputs.firma == 'si'
+        uses: actions/upload-artifact@v4
+        with:
+          name: WIP-iOS-signed
+          path: build/WIP.ipa
           retention-days: 30

@@ -22,6 +22,46 @@
       "destination": "/terms.html"
     },
     {
+      "source": "/robots.txt",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/sitemap(.*).xml",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/luogo/(.*)",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/llms.txt",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/scopri/en",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/scopri/fr",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/scopri/es",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/scopri/de",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/scopri/ru",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/scopri/zh",
+      "destination": "/api/index.ts"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
@@ -42,7 +82,8 @@
   ],
   "functions": {
     "api/**/*.ts": {
-      "maxDuration": 300
+      "maxDuration": 300,
+      "includeFiles": "node_modules/pdfkit/js/standard-fonts/**"
     }
   },
   "crons": [
@@ -65,6 +106,14 @@
     {
       "path": "/api/cron/mostre-refresh",
       "schedule": "40 */4 * * *"
+    },
+    {
+      "path": "/api/geofence/calibrate-radius",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/generazioni",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

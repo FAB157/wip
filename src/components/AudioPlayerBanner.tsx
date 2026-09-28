@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Play, Pause, X, Volume2 } from 'lucide-react';
+import { Play, Pause, X, Volume2, RotateCcw, SkipForward, Landmark } from 'lucide-react';
 import { locationService } from '../services/locationService';
-import { pauseSpeech, resumeSpeech, stopSpeech } from '../services/ttsService';
+import { pauseSpeech, resumeSpeech, stopSpeech, ripetiUltimaBattuta } from '../services/ttsService';
 import { useAudioState } from '../hooks/useAudioState';
 import { getTranslation, linguaCorrente } from '../lib/i18n';
 
@@ -12,15 +12,39 @@ export default function AudioPlayerBanner() {
   // ttsService e restava invisibile durante le audioguide.
   const audioState = useAudioState();
 
-  // Narrazioni avviate da ttsService (PoiCard / popup mappa).
+  // Narrazioni avviate da ttsService (PoiCard / popup mappa / agente WIP).
   const [ttsPlaying, setTtsPlaying] = useState(false);
   const [ttsVisible, setTtsVisible] = useState(false);
+  // Chi parla: l'agente WIP si presenta come "WIP", non come "Audioguida"
+  // (richiesta del committente 09/09/2026). Null = narrazione anonima.
+  const [etichetta, setEtichetta] = useState<string | null>(null);
+  const [ripetibile, setRipetibile] = useState(false);
+
+  // IL LETTORE DEL MUSEO (13/09/2026, committente: «anche con l'app aperta:
+  // opera in riproduzione, play, pausa, riproduci da inizio, nome della
+  // prossima opera e tasto per farla partire»). Finche' un'opera e' in
+  // ascolto o in pausa, MuseumVisitSheet manda qui il suo stato
+  // ('wip-museum-player') e questa barra mostra i SUOI comandi al posto di
+  // quelli generici «Audioguida» — la voce e' la stessa, due barre sarebbero
+  // un doppione. I tocchi tornano alla scheda come 'wip-museum-player-cmd'.
+  type StatoMuseo = { attivo: boolean; playing: boolean; indice: number | null; nome: string; museo: string; prossimaIndice: number | null; prossimaNome: string };
+  const [museo, setMuseo] = useState<StatoMuseo | null>(null);
+  useEffect(() => {
+    const h = (e: Event) => { const d = ((e as CustomEvent).detail || {}) as StatoMuseo; setMuseo(d.attivo ? d : null); };
+    window.addEventListener('wip-museum-player', h);
+    return () => window.removeEventListener('wip-museum-player', h);
+  }, []);
+  const comandoMuseo = (cmd: string, indice?: number | null) => {
+    window.dispatchEvent(new CustomEvent('wip-museum-player-cmd', { detail: { cmd, indice } }));
+  };
 
   useEffect(() => {
     const handleStateChange = (e: Event) => {
       const detail = (e as CustomEvent).detail || {};
       setTtsVisible(!!detail.isVisible);
       setTtsPlaying(!!detail.isPlaying);
+      setEtichetta(detail.etichetta ?? null);
+      setRipetibile(!!detail.ripetibile);
     };
 
     window.addEventListener('wip-audio-state-change', handleStateChange);
@@ -30,8 +54,8 @@ export default function AudioPlayerBanner() {
   }, []);
 
   const usingMainPlayer = audioState.isActive;
-  const isVisible = usingMainPlayer || ttsVisible;
-  const isPlaying = usingMainPlayer ? audioState.isPlaying : ttsPlaying;
+  const isVisible = !!museo || usingMainPlayer || ttsVisible;
+  const isPlaying = museo ? museo.playing : usingMainPlayer ? audioState.isPlaying : ttsPlaying;
 
   // Montato senza `language` in App.tsx: la lingua è quella scritta in
   // localStorage a ogni cambio (stessa fonte di TourRouteLayer).
@@ -39,6 +63,7 @@ export default function AudioPlayerBanner() {
   const t = (key: string) => getTranslation(key, language);
 
   const handleToggle = () => {
+    if (museo) { comandoMuseo('toggle'); return; }
     if (usingMainPlayer) {
       if (isPlaying) locationService.pauseGuideAudio();
       else locationService.resumeGuideAudio();
@@ -49,11 +74,24 @@ export default function AudioPlayerBanner() {
   };
 
   const handleStop = () => {
+    if (museo) { comandoMuseo('stop'); return; }
     // stopSpeech ferma entrambe le sorgenti (ttsService + player principale).
     stopSpeech();
     setTtsVisible(false);
     setTtsPlaying(false);
+    setEtichetta(null);
   };
+
+  // "Ripeti" riascolta l'ultima battuta: vale per l'agente WIP, dove capita di
+  // perdersi una frase, e non tocca il player principale delle audioguide.
+  const handleRepeat = () => { void ripetiUltimaBattuta(); };
+
+  // Titolo: etichetta di chi parla (es. "WIP") > nome del POI > "Audioguida".
+  const titolo = museo ? museo.nome : (etichetta || audioState.poiName || t('audio_titolo_default'));
+  const stato = isPlaying ? t('audio_in_riproduzione') : t('audio_in_pausa');
+  // Museo: sotto il nome dell'opera, lo stato e la prossima («In pausa · Prossima: La Primavera»).
+  const sottotitolo = museo && museo.prossimaNome ? `${stato} · ${t('mv_next_short')}: ${museo.prossimaNome}` : stato;
+  const mostraRipeti = !museo && !usingMainPlayer && ripetibile;
 
   // bottom con safe-area (UX-12): `88px` fissi finivano sotto la gesture bar
   // su iPhone. 5,5 rem = barra tab (4 rem) + 1,5 rem d'aria.
@@ -65,24 +103,53 @@ export default function AudioPlayerBanner() {
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 100, opacity: 0 }}
           role="region"
-          aria-label={t('audio_titolo_default')}
+          aria-label={titolo}
           className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom,0px))] left-4 right-4 bg-surface/85 backdrop-blur-2xl border border-outline-variant/60 shadow-2xl rounded-2xl p-3 z-[90] flex items-center justify-between"
         >
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-full bg-secondary/20 flex items-center justify-center text-secondary shrink-0" aria-hidden="true">
-              <Volume2 className={`w-5 h-5 ${isPlaying ? 'animate-pulse' : ''}`} />
+              {museo ? <Landmark className="w-5 h-5" /> : <Volume2 className={`w-5 h-5 ${isPlaying ? 'animate-pulse' : ''}`} />}
             </div>
-            <div className="min-w-0">
+            {/* Museo: un tocco sul nome riapre la scheda della visita (l'evento
+                lo ascoltano App.tsx, che cambia scheda, e CameraScreen). */}
+            <div
+              className={`min-w-0 ${museo ? 'cursor-pointer' : ''}`}
+              onClick={museo ? () => window.dispatchEvent(new CustomEvent('wip-open-museum-visit')) : undefined}
+            >
               <p className="text-sm font-bold text-on-surface leading-tight truncate">
-                {audioState.poiName || t('audio_titolo_default')}
+                {titolo}
               </p>
-              <p className="text-xs text-on-surface-variant font-medium" aria-live="polite">
-                {isPlaying ? t('audio_in_riproduzione') : t('audio_in_pausa')}
+              <p className="text-xs text-on-surface-variant font-medium truncate" aria-live="polite">
+                {sottotitolo}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            {museo && (
+              <button
+                type="button"
+                onClick={() => comandoMuseo('restart')}
+                aria-label={t('audio_da_capo')}
+                title={t('audio_da_capo')}
+                className="min-w-11 min-h-11 rounded-full bg-surface-variant flex items-center justify-center text-on-surface hover:bg-outline-variant transition-colors shadow-sm"
+              >
+                <RotateCcw className="w-5 h-5" />
+              </button>
+            )}
+
+            {mostraRipeti && (
+              <button
+                type="button"
+                onClick={handleRepeat}
+                aria-label={t('audio_ripeti')}
+                title={t('audio_ripeti')}
+                className="min-w-11 min-h-11 rounded-full bg-surface-variant flex items-center justify-center text-on-surface hover:bg-outline-variant transition-colors shadow-sm"
+              >
+                <RotateCcw className="w-5 h-5" />
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleToggle}
@@ -91,6 +158,18 @@ export default function AudioPlayerBanner() {
             >
               {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-1" />}
             </button>
+
+            {museo && museo.prossimaIndice !== null && (
+              <button
+                type="button"
+                onClick={() => comandoMuseo('next', museo.prossimaIndice)}
+                aria-label={`${t('audio_prossima_opera')}: ${museo.prossimaNome}`}
+                title={`${t('audio_prossima_opera')}: ${museo.prossimaNome}`}
+                className="min-w-11 min-h-11 rounded-full bg-primary text-white flex items-center justify-center hover:bg-primary/90 transition-colors shadow-sm"
+              >
+                <SkipForward className="w-5 h-5" />
+              </button>
+            )}
 
             <button
               type="button"

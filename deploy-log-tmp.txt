@@ -1,0 +1,184 @@
+
+> react-example@0.0.0 deploy
+> vercel --prod --yes && node scripts/smoke-deploy.mjs
+
+<claude-code-hint v="1" type="plugin" value="vercel@claude-plugins-official" />
+Vercel CLI 54.17.1 (Node.js 24.14.1)
+Retrieving project…
+Deploying fabri75715-4892s-projects/itainta
+Uploading [--------------------] (0.0B/8.5KB)
+Uploading [===========---------] (4.9KB/8.5KB)
+Uploading [====================] (8.5KB/8.5KB)
+  Inspect         https://vercel.com/fabri75715-4892s-projects/itainta/DZ5YXMmaCpFenbsNxwxHnNvKmP5d
+  Production      https://itainta-53rzgfpwp-fabri75715-4892s-projects.vercel.app
+Building…
+Building…
+Running build in Washington, D.C., USA (East) – iad1
+Build machine configuration: 4 cores, 8 GB
+Retrieving list of deployment files...
+Downloading 1054 deployment files...
+Restored build cache from previous deployment (J8HLt7hsVbyexk2TvgnATY4nqFuM)
+Running "vercel build"
+Vercel CLI 59.25.4
+Installing dependencies...
+> react-example@0.0.0 postinstall
+> node scripts/patch-revenuecat-agp9.mjs
+[patch-agp9] nessun modulo da correggere.
+up to date in 3s
+330 packages are looking for funding
+run `npm fund` for details
+npm warn install-scripts 8 packages have install scripts not yet covered by allowScripts:
+npm warn install-scripts   @google/genai@1.52.0 (preinstall: echo 'preinstall: no-op')
+npm warn install-scripts   core-js@3.49.0 (postinstall: node -e "try{require('./postinstall')}catch(e){}")
+npm warn install-scripts   cpu-features@0.0.10 (install: node-gyp rebuild)
+npm warn install-scripts   esbuild@0.28.0 (postinstall: node install.js)
+npm warn install-scripts   msgpackr-extract@3.0.4 (install: node-gyp rebuild)
+npm warn install-scripts   protobufjs@7.6.2 (postinstall: node scripts/postinstall)
+npm warn install-scripts   ssh2@1.17.0 (install: node install.js)
+npm warn install-scripts   esbuild@0.25.12 (postinstall: node install.js)
+npm warn install-scripts
+npm warn install-scripts Run `npm install-scripts ls` to review, or `npm install-scripts approve <pkg>` to allow.
+vite v6.4.3 building for production...
+transforming...
+✓ 3302 modules transformed.
+rendering chunks...
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/guideSettings.ts is dynamically imported by /vercel/path0/src/components/ClimaReportSheet.tsx but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/AgentControls.tsx, /vercel/path0/src/components/CameraScreen.tsx, /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/MuseumVisitSheet.tsx, /vercel/path0/src/components/PoiPopupContent.tsx, /vercel/path0/src/components/PoiRadarPanel.tsx, /vercel/path0/src/components/ProfileScreen.tsx, /vercel/path0/src/components/VisionCardSheet.tsx, /vercel/path0/src/components/WipAgentPlanner.tsx, /vercel/path0/src/lib/geofencing/foregroundTriggers.ts, /vercel/path0/src/lib/geofencing/predittore.ts, /vercel/path0/src/lib/pacchettoMuseo.ts, /vercel/path0/src/lib/tour/corridoio.ts, /vercel/path0/src/lib/widgetDati.ts, /vercel/path0/src/services/locationService.ts, /vercel/path0/src/services/tourService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/supabase.ts is dynamically imported by /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/PercorsoPanel.tsx, /vercel/path0/src/lib/affiliates.ts, /vercel/path0/src/lib/api.ts, /vercel/path0/src/lib/geofencing/footprints.ts, /vercel/path0/src/lib/geofencing/foregroundTriggers.ts, /vercel/path0/src/lib/puntoArrivo.ts, /vercel/path0/src/lib/servicesLayer.ts, /vercel/path0/src/plugins/ItaintaBackgroundPoi.ts, /vercel/path0/src/services/audioguideService.ts, /vercel/path0/src/services/locationService.ts, /vercel/path0/src/services/locationService.ts but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/AROverlay.tsx, /vercel/path0/src/components/AdminAffiliateStats.tsx, /vercel/path0/src/components/AdminApiStats.tsx, /vercel/path0/src/components/AdminBeniCulturali.tsx, /vercel/path0/src/components/AdminCounters.tsx, /vercel/path0/src/components/AdminDiagnostics.tsx, /vercel/path0/src/components/AdminEditor.tsx, /vercel/path0/src/components/AdminEnrichedPois.tsx, /vercel/path0/src/components/AdminPanel.tsx, /vercel/path0/src/components/AdminPoiMapEditor.tsx, /vercel/path0/src/components/AdminReports.tsx, /vercel/path0/src/components/AdminSystemErrors.tsx, /vercel/path0/src/components/AdminVisionCommunity.tsx, /vercel/path0/src/components/AgentControls.tsx, /vercel/path0/src/components/CameraScreen.tsx, /vercel/path0/src/components/DayPassCard.tsx, /vercel/path0/src/components/DownloadsScreen.tsx, /vercel/path0/src/components/EventsScreen.tsx, /vercel/path0/src/components/GroupPlanPanel.tsx, /vercel/path0/src/components/IngressoQuiButton.tsx, /vercel/path0/src/components/ItineraryLibrarySheet.tsx, /vercel/path0/src/components/LiveTourPanel.tsx, /vercel/path0/src/components/LoginScreen.tsx, /vercel/path0/src/components/MapArea.tsx, /vercel/path0/src/components/MyVisionTab.tsx, /vercel/path0/src/components/NotifichePreferenze.tsx, /vercel/path0/src/components/OfflineMapsTab.tsx, /vercel/path0/src/components/PilgrimWaysSheet.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/components/PoiGallery.tsx, /vercel/path0/src/components/PoiPopupContent.tsx, /vercel/path0/src/components/PremiumGuideModal.tsx, /vercel/path0/src/components/ProfileScreen.tsx, /vercel/path0/src/components/RainGuaranteeCard.tsx, /vercel/path0/src/components/TravelerDashboard.tsx, /vercel/path0/src/components/UserProfileSummary.tsx, /vercel/path0/src/components/VisionCommentModal.tsx, /vercel/path0/src/components/WipAgentPlanner.tsx, /vercel/path0/src/components/ZeroCreditsBanner.tsx, /vercel/path0/src/components/admin/AdminContentQueue.tsx, /vercel/path0/src/components/admin/AdminFotoVerifica.tsx, /vercel/path0/src/components/admin/AdminMusei.tsx, /vercel/path0/src/components/admin/AdminNotifiche.tsx, /vercel/path0/src/components/admin/AdminOpsConsole.tsx, /vercel/path0/src/components/admin/AdminSocialStats.tsx, /vercel/path0/src/components/admin/AdminTransazioni.tsx, /vercel/path0/src/components/admin/AdminUsersPro.tsx, /vercel/path0/src/components/admin/AdminVisits.tsx, /vercel/path0/src/components/admin/ChallengeForm.tsx, /vercel/path0/src/components/admin/CouponForm.tsx, /vercel/path0/src/components/admin/CouponList.tsx, /vercel/path0/src/components/admin/LevelForm.tsx, /vercel/path0/src/components/admin/UserEditModal.tsx, /vercel/path0/src/components/admin/UserManageModal.tsx, /vercel/path0/src/hooks/useItinerary.ts, /vercel/path0/src/hooks/useLiveTour.ts, /vercel/path0/src/hooks/usePredictiveDownload.ts, /vercel/path0/src/lib/apiLogger.ts, /vercel/path0/src/lib/areeProtette.ts, /vercel/path0/src/lib/bathingWater.ts, /vercel/path0/src/lib/communityModeration.ts, /vercel/path0/src/lib/errorLogger.ts, /vercel/path0/src/lib/favorites.ts, /vercel/path0/src/lib/gamification.ts, /vercel/path0/src/lib/listeningHistory.ts, /vercel/path0/src/lib/museumPass.ts, /vercel/path0/src/lib/museumVisit.ts, /vercel/
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/api.ts is dynamically imported by /vercel/path0/src/components/TourBanner.tsx, /vercel/path0/src/lib/puntoArrivo.ts, /vercel/path0/src/lib/seasonalTemplates.ts, /vercel/path0/src/services/poiRepository.ts, /vercel/path0/src/services/premiumGuideService.ts but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/AdminApiStats.tsx, /vercel/path0/src/components/AdminBeniCulturali.tsx, /vercel/path0/src/components/AdminCounters.tsx, /vercel/path0/src/components/AdminDiagnostics.tsx, /vercel/path0/src/components/AdminEditor.tsx, /vercel/path0/src/components/AdminEnrichedPois.tsx, /vercel/path0/src/components/AdminPanel.tsx, /vercel/path0/src/components/AdminPoiMapEditor.tsx, /vercel/path0/src/components/AdminVisionCommunity.tsx, /vercel/path0/src/components/CameraScreen.tsx, /vercel/path0/src/components/DenominazioniZona.tsx, /vercel/path0/src/components/EventsScreen.tsx, /vercel/path0/src/components/GroupPlanPanel.tsx, /vercel/path0/src/components/IngressoQuiButton.tsx, /vercel/path0/src/components/ItineraryLibrarySheet.tsx, /vercel/path0/src/components/MapArea.tsx, /vercel/path0/src/components/MapStartSetting.tsx, /vercel/path0/src/components/MyVisionTab.tsx, /vercel/path0/src/components/OfflineMapsTab.tsx, /vercel/path0/src/components/PilgrimWaysSheet.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/PoiContactButtons.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/components/PoiPopupContent.tsx, /vercel/path0/src/components/PoiTicketsButtons.tsx, /vercel/path0/src/components/PremiumGuideAudiobook.tsx, /vercel/path0/src/components/PremiumGuideModal.tsx, /vercel/path0/src/components/ProfileScreen.tsx, /vercel/path0/src/components/RaccontoViaggio.tsx, /vercel/path0/src/components/RainGuaranteeCard.tsx, /vercel/path0/src/components/RoutePoisModal.tsx, /vercel/path0/src/components/SeasonalCatalogSheet.tsx, /vercel/path0/src/components/ShopScreen.tsx, /vercel/path0/src/components/TransitEscapesSheet.tsx, /vercel/path0/src/components/VisionCommentModal.tsx, /vercel/path0/src/components/WipAgentPlanner.tsx, /vercel/path0/src/components/admin/AdminContentQueue.tsx, /vercel/path0/src/components/admin/AdminFotoVerifica.tsx, /vercel/path0/src/components/admin/AdminMusei.tsx, /vercel/path0/src/components/admin/AdminNotifiche.tsx, /vercel/path0/src/components/admin/AdminOpsConsole.tsx, /vercel/path0/src/components/admin/AdminSocialStats.tsx, /vercel/path0/src/components/admin/AdminTransazioni.tsx, /vercel/path0/src/components/admin/AdminUsersPro.tsx, /vercel/path0/src/components/admin/AdminVisits.tsx, /vercel/path0/src/components/admin/UserManageModal.tsx, /vercel/path0/src/components/poi/PoiAudioPlayer.tsx, /vercel/path0/src/components/poi/PoiBiodiversity.tsx, /vercel/path0/src/lib/atlanteI18n.ts, /vercel/path0/src/lib/audioFetch.ts, /vercel/path0/src/lib/bathingWater.ts, /vercel/path0/src/lib/cartoTiles.ts, /vercel/path0/src/lib/climaIndex.ts, /vercel/path0/src/lib/communityModeration.ts, /vercel/path0/src/lib/denominazioniAree.ts, /vercel/path0/src/lib/featureFlags.ts, /vercel/path0/src/lib/gamification.ts, /vercel/path0/src/lib/geofencing/telemetry.ts, /vercel/path0/src/lib/museumPass.ts, /vercel/path0/src/lib/museumVisit.ts, /vercel/path0/src/lib/nominatimQueue.ts, /vercel/path0/src/lib/offlineRoads.ts, /vercel/path0/src/lib/offlineStorage.ts, /vercel/path0/src/lib/offlineTiles.ts, /vercel/path0/src/lib/pacchettoMuseo.ts, /vercel/path0/src/lib/pageviewTracker.ts, /vercel/path0/src/lib/pilgrimCertificate.ts, /vercel/path0/src/lib/pricing.ts, /vercel/path0/src/lib/roadSnap.ts, /vercel/path0/src/lib/servicesLayer.ts, /vercel/path0/src/lib/sunIndex.ts, /vercel/path0/src/lib/valanghe.ts, /vercel/path0/src/lib/visionUpdates.ts, /vercel/path0/src/lib/widgetDati.ts, /vercel/path0/src/main.tsx, /vercel/path0/src/services/audioguideService.ts, /vercel/path0/src/services/dayPassService.ts, /vercel/path0/src/services/enrichmentService.ts, /vercel/path0/src/services/generazioniService.ts, /vercel/path0/src/services/locationService.ts,
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/communityModeration.ts is dynamically imported by /vercel/path0/src/components/MapArea.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/lib/tour/corridoio.ts, /vercel/path0/src/lib/widgetDati.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/pricing.ts is dynamically imported by /vercel/path0/src/components/PercorsoPanel.tsx, /vercel/path0/src/services/audioguideService.ts but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/AgentControls.tsx, /vercel/path0/src/components/AppGuide.tsx, /vercel/path0/src/components/ApproachBanner.tsx, /vercel/path0/src/components/CameraScreen.tsx, /vercel/path0/src/components/DayPassCard.tsx, /vercel/path0/src/components/OfflineAudioBundleModal.tsx, /vercel/path0/src/components/PercorsoPanel.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/components/PremiumGuideAudiobook.tsx, /vercel/path0/src/components/PremiumGuideModal.tsx, /vercel/path0/src/components/PriceList.tsx, /vercel/path0/src/components/ProfileScreen.tsx, /vercel/path0/src/components/ShopScreen.tsx, /vercel/path0/src/components/WipAgentPlanner.tsx, /vercel/path0/src/components/ZeroCreditsBanner.tsx, /vercel/path0/src/components/admin/AdminUsersPro.tsx, /vercel/path0/src/lib/gamification.ts, /vercel/path0/src/lib/museumPass.ts, /vercel/path0/src/lib/widgetDati.ts, /vercel/path0/src/services/dayPassService.ts, /vercel/path0/src/services/iapService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/services/offlinePackageService.ts is dynamically imported by /vercel/path0/src/lib/offlineTiles.ts but also statically imported by /vercel/path0/src/components/OfflineMapsTab.tsx, /vercel/path0/src/services/dayPassService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/services/dayPassService.ts is dynamically imported by /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/services/locationService.ts but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/ApproachBanner.tsx, /vercel/path0/src/components/DayPassBadge.tsx, /vercel/path0/src/components/DayPassCard.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/components/PoiRadarPanel.tsx, /vercel/path0/src/hooks/usePredictiveDownload.ts, /vercel/path0/src/lib/tour/passRichiesto.ts, /vercel/path0/src/lib/widgetDati.ts, /vercel/path0/src/services/iapService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/toast.ts is dynamically imported by /vercel/path0/src/services/locationService.ts, /vercel/path0/src/services/locationService.ts but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/AdminPoiMapEditor.tsx, /vercel/path0/src/components/AdminVisionCommunity.tsx, /vercel/path0/src/components/AgentControls.tsx, /vercel/path0/src/components/CalendarExportButton.tsx, /vercel/path0/src/components/CameraScreen.tsx, /vercel/path0/src/components/ClimaReportSheet.tsx, /vercel/path0/src/components/DayPassCard.tsx, /vercel/path0/src/components/DownloadsScreen.tsx, /vercel/path0/src/components/EventsScreen.tsx, /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/IngressoQuiButton.tsx, /vercel/path0/src/components/LoginScreen.tsx, /vercel/path0/src/components/MuseumVisitSheet.tsx, /vercel/path0/src/components/MyVisionTab.tsx, /vercel/path0/src/components/NotifichePreferenze.tsx, /vercel/path0/src/components/OfflineMapsTab.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/components/PremiumGuideAudiobook.tsx, /vercel/path0/src/components/PremiumGuideModal.tsx, /vercel/path0/src/components/ProfileScreen.tsx, /vercel/path0/src/components/RaccontoViaggio.tsx, /vercel/path0/src/components/RoutePoisModal.tsx, /vercel/path0/src/components/ShopScreen.tsx, /vercel/path0/src/components/ToastHost.tsx, /vercel/path0/src/components/TravelerDashboard.tsx, /vercel/path0/src/components/VisionCardSheet.tsx, /vercel/path0/src/components/VisionCommentModal.tsx, /vercel/path0/src/components/WipAgentPlanner.tsx, /vercel/path0/src/components/admin/AdminFotoVerifica.tsx, /vercel/path0/src/components/admin/AdminMusei.tsx, /vercel/path0/src/components/admin/AdminUsersPro.tsx, /vercel/path0/src/components/admin/UserManageModal.tsx, /vercel/path0/src/components/poi/PoiAudioPlayer.tsx, /vercel/path0/src/hooks/useWalkingNavigation.ts, /vercel/path0/src/lib/tour/passRichiesto.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/listeningHistory.ts is dynamically imported by /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/services/dayPassService.ts but also statically imported by /vercel/path0/src/components/ProfileScreen.tsx, /vercel/path0/src/lib/widgetDati.ts, /vercel/path0/src/services/locationService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/capacitor/nativeAudioHelper.ts is dynamically imported by /vercel/path0/src/services/locationService.ts but also statically imported by /vercel/path0/src/lib/pacchettoMuseo.ts, /vercel/path0/src/services/ttsService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/services/ttsService.ts is dynamically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/App.tsx, /vercel/path0/src/components/ClimaReportSheet.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/PremiumGuideModal.tsx, /vercel/path0/src/components/ProfileScreen.tsx, /vercel/path0/src/components/ProfileScreen.tsx but also statically imported by /vercel/path0/src/components/AgentControls.tsx, /vercel/path0/src/components/AudioPlayerBanner.tsx, /vercel/path0/src/components/CameraScreen.tsx, /vercel/path0/src/components/MuseumVisitSheet.tsx, /vercel/path0/src/components/PoiPopupContent.tsx, /vercel/path0/src/components/PremiumGuideAudiobook.tsx, /vercel/path0/src/components/VisionCardSheet.tsx, /vercel/path0/src/components/WipAgentPlanner.tsx, /vercel/path0/src/components/poi/PoiAudioPlayer.tsx, /vercel/path0/src/hooks/useWalkingNavigation.ts, /vercel/path0/src/lib/pacchettoMuseo.ts, /vercel/path0/src/lib/tour/giroDriver.ts, /vercel/path0/src/services/locationService.ts, /vercel/path0/src/services/tourService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/services/locationService.ts is dynamically imported by /vercel/path0/src/lib/geofencing/bearingGate.ts but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/AROverlay.tsx, /vercel/path0/src/components/AudioPlayerBanner.tsx, /vercel/path0/src/components/CameraScreen.tsx, /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/MapArea.tsx, /vercel/path0/src/components/MyVisionTab.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/components/RoutePoisModal.tsx, /vercel/path0/src/components/ThematicSheet.tsx, /vercel/path0/src/components/TourBanner.tsx, /vercel/path0/src/components/itinerary/ItineraryStop.tsx, /vercel/path0/src/components/poi/PoiAudioPlayer.tsx, /vercel/path0/src/hooks/useAudioState.ts, /vercel/path0/src/hooks/useLiveTour.ts, /vercel/path0/src/hooks/useWalkingNavigation.ts, /vercel/path0/src/lib/geofencing/foregroundTriggers.ts, /vercel/path0/src/lib/geofencing/gpsReplay.ts, /vercel/path0/src/lib/nav/navNativo.ts, /vercel/path0/src/lib/tour/giroDriver.ts, /vercel/path0/src/lib/widgetDati.ts, /vercel/path0/src/services/tourService.ts, /vercel/path0/src/services/ttsService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/services/poiRepository.ts is dynamically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/MapArea.tsx, /vercel/path0/src/components/MapArea.tsx, /vercel/path0/src/components/MapArea.tsx, /vercel/path0/src/components/MapArea.tsx, /vercel/path0/src/components/MapArea.tsx, /vercel/path0/src/components/MapArea.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/components/PoiPopupContent.tsx, /vercel/path0/src/components/ProfileScreen.tsx, /vercel/path0/src/lib/geofencing/foregroundTriggers.ts, /vercel/path0/src/services/locationService.ts, /vercel/path0/src/services/locationService.ts, /vercel/path0/src/services/locationService.ts, /vercel/path0/src/services/locationService.ts but also statically imported by /vercel/path0/src/components/CameraScreen.tsx, /vercel/path0/src/components/OfflineMapsTab.tsx, /vercel/path0/src/components/PercorsoPanel.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/hooks/useWalkingNavigation.ts, /vercel/path0/src/lib/importGoogleMaps.ts, /vercel/path0/src/lib/offlineStorage.ts, /vercel/path0/src/lib/tour/corridoio.ts, /vercel/path0/src/lib/widgetDati.ts, /vercel/path0/src/services/audioguideService.ts, /vercel/path0/src/services/enrichmentService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/offlineStorage.ts is dynamically imported by /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/lib/offlineTiles.ts but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/DownloadsScreen.tsx, /vercel/path0/src/components/OfflineMapsTab.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/ProfileScreen.tsx, /vercel/path0/src/services/tourService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/services/audioguideService.ts is dynamically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/GeofenceAudioGuide.tsx but also statically imported by /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/lib/widgetDati.ts, /vercel/path0/src/services/tourService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/services/tourService.ts is dynamically imported by /vercel/path0/src/services/locationService.ts but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/MapArea.tsx, /vercel/path0/src/components/PercorsoPanel.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/PoiPopupContent.tsx, /vercel/path0/src/components/PoiRadarPanel.tsx, /vercel/path0/src/components/TourBanner.tsx, /vercel/path0/src/components/TourRouteLayer.tsx, /vercel/path0/src/hooks/useWalkingNavigation.ts, /vercel/path0/src/lib/geofencing/foregroundTriggers.ts, /vercel/path0/src/lib/tour/giroDriver.ts, /vercel/path0/src/lib/tour/useGiro.ts, /vercel/path0/src/lib/widgetDati.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/pacchettoMuseo.ts is dynamically imported by /vercel/path0/src/App.tsx but also statically imported by /vercel/path0/src/components/CameraScreen.tsx, /vercel/path0/src/components/DownloadsScreen.tsx, /vercel/path0/src/components/MuseumVisitSheet.tsx, /vercel/path0/src/lib/widgetDati.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/pdfArchivio.ts is dynamically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/services/premiumGuideService.ts but also statically imported by /vercel/path0/src/components/DownloadsScreen.tsx, /vercel/path0/src/lib/widgetDati.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/gustiOpere.ts is dynamically imported by /vercel/path0/src/App.tsx but also statically imported by /vercel/path0/src/lib/widgetDati.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/widgetDati.ts is dynamically imported by /vercel/path0/src/services/locationService.ts but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/EventsScreen.tsx, /vercel/path0/src/components/MuseumVisitSheet.tsx, /vercel/path0/src/components/PlanScreen.tsx, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/geofencing/gpsReplay.ts is dynamically imported by /vercel/path0/src/components/AdminDiagnostics.tsx, /vercel/path0/src/components/AdminDiagnostics.tsx, /vercel/path0/src/components/AdminDiagnostics.tsx, /vercel/path0/src/components/AdminDiagnostics.tsx, /vercel/path0/src/components/AdminDiagnostics.tsx, /vercel/path0/src/components/AdminDiagnostics.tsx, /vercel/path0/src/components/AdminDiagnostics.tsx, /vercel/path0/src/components/AdminDiagnostics.tsx, /vercel/path0/src/components/AdminDiagnostics.tsx, /vercel/path0/src/services/locationService.ts, /vercel/path0/src/services/locationService.ts but also statically imported by /vercel/path0/src/components/GeofenceAudioGuide.tsx, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/nav/navNativo.ts is dynamically imported by /vercel/path0/src/services/locationService.ts but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/hooks/useWalkingNavigation.ts, /vercel/path0/src/lib/tour/giroDriver.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/errorLogger.ts is dynamically imported by /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/lib/circuitBreaker.ts but also statically imported by /vercel/path0/src/components/ErrorBoundary.tsx, /vercel/path0/src/main.tsx, dynamic import will not move module into another chunk.
+computing gzip size...
+dist/manifest.webmanifest                         0.64 kB
+dist/index.html                                   6.72 kB │ gzip:     2.45 kB
+dist/assets/vendor-9Hbp8J6b.css                  17.25 kB │ gzip:     6.72 kB
+dist/assets/index-Df4CBAmR.css                  281.79 kB │ gzip:    38.94 kB
+dist/assets/gamification-tj6wdhDz.js              1.64 kB │ gzip:     0.83 kB
+dist/assets/generazioniService-BS17cOAi.js        3.30 kB │ gzip:     1.44 kB
+dist/assets/base-DGy_GOMz.js                      4.90 kB │ gzip:     1.96 kB
+dist/assets/MuseumGuidaPdf-C_Pe0-rd.js            5.31 kB │ gzip:     2.02 kB
+dist/assets/ItinerarioPdf-Dkpj9xNf.js             6.24 kB │ gzip:     2.22 kB
+dist/assets/ClimaPdf-VRsqo91N.js                  6.42 kB │ gzip:     1.96 kB
+dist/assets/GuidaPremiumPdf-BYae-6Ye.js           7.72 kB │ gzip:     2.33 kB
+dist/assets/premiumGuideService-D2ZCoiWQ.js       8.55 kB │ gzip:     3.46 kB
+dist/assets/AdminNotifiche-Bb0Dncxf.js           10.94 kB │ gzip:     3.34 kB
+dist/assets/AdminMusei-B9RCE-aB.js               12.88 kB │ gzip:     4.43 kB
+dist/assets/foregroundTriggers-CLDrx6Uz.js       12.98 kB │ gzip:     5.24 kB
+dist/assets/AdminFotoVerifica-BOtlLTBu.js        13.82 kB │ gzip:     4.51 kB
+dist/assets/AdminVisits-DzeHdGA7.js              19.02 kB │ gzip:     5.26 kB
+dist/assets/generaPdf-C1hDy-kB.js                21.07 kB │ gzip:     8.30 kB
+dist/assets/AdminTransazioni-kwj8ELcW.js         24.37 kB │ gzip:     7.13 kB
+dist/assets/AdminSocialStats-cdJO9IoS.js         26.70 kB │ gzip:     6.43 kB
+dist/assets/AdminUsersPro-BDoPYxfu.js            32.12 kB │ gzip:     8.90 kB
+dist/assets/AdminOpsConsole-DaNawttK.js          36.42 kB │ gzip:     9.68 kB
+dist/assets/AdminContentQueue-BnjS52Gf.js        40.29 kB │ gzip:    10.57 kB
+dist/assets/EventsScreen-_ZbicbF7.js             65.38 kB │ gzip:    17.97 kB
+dist/assets/memoria-C6db0xYd.js                  74.75 kB │ gzip:    21.58 kB
+dist/assets/CameraScreen-B7VNcO2l.js             89.46 kB │ gzip:    23.00 kB
+dist/assets/lento-BsEduxss.js                   134.16 kB │ gzip:    39.79 kB
+dist/assets/foodFestivalsCatalog-DVDEYbv6.js    139.22 kB │ gzip:    47.22 kB
+dist/assets/LoadingQuiz-yrF7lcY_.js             168.41 kB │ gzip:    36.17 kB
+dist/assets/ProfileScreen-CEkTg3OQ.js           214.72 kB │ gzip:    52.26 kB
+dist/assets/fioriture-C88FP7TB.js               226.17 kB │ gzip:    68.52 kB
+dist/assets/PilgrimWaysSheet-SSkZdAMw.js        300.93 kB │ gzip:    89.37 kB
+dist/assets/AdminPanel-ethvd0U7.js              327.54 kB │ gzip:    74.54 kB
+dist/assets/mercati-CyUD34Bf.js                 372.67 kB │ gzip:   104.97 kB
+dist/assets/cieli-CklHIZU5.js                   423.88 kB │ gzip:   124.41 kB
+dist/assets/street_art-B2r01Qds.js              456.03 kB │ gzip:   128.78 kB
+dist/assets/PlanScreen-tVfFBNgl.js              501.34 kB │ gzip:   140.32 kB
+dist/assets/cinema-DhI-ivDn.js                  987.91 kB │ gzip:   285.31 kB
+dist/assets/libraryDescriptors-BCrSSmTp.js    1,239.73 kB │ gzip:   417.09 kB
+dist/assets/terme-CxzqdpHO.js                 2,251.92 kB │ gzip:   408.81 kB
+dist/assets/index-D1_2AOdP.js                 2,551.27 kB │ gzip:   938.23 kB
+dist/assets/vendor-BBUfA8XY.js                2,997.66 kB │ gzip: 1,033.63 kB
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 18.66s
+PWA v1.3.0
+mode      generateSW
+precache  55 entries (15232.90 KiB)
+files generated
+dist/sw.js
+dist/workbox-7334f08a.js
+Using TypeScript 5.8.3 (local user-provided)
+Using TypeScript 5.8.3 (local user-provided)
+Build Completed in /vercel/output [1m]
+Deploying outputs...
+Deployment completed
+Creating build cache...
+[2K[1A[2K[G  Production      https://itainta-53rzgfpwp-fabri75715-4892s-projects.vercel.app
+Completing…
+▲ Aliased         https://www.wip.guide
+{
+  "status": "ok",
+  "deployment": {
+    "id": "dpl_DZ5YXMmaCpFenbsNxwxHnNvKmP5d",
+    "url": "https://itainta-53rzgfpwp-fabri75715-4892s-projects.vercel.app",
+    "inspectorUrl": "https://vercel.com/fabri75715-4892s-projects/itainta/DZ5YXMmaCpFenbsNxwxHnNvKmP5d",
+    "readyState": "READY",
+    "target": "production",
+    "deploymentApiUrl": "https://api.vercel.com/v13/deployments/dpl_DZ5YXMmaCpFenbsNxwxHnNvKmP5d"
+  },
+  "message": "Deployment itainta-53rzgfpwp-fabri75715-4892s-projects.vercel.app ready.",
+  "next": [
+    {
+      "command": "vercel inspect itainta-53rzgfpwp-fabri75715-4892s-projects.vercel.app",
+      "when": "Inspect deployment"
+    },
+    {
+      "command": "vercel deploy --prod",
+      "when": "Promote to production"
+    }
+  ]
+}
+
+Verifica dopo il deploy su https://www.wip.guide
+
+  OK   200  /api/flags                 600 ms  il bundle si carica e le rotte pubbliche rispondono
+  OK   200  /api/pricing               362 ms  il listino crediti e leggibile
+  OK   403  /api/admin/users?limit=1   85 ms  il gate admin e attivo (403 atteso, non 500)
+
+Tutto risponde: il deploy e' vivo.
+
