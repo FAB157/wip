@@ -9876,11 +9876,32 @@ ${description}
       if (patch.lat !== undefined) patch.lat = Number(patch.lat);
       if (patch.lon !== undefined) patch.lon = Number(patch.lon);
       if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Nessun campo modificabile' });
+      const STATI_POI = ['auto', 'verified', 'draft', 'needs_revision', 'banned'];
+      if (patch.status !== undefined && !STATI_POI.includes(patch.status)) {
+        return res.status(400).json({ error: `Status non valido: ${patch.status}` });
+      }
 
       const headers = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
       const beforeRes = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=*`, { headers });
       const before = beforeRes.data?.[0];
       if (!before) return res.status(404).json({ error: 'POI non trovato' });
+
+      // Lo status da solo non nasconde nulla: le RPC della mappa filtrano su
+      // is_hidden/verified. Stesse regole di AdminEditor (banna, sbanna, approva).
+      if (patch.status !== undefined && patch.status !== before.status) {
+        if (patch.status === 'banned') {
+          patch.is_hidden = true;
+          patch.verified = false;
+        } else {
+          if (before.status === 'banned') patch.is_hidden = false;
+          if (patch.status === 'verified') {
+            patch.verified = true;
+            patch.is_hidden = false;
+          } else if (patch.status === 'draft' || patch.status === 'needs_revision') {
+            patch.verified = false;
+          }
+        }
+      }
 
       const updRes = await axios.patch(
         `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}`,
@@ -9902,6 +9923,9 @@ ${description}
       // Il trigger protect_poi_review_columns può bloccare alcune colonne:
       // meglio un errore leggibile che un 500 muto.
       const detail = e?.response?.data?.message || e?.message || 'update fallito';
+      if (String(detail).includes('shared_pois_status_check')) {
+        return res.status(500).json({ error: 'Il database non accetta questo status: va applicata la migration 20260928120000_shared_pois_status_check.sql' });
+      }
       res.status(500).json({ error: detail });
     }
   });
