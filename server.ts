@@ -9107,6 +9107,16 @@ ORDER BY DESC(?fama)`;
   }
 
   /**
+   * Wikimedia genera su richiesta solo miniature di larghezze standard
+   * (https://w.wiki/GHai); le altre le serve solo se già in cache, e alle
+   * opere meno note rispondeva con un errore: foto sparite nelle guide museo.
+   */
+  function passoMiniaturaCommons(larghezza: number): number {
+    const passi = [120, 250, 330, 500, 960, 1280];
+    return passi.find(p => p >= larghezza) || passi[passi.length - 1];
+  }
+
+  /**
    * L'URL di una foto Commons alla larghezza voluta. Si passa da
    * Special:FilePath, che regge il ridimensionamento e non richiede di
    * calcolare l'hash del nome file.
@@ -9114,9 +9124,9 @@ ORDER BY DESC(?fama)`;
   function fotoCommons(url: string, larghezza: number): string {
     if (!url) return '';
     // Wikidata dà "http://commons.wikimedia.org/wiki/Special:FilePath/Nome.jpg"
-    const nome = decodeURIComponent(String(url).split('/').pop() || '');
+    const nome = decodeURIComponent(String(url).split('/').pop()?.split('?')[0] || '');
     if (!nome) return '';
-    return `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(nome)}?width=${larghezza}`;
+    return `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(nome)}?width=${passoMiniaturaCommons(larghezza)}`;
   }
 
   /**
@@ -12647,15 +12657,22 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
       const lang = String(req.query.language || 'IT').toLowerCase().slice(0, 2);
       const escludi = String(req.query.exclude || '').trim().slice(0, 160);
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) return res.status(400).json({ ok: false, reason: 'lat e lon richiesti' });
-      const ck = partnerCacheKey('exp-near', lat, lon, 3, lang, citta.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30));
+      // Entro 10 km dal museo (28/09/2026, committente).
+      const RAGGIO_KM = 10;
+      const ck = partnerCacheKey('exp-near-v2', lat, lon, RAGGIO_KM, lang, citta.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30));
       const hit = await partnerCacheGet(ck, 6 * 60 * 60 * 1000);
       if (hit) return res.json({ ok: true, cached: true, esperienze: hit });
       const conTimeout = <T,>(p: Promise<T>, fallback: T) => Promise.race([p, new Promise<T>((r) => setTimeout(() => r(fallback), 9000))]).catch(() => fallback);
-      const [tiqets, viatorRaw, gyg] = await Promise.all([
-        conTimeout(fetchTiqetsProducts({ lat, lon, radiusKm: 3, lang, pageSize: 16 }), [] as any[]),
-        conTimeout(agentTools.searchViatorExperiences(lat, lon, 5, undefined, undefined, citta || undefined), '[]'),
-        conTimeout(citta ? fetchGygExperiencesScraped(citta, lang) : Promise.resolve([] as any[]), [] as any[]),
+      // Senza città Viator cercava «Italia» e a Luni proponeva Venezia e
+      // Palermo. La città si ricava dal punto, come per il biglietto; se non
+      // si trova, Viator e GetYourGuide restano fuori (resta Tiqets nel raggio).
+      const nomiCitta = citta ? [citta] : await nomiCittaDelPunto(lat, lon, lang);
+      const [tiqets, viatorRaw, gygTutti] = await Promise.all([
+        conTimeout(fetchTiqetsProducts({ lat, lon, radiusKm: RAGGIO_KM, lang, pageSize: 16 }), [] as any[]),
+        conTimeout(nomiCitta.length ? agentTools.searchViatorExperiences(lat, lon, RAGGIO_KM, undefined, undefined, nomiCitta[0], lang, 30) : Promise.resolve('[]'), '[]'),
+        conTimeout(nomiCitta.length ? fetchGygExperiencesScraped(nomiCitta[0], lang) : Promise.resolve([] as any[]), [] as any[]),
       ]);
+      const gyg = (gygTutti as any[]).filter((p: any) => gygNellaCitta(p?.url, p?.titolo || p?.title, nomiCitta));
       let viator: any[] = [];
       try { const a = JSON.parse(String(viatorRaw || '[]')); if (Array.isArray(a)) viator = a; } catch { /* fail-open */ }
       const tokEscl = tokenSignificativi(escludi);
@@ -12674,6 +12691,8 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
         ...gyg.map((p: any) => ({ fonte: 'getyourguide', titolo: String(p.titolo || p.title || ''), prezzo: String(p.prezzo || p.price || ''), immagine: '', voto: '', durata: '', distanzaKm: null, url: String(p.url || '') })),
       ]
         .filter(e => e.titolo && e.url && libIsBookableHost(e.url) && !delMuseoEscluso(e.titolo))
+        // Una distanza nota oltre il raggio esclude: «qui vicino» deve essere vero.
+        .filter(e => e.distanzaKm == null || e.distanzaKm <= RAGGIO_KM)
         .filter(e => { const k = normalizzaTesto(e.titolo).slice(0, 60); if (visti.has(k)) return false; visti.add(k); return true; })
         // Prima chi ha foto e distanza, poi il resto; mai più di 12.
         .sort((a, b) => (Number(!!b.immagine) - Number(!!a.immagine)) || ((a.distanzaKm ?? 99) - (b.distanzaKm ?? 99)))
@@ -17958,7 +17977,7 @@ ${manuale}`;
       const alt = valori('P2048')[0]?.amount; if (alt) fatti.push(`${it ? 'Altezza' : 'Height'}: ${Math.round(Math.abs(Number(alt)))} m`);
       const vis = valori('P1174')[0]?.amount; if (vis) fatti.push(`${it ? 'Visitatori annui' : 'Annual visitors'}: ${Math.round(Math.abs(Number(vis))).toLocaleString(it ? 'it-IT' : 'en-GB')}`);
       const p18 = valori('P18')[0];
-      const foto = p18 && fileFotoAccettabile(String(p18)) ? `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(String(p18).replace(/ /g, '_'))}?width=1024` : '';
+      const foto = p18 && fileFotoAccettabile(String(p18)) ? `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(String(p18).replace(/ /g, '_'))}?width=1280` : '';
       return { testo: fatti.length ? `DATI STRUTTURATI VERIFICATI (Wikidata ${qid}):\n- ${fatti.join('\n- ')}` : '', fatti, qid, foto };
     } catch { return vuoto; }
   }
@@ -18432,7 +18451,7 @@ ${manuale}`;
     }
     // 2. Commons: file geolocalizzati a pochi metri dal POI.
     try {
-      const r = await axios.get(`https://commons.wikimedia.org/w/api.php?action=query&generator=geosearch&ggscoord=${lat}|${lon}&ggsradius=150&ggslimit=30&ggsnamespace=6&prop=imageinfo|coordinates&iiprop=url&iiurlwidth=1024&format=json&origin=*`, { timeout: 8000, headers: { 'User-Agent': WIKI_UA } });
+      const r = await axios.get(`https://commons.wikimedia.org/w/api.php?action=query&generator=geosearch&ggscoord=${lat}|${lon}&ggsradius=150&ggslimit=30&ggsnamespace=6&prop=imageinfo|coordinates&iiprop=url&iiurlwidth=1280&format=json&origin=*`, { timeout: 8000, headers: { 'User-Agent': WIKI_UA } });
       const pages: any[] = Object.values(r.data?.query?.pages || {});
       const candidati = pages
         .filter((p: any) => fileFotoAccettabile(p.title))
@@ -18504,7 +18523,7 @@ ${manuale}`;
           try {
             // iiurlwidth: thumbnail renderizzata a 1024px — l'URL originale può
             // essere un TIFF da decine di MB che il tag <img> non mostra.
-            const infoUrl = `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(file.title)}&prop=imageinfo&iiprop=url&iiurlwidth=1024&format=json&origin=*`;
+            const infoUrl = `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(file.title)}&prop=imageinfo&iiprop=url&iiurlwidth=1280&format=json&origin=*`;
             const infoRes = await axios.get(infoUrl);
             const pages = infoRes.data.query.pages;
             const pageId = Object.keys(pages)[0];
@@ -31973,7 +31992,7 @@ app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => 
             const codice = [`${lang}wiki`, 'itwiki', 'enwiki'].find(k => sl[k]?.title);
             const p18 = ent?.claims?.P18?.[0]?.mainsnak?.datavalue?.value;
             if (p18 && !thumbnail) {
-              thumbnail = `https://commons.wikimedia.org/w/index.php?title=Special:FilePath/${encodeURIComponent(String(p18).replace(/ /g, '_'))}&width=800`;
+              thumbnail = `https://commons.wikimedia.org/w/index.php?title=Special:FilePath/${encodeURIComponent(String(p18).replace(/ /g, '_'))}&width=960`;
             }
             if (codice) {
               const wl = codice.replace('wiki', '');
@@ -32634,7 +32653,7 @@ ${materialePerAi || "Nessuna fonte trovata"}
           const sl = ent?.sitelinks || {};
           const codice = [`${lang}wiki`, 'itwiki', 'enwiki'].find((k) => sl[k]?.title);
           const p18 = ent?.claims?.P18?.[0]?.mainsnak?.datavalue?.value;
-          if (p18 && fileFotoAccettabile(String(p18))) thumbnail = `https://commons.wikimedia.org/w/index.php?title=Special:FilePath/${encodeURIComponent(String(p18).replace(/ /g, '_'))}&width=800`;
+          if (p18 && fileFotoAccettabile(String(p18))) thumbnail = `https://commons.wikimedia.org/w/index.php?title=Special:FilePath/${encodeURIComponent(String(p18).replace(/ /g, '_'))}&width=960`;
           if (codice) {
             const sRes = await fetch(`https://${codice.replace('wiki', '')}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(sl[codice].title)}`, { signal: AbortSignal.timeout(6000), headers: { 'User-Agent': WIKI_UA } });
             if (sRes.ok) {
@@ -40096,7 +40115,7 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
           try {
             const r = await axios.get(
               `https://${lang}.wikipedia.org/w/api.php?action=query&generator=images&titles=${encodeURIComponent(citta)}` +
-              `&gimlimit=25&prop=imageinfo&iiprop=url&iiurlwidth=1600&format=json&origin=*`,
+              `&gimlimit=25&prop=imageinfo&iiprop=url&iiurlwidth=1280&format=json&origin=*`,
               { timeout: 5000, headers: { 'User-Agent': WIKI_UA } } // senza user-agent Wikimedia risponde 403 (collaudo 20/09/2026)
             ).catch(() => null);
             const pagine = r?.data?.query?.pages;
@@ -40122,7 +40141,7 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
         try {
           const r = await axios.get(
             `https://commons.wikimedia.org/w/api.php?action=query&generator=geosearch&ggscoord=${lat}|${lon}` +
-            `&ggsradius=${raggioM}&ggslimit=30&ggsnamespace=6&prop=imageinfo&iiprop=url&iiurlwidth=1600&format=json&origin=*`,
+            `&ggsradius=${raggioM}&ggslimit=30&ggsnamespace=6&prop=imageinfo&iiprop=url&iiurlwidth=1280&format=json&origin=*`,
             { timeout: 6000, headers: { 'User-Agent': WIKI_UA } }
           ).catch(() => null);
           const pagine = r?.data?.query?.pages;
@@ -40221,7 +40240,7 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
               // 1. Commons cercato per NOME della tappa: se il monumento ha
               //    una sua categoria su Commons, la foto è sua.
               const wmRes = await axios.get(
-                `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(`${poi.titolo} ${destination}`)}&gsrnamespace=6&prop=imageinfo&iiprop=url&iiurlwidth=1600&format=json&gsrlimit=5`,
+                `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(`${poi.titolo} ${destination}`)}&gsrnamespace=6&prop=imageinfo&iiprop=url&iiurlwidth=1280&format=json&gsrlimit=5`,
                 { timeout: 4000, headers: { 'User-Agent': WIKI_UA } }
               ).catch(() => null);
               if (wmRes?.data?.query?.pages) {

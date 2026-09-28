@@ -581,6 +581,9 @@ export async function searchViatorExperiences(lat: number, lng: number, radiusKm
 
     // Se non troviamo il destinationId, possiamo provare una ricerca prodotti "Freetext"
     if (!destinationId) {
+      // Senza una città, il testo libero era «Italia»: i prodotti più
+      // venduti del Paese spacciati per «qui vicino». Meglio niente.
+      if (!cityName) return JSON.stringify([]);
       console.log(`[Viator] Città '${cityName}' non trovata dinamicamente. Fallback a ricerca Freetext su PRODUCTS.`);
       // La paginazione va DENTRO ogni searchType, non (solo) in cima: senza
       // Viator risponde 400 «Missing pagination» e QUESTA funzione — usata
@@ -588,7 +591,7 @@ export async function searchViatorExperiences(lat: number, lng: number, radiusKm
       // il 12/09/2026 su Musei Vaticani, Uffizi, Museo del Marmo).
       // searchViatorFreetext qui sopra lo faceva già giusto.
       const freePayload = {
-        searchTerm: cityName || "Italia",
+        searchTerm: cityName,
         searchTypes: [{ searchType: "PRODUCTS", pagination: { start: 1, count: quanti } }],
         currency: "EUR",
         pagination: { start: 1, count: quanti }

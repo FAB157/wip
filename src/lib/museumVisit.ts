@@ -1037,6 +1037,28 @@ export function conservaDescrizione(venueKey: string, language: Language, nome: 
     localStorage.setItem(AUDIODESCR_KEY, JSON.stringify(tutte));
   } catch { /* spazio finito: si perde solo la copia locale */ }
 }
+/**
+ * LE FOTO DELLE OPERE A MISURA STANDARD (28/09/2026). Wikimedia genera su
+ * richiesta solo miniature di larghezze standard (https://w.wiki/GHai): le
+ * guide salvate con 800 e 160 pixel restavano senza foto per le opere meno
+ * note. Qui si riporta ogni Special:FilePath alla misura standard più vicina
+ * per eccesso, anche nelle guide già archiviate nel telefono.
+ */
+const PASSI_MINIATURE_COMMONS = [120, 250, 330, 500, 960, 1280];
+export function fotoCommonsStandard(url?: string | null): string {
+  if (!url) return '';
+  if (!/commons\.wikimedia\.org/i.test(url) || !/Special:FilePath/i.test(url)) return url;
+  try {
+    const u = new URL(url);
+    const w = Number(u.searchParams.get('width'));
+    if (!w) return url;
+    const passo = PASSI_MINIATURE_COMMONS.find(p => p >= w) || PASSI_MINIATURE_COMMONS[PASSI_MINIATURE_COMMONS.length - 1];
+    if (passo === w) return url;
+    u.searchParams.set('width', String(passo));
+    return u.toString();
+  } catch { return url; }
+}
+
 /** Preferenza «descrizione prima di ogni opera» (accessibilità). */
 const AUTO_AD_KEY = 'wip_audiodescrizione';
 export function getAudiodescrizioneAuto(): boolean {
@@ -1100,7 +1122,7 @@ export async function fetchBigliettoEdEsperienze(v: MuseumVisit, language: Langu
     return { ticket: null, esperienze: [] };
   }
 }
-/** Le esperienze prenotabili intorno a un punto (3 km), col nostro codice. */
+/** Le esperienze prenotabili intorno a un punto (10 km), col nostro codice. */
 export async function fetchEsperienzeVicine(lat: number, lon: number, language: Language, city?: string, exclude?: string): Promise<Esperienza[]> {
   try {
     const p = new URLSearchParams({ language, lat: String(lat), lon: String(lon) });

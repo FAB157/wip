@@ -4,12 +4,12 @@ import { X, Camera, Check, Volume2, Pause, Play, Loader2, RotateCcw, Landmark, C
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, fetchEsperienzeVicine, Esperienza, skipStop, unskipStop, markStopListened, prossimaTappa, ordinaPerTragitto, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto, leggiCartellino, Cartellino, coppieDaConfrontare, Coppia, fetchConfronto, matchTappa, fetchMuseumMap, MuseumMap, MuseumMapLink, normSalaMappa } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, fetchEsperienzeVicine, Esperienza, skipStop, unskipStop, markStopListened, prossimaTappa, ordinaPerTragitto, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto, leggiCartellino, Cartellino, coppieDaConfrontare, Coppia, fetchConfronto, matchTappa, fetchMuseumMap, MuseumMap, MuseumMapLink, normSalaMappa, fotoCommonsStandard } from '../lib/museumVisit';
 import { avviaAscolto, comandiVocaliDisponibili, ComandoVocale } from '../lib/comandiVocali';
 import { componiFotoRicordo, componiCartolina, condividiImmagine } from '../lib/fotoRicordo';
 import TargaSala from './TargaSala';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
-import { scaricaPacchettoMuseo, museoScaricato, operaDallArchivio, conservaVisita, conservaOpera, prescaricaPrimeOpere } from '../lib/pacchettoMuseo';
+import { scaricaPacchettoMuseo, museoScaricato, museoCompleto, operaDallArchivio, conservaVisita, conservaOpera, prescaricaPrimeOpere } from '../lib/pacchettoMuseo';
 import { speakAudioguide, speakAudioguideFile, stopSpeech, pauseSpeech, resumeSpeech, speakWithSystemVoice, setSpeechSpeed } from '../services/ttsService';
 import { Capacitor } from '@capacitor/core';
 import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
@@ -36,21 +36,40 @@ interface MuseumVisitSheetProps {
 
 /**
  * Una foto che non arriva si RITENTA prima di sparire (13/09/2026,
- * committente in 4G: «sono sparite tutte le foto delle guide museo» — i
- * dati erano tutti a posto, Commons rispondeva 200 dal PC; il redirect di
- * Special:FilePath sotto rete lenta scadeva e `display:none` la nascondeva
- * per sempre). Due tentativi a distanza crescente con un frammento diverso
- * (stessa richiesta, ma il WebView la rifa'); solo poi il vuoto — mai la
- * foto di un altro posto.
+ * committente in 4G: «sono sparite tutte le foto delle guide museo»). Mai la
+ * foto di un altro posto: sempre lo STESSO file, in quest'ordine:
+ *  1. la misura standard di Wikimedia, se la guida ne aveva una non standard
+ *     (28/09/2026: le miniature a 800/160 px non generate venivano rifiutate);
+ *  2. la stessa richiesta rifatta due volte a distanza crescente. Con un
+ *     parametro, non con un frammento: `#r1` non rifà la richiesta, il
+ *     browser riusa l'errore, e i «tentativi» non tentavano niente;
+ *  3. l'originale del file Commons, senza miniatura;
+ * solo dopo, il vuoto.
  */
+function conParametroFoto(src: string, k: string, v: string): string {
+  try { const u = new URL(src); u.searchParams.set(k, v); return u.toString(); } catch { return src; }
+}
 function ritentaFoto(e: React.SyntheticEvent<HTMLImageElement>) {
   const img = e.currentTarget;
+  const src = img.src.split('#')[0];
   const n = Number(img.dataset.tentativi || 0);
-  if (n < 2) {
-    img.dataset.tentativi = String(n + 1);
-    const base = img.src.split('#')[0];
-    setTimeout(() => { img.src = `${base}#r${n + 1}`; }, 1500 * (n + 1));
+  img.dataset.tentativi = String(n + 1);
+  if (n === 0) {
+    const std = fotoCommonsStandard(src);
+    if (std !== src) { img.src = std; return; }
+  }
+  if (n <= 1) {
+    setTimeout(() => { img.src = conParametroFoto(src, 'r', String(n + 1)); }, 1500 * (n + 1));
     return;
+  }
+  if (n === 2 && /Special:FilePath/i.test(src)) {
+    try {
+      const u = new URL(src);
+      u.searchParams.delete('width');
+      u.searchParams.delete('r');
+      img.src = u.toString();
+      return;
+    } catch { /* si nasconde */ }
   }
   img.style.display = 'none';
 }
@@ -74,7 +93,9 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   const [operaInPausa, setOperaInPausa] = useState<number | null>(null);
   // Scaricamento per l'uso senza rete e ampliamento del percorso.
   const [scaricando, setScaricando] = useState<{ fatte: number; totali: number } | null>(null);
-  const [scaricato, setScaricato] = useState(() => !!museoScaricato(visit.venueKey, language));
+  // «Scaricata» vuol dire TUTTO il percorso, non l'archivio aperto dalle
+  // prime otto opere: prima il tasto lo diceva con 8 opere su 15.
+  const [scaricato, setScaricato] = useState(() => museoCompleto(visit.venueKey, language));
   const [aggiungendo, setAggiungendo] = useState(false);
   const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine !== false);
   // La foto dell'opera a tutto schermo: si tiene in mano e si confronta con
@@ -353,22 +374,33 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   // tutto dal leader). Si ferma da solo se il pass manca. Il conteggio in
   // testata dice cosa sta succedendo; se si cambia museo a metà, si smette.
   useEffect(() => {
-    if (!online || visit.dalLeader || visit.prefetchFatto) return;
+    if (!online || visit.dalLeader) return;
     let vivo = true;
+    // TUTTA LA GUIDA SI SCARICA DA SOLA (13/09/2026, committente: «tutte
+    // le guide devono essere scaricate ed essere offline, perché dentro
+    // il museo non c'è linea»). Dopo le prime otto, il resto in silenzio;
+    // il tasto in fondo diventa solo lo stato «disponibile offline».
+    // Riprende a ogni ingresso con la rete finché non è completa: prima
+    // partiva una volta sola, e chi chiudeva la scheda a metà restava con
+    // otto opere su quindici e il tasto che diceva «Scaricata».
+    const completaScarico = async () => {
+      if (!vivo || scaricando || pers.bambini) return;
+      if (!museoScaricato(visit.venueKey, language) || museoCompleto(visit.venueKey, language)) return;
+      try {
+        setScaricando({ fatte: 0, totali: visit.guide.tappe.length });
+        await scaricaPacchettoMuseo(visit, language, (f, t) => { if (vivo) setScaricando({ fatte: f, totali: t }); });
+        if (vivo) setScaricato(museoCompleto(visit.venueKey, language));
+      } catch { /* si riprova al prossimo ingresso */ } finally { if (vivo) setScaricando(null); }
+    };
+    if (visit.prefetchFatto) {
+      void completaScarico();
+      return () => { vivo = false; };
+    }
     prescaricaPrimeOpere(visit, language, 8, (f, t) => { if (vivo) setPrefetch({ fatte: f, totali: t }); }, pers.bambini ? 'bambini' : '')
       .then(async () => {
         if (!vivo) return;
         setPrefetch(null); segnaPrefetchFatto();
-        // TUTTA LA GUIDA SI SCARICA DA SOLA (13/09/2026, committente: «tutte
-        // le guide devono essere scaricate ed essere offline, perché dentro
-        // il museo non c'è linea»). Dopo le prime otto, il resto in silenzio;
-        // il tasto in fondo diventa solo lo stato «disponibile offline».
-        if (scaricato || scaricando || pers.bambini || !museoScaricato(visit.venueKey, language)) return;
-        try {
-          setScaricando({ fatte: 0, totali: visit.guide.tappe.length });
-          await scaricaPacchettoMuseo(visit, language, (f, t) => { if (vivo) setScaricando({ fatte: f, totali: t }); });
-          if (vivo) setScaricato(true);
-        } catch { /* si riprova al prossimo ingresso */ } finally { if (vivo) setScaricando(null); }
+        await completaScarico();
       })
       .catch(() => { if (vivo) setPrefetch(null); });
     return () => { vivo = false; };
@@ -638,7 +670,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     setScaricando({ fatte: 0, totali: visit.guide.tappe.length });
     try {
       const esito = await scaricaPacchettoMuseo(visit, language, (fatte, totali) => setScaricando({ fatte, totali }));
-      setScaricato(true);
+      setScaricato(museoCompleto(visit.venueKey, language));
       notify(
         esito.mancanti.length
           ? t('mv_scaricato_parziale').replace('{n}', String(esito.opere)).replace('{t}', String(esito.opereTotali))
@@ -767,7 +799,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       setScaricando({ fatte: 0, totali: visit.guide.tappe.length });
       try {
         await scaricaPacchettoMuseo(visit, language, (fatte, totali) => setScaricando({ fatte, totali }));
-        setScaricato(true);
+        setScaricato(museoCompleto(visit.venueKey, language));
       } catch { /* si stampa con quello che c'e' */ } finally { setScaricando(null); }
     }
     const opereOrdinate = Object.fromEntries(ordineAttivo.map((k, n) => [n, schedaDi(k)]).filter(([, g]) => !!g));
@@ -951,7 +983,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                 className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-white border border-slate-200 text-left active:scale-[0.98] transition-transform disabled:opacity-60"
               >
                 {m.venue_photo_icon ? (
-                  <img src={m.venue_photo_icon} alt="" loading="lazy" className="w-11 h-11 rounded-full object-cover border border-slate-200 shrink-0"
+                  <img src={fotoCommonsStandard(m.venue_photo_icon)} alt="" loading="lazy" className="w-11 h-11 rounded-full object-cover border border-slate-200 shrink-0"
                     onError={ritentaFoto} />
                 ) : (
                   <div className="w-11 h-11 rounded-xl bg-blue-50 flex items-center justify-center shrink-0"><Landmark className="w-5 h-5 text-primary" /></div>
@@ -1442,7 +1474,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
           <div className="flex-1 min-h-0 flex flex-col items-center justify-center px-6">
             {(tp.foto || tp.fotoIcona) ? (
               <img
-                src={tp.foto || tp.fotoIcona}
+                src={fotoCommonsStandard(tp.foto || tp.fotoIcona)}
                 alt={tp.nome}
                 onClick={() => setFotoGrande({ url: tp.foto || tp.fotoIcona || '', nome: tp.nome, dove: tp.dove || '' })}
                 className="max-h-[42vh] max-w-full object-contain rounded-3xl border border-slate-200 bg-white cursor-pointer"
@@ -1513,7 +1545,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                   {opere.map((t2, k) => (
                     <div key={`${sala}-${k}`} className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-white border border-slate-200">
                       {t2.fotoIcona && (
-                        <img src={t2.fotoIcona} alt="" loading="lazy" className="w-8 h-8 rounded-full object-cover border border-slate-200 shrink-0"
+                        <img src={fotoCommonsStandard(t2.fotoIcona)} alt="" loading="lazy" className="w-8 h-8 rounded-full object-cover border border-slate-200 shrink-0"
                           onError={ritentaFoto} />
                       )}
                       <span className="text-[12px] font-bold text-slate-800 truncate flex-1">{t2.nome}</span>
@@ -1552,7 +1584,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         onClick={() => setFotoGrande(null)}
       >
         <img
-          src={fotoGrande.url}
+          src={fotoCommonsStandard(fotoGrande.url)}
           alt={fotoGrande.nome}
           className="max-w-full max-h-[74vh] object-contain rounded-2xl"
           onError={ritentaFoto}
@@ -1594,7 +1626,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               solo nome — mai l'immagine di un altro museo. */}
           {visit.venuePhotoIcon && (
             <img
-              src={visit.venuePhotoIcon}
+              src={fotoCommonsStandard(visit.venuePhotoIcon)}
               alt=""
               loading="lazy"
               onError={ritentaFoto}
@@ -1783,7 +1815,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                       onClick={() => { const i = visit.guide.tappe.indexOf(x); if (i >= 0) void handleOpera(i); }}
                       className="flex-1 min-w-0 flex flex-col items-center gap-1 px-1.5 py-1.5 rounded-xl bg-white border border-amber-200 active:scale-95 transition-transform"
                     >
-                      {x.fotoIcona ? <img src={x.fotoIcona} alt="" className="w-10 h-10 rounded-full object-cover border border-slate-200" onError={ritentaFoto} /> : <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center"><Landmark className="w-4 h-4 text-primary" /></div>}
+                      {x.fotoIcona ? <img src={fotoCommonsStandard(x.fotoIcona)} alt="" className="w-10 h-10 rounded-full object-cover border border-slate-200" onError={ritentaFoto} /> : <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center"><Landmark className="w-4 h-4 text-primary" /></div>}
                       <span className="text-[10px] font-black text-slate-800 leading-tight text-center line-clamp-2">{x.nome}</span>
                       {x.dove && <span className="text-[9px] font-bold text-slate-500 truncate max-w-full">{x.dove}</span>}
                     </button>
@@ -2018,7 +2050,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               >
                 {p.tappa.fotoIcona ? (
                   <img
-                    src={p.tappa.fotoIcona}
+                    src={fotoCommonsStandard(p.tappa.fotoIcona)}
                     alt=""
                     loading="lazy"
                     onClick={(e) => { e.stopPropagation(); setFotoGrande({ url: p.tappa.foto || p.tappa.fotoIcona || '', nome: p.tappa.nome, dove: p.tappa.dove || '' }); }}
@@ -2284,7 +2316,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                       return (
                         <button key={k} type="button" onClick={() => { setPinAperto(null); apriDalPin(k); }} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-xl text-left active:bg-white">
                           <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${tp.seenCardId ? 'bg-emerald-600 text-white' : 'bg-primary text-white'}`}>{numeroDi(k)}</span>
-                          {tp.fotoIcona && <img src={tp.fotoIcona} alt="" className="w-7 h-7 rounded-lg object-cover shrink-0" />}
+                          {tp.fotoIcona && <img src={fotoCommonsStandard(tp.fotoIcona)} alt="" className="w-7 h-7 rounded-lg object-cover shrink-0" />}
                           <span className="flex-1 text-[12px] font-bold text-slate-800 truncate">{tp.nome}</span>
                           {tp.seenCardId ? <Check className="w-4 h-4 text-emerald-600 shrink-0" /> : <Volume2 className="w-4 h-4 text-primary shrink-0" />}
                         </button>
@@ -2361,7 +2393,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                       className="relative w-11 h-11 shrink-0 cursor-pointer active:scale-90 transition-transform"
                     >
                       <img
-                        src={tappa.fotoIcona}
+                        src={fotoCommonsStandard(tappa.fotoIcona)}
                         alt=""
                         loading="lazy"
                         className="w-11 h-11 rounded-full object-cover border border-slate-200"
@@ -2533,7 +2565,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                         {/* La foto dell'opera, grande: si guarda mentre parla */}
                         {(operaGuide[i].foto || tappa.foto) && (
                           <img
-                            src={operaGuide[i].foto || tappa.foto}
+                            src={fotoCommonsStandard(operaGuide[i].foto || tappa.foto)}
                             alt={operaGuide[i].titolo || tappa.nome}
                             loading="lazy"
                             className="w-full max-h-56 object-contain bg-slate-100"
@@ -2663,7 +2695,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     className="flex flex-col items-center gap-1.5 p-2 rounded-2xl bg-white border border-rose-200 active:scale-95 transition-transform"
                   >
                     {x.fotoIcona ? (
-                      <img src={x.foto || x.fotoIcona} alt="" loading="lazy" className="w-full aspect-square rounded-xl object-cover border border-slate-200" onError={ritentaFoto} />
+                      <img src={fotoCommonsStandard(x.foto || x.fotoIcona)} alt="" loading="lazy" className="w-full aspect-square rounded-xl object-cover border border-slate-200" onError={ritentaFoto} />
                     ) : (
                       <div className="w-full aspect-square rounded-xl bg-blue-50 flex items-center justify-center"><Landmark className="w-6 h-6 text-primary" /></div>
                     )}
@@ -2692,7 +2724,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                         {[A, B].map((x, n) => (
                           <div key={n} className="flex-1 min-w-0 flex items-center gap-2">
                             {(x.fotoIcona || x.foto) ? (
-                              <img src={x.fotoIcona || x.foto} alt="" loading="lazy" className="w-12 h-12 rounded-xl object-cover border border-slate-200 shrink-0" onError={ritentaFoto} />
+                              <img src={fotoCommonsStandard(x.fotoIcona || x.foto)} alt="" loading="lazy" className="w-12 h-12 rounded-xl object-cover border border-slate-200 shrink-0" onError={ritentaFoto} />
                             ) : (
                               <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center shrink-0"><Landmark className="w-5 h-5 text-primary" /></div>
                             )}
@@ -2831,7 +2863,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             return (
               <div className="flex items-center gap-2 p-2 rounded-2xl bg-white border border-slate-200 shadow-sm">
                 {tp?.fotoIcona || tp?.foto
-                  ? <img src={tp.fotoIcona || tp.foto} alt="" className="w-10 h-10 rounded-full object-cover border border-slate-200 shrink-0" onError={ritentaFoto} />
+                  ? <img src={fotoCommonsStandard(tp.fotoIcona || tp.foto)} alt="" className="w-10 h-10 rounded-full object-cover border border-slate-200 shrink-0" onError={ritentaFoto} />
                   : <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center shrink-0"><Landmark className="w-4 h-4 text-primary" /></div>}
                 <div className="min-w-0 flex-1">
                   <p className="text-[13px] font-black text-slate-900 leading-tight truncate">{tp?.nome}</p>
