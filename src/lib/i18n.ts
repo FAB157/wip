@@ -2631,7 +2631,7 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Без интернета Музейный пасс не работает: каждое сканирование требует распознавания на сервере.",
     ZH: "没有网络时博物馆通票无法使用：每次扫描都需要服务器识别。"
   },
-  // ── VISITA MUSEO (12/09/2026): la guida completa + 20 scansioni, 7 giorni ──
+  // ── VISITA MUSEO (12/09/2026): la guida completa + 20 scansioni, per museo, senza scadenza ──
   museum_pass_tour_title: {
     IT: "Visita Museo",
     EN: "Museum Visit",

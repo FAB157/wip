@@ -34,6 +34,8 @@ function blobToBase64(blob: Blob): Promise<string> {
  * «I miei download» lo ritrova nella cartella giusta. Senza, nessuna copia.
  */
 export async function saveBlobAsFile(blob: Blob, filename: string, archivio?: { tipo: 'itinerario' | 'guida' | 'museo'; nome: string }): Promise<boolean> {
+  // Statistiche anonime (26/09/2026): quale documento viene stampato.
+  try { const { tracciaEvento } = await import('../lib/pageviewTracker'); tracciaEvento('pdf_salvato', archivio?.tipo || 'altro'); } catch { /* niente */ }
   if (archivio) {
     try {
       const { archiviaPdf } = await import('../lib/pdfArchivio');

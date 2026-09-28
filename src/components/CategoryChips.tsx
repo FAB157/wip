@@ -306,6 +306,20 @@ export default function CategoryChips({
     }
   };
 
+  // Riga dei Tematici, una voce alla volta come le altre righe (26/09/2026).
+  const tuttiTematiciAccesi = TEMATICI_CHIPS.every((t) => selectedIds.includes(t.id));
+  const accendiTuttiTematici = () => TEMATICI_CHIPS.forEach((t) => { if (!selectedIds.includes(t.id)) onToggle(t.id); });
+  /** Come i sotto-filtri delle altre righe: da «Tutti» un tema resta da solo (gli altri si
+   *  spengono); poi i temi si aggiungono o tolgono uno a uno; tolto l'ultimo si torna a «Tutti». */
+  const scegliSoloTematico = (id: string) => {
+    if (tuttiTematiciAccesi) {
+      TEMATICI_CHIPS.forEach((t) => { if (t.id !== id) onToggle(t.id); });
+      return;
+    }
+    if (temAccesi.length === 1 && temAccesi[0].id === id) { accendiTuttiTematici(); return; }
+    onToggle(id);
+  };
+
   /** Dal pannello: portarla in barra la accende, toglierla la spegne. */
   const cambiaDalPannello = (id: string) => {
     const giaInBarra = inBarra.includes(id);
@@ -657,14 +671,19 @@ export default function CategoryChips({
         {inBarraValide.includes("tematiche") && isAcceso("tematiche") && (
           <motion.div key="tematiche-sub" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
             className="flex flex-row gap-1.5 px-3 overflow-x-auto no-scrollbar pointer-events-auto pb-1">
+            {/* COME LE ALTRE RIGHE (26/09/2026, committente: «quando selezionato Tutti deve
+                comportarsi come le altre categorie — se selezionata le altre si spengono»). «Tutti» =
+                gli otto verticali accesi, ed è l'unica chip evidenziata; da lì un tema toccato resta da
+                solo, poi si aggiungono/tolgono uno a uno, e tolto l'ultimo si torna a «Tutti».
+                Restano categorie vere (onToggle), non un subFilter. */}
             <SubChip key="all" f={{ id: null, emoji: "🧭" }}
-              isSelected={TEMATICI_CHIPS.every((t) => selectedIds.includes(t.id))}
+              isSelected={tuttiTematiciAccesi}
               label={SUB_FILTER_TRANSLATIONS.all_m[language] || "Tutti"}
-              onSelect={() => TEMATICI_CHIPS.forEach((t) => { if (!selectedIds.includes(t.id)) onToggle(t.id); })} />
+              onSelect={accendiTuttiTematici} />
             {TEMATICI_CHIPS.map((f) => (
-              <SubChip key={f.id} f={f} isSelected={selectedIds.includes(f.id)}
+              <SubChip key={f.id} f={f} isSelected={!tuttiTematiciAccesi && selectedIds.includes(f.id)}
                 label={SUB_FILTER_TRANSLATIONS[f.id]?.[language] || getTranslation(f.id, language)}
-                onSelect={() => onToggle(f.id)} />
+                onSelect={() => scegliSoloTematico(f.id)} />
             ))}
           </motion.div>
         )}

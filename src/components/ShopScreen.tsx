@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { ShoppingCart, Coins, ShieldCheck } from 'lucide-react';
-import { getWalletBalance, WalletBalance } from '../lib/pricing';
+import { getWalletBalance, WalletBalance, notifyCreditsChanged } from '../lib/pricing';
 import { notify } from '../lib/toast';
 import { getTranslation, type Language } from '../lib/i18n';
 import { Capacitor } from '@capacitor/core';
@@ -143,13 +143,34 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
           return;
         }
 
+        const primaDellAcquisto = balance?.total ?? (await getWalletBalance(userId)).total;
         await Purchases.purchasePackage({ aPackage: pkgToBuy });
-        
+
         notify(t('vr_b_shop_purchase_ok'));
-        
-        // Polling leggero per aggiornare la UI quando il webhook accreditato i crediti
-        setTimeout(() => fetchBalance(), 3000);
-        setTimeout(() => fetchBalance(), 6000);
+
+        // I crediti li scrive il webhook RevenueCat → server, di solito in
+        // pochi secondi ma non sempre (25/09/2026, primo acquisto reale su iOS:
+        // a registro alle 11:35:00, home ferma al saldo vecchio finché l'app
+        // non veniva riavviata). Due letture a 3 e 6 s non bastavano e, sopra
+        // tutto, aggiornavano SOLO questa schermata: la home e il profilo
+        // ascoltano `wip-credits-updated`, che qui non veniva mai emesso.
+        // Ora: si rilegge il saldo ogni 2 s per un minuto e, appena cresce,
+        // si avvisa tutta l'app; scaduto il minuto, si avvisa comunque.
+        // (In più UserProfileSummary ascolta la riga del profilo in diretta.)
+        void (async () => {
+          for (let i = 0; i < 30; i++) {
+            await new Promise((r) => setTimeout(r, 2000));
+            try {
+              const nuovo = await getWalletBalance(userId);
+              setBalance(nuovo);
+              if (nuovo.total > primaDellAcquisto) {
+                notifyCreditsChanged({ userId, delta: nuovo.total - primaDellAcquisto });
+                return;
+              }
+            } catch { /* rete assente: si riprova al giro dopo */ }
+          }
+          notifyCreditsChanged({ userId });
+        })();
 
       } catch (e: any) {
         if (!e.userCancelled) {

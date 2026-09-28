@@ -1,0 +1,21 @@
+/* NS*UsageDescription dell'Info.plist in de. La cartella de.lproj serve
+   anche perché App Store elenchi la lingua sotto «Lingue»: legge le .lproj
+   del bundle, non CFBundleLocalizations. Chiavi identiche a en.lproj. */
+
+"NSLocationWhenInUseUsageDescription" = "Dein Standort wird verwendet, um Sehenswürdigkeiten auf der Karte anzuzeigen und die Route zu Denkmälern in der Nähe zu berechnen.";
+
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "WIP benötigt dauerhaft deinen Standort, um Denkmäler und Juwelen in der Nähe zu erkennen, während du gehst oder fährst, und den Audioguide zu starten, auch wenn das Telefon in der Tasche steckt oder die App geschlossen ist. Dein Standort wird niemals für Werbung verwendet.";
+
+"NSLocationAlwaysUsageDescription" = "Der dauerhafte Zugriff auf deinen Standort lässt den Audioguide von selbst starten, während du die Stadt erkundest, auch bei ausgeschaltetem Bildschirm.";
+
+"NSFaceIDUsageDescription" = "Face ID wird verwendet, um dein Profil und deine Premium-Inhalte zu schützen.";
+
+"NSCameraUsageDescription" = "Die Kamera wird von der Funktion Vision verwendet, die das Denkmal erkennt, auf das du sie richtest.";
+
+"NSMicrophoneUsageDescription" = "Das Mikrofon wird verwendet, um dem KI-Guide deine Fragen zu diktieren, während du einen Audioguide hörst.";
+
+"NSSpeechRecognitionUsageDescription" = "Die Spracherkennung wandelt in Text um, was du dem WIP-Assistenten diktierst, damit du deine Route erstellen und Fragen stellen kannst, indem du sprichst statt zu tippen.";
+
+"Audioguida" = "Der genaue Standort wird benötigt, um das Denkmal vor dir zu erkennen.";
+
+"NSMotionUsageDescription" = "Bewegungsdaten (stillstehend, gehend, im Fahrzeug) werden nur verwendet, um falsche Audioguide-Hinweise zu vermeiden, wenn das GPS-Signal springt, während du stillstehst. Sie werden niemals weitergegeben oder für Werbung verwendet.";

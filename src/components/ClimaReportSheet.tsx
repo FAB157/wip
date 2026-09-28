@@ -426,6 +426,11 @@ export default function ClimaReportSheet({ aperto, onClose, lat, lon, nome, dati
             </>
           )}
           {!dati && <p className="text-[12px] text-gray-500 mt-4">{tr('mp_clima_non_disp')}</p>}
+          {/* CHIUSURA ANCHE IN FONDO (25/09/2026, committente dal telefono: «la x non funziona e si
+              rimane bloccati»): su un telefono, dopo aver letto tutto, la X in cima è lontana. */}
+          <button type="button" onClick={onClose} className="mt-6 w-full rounded-xl bg-black/5 dark:bg-white/10 text-[#1e3a8a] dark:text-white text-[13px] font-black py-2.5">
+            {getTranslation('close', lang)}
+          </button>
         </div>
       </div>
     </div>

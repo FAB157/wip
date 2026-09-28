@@ -11,6 +11,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { getApiUrl, apiFetch } from "../lib/api";
+import { tracciaEvento } from "../lib/pageviewTracker";
 import {
   CATEGORY_COLORS,
   CATEGORY_EMOJIS,
@@ -1072,6 +1073,7 @@ function MapArea({
   // evento, come gia' fa 'wip-apri-radar' qualche schermata sotto.
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('wip-city-search-toggle', { detail: { aperta: ricercaAperta } }));
+    if (ricercaAperta) tracciaEvento('ricerca_aperta'); // statistiche anonime (26/09/2026)
   }, [ricercaAperta]);
   // Stessa cosa quando si apre la card di un pin (07/09/2026): la card e'
   // ancorata in basso e i due tasti (livelli qui sotto, percorso in
@@ -1682,7 +1684,11 @@ function MapArea({
   // shared_pois: stesso schema di `loadServices` qui sopra, senza le reti/i
   // tracciati di Vino e Gusto, che qui non hanno senso (un centro commerciale
   // non è una tappa di un percorso).
-  const SHOPPING_LUSSO_MIN_ZOOM = 10;
+  // Allargato da 10 a 2 il 26/09/2026 (committente: «zoom il più largo
+  // possibile, basta che la mappa non si blocchi»): la query è comunque
+  // delimitata dal riquadro e da un limite di righe fisso, come gemme e
+  // monumenti — allargare la soglia non aumenta il carico.
+  const SHOPPING_LUSSO_MIN_ZOOM = 2;
   const SHOPPING_EMOJI: Record<string, string> = {
     vie_shopping: '🛍️', grandi_magazzini: '🏬', mall: '🏢', outlet: '🏷️', souk: '🕌', duty_free: '✈️',
   };
@@ -1696,14 +1702,21 @@ function MapArea({
   });
   const [shoppingLoading, setShoppingLoading] = useState(false);
   const shoppingLayerRef = useRef<L.LayerGroup | null>(null);
+  // Stato ATTUALE letto dopo l'await, come servicesActiveRef: senza, un
+  // toggle-off durante il fetch non impediva al layer di riaccendersi da solo.
+  const shoppingActiveRef = useRef(false);
+  useEffect(() => { shoppingActiveRef.current = shoppingActive; }, [shoppingActive]);
 
   const [lussoActive, setLussoActive] = useState(() => {
     try { return localStorage.getItem('wip_lusso_layer_enabled') === '1'; } catch { return false; }
   });
   const [lussoLoading, setLussoLoading] = useState(false);
   const lussoLayerRef = useRef<L.LayerGroup | null>(null);
+  const lussoActiveRef = useRef(false);
+  useEffect(() => { lussoActiveRef.current = lussoActive; }, [lussoActive]);
 
-  /** Fabbrica comune: interroga shared_pois per `category` nei bounds e disegna i pin nel gruppo dato. */
+  /** Fabbrica comune: interroga pin_mappa (leggera, indicizzata GIST) per `category` nei bounds e disegna i pin nel gruppo dato.
+   * Fino al 27/09/2026 interrogava shared_pois diretto (senza indice spaziale, come gemme/monumenti prima di pin_mappa). */
   const caricaLayerVerticale = useCallback(async (
     category: 'shopping' | 'lusso',
     emojiPerTipo: Record<string, string>,
@@ -1711,27 +1724,19 @@ function MapArea({
     group: L.LayerGroup,
     bounds: L.LatLngBounds,
   ) => {
-    const { data } = await supabase
-      .from('shared_pois')
-      .select('id,name,lat,lon,poi_type,description_short,contact_website,contact_phone,is_hidden,status')
-      .eq('category', category)
-      .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
-      .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
-      // .order('id') (06/09/2026): senza un ordine esplicito il limit(200)
-      // non e' stabile fra una richiesta e l'altra — con le decine di
-      // migliaia di righe aggiunte oggi (harvest planet+Wikidata+directory)
-      // ogni pan/zoom poteva tornare un sottoinsieme leggermente diverso
-      // degli stessi 200, e i pin sembravano sfarfallare (apparire/sparire)
-      // anche senza muoversi. Un ordine fisso rende il sottoinsieme stabile.
-      .order('id')
-      .limit(200);
+    // shopping/lusso sono servizi non culturali: pin_mappa_servizi
+    // (27/09/2026), non pin_mappa (quella resta gemme/monumenti/chiese/
+    // musei/panorami, «perfetta, non toccarla»).
+    const { data } = await supabase.rpc('pin_mappa_servizi_per_categoria', {
+      p_south: bounds.getSouth(), p_west: bounds.getWest(), p_north: bounds.getNorth(), p_east: bounds.getEast(),
+      p_category: category, p_limit: 200,
+    });
     // Pulire QUI, dopo la risposta, non prima di interrogare: pulire prima
     // dell'await lasciava la mappa senza pin per tutta la durata della rete
     // (i pin "vanno e vengono" a ogni pan/zoom, segnalato 06/09/2026).
     group.clearLayers();
     for (const p of data || []) {
-      if (p.is_hidden === true || p.status === 'needs_revision') continue;
-      const emoji = emojiPerTipo[String(p.poi_type)] || emojiDefault;
+      const emoji = emojiPerTipo[String(p.sub_category)] || emojiDefault;
       const icon = L.divIcon({
         html: cerchioMarker(emoji, MARKER_CERCHIO_PX, 14),
         className: `wip-${category}-marker`,
@@ -1739,13 +1744,13 @@ function MapArea({
       });
       const mk = L.marker([Number(p.lat), Number(p.lon)], { icon })
         .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
-          <div style="font-size:12px;font-weight:700;color:#111827;">${emoji} ${escapeHtml(p.name || '')}</div>
+          <div style="font-size:12px;font-weight:700;color:#111827;">${emoji} ${escapeHtml(p.nome || '')}</div>
           <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(p.description_short || '')}</div>
           ${p.contact_website ? `<a href="${escapeHtml(p.contact_website)}" target="_blank" rel="noopener" style="font-size:10px;color:#1e3a8a;font-weight:700;display:block;margin-top:4px;">${getTranslation('mp_sito', language)} ↗</a>` : ''}
           ${p.contact_phone ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;">${escapeHtml(p.contact_phone)}</div>` : ''}
         </div>`)
         .addTo(group);
-      arricchisciFumetto(mk, { id: String(p.id), name: String(p.name || ''), lat: Number(p.lat), lon: Number(p.lon), category, poiType: String(p.poi_type || ''), testo: p.description_short || '' }, language);
+      arricchisciFumetto(mk, { id: String(p.id), name: String(p.nome || ''), lat: Number(p.lat), lon: Number(p.lon), category, poiType: String(p.sub_category || ''), testo: p.description_short || '' }, language);
     }
   }, [language]);
 
@@ -1757,7 +1762,7 @@ function MapArea({
       if (!shoppingLayerRef.current) shoppingLayerRef.current = L.layerGroup();
       const group = shoppingLayerRef.current;
       await caricaLayerVerticale('shopping', SHOPPING_EMOJI, '🏬', group, bounds);
-      if (!map.hasLayer(group)) group.addTo(map);
+      if (shoppingActiveRef.current && !map.hasLayer(group)) group.addTo(map);
     } catch (e) {
       console.warn('[Shopping] fetch fallito:', e);
     } finally {
@@ -1773,7 +1778,7 @@ function MapArea({
       if (!lussoLayerRef.current) lussoLayerRef.current = L.layerGroup();
       const group = lussoLayerRef.current;
       await caricaLayerVerticale('lusso', LUSSO_EMOJI, '👑', group, bounds);
-      if (!map.hasLayer(group)) group.addTo(map);
+      if (lussoActiveRef.current && !map.hasLayer(group)) group.addTo(map);
     } catch (e) {
       console.warn('[Lusso] fetch fallito:', e);
     } finally {
@@ -1982,6 +1987,10 @@ function MapArea({
   const [neveActive, setNeveActive] = useState(() => {
     try { return localStorage.getItem('wip_neve_enabled') === '1'; } catch { return false; }
   });
+  // Stato ATTUALE letto dopo l'await (come servicesActiveRef): senza, un
+  // toggle-off durante il fetch non impediva al layer di riaccendersi da solo.
+  const neveActiveRef = useRef(false);
+  useEffect(() => { neveActiveRef.current = neveActive; }, [neveActive]);
 
   // ── Sentieri e cammini ────────────────────────────────────────────────
   // 30.068 percorsi internazionali, nazionali e regionali importati da OSM.
@@ -1991,6 +2000,8 @@ function MapArea({
   const [sentieriActive, setSentieriActive] = useState(() => {
     try { return localStorage.getItem('wip_sentieri_enabled') === '1'; } catch { return false; }
   });
+  const sentieriActiveRef = useRef(false);
+  useEffect(() => { sentieriActiveRef.current = sentieriActive; }, [sentieriActive]);
   const [sentieriLoading, setSentieriLoading] = useState(false);
   const sentieriLayerRef = useRef<L.LayerGroup | null>(null);
   // I tracciati stanno in un gruppo a parte: le palline raggruppano i PIN,
@@ -2168,7 +2179,10 @@ function MapArea({
           }
         }
       }
-      if (map.getZoom() >= SENTIERI_MIN_ZOOM) {
+      // Ricontrolla lo stato ATTUALE (sentieriActiveRef), non quello di
+      // quando il fetch è partito: altrimenti un livello spento durante
+      // l'attesa si riaccendeva da solo appena la risposta arrivava.
+      if (sentieriActiveRef.current && map.getZoom() >= SENTIERI_MIN_ZOOM) {
         if (!map.hasLayer(group)) group.addTo(map);
         if (!map.hasLayer(linee)) linee.addTo(map);
       }
@@ -2422,16 +2436,23 @@ function MapArea({
   });
   const [stradeGustoLoading, setStradeGustoLoading] = useState(false);
   const stradeGustoLayerRef = useRef<L.LayerGroup | null>(null);
+  const stradeGustoActiveRef = useRef(false);
+  useEffect(() => { stradeGustoActiveRef.current = stradeGustoActive; }, [stradeGustoActive]);
   const stradeGustoLineeRef = useRef<L.LayerGroup | null>(null);
   // BUGFIX 26/08/2026: stessa correzione di SENTIERI_MIN_ZOOM sopra.
   const STRADE_GUSTO_MIN_ZOOM = 2;
-  const GUSTO_PRODUTTORI_ZOOM = 11;
+  // GUSTO_PRODUTTORI_ZOOM tolto il 26/09/2026: i pin del gusto si vedono ora
+  // a qualsiasi zoom (vedi punto 3 più sotto), non solo da zoom 11.
   const GUSTO_BOTTEGHE_ZOOM = 14;
   // Come per i sentieri: sotto questo zoom una pallina bordeaux col numero
   // di strade e cantine, sopra i pin singoli e i tracciati.
   const GUSTO_ZOOM_APERTURA = 12;
   // Zone di denominazione (AVA, aree UE derivate): confini, non pin.
-  const GUSTO_AREE_ZOOM = 8;
+  // Allargato da 8 a 4 il 27/09/2026: la query passa ora da `denominazioni_vicine`
+  // (indice GIST) invece del filtro diretto a 4 colonne — misurata veloce
+  // (73-344ms) anche su un riquadro europeo, il timore di lentezza a zoom
+  // lontano non vale più.
+  const GUSTO_AREE_ZOOM = 4;
 
   const toggleStradeGusto = useCallback(() => {
     setStradeGustoActive((prev) => {
@@ -2550,25 +2571,28 @@ function MapArea({
         drawRouteLines(linee, lineeGusto, '#7f1d1d', nomiGusto);
       }
 
-      // 3) I luoghi del gusto. Due livelli per zoom: prima i produttori
-      // (dove nasce), poi anche le botteghe (dove si compra).
+      // 3) I luoghi del gusto (26/09/2026, committente: «pin a qualsiasi
+      // livello di zoom», come gemme/monumenti). Prima si vedevano solo da
+      // zoom 11 (produttori) / 14 (botteghe): niente pin dell'Italia intera
+      // o del mondo. Ora si interroga sempre — cambia solo QUALI tipi si
+      // vedono: le botteghe (130.000, hanno senso a piedi) solo da
+      // GUSTO_BOTTEGHE_ZOOM, i produttori sempre. Dal 27/09/2026 legge
+      // `pin_mappa_servizi` (leggera, indice GIST, tabella dei non-culturali)
+      // invece di shared_pois diretto — stessa causa di lentezza già
+      // risolta per gemme/monumenti, ma su una tabella separata (pin_mappa
+      // resta solo culturale, «perfetta, non toccarla»).
       const zoom = map.getZoom();
-      if (zoom >= GUSTO_PRODUTTORI_ZOOM) {
+      {
         const tipi = zoom >= GUSTO_BOTTEGHE_ZOOM
           ? [...ENO_PRODUTTORI, ...ENO_BOTTEGHE]
           : ENO_PRODUTTORI;
-        const { data: luoghi } = await supabase
-          .from('shared_pois')
-          .select('id,name,lat,lon,poi_type,description_short,contact_website,contact_phone,is_hidden,status')
-          .eq('category', 'enogastronomia')
-          .in('poi_type', tipi)
-          .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
-          .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
-          .limit(zoom >= GUSTO_BOTTEGHE_ZOOM ? 350 : 200);
+        const { data: luoghi } = await supabase.rpc('pin_mappa_servizi_per_categoria', {
+          p_south: bounds.getSouth(), p_west: bounds.getWest(), p_north: bounds.getNorth(), p_east: bounds.getEast(),
+          p_category: 'enogastronomia', p_sub_categories: tipi, p_limit: zoom >= GUSTO_BOTTEGHE_ZOOM ? 350 : 200,
+        });
         for (const p of luoghi || []) {
-          if (p.is_hidden === true || p.status === 'needs_revision') continue;
-          const emoji = SUB_CATEGORY_EMOJIS[String(p.poi_type)] || '🍷';
-          const produttore = ENO_PRODUTTORI.includes(String(p.poi_type));
+          const emoji = SUB_CATEGORY_EMOJIS[String(p.sub_category)] || '🍷';
+          const produttore = ENO_PRODUTTORI.includes(String(p.sub_category));
           const icon = L.divIcon({
             // I produttori sono più grandi e pieni, le botteghe più discrete:
             // a colpo d'occhio si distingue dove si visita da dove si compra.
@@ -2579,14 +2603,14 @@ function MapArea({
           });
           const mkG = L.marker([Number(p.lat), Number(p.lon)], { icon })
             .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
-              <div style="font-size:12px;font-weight:700;color:#111827;">${emoji} ${escapeHtml(p.name || '')}</div>
+              <div style="font-size:12px;font-weight:700;color:#111827;">${emoji} ${escapeHtml(p.nome || '')}</div>
               <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(p.description_short || '')}</div>
               ${p.contact_website ? `<a href="${escapeHtml(p.contact_website)}" target="_blank" rel="noopener" style="font-size:10px;color:#7f1d1d;font-weight:700;display:block;margin-top:4px;">${getTranslation('mp_sito', language)} ↗</a>` : ''}
               ${p.contact_phone ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;">${escapeHtml(p.contact_phone)}</div>` : ''}
               <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_verifica_orari_osm', language)}</div>
             </div>`)
             .addTo(group);
-          arricchisciFumetto(mkG, { id: String(p.id), name: String(p.name || ''), lat: Number(p.lat), lon: Number(p.lon), category: 'enogastronomia', poiType: String(p.poi_type || ''), testo: p.description_short || '' }, language);
+          arricchisciFumetto(mkG, { id: String(p.id), name: String(p.nome || ''), lat: Number(p.lat), lon: Number(p.lon), category: 'enogastronomia', poiType: String(p.sub_category || ''), testo: p.description_short || '' }, language);
         }
       }
 
@@ -2617,7 +2641,7 @@ function MapArea({
         }
       }
 
-      if (map.getZoom() >= STRADE_GUSTO_MIN_ZOOM) {
+      if (stradeGustoActiveRef.current && map.getZoom() >= STRADE_GUSTO_MIN_ZOOM) {
         if (!map.hasLayer(group)) group.addTo(map);
         if (!map.hasLayer(linee)) linee.addTo(map);
       }
@@ -2847,9 +2871,9 @@ function MapArea({
           livelloNeve,
         );
         drawRouteLines(lineeNeve, tracce, '#38bdf8', nomiNeve);
-        if (!map.hasLayer(lineeNeve) && map.getZoom() >= NEVE_MIN_ZOOM) lineeNeve.addTo(map);
+        if (neveActiveRef.current && !map.hasLayer(lineeNeve) && map.getZoom() >= NEVE_MIN_ZOOM) lineeNeve.addTo(map);
       }
-      if (!map.hasLayer(group) && map.getZoom() >= NEVE_MIN_ZOOM) group.addTo(map);
+      if (neveActiveRef.current && !map.hasLayer(group) && map.getZoom() >= NEVE_MIN_ZOOM) group.addTo(map);
     } catch (e) {
       console.warn('[Neve] fetch fallito:', e);
     } finally {
@@ -3038,6 +3062,8 @@ function MapArea({
   // Disclaimer una tantum sulla copertura OSM (flag localStorage)
   const [ztlDisclaimer, setZtlDisclaimer] = useState(false);
   const ztlLayerRef = useRef<L.LayerGroup | null>(null);
+  const ztlActiveRef = useRef(false);
+  useEffect(() => { ztlActiveRef.current = ztlActive; }, [ztlActive]);
   // Centro dell'ultimo fetch perimetri: sopra 5 km di pan si ricarica
   const ztlCenterRef = useRef<{ lat: number; lon: number } | null>(null);
   const ztlBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -3124,7 +3150,7 @@ function MapArea({
             group.addLayer(poly);
           }
         }
-        if (!map.hasLayer(group)) group.addTo(map);
+        if (ztlActiveRef.current && !map.hasLayer(group)) group.addTo(map);
         ztlCenterRef.current = { lat, lon };
       } catch (e) {
         console.warn('[ZTL] fetch perimetri fallito:', e);
@@ -3159,8 +3185,11 @@ function MapArea({
   // Toggle 🏖 nei controlli mappa: marker colorati con la classificazione
   // annuale EEA delle acque di balneazione (dati aperti UE). Persistente,
   // default OFF. Copertura solo Europa: fuori arrivano 0 siti, in silenzio.
-  // Il layer è visibile solo a zoom ≥9 (i siti sono puntuali).
-  const BATHING_MIN_ZOOM = 9;
+  // Allargato da 9 a 2 il 27/09/2026: con la cache `balneazione_cache`
+  // (indice GIST, riempimento in corso) la query usa il riquadro VERO
+  // della vista, non più la cella fissa del solo ripiego live — a zoom
+  // basso si vede la costa intera, non una macchia vicino al centro.
+  const BATHING_MIN_ZOOM = 2;
   // Atlante beni vincolati: 1,78 M di punti nel mondo. Sotto lo zoom 13
   // (scala di quartiere) sarebbero migliaia di pin sovrapposti su una query
   // inutilmente larga, quindi il layer semplicemente non si carica.
@@ -3171,6 +3200,8 @@ function MapArea({
   // Toast una tantum sulla copertura europea (flag localStorage)
   const [bathingDisclaimer, setBathingDisclaimer] = useState(false);
   const bathingLayerRef = useRef<L.LayerGroup | null>(null);
+  const bathingActiveRef = useRef(false);
+  useEffect(() => { bathingActiveRef.current = bathingActive; }, [bathingActive]);
   // Centro dell'ultimo fetch: sopra 10 km di pan il layer si aggiorna
   const bathingCenterRef = useRef<{ lat: number; lon: number } | null>(null);
   // Retry se la mappa non è ancora pronta (ripristino da localStorage al mount)
@@ -3226,7 +3257,7 @@ function MapArea({
         group.addLayer(marker);
       }
       // Il fetch è async: nel frattempo l'utente può aver zoomato sotto soglia
-      if (!map.hasLayer(group) && map.getZoom() >= BATHING_MIN_ZOOM) group.addTo(map);
+      if (bathingActiveRef.current && !map.hasLayer(group) && map.getZoom() >= BATHING_MIN_ZOOM) group.addTo(map);
       const c = bounds.getCenter();
       bathingCenterRef.current = { lat: c.lat, lon: c.lng };
     } catch (e) {
@@ -3301,10 +3332,12 @@ function MapArea({
   // ── Aree protette: Natura 2000 + aree nazionali CDDA (EEA, CC BY 4.0) ──
   // 27/08/2026. Confini, non pin: un poligono per sito, colorato per tipo
   // (habitat / uccelli / nazionale). Stesso schema del layer balneazione:
-  // default OFF, solo Europa, refresh su pan > 10 km. Zoom minimo 9: sotto,
-  // un intero paese di poligoni sarebbe una macchia verde e una risposta da
-  // megabyte.
-  const AREE_MIN_ZOOM = 9;
+  // default OFF, solo Europa, refresh su pan > 10 km.
+  // Allargato da 9 a 4 il 27/09/2026 (non a 2 come balneazione: qui sono
+  // POLIGONI, non punti — un intero continente di confini dettagliati pesa
+  // comunque di più da disegnare). Il tetto di righe (`p_limit`, 200) e la
+  // semplificazione (`p_semplifica_m`) nella cache restano la vera difesa.
+  const AREE_MIN_ZOOM = 4;
   const AREE_ZOOM_FINE = 12;
   const [areeActive, setAreeActive] = useState(() => {
     try { return localStorage.getItem('wip_aree_enabled') === '1'; } catch { return false; }
@@ -3312,6 +3345,8 @@ function MapArea({
   const [areeLoading, setAreeLoading] = useState(false);
   const [areeDisclaimer, setAreeDisclaimer] = useState(false);
   const areeLayerRef = useRef<L.LayerGroup | null>(null);
+  const areeActiveRef = useRef(false);
+  useEffect(() => { areeActiveRef.current = areeActive; }, [areeActive]);
   const areeCenterRef = useRef<{ lat: number; lon: number; fine: boolean } | null>(null);
   const [areeTick, setAreeTick] = useState(0);
 
@@ -3352,7 +3387,7 @@ function MapArea({
           </div>`);
         group.addLayer(poly);
       }
-      if (!map.hasLayer(group) && map.getZoom() >= AREE_MIN_ZOOM) group.addTo(map);
+      if (areeActiveRef.current && !map.hasLayer(group) && map.getZoom() >= AREE_MIN_ZOOM) group.addTo(map);
       const c = bounds.getCenter();
       areeCenterRef.current = { lat: c.lat, lon: c.lng, fine };
     } catch (e) {
@@ -3808,6 +3843,35 @@ function MapArea({
     south: number, west: number, north: number, east: number,
     tipiDb: string[], macro: string, limite = 500,
   ): Promise<Poi[]> => {
+    // locali/utilità/famiglie sono servizi non culturali (27/09/2026):
+    // pin_mappa_servizi, indicizzata GIST, una sola interrogazione invece
+    // della griglia 3×3 su shared_pois diretto qui sotto — quella resta per
+    // `monumenti`, che è culturale e vive solo in pin_mappa (non toccata).
+    if (macro === 'locali' || macro === 'utilita' || macro === 'famiglie') {
+      try {
+        const { data } = await supabase.rpc('pin_mappa_servizi_per_tipi', {
+          p_south: south, p_west: west, p_north: north, p_east: east,
+          p_categorie: tipiDb, p_limit: limite,
+        });
+        return ((data || []) as any[]).filter((i) => i?.nome).map((i) => ({
+          id: i.id,
+          lat: Number(i.lat),
+          lon: Number(i.lon),
+          name: i.nome,
+          category: i.category,
+          baseCategory: macro,
+          subCategory: i.sub_category || i.category,
+          description: i.description_short,
+          description_short: i.description_short,
+          image_url: i.image_url,
+          is_gem: false,
+          isFromDb: true,
+          status: 'verified',
+        } as unknown as Poi));
+      } catch {
+        return [];
+      }
+    }
     try {
       // CAMPIONE SPARSO SU TUTTA LA VISTA, non un grumo (30/08/2026).
       //
@@ -5794,6 +5858,8 @@ function MapArea({
   };
 
   const handleSuggestionClick = async (suggestion: any) => {
+    // Parola cercata, anonima (27/09/2026): quello che la persona ha SCRITTO, non la voce scelta.
+    tracciaEvento('ricerca', searchQuery.trim().toLowerCase() || suggestion?.name || suggestion?.label);
     // Immediate feedback: clear suggestions
     setSuggestions([]);
     setNostri([]);
@@ -5845,6 +5911,7 @@ function MapArea({
   const handleSearch = async (e: FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
+    tracciaEvento('ricerca', searchQuery.trim().toLowerCase()); // parola cercata, anonima (27/09/2026)
 
     setSuggestions([]);
     setIsSearching(true);
@@ -6553,6 +6620,14 @@ function MapArea({
   ]);
 
   const layerAccesi = useMemo(() => LIVELLI.filter((l) => l.on), [LIVELLI]);
+  // Statistiche anonime (26/09/2026): quale livello della mappa viene ACCESO (solo il passaggio spento → acceso,
+  // non quelli già attivi all'apertura, che restano da una sessione all'altra).
+  const livelliPrima = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const ora = new Set<string>(layerAccesi.map((l) => String(l.id)));
+    if (livelliPrima.current) for (const id of ora) if (!livelliPrima.current.has(id)) tracciaEvento('livello_acceso', id);
+    livelliPrima.current = ora;
+  }, [layerAccesi]);
 
   const spegniTuttiILivelli = useCallback(async () => {
     // In serie e attesi: alcuni onClick (es. toggleServices) sono async, e
@@ -7322,15 +7397,36 @@ function MapArea({
               piedi, il periodo migliore, i mesi estremi e l'analisi AI.
               Una scheda sola perché il clima medio è lo stesso per tutta la
               città: quello che cambia è il MESE, non il punto sulla mappa. */}
+          {/* Col pannello dei livelli aperto la scheda si ritira (25/09/2026): stanno nella
+              stessa colonna e una scheda alta schiacciava il pannello a zero altezza —
+              impossibile spegnere il livello. */}
           <AnimatePresence>
-            {climaActive && (datiClima || climaVuoto) && (
+            {climaActive && !serviziAperti && (datiClima || climaVuoto) && (
               <motion.div
                 key="scheda-clima"
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
-                className="shrink-0 bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 px-3 py-2.5 max-w-[240px]"
+                // TETTO E CHIUSURA (25/09/2026, committente dal telefono: «il banner non si può
+                // spengere ed è troppo in alto… si rimane bloccati»): la colonna cresce dal basso
+                // verso l'alto, e con l'analisi AI lunga la scheda usciva dallo schermo senza un
+                // modo per chiuderla. Ora scorre dentro un'altezza massima e ha la sua X, che
+                // spegne il livello.
+                // 26/09: su iPhone 58vh (viewport «grande», barra di Safari esclusa) sforava ancora e la X,
+                // in cima al contenuto, scorreva via col testo. Tetto in dvh (altezza visibile reale) e X
+                // appiccicata in alto: resta raggiungibile a qualunque punto dello scorrimento.
+                className="shrink-0 pointer-events-auto bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 px-3 py-2.5 max-w-[240px] max-h-[min(45dvh,26rem)] overflow-y-auto overscroll-contain relative"
               >
+                <div className="sticky top-0 z-10 flex justify-end -mb-6 pointer-events-none">
+                  <button
+                    type="button"
+                    onClick={() => setClimaActive(false)}
+                    className="pointer-events-auto w-7 h-7 -mt-1 -mr-1 rounded-full bg-white/90 dark:bg-[#2C2C2E]/90 shadow text-primary/80 dark:text-white/80 flex items-center justify-center"
+                    aria-label={getTranslation('close', language)}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
                 {!datiClima ? (
                   <p className="text-[10px] text-primary/70 dark:text-white/70">{getTranslation('mp_clima_non_disp', language)}</p>
                 ) : (

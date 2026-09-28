@@ -6,7 +6,7 @@ import { notifyCreditsChanged } from '../../lib/pricing';
 import {
   Users, Search, RefreshCw, Download, ChevronLeft, ChevronRight, Loader2,
   AlertTriangle, ShieldCheck, ShieldOff, Wallet, Gauge, Activity, X,
-  ArrowUpCircle, ArrowDownCircle, Ban, Crown, Zap, DollarSign, Server,
+  ArrowUpCircle, ArrowDownCircle, Ban, Zap, DollarSign, Server,
   Inbox, UserCog, Trophy, Coins, CalendarClock,
 } from 'lucide-react';
 
@@ -393,7 +393,6 @@ export default function AdminUsersPro() {
           <thead className="bg-[#f8f5f0] text-[10px] font-black uppercase tracking-wider text-on-surface-variant/60">
             <tr>
               <th className="p-4">Utente</th>
-              <th className="p-4 text-center">Piano</th>
               <th className="p-4 text-center">Acquistati</th>
               <th className="p-4 text-center">Ottenuti</th>
               <th className="p-4 text-center">Totale</th>
@@ -405,7 +404,7 @@ export default function AdminUsersPro() {
             {loading && rows.length === 0 && (
               Array.from({ length: 6 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  <td colSpan={7} className="p-4">
+                  <td colSpan={6} className="p-4">
                     <div className="h-6 bg-[#f1ede6] rounded-lg animate-pulse" />
                   </td>
                 </tr>
@@ -414,7 +413,7 @@ export default function AdminUsersPro() {
 
             {!loading && rows.length === 0 && !error && (
               <tr>
-                <td colSpan={7} className="p-12 text-center">
+                <td colSpan={6} className="p-12 text-center">
                   <Inbox className="w-8 h-8 mx-auto text-on-surface-variant/30 mb-2" />
                   <p className="text-xs font-bold text-on-surface-variant">
                     {query ? `Nessun utente trovato per "${query}".` : 'Nessun utente registrato.'}
@@ -424,7 +423,6 @@ export default function AdminUsersPro() {
             )}
 
             {rows.map(u => {
-              const premium = u.is_forever_premium || (u.premium_until && new Date(u.premium_until) > new Date());
               return (
                 <tr
                   key={u.id}
@@ -442,21 +440,11 @@ export default function AdminUsersPro() {
                           {u.is_admin && (
                             <span className="text-[8px] font-black uppercase tracking-wider bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded">Admin</span>
                           )}
-                          {premium && (
-                            <span className="text-[8px] font-black uppercase tracking-wider bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Premium</span>
-                          )}
                         </p>
                         {u.display_name && <p className="text-[10px] text-on-surface-variant/70 truncate">{u.email}</p>}
                         <p className="text-[9px] font-mono text-on-surface-variant/40 truncate">{u.id}</p>
                       </div>
                     </div>
-                  </td>
-                  <td className="p-4 text-center">
-                    <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-full ${
-                      (u.subscription_tier || 'free') === 'free' ? 'bg-gray-100 text-gray-600' : 'bg-amber-50 text-amber-700'
-                    }`}>
-                      {u.subscription_tier || 'free'}
-                    </span>
                   </td>
                   <td className="p-4 text-center">
                     <span className="text-[11px] font-black tabular-nums bg-blue-50 text-blue-600 px-2.5 py-1 rounded-full">{nf(u.purchased_credits)}</span>
@@ -716,47 +704,12 @@ function UserDetailPanel({ user, onClose, onChanged }: {
     }, false);
   };
 
-  /* Limiti e piano */
-  const [limitItinerary, setLimitItinerary] = useState(profile.custom_limit_itinerary?.toString() ?? '');
-  const [limitAudio, setLimitAudio] = useState(profile.custom_limit_audio_guide?.toString() ?? '');
-  const [tier, setTier] = useState(profile.subscription_tier || 'free');
-  const [forever, setForever] = useState(!!profile.is_forever_premium);
-  const [premiumUntil, setPremiumUntil] = useState(profile.premium_until ? String(profile.premium_until).slice(0, 10) : '');
-  const [limitsTouched, setLimitsTouched] = useState(false);
-
-  // Il profilo completo arriva col dettaglio: i campi vanno riallineati una
-  // volta sola, e mai sopra a quello che l'operatore sta scrivendo.
-  useEffect(() => {
-    if (limitsTouched || !detail?.profile) return;
-    const p = detail.profile;
-    setLimitItinerary(p.custom_limit_itinerary?.toString() ?? '');
-    setLimitAudio(p.custom_limit_audio_guide?.toString() ?? '');
-    setTier(p.subscription_tier || 'free');
-    setForever(!!p.is_forever_premium);
-    setPremiumUntil(p.premium_until ? String(p.premium_until).slice(0, 10) : '');
-  }, [detail?.profile, limitsTouched]);
-
-  const doSaveLimits = () => run('limits', async () => {
-    const payload = {
-      user_id: user.id,
-      userId: user.id,
-      custom_limit_itinerary: limitItinerary === '' ? null : Math.max(0, Math.trunc(Number(limitItinerary) || 0)),
-      custom_limit_audio_guide: limitAudio === '' ? null : Math.max(0, Math.trunc(Number(limitAudio) || 0)),
-      subscription_tier: tier,
-      is_forever_premium: forever,
-      premium_until: premiumUntil ? new Date(`${premiumUntil}T23:59:59.000Z`).toISOString() : null,
-    };
-    try {
-      await adminApi('/api/admin/user/set-limits', { method: 'POST', body: JSON.stringify(payload) });
-    } catch (e) {
-      if (!isRouteMissing(e)) throw e;
-      const { user_id, userId, ...cols } = payload;
-      const { error: upErr } = await supabase.from('user_profiles').update(cols).eq('id', user.id);
-      if (upErr) throw upErr;
-    }
-    setLimitsTouched(false);
-    return 'Limiti e piano aggiornati.';
-  });
+  // «Limiti e piano» (limite itinerari/audioguide al giorno, piano free/premium,
+  // scadenza, premium a vita) TOLTA il 25/09/2026 su ordine del committente:
+  // con il portafoglio a crediti i limiti del piano non hanno più senso. Le
+  // colonne custom_limit_*, subscription_tier, premium_until e
+  // is_forever_premium restano sul DB (quotaManager legacy) ma non si
+  // modificano più da qui.
 
   /* Sospensione */
   const [banDuration, setBanDuration] = useState('24h');
@@ -854,10 +807,6 @@ function UserDetailPanel({ user, onClose, onChanged }: {
             <div>
               <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant/50">Iscritto il</p>
               <p className="font-bold text-on-surface">{dateIt(profile.created_at || status?.created_at)}</p>
-            </div>
-            <div>
-              <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant/50">Piano</p>
-              <p className="font-bold text-on-surface capitalize">{profile.subscription_tier || 'free'}</p>
             </div>
             <div>
               <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant/50">Ruolo</p>
@@ -1021,51 +970,6 @@ function UserDetailPanel({ user, onClose, onChanged }: {
             Per un acquisto contestato accredita qui i crediti corrispondenti sul portafoglio «Acquistati»,
             indicando l'ordine nella causale.
           </p>
-        </Section>
-
-        {/* Limiti e piano */}
-        <Section title="Limiti e piano" icon={<Crown className="w-3.5 h-3.5" />}>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="text-[10px] font-black uppercase tracking-widest text-primary/60 mb-1 block">Limite itinerari/giorno</label>
-              <input type="number" min="0" value={limitItinerary}
-                onChange={e => { setLimitItinerary(e.target.value); setLimitsTouched(true); }}
-                placeholder="vuoto = limite del piano"
-                className="w-full bg-surface border border-outline-variant rounded-xl px-3 py-2 text-xs font-bold tabular-nums" />
-            </div>
-            <div>
-              <label className="text-[10px] font-black uppercase tracking-widest text-primary/60 mb-1 block">Limite audioguide/giorno</label>
-              <input type="number" min="0" value={limitAudio}
-                onChange={e => { setLimitAudio(e.target.value); setLimitsTouched(true); }}
-                placeholder="vuoto = limite del piano"
-                className="w-full bg-surface border border-outline-variant rounded-xl px-3 py-2 text-xs font-bold tabular-nums" />
-            </div>
-            <div>
-              <label className="text-[10px] font-black uppercase tracking-widest text-primary/60 mb-1 block">Piano</label>
-              <select value={tier} onChange={e => { setTier(e.target.value); setLimitsTouched(true); }}
-                className="w-full bg-surface border border-outline-variant rounded-xl px-3 py-2 text-xs font-bold">
-                <option value="free">free</option>
-                <option value="premium">premium</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-[10px] font-black uppercase tracking-widest text-primary/60 mb-1 block">Premium fino al</label>
-              <input type="date" value={premiumUntil}
-                onChange={e => { setPremiumUntil(e.target.value); setLimitsTouched(true); }}
-                disabled={forever}
-                className="w-full bg-surface border border-outline-variant rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50" />
-            </div>
-          </div>
-          <label className="flex items-center gap-2.5 bg-[#f8f5f0] p-3 rounded-xl cursor-pointer">
-            <input type="checkbox" checked={forever}
-              onChange={e => { setForever(e.target.checked); setLimitsTouched(true); }}
-              className="w-4 h-4 rounded border-gray-300" />
-            <span className="text-xs font-bold text-on-surface select-none">Premium a vita (ignora la data di scadenza)</span>
-          </label>
-          <button onClick={doSaveLimits} disabled={busy === 'limits'}
-            className="w-full sm:w-auto px-5 py-2.5 bg-primary text-white rounded-xl text-xs font-black disabled:opacity-50 flex items-center justify-center gap-1.5">
-            {busy === 'limits' ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Salva limiti e piano
-          </button>
         </Section>
 
         {/* Provvedimenti */}

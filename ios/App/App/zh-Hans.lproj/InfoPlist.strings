@@ -1,0 +1,21 @@
+/* NS*UsageDescription dell'Info.plist in zh-Hans. La cartella zh-Hans.lproj serve
+   anche perché App Store elenchi la lingua sotto «Lingue»: legge le .lproj
+   del bundle, non CFBundleLocalizations. Chiavi identiche a en.lproj. */
+
+"NSLocationWhenInUseUsageDescription" = "我们使用你的位置在地图上显示景点，并计算前往附近古迹的路线。";
+
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "WIP 需要始终访问你的位置，以便在你步行或驾车时发现附近的古迹和宝藏景点，即使手机在口袋里或应用已关闭，也能自动播放语音导览。你的位置绝不会用于广告。";
+
+"NSLocationAlwaysUsageDescription" = "持续访问你的位置可让语音导览在你游览城市时自动开始，即使屏幕已关闭。";
+
+"NSFaceIDUsageDescription" = "Face ID 用于保护你的个人资料和高级内容。";
+
+"NSCameraUsageDescription" = "相机用于 Vision 功能，识别你对准的古迹。";
+
+"NSMicrophoneUsageDescription" = "麦克风用于在收听语音导览时，向 AI 导游口述你的问题。";
+
+"NSSpeechRecognitionUsageDescription" = "语音识别会把你对 WIP 助手说的话转成文字，让你用说话代替打字来创建行程和提问。";
+
+"Audioguida" = "需要精确位置才能识别你面前的古迹。";
+
+"NSMotionUsageDescription" = "运动数据（静止、步行、乘车）仅用于在你静止而 GPS 信号跳动时避免语音导览误报。这些数据绝不会被共享，也不会用于广告。";

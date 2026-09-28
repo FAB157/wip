@@ -80,6 +80,16 @@ Content is generated once and cached forever:
 What the user actually opens: the **pin popup** (`PoiPopupContent` → `/api/poi/details`, then `/api/poi/enrich-stream`) and the **sheet** (`PoiDetailSheet` → `/api/poi/details`, then `/api/poi/enrich` + the stream). Measured that day: 77% of the POIs around Forte dei Marmi had neither text nor photo (almost all `source='overture'`), and the pipeline had fired 105 times in 7 days. Decisions of the committente, all in force:
 
 - **No credit gate on the card.** The 5-credit «Arricchimento Dettagli (AI)» confirmation and charge are gone: a place's text and photo are free. The audioguide keeps its own gate.
+- **A card is generated ONCE, every route is cache-first** (26/09/2026, committente: «ciò che il primo utente vede
+  resta, il secondo usa la cache — pin, descrizioni, audioguida, su tutto»). `/api/poi/enrich` (also `fast`, the
+  mode PoiDetailSheet always uses) answers `cached:true` when the row has ≥ 60 chars of text in the requested
+  language (the LONGEST of description_short / description_long / description_ai — many rows have text only in
+  `description_ai`) and a photo or a fresh `enrich_foto_cercata_<id>`; `enrich-stream` hits cache on the longest of
+  the three fields (> 80). «Searched, nothing» is remembered 14 days (`enrich_vuoto_v2_<id>`, also when the card is
+  only the data line or < 60 chars). A data line NEVER overwrites existing text and an existing
+  description_long/description_ai is never replaced. The audioguide takes the LONGEST saved text as material,
+  never the first (a 155-char poi_details.summary used to hide a 1,049-char text → «no_material»). `force:true`
+  (admin/scripts) regenerates.
 - **Guests get the cache, never a generation** («ospiti no»): `/api/poi/details` and the STEP 0 cache hit stay public; everything after it sits behind `cancelloGenerazione`, which is called **before** the source lookup, not after.
 - **No source → no text, and no LLM call either.** The text was already forced empty (rule of 24/08); now the model is not even called, the outcome is remembered for 14 days (`enrich_vuoto_<id>` in `api_cache`), and a photo that *was* found is saved immediately — not after the stream.
 - **Overture commercial POIs: data only, no prose** (`eCommercialeOverture`: `source='overture'` or id `ov-…`, and a commercial category — beach clubs, restaurants, hotels, shops, chargers). No Wikipedia, no official-site-as-source, no LLM: the server answers `solo_dati: true` and the client shows the data line (street · city; phone, site and hours already have their buttons). The only lookup allowed is the street-level photo. Museums, churches, monuments, parks and galleries are **not** commercial, even when the row comes from Overture.
@@ -274,6 +284,52 @@ per-work button answered «nessuna fonte».
   title of the source (`nomeFonte`, often English with the museum in front):
   Wikipedia's title match is ≥ 0.6, and only the Italian title finds
   «Vetrate del Duomo di Milano».
+- **Photos, copies, source: measured (25/09/2026, Santo Stefano di Bologna: 0 photos on 13
+  stops, 3 stops ≥ 60% copied from Wikipedia, the EN guide of another «Santo Stefano» built on
+  the Genoa article).** The photo phase is `fotoPerTappeGuida`: every Wikimedia call is retried
+  once after 2 s, and a guide still without photos because of an ERROR (not missing material)
+  is saved with `fotoDaRifare` — never as final. Churches also read Wikidata P361 («part of»).
+  Copying is MEASURED, not just forbidden: `antiCopiaTappe` (pgSovrapposizione, 8-word windows,
+  each field separately) sends stops ≥ `SOGLIA_COPIA_PCT` (60) through the reviewer's rewrite;
+  outcome in `guide.qualita.copia`. The «own words» rule is ONE constant, `REGOLA_PAROLE_TUE`.
+  Without GPS, a venue article must lie within 2 km of the venue or name its city; disambiguation
+  pages never count. Old guides: `scratch/ripara-guide-musei.mjs` (route `/api/museums/ripara-guida`,
+  script-only); test: `scratch/collaudo-copia-guide-musei.mjs`.
+- **Empty stops: ONE function, source by QID first (25/09/2026, collaudo of 7 guides: Louvre 35/40
+  stops empty — the Venus de Milo was «Opera (-140) n. inventario LL 299.» —, British 35/40 with
+  the literal placeholder «... (200+ words) ...», Duomo di Milano 16/16, Uffizi 9/40).**
+  `riempiTappeVuote` (server.ts, above `cercaMaterialeWeb`) fills every stop for which `tappaVuota`
+  is true (< 60 chars or a placeholder): first the Wikipedia article OF THE WORK through its
+  Wikidata QID (`voceOperaDaQid`, tier A), then the open web. Used by `venue-guide` (4 stops live,
+  40 when seeding) and by `ripara-guida` mode `vuoti`, which also removes works that Wikidata places
+  in ANOTHER museum > 20 km away (`operaAltroveSecondoWikidata`: the Louvre had Titian's «Sacred and
+  Profane Love», which is at the Borghese). The library's anti-regression score counts stops with
+  real text. The client never shows or reads a placeholder (`spiegazioneVera`, MuseumVisitSheet).
+- **The artwork card must be about THAT work, in THAT language.** The Wikipedia title must contain
+  every proper word of the work's name (`titoloDellOpera`: «Candelabro Trivulzio» used to take
+  «Palazzo Trivulzio»), the city is not a word of the museum's name, and `linguaProbabile` checks
+  the output, the translation and the cache (an EN card in Italian is redone). Offline test of the
+  rules: `scratch/collaudo-regole-guide-museo.mjs`.
+- **Distances: `getHaversineDistance` is METRES, `haversineDistance` (server.ts ~20867) is KILOMETRES.**
+  Until 26/09/2026 `fotoOperaPerTitolo` compared the km value with `> 3000` as if metres, so a photo
+  found by title passed from anywhere within 3,000 km (the chapels of the Sacro Monte di Varese on a
+  basilica in Bologna); the museum-map lookup by name and the «experiences near» distance had the same
+  bug. Use `getHaversineDistance` for any threshold in metres.
+- **A photo found by title must PROVE it is here** (P625 ≤ 3 km, or P195/P276 = the venue or an entity
+  ≤ 3 km): a person («San Pietro» → Rubens) or a subject («Madonna del latte» → Memling) declares no
+  place and used to pass. Last check on every artwork photo, whatever the phase:
+  `fotoContraddiceTappa` (another famous artist, another big museum, the author's portrait, a
+  panorama). `opereDaWikidata` drops events and people (the state funeral of Berlusconi was a «work»
+  of the Duomo).
+- **The library never gets worse, even at night.** `salvaInLibreriaMusei` does NOT overwrite when the
+  existing guide cannot be read (the 02:00 seeding with `rigenera` on droplet 104 replaced the British
+  Museum EN — 40 stops, 40 photos — with 12 stops and 0 photos because the read timed out), nor with a
+  `fotoDaRifare` guide that has fewer photos than the old one.
+- **Experiences and tickets of THIS museum**: the product TITLE must carry the museum's proper words
+  (city words don't count; «british» used to let in Westminster Abbey); links go through `/api/out`
+  with `u=` (with `url=` it answered 400). A Visita bought for the museum opens experiences and
+  «altre opere» like the pass; the Pass base discount on a Visita is used ONCE per pass
+  (`scontoPassBaseLibero`).
 
 ## Premium Guide: truth before length (20/09/2026)
 

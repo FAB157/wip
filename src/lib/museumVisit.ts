@@ -1424,6 +1424,8 @@ export async function fetchEsperienzeMuseo(visit: MuseumVisit, language: Languag
   if (!headers) return [];
   try {
     const p = new URLSearchParams({ venueName: visit.venue.name, language });
+    // La Visita comprata apre le esperienze come il Pass: il server la cerca per chiave.
+    if (visit.venueKey) p.set('venueKey', visit.venueKey);
     if (visit.venue.lat != null && visit.venue.lon != null) {
       p.set('lat', String(visit.venue.lat));
       p.set('lon', String(visit.venue.lon));

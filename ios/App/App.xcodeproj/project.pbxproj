@@ -101,6 +101,12 @@
 		504EC3131FED79650016851F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A11A2B3C4D5E6F708091001A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		A11A2B3C4D5E6F7080910203 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A11A2B3C4D5E6F7080910204 /* it */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = it; path = it.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A11A2B3C4D5E6F7080910205 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A11A2B3C4D5E6F7080910206 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A11A2B3C4D5E6F7080910207 /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = de.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A11A2B3C4D5E6F7080910208 /* ru */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ru; path = ru.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A11A2B3C4D5E6F7080910209 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = zh-Hans.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		50B271D01FEDC1A000F3C39B /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
 		AF277DCFFFF123FFC6DF26C7 /* Pods_App.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_App.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		AF51FD2D460BCFE21FA515B2 /* Pods-App.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-App.release.xcconfig"; path = "Pods/Target Support Files/Pods-App/Pods-App.release.xcconfig"; sourceTree = "<group>"; };
@@ -312,6 +318,12 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				it,
+				fr,
+				es,
+				de,
+				ru,
+				"zh-Hans",
 				Base,
 			);
 			mainGroup = 504EC2FB1FED79650016851F;
@@ -470,6 +482,12 @@
 			isa = PBXVariantGroup;
 			children = (
 				A11A2B3C4D5E6F7080910203 /* en */,
+				A11A2B3C4D5E6F7080910204 /* it */,
+				A11A2B3C4D5E6F7080910205 /* fr */,
+				A11A2B3C4D5E6F7080910206 /* es */,
+				A11A2B3C4D5E6F7080910207 /* de */,
+				A11A2B3C4D5E6F7080910208 /* ru */,
+				A11A2B3C4D5E6F7080910209 /* zh-Hans */,
 			);
 			name = InfoPlist.strings;
 			sourceTree = "<group>";

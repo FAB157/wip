@@ -24,7 +24,7 @@ import { ItaintaBackgroundPoi, clearNativeUserContext, pushUserContextToNative }
 import DayPassBadge from "./components/DayPassBadge";
 import { wipeLocalUserData } from "./lib/userSession";
 import { getApiUrl, invalidaTokenCache } from "./lib/api";
-import { tracciaVisita } from "./lib/pageviewTracker";
+import { tracciaVisita, tracciaEvento, impostaContestoVisite } from "./lib/pageviewTracker";
 import NavChoiceSheet from "./components/NavChoiceSheet";
 import { notify } from "./lib/toast";
 import { notifyCreditsChanged } from "./lib/pricing";
@@ -200,14 +200,46 @@ export default function App() {
 
   // --- 2. Navigation & UI ---
   const [activeTab, setActiveTab] = useState<"map" | "plan" | "camera" | "profile" | "events">("map");
-  // Visite del SITO per il pannello admin (non i POI, vedi CLAUDE.md): una
-  // riga per apertura app + una per ogni cambio tab, mai per l'app nativa
-  // (il pannello "Visite" parla del sito, non degli utenti mobile).
+  // Visite per il pannello admin (non i POI, vedi CLAUDE.md): una riga per apertura + una per ogni cambio tab.
+  // (26/09/2026) Anche dalle app Android/iOS, con la piattaforma: il committente vuole sapere se è sito o app.
+  // Il contesto (lingua, registrato sì/no) va impostato PRIMA della prima visita.
+  useEffect(() => { impostaContestoVisite({ lang: String(language || ''), logged: !!session?.user }); }, [language, session]);
   useEffect(() => {
-    if (Capacitor.isNativePlatform()) return;
     tracciaVisita(`/${activeTab}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
+  // USO DEI SERVIZI (26/09/2026): gli eventi che l'app già emette diventano righe anonime del pannello Visite,
+  // in un posto solo invece che sparsi nei componenti. Il dettaglio è corto e mai personale (categoria, città).
+  useEffect(() => {
+    const MAPPA: Record<string, string> = {
+      'wip-poi-trigger': 'audioguida_avvio', 'wip-teaser-started': 'teaser', 'wip-smart-navigate': 'nav_avviata',
+      'wip-nav-arrived': 'nav_arrivo', 'wip-open-chat': 'chat_aperta', 'wip-giro-avviato': 'percorso_avviato',
+      [OPEN_MUSEUM_VISIT_EVENT]: 'visita_museo', 'wip-itinerary-verified': 'itinerario_generato',
+      'wip-apri-download': 'download_aperto', 'wip-open-experiences': 'esperienze_aperte', 'wip-open-shop': 'negozio_aperto',
+      'wip-open-daypass': 'daypass_aperto', 'wip-auth-required': 'login_richiesto', 'wip-set-category': 'categoria_scelta',
+      'wip-open-radar': 'radar_aperto', 'wip-apri-radar': 'radar_aperto', 'wip-notifica-apri': 'notifica_aperta',
+    };
+    const dettaglioDi = (d: any): string | undefined => {
+      if (d == null) return undefined;
+      if (typeof d !== 'object') return String(d);
+      const v = d.category || d.categoria || d.poi?.category || d.tipo || d.kind || d.city || d.citta || d.destinazione || d.source || d.mode;
+      return v ? String(v) : undefined;
+    };
+    const ascoltatori = Object.entries(MAPPA).map(([ev, nome]) => {
+      const h = (e: Event) => tracciaEvento(nome, dettaglioDi((e as CustomEvent).detail));
+      window.addEventListener(ev, h);
+      return () => window.removeEventListener(ev, h);
+    });
+    return () => ascoltatori.forEach((f) => f());
+  }, []);
+  // Da dove si apre l'app nativa (notifica, widget, link condiviso): una volta sola per sessione.
+  useEffect(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const da = q.get('from') || q.get('source') || (q.get('widget') ? 'widget' : '') || (q.get('notifica') ? 'notifica' : '');
+      if (da) tracciaEvento('apertura_da', da);
+    } catch { /* niente */ }
+  }, []);
   // Kill switch dal pannello admin (feature flag): una tab spenta mostra un
   // avviso di manutenzione invece della schermata.
   const eventsEnabled = useFeatureFlag('events_tab');

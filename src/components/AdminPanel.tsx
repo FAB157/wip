@@ -36,6 +36,8 @@ const AdminSocialStats = lazy(() => import('./admin/AdminSocialStats'));
 // Visite del sito (pagine, referrer, dispositivi): caricato a richiesta.
 const AdminVisits = lazy(() => import('./admin/AdminVisits'));
 const AdminNotifiche = lazy(() => import('./admin/AdminNotifiche'));
+// Pagamenti reali Apple/Google/Stripe, uno per riga (25/09/2026).
+const AdminTransazioni = lazy(() => import('./admin/AdminTransazioni'));
 // Completezza dei musei prioritari + editor dei pin sulla pianta (12/09/2026).
 const AdminMusei = lazy(() => import('./admin/AdminMusei'));
 // Foto candidate (blog, social, guide, Commons alla larga) da approvare a mano (18/09/2026).
@@ -46,7 +48,7 @@ const CaricamentoScheda = () => (
 );
 
 export default function AdminPanel() {
-  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision' | 'content_queue' | 'ops' | 'social' | 'visits' | 'notifiche' | 'musei' | 'foto'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision' | 'content_queue' | 'ops' | 'social' | 'visits' | 'notifiche' | 'musei' | 'foto' | 'transazioni'>('users');
   // La scheda Utenti ora e' quella nuova (ricerca, consumo per utente, azioni
   // tracciate). La vista storica resta raggiungibile con un interruttore:
   // mostra cose che la nuova non ha (storico ascolti, righe dei pass).
@@ -525,6 +527,16 @@ export default function AdminPanel() {
             <Share2 className="w-4 h-4" />
             Social
           </button>
+          {/* Pagamenti reali: Apple, Google Play, Stripe (25/09/2026) */}
+          <button
+            onClick={() => setActiveTab('transazioni')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'transazioni' ? 'bg-white text-emerald-700 shadow-sm' : 'text-primary/60 hover:text-emerald-700'
+            }`}
+          >
+            <Wallet className="w-4 h-4" />
+            Transazioni
+          </button>
           {/* Notifiche push/email ai clienti (06/09/2026) */}
           <button
             onClick={() => setActiveTab('notifiche')}
@@ -670,6 +682,9 @@ export default function AdminPanel() {
       )}
       {activeTab === 'social' && (
         <Suspense fallback={<CaricamentoScheda />}><AdminSocialStats /></Suspense>
+      )}
+      {activeTab === 'transazioni' && (
+        <Suspense fallback={<CaricamentoScheda />}><AdminTransazioni /></Suspense>
       )}
       {activeTab === 'notifiche' && (
         <Suspense fallback={<CaricamentoScheda />}><AdminNotifiche /></Suspense>

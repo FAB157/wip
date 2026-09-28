@@ -56,6 +56,20 @@ function ritentaFoto(e: React.SyntheticEvent<HTMLImageElement>) {
 }
 
 /**
+ * La spiegazione di una tappa, o '' se è solo un segnaposto (25/09/2026, collaudo Duomo di Milano:
+ * sotto «Giuseppe Perego · 1774» l'elenco ripeteva «Opera di Giuseppe Perego (1774).», e al British
+ * si leggeva «... (200+ words) ...»). Autore e anno stanno già nella riga sopra; il testo vero
+ * arriva dalla scheda dell'opera. Mai riempitivo a schermo né letto a voce.
+ */
+function spiegazioneVera(perche: unknown): string {
+  const p = String(perche || '').trim();
+  if (!p) return '';
+  if (/\.\.\.\s*\(\s*\d+[^)]*\b(words?|sentences?|parole|frasi)\b/i.test(p)) return '';
+  if (p.length < 90 && /^(opera|work|œuvre|oeuvre|obra|werk)\b[^.]*(\(|\.$)/i.test(p)) return '';
+  return p;
+}
+
+/**
  * Scheda della VISITA GUIDATA: dove sei, il percorso consigliato con le
  * tappe già viste spuntate, l'introduzione da ascoltare. Tema chiaro come
  * la scheda Vision (VisionCardSheet), perché si apre sopra di essa.
@@ -676,7 +690,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     const next = visit.guide.tappe.filter(x => !x.seenCardId).slice(0, 4);
     const parts = [visit.guide.intro];
     if (visit.guide.consiglio) parts.push(visit.guide.consiglio);
-    next.forEach(x => parts.push(`${x.nome}${x.dove ? ` (${x.dove})` : ''}. ${x.perche}`));
+    next.forEach(x => parts.push(`${x.nome}${x.dove ? ` (${x.dove})` : ''}. ${spiegazioneVera(x.perche)}`));
     return parts.filter(Boolean).join('\n');
   };
 
@@ -2405,7 +2419,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                         {tappa.puntoPreciso}
                       </p>
                     )}
-                    {tappa.perche && <p className={`${calma ? 'text-[15px] leading-relaxed' : 'text-[12px] leading-snug'} text-slate-700 mt-1`}>{tappa.perche}</p>}
+                    {spiegazioneVera(tappa.perche) && <p className={`${calma ? 'text-[15px] leading-relaxed' : 'text-[12px] leading-snug'} text-slate-700 mt-1`}>{spiegazioneVera(tappa.perche)}</p>}
                     {/* Sotto ogni spiegazione, sempre una curiosità o un
                         consiglio specifico di QUESTA tappa (richiesta del
                         committente, 12/09/2026): mai la spiegazione da sola. */}

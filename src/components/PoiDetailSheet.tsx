@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { useState, useEffect, ReactNode, useRef } from "react";
+import { tracciaEvento } from "../lib/pageviewTracker";
 import { motion, AnimatePresence } from "motion/react";
 import { checkUserQuota, incrementUserQuota } from '../lib/quotaManager';
 import QuotaLimitToast, { useQuotaToast } from './QuotaLimitToast';
@@ -214,6 +215,8 @@ export default function PoiDetailSheet({
   language,
 }: PoiDetailSheetProps) {
   const [nearbyPois, setNearbyPois] = useState<any[]>(propNearbyPois);
+  // Statistiche anonime (26/09/2026): scheda aperta, per categoria.
+  useEffect(() => { if (poi?.id) tracciaEvento('scheda_aperta', poi.category || 'altro'); }, [poi?.id]);
   const [showNearbyList, setShowNearbyList] = useState(false);
   const [showNavChoice, setShowNavChoice] = useState(false);
 
@@ -300,23 +303,61 @@ export default function PoiDetailSheet({
   // porto e in fondo dice «qui hanno girato…») sia sul POI dedicato
   // (category='cinema'). La RPC della mappa non porta la colonna: mini-fetch
   // alla prima apertura, come per l'indirizzo.
-  type Opera = { qid?: string; titolo: string; anno?: number | null; tipo?: string; ruolo?: string; regista?: string | null; autore?: string | null; attori?: string[]; scena?: string | null; immagine?: string | null };
+  type Opera = { qid?: string; titolo: string; anno?: number | null; anni?: string | null; tipo?: string; ruolo?: string; fonte?: string; regista?: string | null; autore?: string | null; attori?: string[]; scena?: string | null; scena_fonte?: string | null; scena_lingua?: string | null; immagine?: string | null; serie?: string | null; descrizione?: string | null; wikipedia?: string | null; scena_i18n?: Record<string, string> | null; descrizione_i18n?: Record<string, string> | null };
+  const [tutteOpere, setTutteOpere] = useState(false);
+  // Testi fissi della sezione (26/09/2026): «Mostra tutte» e l'etichetta dei film citati solo da Wikipedia.
+  const lingOpere = String(language || 'it').toLowerCase().slice(0, 2);
+  const TOP: Record<string, { tutte: string; wiki: string; fonte: string }> = {
+    it: { tutte: 'Mostra tutte', wiki: 'secondo Wikipedia', fonte: 'Wikipedia' },
+    en: { tutte: 'Show all', wiki: 'according to Wikipedia', fonte: 'Wikipedia' },
+    fr: { tutte: 'Tout afficher', wiki: 'selon Wikipédia', fonte: 'Wikipédia' },
+    es: { tutte: 'Ver todas', wiki: 'según Wikipedia', fonte: 'Wikipedia' },
+    de: { tutte: 'Alle anzeigen', wiki: 'laut Wikipedia', fonte: 'Wikipedia' },
+    ru: { tutte: 'Показать все', wiki: 'по данным Википедии', fonte: 'Википедия' },
+    zh: { tutte: '显示全部', wiki: '据维基百科', fonte: '维基百科' },
+  };
+  const tOp = TOP[lingOpere] || TOP.en;
   const [opere, setOpere] = useState<Opera[]>(() => (Array.isArray((poi as any)?.works_json) ? (poi as any).works_json : []));
   useEffect(() => {
     let alive = true;
     const locali = Array.isArray((poi as any)?.works_json) ? (poi as any).works_json : null;
     setOpere(locali || []);
-    if (!poi?.id || locali) return;
-    supabase
-      .from('shared_pois')
-      .select('works_json')
-      .eq('id', String(poi.id))
-      .maybeSingle()
-      .then(({ data }) => {
-        if (alive && Array.isArray((data as any)?.works_json)) setOpere((data as any).works_json);
-      }, () => { /* niente opere, niente sezione */ });
+    if (!poi?.id) return;
+    // UNIONE PER LUOGO (27/09/2026, committente: «dobbiamo avere più di questo sito»): lo stesso luogo ha spesso
+    // più righe con lo stesso QID (cine-Q180212 e wd-Q180212 per il Foro Romano, da fonti diverse) e ognuna
+    // portava solo la sua parte di film. Si uniscono le opere di tutte le righe con lo stesso `wikidata`.
+    const unisci = (liste: any[][]) => {
+      const visti = new Set<string>(); const out: Opera[] = [];
+      for (const l of liste) for (const o of (Array.isArray(l) ? l : [])) {
+        const k = o?.qid || `${String(o?.titolo || '').toLowerCase()}|${o?.anno || ''}`;
+        if (!o?.titolo || visti.has(k)) continue;
+        visti.add(k); out.push(o);
+      }
+      return out;
+    };
+    (async () => {
+      try {
+        const { data } = await supabase.from('shared_pois').select('works_json, wikidata').eq('id', String(poi.id)).maybeSingle();
+        const proprie = Array.isArray((data as any)?.works_json) ? (data as any).works_json : (locali || []);
+        const qid = String((data as any)?.wikidata || (poi as any)?.wikidata || String(poi.id).match(/^(?:cine|wd)-(Q\d+)$/)?.[1] || '');
+        let gemelle: any[][] = [];
+        if (/^Q\d+$/.test(qid)) {
+          const { data: altre } = await supabase.from('shared_pois').select('id, works_json').eq('wikidata', qid).not('works_json', 'is', null).limit(10);
+          gemelle = (altre || []).filter((r: any) => String(r.id) !== String(poi.id)).map((r: any) => r.works_json);
+        }
+        if (alive) setOpere(unisci([proprie, ...gemelle]));
+      } catch { /* niente opere, niente sezione */ }
+    })();
     return () => { alive = false; };
   }, [poi?.id]);
+  /** Testo della scena preso da Wikipedia: via titoli di sezione («== Produzione ==») ed elenchi puntati
+   *  («* Ghetto di Roma;») rimasti dal wikitesto (27/09/2026, Fori Imperiali). */
+  const pulisciScena = (t: string) => t
+    .replace(/={2,}\s*[^=]+?\s*={2,}/g, ' ')
+    .replace(/(^|[\s:;])\*+\s*/g, '$1')
+    .replace(/'{2,}/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
   /** La locandina/immagine di Commons in piccolo: Special:FilePath accetta ?width. */
   const miniatura = (u?: string | null) => (u && /commons\.wikimedia\.org|upload\.wikimedia\.org/.test(u) ? `${u}${u.includes('?') ? '&' : '?'}width=96` : null);
 
@@ -2986,7 +3027,7 @@ export default function PoiDetailSheet({
                   {opere.length > 8 ? ` · ${opere.length}` : ''}
                 </p>
                 <ul className="space-y-2">
-                  {opere.slice(0, 8).map((o, i) => {
+                  {[...opere].sort((a, b) => (a.ruolo === 'ambientazione' ? 1 : 0) - (b.ruolo === 'ambientazione' ? 1 : 0) || (a.fonte === 'wikipedia' ? 1 : 0) - (b.fonte === 'wikipedia' ? 1 : 0)).slice(0, tutteOpere ? 400 : 8).map((o, i) => {
                     const img = miniatura(o.immagine);
                     const chi = o.regista || o.autore;
                     return (
@@ -2998,16 +3039,31 @@ export default function PoiDetailSheet({
                         )}
                         <div className="min-w-0 flex-1">
                           <p className="text-[13px] font-bold text-primary leading-snug">
-                            {o.titolo}{o.anno ? <span className="text-primary/50 font-semibold"> ({o.anno})</span> : null}
+                            {o.titolo}{o.anni || o.anno ? <span className="text-primary/50 font-semibold"> ({o.anni || o.anno})</span> : null}
                           </p>
                           {chi && <p className="text-[11px] text-primary/60 leading-snug">{chi}{o.attori?.length ? ` · ${o.attori.slice(0, 3).join(', ')}` : ''}</p>}
-                          {o.scena && <p className="text-[11px] text-primary/70 italic leading-snug mt-0.5">{o.scena}</p>}
+                          {o.serie && o.serie !== o.titolo && <p className="text-[10px] text-primary/50 leading-snug">{o.serie}</p>}
+                          {!o.scena && o.descrizione && <p className="text-[10px] text-primary/50 leading-snug line-clamp-2">{o.descrizione_i18n?.[lingOpere] || o.descrizione}</p>}
+                          {o.scena && (
+                            <p className="text-[11px] text-primary/70 italic leading-snug mt-0.5">
+                              {pulisciScena(o.scena_i18n?.[lingOpere] || o.scena)}
+                              {o.scena_fonte && (
+                                <a href={o.scena_fonte} target="_blank" rel="noopener noreferrer" className="not-italic text-[9px] text-primary/50 underline ml-1 whitespace-nowrap">{tOp.fonte} · CC BY-SA</a>
+                              )}
+                            </p>
+                          )}
                           {o.ruolo === 'ambientazione' && <p className="text-[10px] text-primary/40 leading-snug">{getTranslation('sk_ambientato_qui', language)}</p>}
+                          {o.fonte === 'wikipedia' && o.ruolo !== 'ambientazione' && <p className="text-[9px] text-primary/35 leading-snug">{tOp.wiki}</p>}
                         </div>
                       </li>
                     );
                   })}
                 </ul>
+                {opere.length > 8 && !tutteOpere && (
+                  <button type="button" onClick={() => setTutteOpere(true)} className="mt-2.5 w-full text-[11px] font-bold text-primary/70 bg-white border border-black/10 rounded-xl py-2 active:scale-[0.98] transition-transform">
+                    {tOp.tutte} ({opere.length})
+                  </button>
+                )}
               </div>
             )}
             {/* Contatti strutturati (telefono / sito / orari) da OSM+Wikidata,

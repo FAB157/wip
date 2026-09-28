@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { tracciaEvento } from "../lib/pageviewTracker";
 import {
   BookOpen, Star, Compass, Play, Pause, ChevronDown, ChevronUp,
   MapPin, Clock, Globe, Phone, Camera, Sparkles, X, ExternalLink,
@@ -154,6 +155,8 @@ function isHeritageAtlasPoi(poi: any): boolean {
 }
 
 export default function PoiPopupContent({ poi, onGuideClick, language, setMarkers, modalitaGiro, onClose }: PoiPopupContentProps) {
+  // Statistiche anonime (26/09/2026): pin aperto, per categoria.
+  useEffect(() => { if (poi?.id) tracciaEvento('pin_aperto', poi.category || 'altro'); }, [poi?.id]);
   // (22/09/2026 sera) Stato iniziale dalla cache DELLA LINGUA: prima si
   // leggeva la chiave nuda (= italiano) per chiunque, e con l'app in francese
   // il fumetto partiva mostrando la versione italiana messa in cache da

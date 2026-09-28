@@ -331,6 +331,7 @@ export async function askMore(
     mode: character,
     lang: language,
     previousText,
-    focusInstruction: `Approfondisci in particolare: ${focus}. Massimo 200 parole.`,
+    // 90-180 secondi come la guida base (27/09/2026, committente), uguale sui tre livelli.
+    focusInstruction: `Approfondisci in particolare: ${focus}. Massimo 450 parole (90-180 secondi di parlato).`,
   });
 }
