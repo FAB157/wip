@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget «Vicino a te» (14/09/2026): fino a 5 luoghi con audioguida, ognuno
+     toccabile. Cinque righe esplicite con id unici: RemoteViews trova le view
+     per id e un <include> ripetuto darebbe id doppi. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_vc_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/wip_widget_bg"
+    android:padding="12dp">
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
+        <TextView android:id="@+id/w_vc_titolo" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" android:textStyle="bold" />
+        <TextView android:id="@+id/w_vc_agg" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#80FFFFFF" android:textSize="9sp" />
+    </LinearLayout>
+
+    <TextView android:id="@+id/w_vc_vuoto" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:gravity="center" android:textColor="#B8FFFFFF" android:textSize="12sp" android:textStyle="bold" android:visibility="gone" />
+
+    <LinearLayout android:id="@+id/w_vc_corpo" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="vertical" android:layout_marginTop="2dp">
+
+        <LinearLayout android:id="@+id/w_vc_r1" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="4dp" android:paddingBottom="4dp">
+            <ImageView android:id="@+id/w_vc_r1_foto" android:layout_width="38dp" android:layout_height="38dp" android:scaleType="centerCrop" android:background="@drawable/wip_w_riquadro" android:contentDescription="@null" android:visibility="gone" />
+            <TextView android:id="@+id/w_vc_r1_icona" android:layout_width="38dp" android:layout_height="38dp" android:gravity="center" android:background="@drawable/wip_w_riquadro" android:textSize="18sp" />
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginStart="9dp">
+                <TextView android:id="@+id/w_vc_r1_nome" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
+                    <TextView android:id="@+id/w_vc_r1_gemma" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/wip_w_pillola" android:paddingStart="5dp" android:paddingEnd="5dp" android:layout_marginEnd="5dp" android:textColor="#1E3A8A" android:textSize="8sp" android:textStyle="bold" android:visibility="gone" />
+                    <TextView android:id="@+id/w_vc_r1_dettagli" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" />
+                </LinearLayout>
+            </LinearLayout>
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/wip_w_cuffie" android:textColor="#D4AF37" android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/w_vc_r2" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="4dp" android:paddingBottom="4dp">
+            <ImageView android:id="@+id/w_vc_r2_foto" android:layout_width="38dp" android:layout_height="38dp" android:scaleType="centerCrop" android:background="@drawable/wip_w_riquadro" android:contentDescription="@null" android:visibility="gone" />
+            <TextView android:id="@+id/w_vc_r2_icona" android:layout_width="38dp" android:layout_height="38dp" android:gravity="center" android:background="@drawable/wip_w_riquadro" android:textSize="18sp" />
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginStart="9dp">
+                <TextView android:id="@+id/w_vc_r2_nome" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
+                    <TextView android:id="@+id/w_vc_r2_gemma" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/wip_w_pillola" android:paddingStart="5dp" android:paddingEnd="5dp" android:layout_marginEnd="5dp" android:textColor="#1E3A8A" android:textSize="8sp" android:textStyle="bold" android:visibility="gone" />
+                    <TextView android:id="@+id/w_vc_r2_dettagli" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" />
+                </LinearLayout>
+            </LinearLayout>
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/wip_w_cuffie" android:textColor="#D4AF37" android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/w_vc_r3" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="4dp" android:paddingBottom="4dp">
+            <ImageView android:id="@+id/w_vc_r3_foto" android:layout_width="38dp" android:layout_height="38dp" android:scaleType="centerCrop" android:background="@drawable/wip_w_riquadro" android:contentDescription="@null" android:visibility="gone" />
+            <TextView android:id="@+id/w_vc_r3_icona" android:layout_width="38dp" android:layout_height="38dp" android:gravity="center" android:background="@drawable/wip_w_riquadro" android:textSize="18sp" />
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginStart="9dp">
+                <TextView android:id="@+id/w_vc_r3_nome" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
+                    <TextView android:id="@+id/w_vc_r3_gemma" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/wip_w_pillola" android:paddingStart="5dp" android:paddingEnd="5dp" android:layout_marginEnd="5dp" android:textColor="#1E3A8A" android:textSize="8sp" android:textStyle="bold" android:visibility="gone" />
+                    <TextView android:id="@+id/w_vc_r3_dettagli" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" />
+                </LinearLayout>
+            </LinearLayout>
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/wip_w_cuffie" android:textColor="#D4AF37" android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/w_vc_r4" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="4dp" android:paddingBottom="4dp">
+            <ImageView android:id="@+id/w_vc_r4_foto" android:layout_width="38dp" android:layout_height="38dp" android:scaleType="centerCrop" android:background="@drawable/wip_w_riquadro" android:contentDescription="@null" android:visibility="gone" />
+            <TextView android:id="@+id/w_vc_r4_icona" android:layout_width="38dp" android:layout_height="38dp" android:gravity="center" android:background="@drawable/wip_w_riquadro" android:textSize="18sp" />
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginStart="9dp">
+                <TextView android:id="@+id/w_vc_r4_nome" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
+                    <TextView android:id="@+id/w_vc_r4_gemma" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/wip_w_pillola" android:paddingStart="5dp" android:paddingEnd="5dp" android:layout_marginEnd="5dp" android:textColor="#1E3A8A" android:textSize="8sp" android:textStyle="bold" android:visibility="gone" />
+                    <TextView android:id="@+id/w_vc_r4_dettagli" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" />
+                </LinearLayout>
+            </LinearLayout>
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/wip_w_cuffie" android:textColor="#D4AF37" android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/w_vc_r5" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="4dp" android:paddingBottom="4dp">
+            <ImageView android:id="@+id/w_vc_r5_foto" android:layout_width="38dp" android:layout_height="38dp" android:scaleType="centerCrop" android:background="@drawable/wip_w_riquadro" android:contentDescription="@null" android:visibility="gone" />
+            <TextView android:id="@+id/w_vc_r5_icona" android:layout_width="38dp" android:layout_height="38dp" android:gravity="center" android:background="@drawable/wip_w_riquadro" android:textSize="18sp" />
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginStart="9dp">
+                <TextView android:id="@+id/w_vc_r5_nome" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
+                    <TextView android:id="@+id/w_vc_r5_gemma" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/wip_w_pillola" android:paddingStart="5dp" android:paddingEnd="5dp" android:layout_marginEnd="5dp" android:textColor="#1E3A8A" android:textSize="8sp" android:textStyle="bold" android:visibility="gone" />
+                    <TextView android:id="@+id/w_vc_r5_dettagli" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" />
+                </LinearLayout>
+            </LinearLayout>
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/wip_w_cuffie" android:textColor="#D4AF37" android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

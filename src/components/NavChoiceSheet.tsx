@@ -1,8 +1,9 @@
-import React from "react";
+import React, { useState } from "react";
 import { createPortal } from "react-dom";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { Language, getTranslation } from "../lib/i18n";
 import { puntoArrivoSuStrada } from "../lib/puntoArrivo";
+import { getEvitaScale, setEvitaScale } from "../services/osrmService";
 
 /**
  * La doppia scelta di navigazione verso un POI, la stessa degli itinerari
@@ -34,17 +35,28 @@ export async function navigaAPiediVerso(poi: NavChoicePoi) {
       poiId: poi.id,
       mode: "foot",
       arrivoDa: a.fonte,
+      // Paese del POI (shared_pois.country): serve al navigatore per leggere
+      // i nomi delle vie nella lingua locale (08/09/2026).
+      country: poi.country ?? null,
     },
   }));
 }
 
-export async function navigaInAutoVerso(poi: NavChoicePoi) {
+/**
+ * `app` (12/09/2026, App Review Guideline 4 «give users the option to launch
+ * the native Apple Maps app»): su iPhone si offrono DUE tasti, Mappe di Apple
+ * e Google Maps; prima il plugin apriva Google se installata e Mappe non era
+ * mai raggiungibile. "apple" = sempre Mappe; "google"/assente = come prima.
+ */
+export async function navigaInAutoVerso(poi: NavChoicePoi, app?: 'apple' | 'google') {
   const a = await puntoArrivoSuStrada(poi as any);
-  const web = () => window.open(`https://www.google.com/maps/dir/?api=1&destination=${a.lat},${a.lon}&travelmode=driving`, "_blank");
+  const web = () => window.open(app === 'apple'
+    ? `https://maps.apple.com/?daddr=${a.lat},${a.lon}&dirflg=d`
+    : `https://www.google.com/maps/dir/?api=1&destination=${a.lat},${a.lon}&travelmode=driving`, "_blank");
   if (Capacitor.isNativePlatform()) {
     try {
       const plugin = registerPlugin<any>("ItaintaBackgroundPoiPlugin");
-      await plugin.openSystemNavigator({ lat: a.lat, lon: a.lon, name: poi.name || poi.nome, mode: "driving" });
+      await plugin.openSystemNavigator({ lat: a.lat, lon: a.lon, name: poi.name || poi.nome, mode: "driving", ...(app ? { app } : {}) });
       return;
     } catch (e) {
       console.warn("[NavChoice] openSystemNavigator fallito, apro il link web", e);
@@ -116,19 +128,52 @@ interface Props {
   tappe?: NavChoicePoi[];
   onAPiedi?: () => void;
   titolo?: string;
+  /**
+   * IL GIRO IN AUTO (01/09/2026, committente: «il navigatore in auto nel radar
+   * da` indicazioni di una tappa sola, deve comprendere tutte le tappe del
+   * giro»). Diverso da `tappe`: qui a piedi resta la navigazione verso QUESTA
+   * tappa — gratis, la regola dei due tasti non si tocca — e cambia solo
+   * l'auto, che consegna a Google Maps l'intera sequenza come fa
+   * l'itinerario. Passarlo solo quando c'e` davvero un giro di piu` tappe.
+   */
+  tappeAuto?: NavChoicePoi[] | null;
 }
 
-export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi, titolo }: Props) {
+export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi, titolo, tappeAuto }: Props) {
+  // EVITA SCALE (08/09/2026): preferenza persistente letta da osrmService al
+  // calcolo del percorso. L'hook sta prima del return condizionale (regole
+  // degli hook), il default e' quello salvato.
+  const [evitaScale, setEvitaScaleUi] = useState<boolean>(() => getEvitaScale());
   if (!poi) return null;
   const lang = language as Language;
   const modoItinerario = Array.isArray(tappe) && tappe.length > 0;
+  const giroInAuto = !modoItinerario && Array.isArray(tappeAuto) && tappeAuto.length > 1 ? tappeAuto : null;
+  // Google Maps si ferma a 10 punti: se il giro e` piu` lungo, urlGoogleItinerario
+  // campiona — meglio dirlo nel sottotitolo che far contare le fermate a chi guida.
+  const quanteInAuto = giroInAuto ? Math.min(giroInAuto.length, MAX_TAPPE_GOOGLE) : 0;
   const stop = (e: React.SyntheticEvent) => { e.preventDefault(); e.stopPropagation(); };
+  // Solo «non far salire il clic», SENZA preventDefault (18/09/2026): sul
+  // contenitore e sull'etichetta di «Evita scale» il preventDefault annullava
+  // il clic della casella — la preferenza si salvava (onChange parte lo stesso)
+  // ma il browser rimetteva la spunta com'era, e la si vedeva cambiata solo
+  // alla riapertura del foglio.
+  const soloFerma = (e: React.SyntheticEvent) => { e.stopPropagation(); };
+  // Su iPhone, verso una meta sola: Mappe di Apple E Google Maps, due tasti
+  // (App Review, Guideline 4). Con un giro di più tappe resta Google, che
+  // accetta le tappe intermedie; Mappe no.
+  const dueNavigatori = Capacitor.getPlatform() === 'ios' && !modoItinerario && !giroInAuto;
+  const primaTappa: NavChoicePoi | null = modoItinerario ? (tappe!.find((t) => Number.isFinite(t?.lat) && Number.isFinite(t?.lon)) || null) : giroInAuto ? (giroInAuto[0] || null) : null;
+  const appleSuGiro = Capacitor.getPlatform() === 'ios' && !dueNavigatori && !!primaTappa;
+  // (14/09/2026) Sopra la barra delle schede e dentro l'area sicura di iPhone:
+  // il foglio sta sopra tutto (z 10050), non finisce sotto la barra in basso
+  // (padding = barra + home indicator) e se non entra scorre da solo.
   const sheet = (
     <div
-      className="fixed inset-0 z-[10000] flex items-end justify-center bg-black/40"
+      className="fixed inset-0 z-[10050] flex items-end justify-center bg-black/40"
+      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 5.5rem)' }}
       onClick={(e) => { stop(e); onClose(); }}
     >
-      <div className="w-full max-w-sm m-3 rounded-2xl bg-white shadow-2xl overflow-hidden" onClick={stop}>
+      <div className="w-full max-w-sm m-3 rounded-2xl bg-white shadow-2xl overflow-y-auto max-h-[calc(100dvh-8rem)]" style={{ WebkitOverflowScrolling: 'touch' } as any} onClick={soloFerma}>
         <p className="px-4 pt-3 pb-2 text-[11px] font-bold uppercase tracking-wide text-gray-400 truncate">
           {titolo || poi.name || poi.nome}
         </p>
@@ -149,20 +194,68 @@ export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi
             </span>
           </span>
         </button>
+        {/* Evita scale: per passeggini e mobilita' ridotta. Il percorso a piedi
+            usa Valhalla/ORS con profilo accessibile quando e' attivo. */}
+        <label
+          onClick={soloFerma}
+          className="w-full flex items-center gap-3 px-4 py-2.5 text-left border-t border-gray-100 cursor-pointer select-none"
+        >
+          <span className="text-xl">♿</span>
+          <span className="flex-1 text-sm font-semibold text-gray-800">{getTranslation("nav_evita_scale", lang)}</span>
+          <input
+            type="checkbox"
+            checked={evitaScale}
+            onChange={(e) => { const on = e.target.checked; setEvitaScaleUi(on); setEvitaScale(on); }}
+            className="h-5 w-5 accent-blue-700"
+          />
+        </label>
+        {dueNavigatori && (
+          <button
+            onClick={(e) => { stop(e); onClose(); void navigaInAutoVerso(poi, 'apple'); }}
+            className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors border-t border-gray-100"
+          >
+            <span className="text-xl">🚗</span>
+            <span className="flex-1">
+              <span className="block text-sm font-bold text-gray-900">{getTranslation("nav_in_auto_apple", lang)}</span>
+              <span className="block text-[11px] text-gray-500">{getTranslation("nav_in_auto_apple_sub", lang)}</span>
+            </span>
+          </button>
+        )}
+        {/* (14/09/2026) Anche con un itinerario o un giro di più tappe, su
+            iPhone Mappe di Apple deve esserci: porta alla prima tappa (Mappe
+            non accetta le tappe intermedie); Google resta col giro intero. */}
+        {appleSuGiro && (
+          <button
+            onClick={(e) => { stop(e); onClose(); void navigaInAutoVerso(primaTappa!, 'apple'); }}
+            className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors border-t border-gray-100"
+          >
+            <span className="text-xl">🚗</span>
+            <span className="flex-1">
+              <span className="block text-sm font-bold text-gray-900">{getTranslation("nav_in_auto_apple", lang)}</span>
+              <span className="block text-[11px] text-gray-500">{getTranslation("nav_in_auto_apple_tappa_sub", lang).replace("{n}", String(primaTappa!.name || primaTappa!.nome || ""))}</span>
+            </span>
+          </button>
+        )}
         <button
           onClick={(e) => {
             stop(e); onClose();
-            if (modoItinerario) navigaInAutoItinerario(tappe!); else void navigaInAutoVerso(poi);
+            if (modoItinerario) navigaInAutoItinerario(tappe!);
+            else if (giroInAuto) navigaInAutoItinerario(giroInAuto);
+            else void navigaInAutoVerso(poi, dueNavigatori ? 'google' : undefined);
           }}
           className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors border-t border-gray-100"
         >
-          <span className="text-xl">🚗</span>
+          <span className="text-xl">{dueNavigatori ? '🗺️' : '🚗'}</span>
           <span className="flex-1">
             <span className="block text-sm font-bold text-gray-900">
-              {getTranslation(modoItinerario ? "nav_giorno_in_auto" : "nav_in_auto", lang)}
+              {getTranslation(modoItinerario ? "nav_giorno_in_auto" : giroInAuto ? "nav_giro_in_auto" : dueNavigatori ? "nav_in_auto_google" : "nav_in_auto", lang)}
             </span>
             <span className="block text-[11px] text-gray-500">
-              {getTranslation(modoItinerario ? "nav_giorno_in_auto_sub" : "nav_in_auto_sub", lang)}
+              {modoItinerario
+                ? getTranslation("nav_giorno_in_auto_sub", lang)
+                : giroInAuto
+                  ? getTranslation("nav_giro_in_auto_sub", lang).replace("{n}", String(quanteInAuto))
+                  : dueNavigatori ? getTranslation("nav_in_auto_google_sub", lang) : getTranslation("nav_in_auto_sub", lang)}
             </span>
           </span>
         </button>

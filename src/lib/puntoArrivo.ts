@@ -1,18 +1,41 @@
 /**
- * DOVE SI ARRIVA DAVVERO: la porta, non il centro dell'edificio.
- * ==============================================================
- * La differenza fra i due punti non e' cosmetica. OSRM aggancia la
- * destinazione alla strada percorribile piu' vicina: dal centroide di un
- * palazzo puo' agganciarsi alla via sul RETRO, e allora l'intero percorso gira
- * dalla parte sbagliata. Con l'ingresso si aggancia alla via del portone.
- * Cambia il percorso, non l'ultimo metro.
+ * DOVE SI ARRIVA DAVVERO: il marciapiede davanti alla porta.
+ * ==========================================================
+ * La differenza fra i punti non e' cosmetica. OSRM aggancia la destinazione
+ * alla strada percorribile piu' vicina: dal centroide di un palazzo puo'
+ * agganciarsi alla via sul RETRO, e allora l'intero percorso gira dalla parte
+ * sbagliata. Con l'ingresso si aggancia alla via del portone. Cambia il
+ * percorso, non l'ultimo metro.
  *
  * Il nativo lo fa gia' da sempre — `poi.entranceLat ?: poi.lat` in
  * GeofenceManager.kt, WipRadarScreen.kt (Android Auto) e
  * PoiModels.swift::triggerLocation. Il web no: tutti i punti di partenza della
  * navigazione passavano il centroide. Questa funzione e' l'allineamento.
+ *
+ * IL PUNTO D'ARRIVO (05/09/2026, committente: «il marciapiede davanti
+ * all'ingresso e' il top», e «il punto d'arrivo sara' quello da cui partono i
+ * trigger dei 150 m / 300 m in auto e l'avviso del teaser»). Dal matcher
+ * v3.1 ogni POI porta `arrival_lat/lon`: la PORTA proiettata sulla way
+ * pedonale percorribile piu' vicina entro 40 m — proiettata DALLA porta,
+ * cosi' cade sul lato giusto della strada — altrimenti la via dichiarata,
+ * altrimenti la porta stessa. Quando c'e', E' l'arrivo per tutti: avviso,
+ * teaser, trigger, metri del cruscotto, destinazione del navigatore. La
+ * porta (`entrance_lat/lon`) resta il secondo gradino, per i POI scritti
+ * prima del v3.1 e per i pacchetti offline vecchi; il perimetro, quando c'e',
+ * continua a comandare sul raggio (foregroundTriggers, alPerimetro).
+ *
+ * Guardia come per l'indirizzo: oltre MAX_DISTANZA_PUNTO_INDIRIZZO_M dal
+ * centroide non e' l'arrivo di QUESTO POI. (0,0) e' un campo vuoto.
  */
 export function puntoArrivo(p: any): { lat: number; lon: number } {
+  const aLat = Number(p?.arrival_lat ?? p?.arrivalLat);
+  const aLon = Number(p?.arrival_lon ?? p?.arrivalLon);
+  if (Number.isFinite(aLat) && Number.isFinite(aLon) && (aLat !== 0 || aLon !== 0)) {
+    const cLat = Number(p?.lat), cLon = Number(p?.lon);
+    const troppoLontano = Number.isFinite(cLat) && Number.isFinite(cLon)
+      && metri(cLat, cLon, aLat, aLon) > MAX_DISTANZA_PUNTO_INDIRIZZO_M;
+    if (!troppoLontano) return { lat: aLat, lon: aLon };
+  }
   const eLat = Number(p?.entrance_lat ?? p?.entranceLat);
   const eLon = Number(p?.entrance_lon ?? p?.entranceLon);
   // Lo zero-zero e' escluso di proposito: (0,0) e' il Golfo di Guinea, ed e'
@@ -28,6 +51,13 @@ export function puntoArrivo(p: any): { lat: number; lon: number } {
   const p2 = puntoIndirizzo(p);
   if (p2) return p2;
   return { lat: Number(p?.lat), lon: Number(p?.lon) };
+}
+
+/** Il POI porta il punto d'arrivo del matcher v3.1? (0,0 e' un campo vuoto.) */
+export function haPuntoArrivo(p: any): boolean {
+  const aLat = Number(p?.arrival_lat ?? p?.arrivalLat);
+  const aLon = Number(p?.arrival_lon ?? p?.arrivalLon);
+  return Number.isFinite(aLat) && Number.isFinite(aLon) && (aLat !== 0 || aLon !== 0);
 }
 
 /**
@@ -80,9 +110,11 @@ function metri(lat1: number, lon1: number, lat2: number, lon2: number): number {
 
 export async function puntoArrivoSuStrada(p: any): Promise<{ lat: number; lon: number; fonte: 'ingresso' | 'indirizzo' | 'centroide' }> {
   const base = puntoArrivo(p);
-  // L'ingresso vero, non il punto dell'indirizzo: `puntoArrivo` ormai
-  // restituisce anche quello, e chiamarlo «ingresso» falserebbe la fonte
-  // mostrata e la scala di fiducia che ci si appoggia.
+  // Il punto d'arrivo del matcher (marciapiede davanti alla porta) o
+  // l'ingresso vero, non il punto dell'indirizzo: `puntoArrivo` restituisce
+  // anche quello, e chiamarlo «ingresso» falserebbe la fonte mostrata e la
+  // scala di fiducia che ci si appoggia.
+  if (haPuntoArrivo(p)) return { ...base, fonte: 'ingresso' };
   const eLat = Number(p?.entrance_lat ?? p?.entranceLat);
   const eLon = Number(p?.entrance_lon ?? p?.entranceLon);
   const haIngresso = Number.isFinite(eLat) && Number.isFinite(eLon) && (eLat !== 0 || eLon !== 0);

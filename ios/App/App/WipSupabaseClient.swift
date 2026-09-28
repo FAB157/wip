@@ -254,8 +254,8 @@ final class WipSupabaseClient {
 
     /// Compatibilità: i chiamanti che vogliono solo "testo o niente". Un 402
     /// qui è nil come un errore — chi deve distinguerlo usa `fetchAudioguide`.
-    func fetchAudioguideText(poiId: String, lang: String, character: String, accessToken: String? = nil, completion: @escaping (String?) -> Void) {
-        fetchAudioguide(poiId: poiId, lang: lang, character: character, accessToken: accessToken) { esito in
+    func fetchAudioguideText(poiId: String, lang: String, character: String, accessToken: String? = nil, soloCache: Bool = false, completion: @escaping (String?) -> Void) {
+        fetchAudioguide(poiId: poiId, lang: lang, character: character, accessToken: accessToken, soloCache: soloCache) { esito in
             if case .testo(let t) = esito { completion(t) } else { completion(nil) }
         }
     }
@@ -296,7 +296,11 @@ final class WipSupabaseClient {
         }
     }
 
-    func fetchAudioguide(poiId: String, lang: String, character: String, accessToken: String? = nil, ritenta: Bool = true, completion: @escaping (AudioguideEsito) -> Void) {
+    /// `soloCache` (18/09/2026): solo dal pre-scarico IN BLOCCO di un giro. Il
+    /// server risponde col testo già scritto oppure 204 (→ `.fallito` qui
+    /// sotto), senza far partire una generazione AI per ogni tappa. Default
+    /// false: arrivo e prefetch all'avvicinamento restano get-or-create.
+    func fetchAudioguide(poiId: String, lang: String, character: String, accessToken: String? = nil, ritenta: Bool = true, soloCache: Bool = false, completion: @escaping (AudioguideEsito) -> Void) {
         guard let url = URL(string: "\(WipApi.base)/api/poi/audioguide") else {
             completion(.fallito); return
         }
@@ -310,9 +314,9 @@ final class WipSupabaseClient {
         if let token = token, !token.isEmpty {
             req.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        req.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "poiId": poiId, "lang": lang, "character": character
-        ])
+        var corpo: [String: Any] = ["poiId": poiId, "lang": lang, "character": character]
+        if soloCache { corpo["soloCache"] = true }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: corpo)
         session.dataTask(with: req) { [weak self] data, response, _ in
             guard let http = response as? HTTPURLResponse else { completion(.fallito); return }
             let obj = data.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
@@ -340,7 +344,7 @@ final class WipSupabaseClient {
                         let nuovo = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken) ?? ""
                         if !nuovo.isEmpty && nuovo != (token ?? "") {
                             self.fetchAudioguide(poiId: poiId, lang: lang, character: character,
-                                                 accessToken: nuovo, ritenta: false, completion: completion)
+                                                 accessToken: nuovo, ritenta: false, soloCache: soloCache, completion: completion)
                         } else {
                             self.ripiegoDopo401(poiId: poiId, lang: lang, completion: completion)
                         }
@@ -357,7 +361,9 @@ final class WipSupabaseClient {
     /// Testo integrale dai campi grezzi di shared_pois (fallback mono-lingua,
     /// tipicamente italiano). Tenuto come rete di sicurezza offline/di errore.
     func fetchPoiAudioText(_ poiId: String, completion: @escaping (String?) -> Void) {
-        let sel = "audio_script,description_long,description_ai,description"
+        // (20/09/2026) `description` NON esiste su shared_pois: con quella colonna
+        // la query dava 400 e questo ripiego tornava SEMPRE nil.
+        let sel = "audio_script,description_long,description_ai,description_short"
         guard let req = request(path: "/rest/v1/shared_pois?id=eq.\(poiId)&select=\(sel)", method: "GET") else {
             completion(nil)
             return
@@ -370,7 +376,7 @@ final class WipSupabaseClient {
                 completion(nil)
                 return
             }
-            for key in ["audio_script", "description_long", "description_ai", "description"] {
+            for key in ["audio_script", "description_long", "description_ai", "description_short"] {
                 if let v = row[key] as? String, !v.trimmingCharacters(in: .whitespaces).isEmpty {
                     completion(v)
                     return
@@ -543,13 +549,26 @@ final class WipSupabaseClient {
                 ?? (map["teaser_text_en"] as? String)
                 ?? (map["teaser_text"] as? String)
 
+            // IL PUNTO D'ARRIVO PRIMA DELLA PORTA (05/09/2026, committente: «il
+            // punto d'arrivo sara' quello da cui partono i trigger dei 150 m /
+            // 300 m in auto e l'avviso del teaser»). `arrival_lat/lon` (matcher
+            // v3.1, migration 20260905130000) e' la porta proiettata sul
+            // marciapiede davanti, gia' sulla rete percorribile. Si posa in
+            // entranceLat/Lon cosi' triggerLocation e tutti i consumatori lo
+            // usano senza un campo in piu'; con una RPC vecchia resta la porta.
+            // Coppia intera o niente, e mai lo zero-zero di un campo vuoto.
+            // Stessa regola di SupabaseClient.kt.
+            let arrivalLat = (map["arrival_lat"] as? NSNumber)?.doubleValue
+            let arrivalLon = (map["arrival_lon"] as? NSNumber)?.doubleValue
+            let haArrivo = arrivalLat != nil && arrivalLon != nil && (arrivalLat != 0 || arrivalLon != 0)
+
             return Poi(
                 id: (map["id"] as? String) ?? String(describing: map["id"] ?? ""),
                 nome: (map["nome"] as? String) ?? (map["name"] as? String) ?? "Punto di interesse",
                 lat: (map["lat"] as? NSNumber)?.doubleValue ?? 0,
                 lon: (map["lon"] as? NSNumber)?.doubleValue ?? 0,
-                entranceLat: (map["entrance_lat"] as? NSNumber)?.doubleValue,
-                entranceLon: (map["entrance_lon"] as? NSNumber)?.doubleValue,
+                entranceLat: haArrivo ? arrivalLat : (map["entrance_lat"] as? NSNumber)?.doubleValue,
+                entranceLon: haArrivo ? arrivalLon : (map["entrance_lon"] as? NSNumber)?.doubleValue,
                 poiType: cat,
                 guideDefault: (map["guide_default"] as? String) ?? "nicky",
                 isGem: isGem,
@@ -587,9 +606,17 @@ final class WipSupabaseClient {
         if uiCategories.isEmpty {
             return pois.filter { $0.isGem || PoiCategories.culturalCats.contains($0.poiType ?? "") }
         }
+        // (23/09/2026, batteria) Le gemme passano SOLO se non c'è la sentinella
+        // "gemme:off" (PoiCategories.areGemsActive), come CategoryMap.isActive
+        // su Android: `if (isGem) return !selected.contains("gemme:off")`.
+        // Prima passavano sempre, e in «modalità navigatore» (categories =
+        // ['gemme:off']) il radar si riempiva di gemme che non potevano parlare
+        // ma costavano file, region, batch-teaser e notifiche di scoperta.
+        let gemmeAttive = PoiCategories.areGemsActive(selected: uiCategories)
         return pois.filter { poi in
+            if poi.isGem { return gemmeAttive }
             let cat = (poi.poiType ?? "").lowercased()
-            return poi.isGem || targetDbCategories.contains(cat) || uiCategories.contains(cat)
+            return targetDbCategories.contains(cat) || uiCategories.contains(cat)
         }
     }
 }

@@ -377,7 +377,9 @@ export default function PrintView({ plan, language }: PrintViewProps) {
       `}</style>
 
       {/* PRINT-ONLY RESILIENT TRAVEL GUIDE */}
-      <div className="absolute top-0 left-[-9999px] w-[800px] print:relative print:left-0 print:w-full text-black p-0 print-optimized-view">
+      {/* id: serve al PDF nativo (html2pdf lavora sull'elemento, non sulla
+          stampa del browser, che il WebView Android non ha — vedi PlanScreen). */}
+      <div id="itinerary-print-view" className="absolute top-0 left-[-9999px] w-[800px] print:relative print:left-0 print:w-full text-black p-0 print-optimized-view">
         <div className="print-page-frame"></div>
         {/* Header compatto: titolo + eyebrow + intro breve, logo discreto */}
         <div className="print-header">

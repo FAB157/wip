@@ -6,7 +6,7 @@ import { Download, AlertTriangle, X, MapPinOff, Compass } from 'lucide-react';
 import { Language, getTranslation, linguaCorrente } from '../lib/i18n';
 import { notify } from '../lib/toast';
 import { locationService } from '../services/locationService';
-import { isCategoryAllowed, isPlayed } from '../lib/guideSettings';
+import { isCategoryAllowed, isPlayed, resolveTransportMode } from '../lib/guideSettings';
 import { isBearingGateEnabled, setBearingGateEnabled } from '../lib/geofencing/bearingGate';
 import { useFeatureFlag } from '../lib/featureFlags';
 
@@ -384,10 +384,14 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
       // 300 m in auto, e il banner mostrava "150m" anche per POI molto più
       // lontani. Se il nativo la fornisce si usa quella; altrimenti si parte
       // dal raggio corretto per la modalità e il primo fix GPS la corregge.
-      // Chiave allineata alle impostazioni (guideSettings.KEYS.transport =
-      // 'wip_transport_pref', valore 'auto' | 'walk' | 'car'): prima leggeva
-      // 'wip_transport_mode', chiave inesistente → sempre modalità a piedi.
-      const isCar = (localStorage.getItem('wip_transport_pref') || '') === 'car';
+      // isCar viene dalla modalità RILEVATA (resolveTransportMode, la stessa
+      // isteresi 12/6 km/h che decide i raggi veri), non dalla sola
+      // preferenza salvata: con preferenza "auto" ma velocità da pedone
+      // (o viceversa) il banner mostrava il raggio sbagliato (150 vs 300 m)
+      // anche quando il trigger reale ne stava usando l'altro. getLastLocation()
+      // è l'unico stato di velocità già pubblico su locationService, quindi
+      // niente modifica a quel file.
+      const isCar = resolveTransportMode(locationService.getLastLocation()?.speed ?? null) === 'car';
       // Il nativo può fornire la distanza come `distanceM` (nuove build) o
       // `distance`; se manca (NaN) si ricade sul raggio di alert corretto per
       // la modalità invece di mostrare un "150m" fittizio.

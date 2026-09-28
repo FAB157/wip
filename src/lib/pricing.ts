@@ -20,11 +20,27 @@ export const PRICING_LIST = {
   podcast_daily: 15,       // Podcast (per giorno)
   chat_session: 3,         // Chat sessione (10 messaggi)
   day_pass: 200,           // WIP Day Pass: 24h hands-free, max 40 audioguide (mappe offline gratuite)
-  museum_pass: 100,        // Pass Museo: riconoscimenti Vision illimitati per 4 ore (indoor)
+  museum_pass: 100,        // Pass Museo: 40 scansioni in 4 ore con la fotocamera, schede ascoltabili di ciò che inquadri; serve internet
+  museum_pass_tour: 200,   // VISITA MUSEO (12/09/2026): la guida completa (percorso per sale, spiegazioni, curiosità, foto, pianta con i pin, confronti), scaricabile la sera prima e offline, più 20 scansioni; vale 7 giorni, la guida resta nei download
+  // PERCORSO SU MISURA (03/09/2026): luoghi di qualsiasi categoria scelti
+  // dalla mappa, ordine ottimizzato e navigatore WIP, SENZA audioguida e
+  // senza Day Pass. Un addebito a percorso, tre modifiche incluse. Allineare
+  // a PERCORSO_COSTO / PERCORSO_MODIFICHE_MAX in server.ts.
+  custom_route: 30,
 };
+
+/** Modifiche (aggiungi/togli luogo) incluse nel prezzo del percorso su misura. */
+export const CUSTOM_ROUTE_MAX_CHANGES = 3;
 
 /** Durata del Pass Museo in ore. Allineare a MUSEUM_PASS_HOURS in server.ts. */
 export const MUSEUM_PASS_HOURS = 4;
+
+/** Scansioni incluse nel Pass Museo (40 in MUSEUM_PASS_HOURS ore) e nella Visita Museo (20 per museo).
+ *  Allineare a MUSEUM_PASS_MAX_SCANS e alle scansioni della Visita in server.ts. */
+export const MUSEUM_PASS_SCANS = 40;
+export const MUSEUM_VISIT_SCANS = 20;
+/** Sotto questo numero di opere la Visita non si vende (restano le scansioni singole). */
+export const MUSEUM_VISIT_MIN_WORKS = 12;
 
 /** Cap audioguide del Day Pass nelle 24 ore. */
 export const DAY_PASS_GUIDE_CAP = 40;

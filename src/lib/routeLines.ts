@@ -73,6 +73,54 @@ export function livelloDaZoom(zoom: number): LivelloTracciato | null {
   return 'pieno';
 }
 
+/**
+ * RITAGLIO AL RIQUADRO (18/09/2026, committente: «con ciclovie e mountain
+ * bike l'app rallenta e si muove male»).
+ *
+ * Il filtro SQL e' l'intersezione dei rettangoli, quindi una EuroVelo da
+ * 3.000 km che sfiora lo schermo arrivava INTERA: decine di migliaia di
+ * punti disegnati a zoom di citta' per mostrarne trecento metri. Con i
+ * sentieri si notava poco (un anello di valle e' corto), con le ciclovie
+ * era il grosso del lavoro di Leaflet a ogni spostamento.
+ *
+ * Si tengono solo i tratti dentro il riquadro allargato di una schermata
+ * per lato (e mai meno di ~660 m: i layer ricaricano dopo 400 m di
+ * spostamento, quindi il bordo del ritaglio non entra mai in vista). Di
+ * ogni tratto tenuto resta anche il punto subito fuori, cosi' la linea
+ * esce dallo schermo invece di fermarsi sul bordo.
+ */
+function ritagliaAlRiquadro(segs: [number, number][][], bounds: L.LatLngBounds): [number, number][][] {
+  const b = bounds.pad(1);
+  const MIN = 0.006;
+  const s = Math.min(b.getSouth(), bounds.getSouth() - MIN);
+  const n = Math.max(b.getNorth(), bounds.getNorth() + MIN);
+  const w = Math.min(b.getWest(), bounds.getWest() - MIN);
+  const e = Math.max(b.getEast(), bounds.getEast() + MIN);
+  // Si ragiona per LATI, non per punti: un rettilineo di 3 km con due soli
+  // nodi (o il collegamento «dritto» fra due tappe del gusto) attraversa lo
+  // schermo con entrambi gli estremi fuori, e a guardare i punti sparirebbe.
+  // Un lato resta se il suo rettangolo tocca il riquadro — prudente: tiene
+  // qualcosa in piu', non toglie mai qualcosa che si vede.
+  const tocca = (a: [number, number], c: [number, number]) =>
+    Math.max(a[0], c[0]) >= s && Math.min(a[0], c[0]) <= n &&
+    Math.max(a[1], c[1]) >= w && Math.min(a[1], c[1]) <= e;
+  const out: [number, number][][] = [];
+  for (const seg of segs) {
+    let corrente: [number, number][] = [];
+    for (let i = 1; i < seg.length; i++) {
+      if (tocca(seg[i - 1], seg[i])) {
+        if (!corrente.length) corrente.push(seg[i - 1]);
+        corrente.push(seg[i]);
+      } else if (corrente.length) {
+        out.push(corrente);
+        corrente = [];
+      }
+    }
+    if (corrente.length) out.push(corrente);
+  }
+  return out;
+}
+
 export async function fetchRouteLines(
   bounds: L.LatLngBounds,
   kinds: string[],
@@ -118,7 +166,12 @@ export async function fetchRouteLines(
       poiId: String(r.poi_id),
       kind: String(r.kind || ''),
       profile: String(r.profile || 'reale'),
-      segments: dirada(decodeSegments(String((regionale ? r.line_regionale : r.line) || ''))),
+      // Prima il ritaglio, poi il diradamento: diradare 100.000 punti per
+      // buttarne via il 99% subito dopo e' lavoro sprecato. A scala
+      // regionale la linea e' gia' di ~120 punti: non si ritaglia.
+      segments: dirada(regionale
+        ? decodeSegments(String(r.line_regionale || ''))
+        : ritagliaAlRiquadro(decodeSegments(String(r.line || '')), bounds)),
       km: r.length_km != null ? Number(r.length_km) : null,
       stops: Array.isArray(r.stops)
         ? (r.stops as any[])
@@ -253,7 +306,15 @@ export function drawRouteLines(
   linee: RouteLine[],
   colore: string,
   nomi?: Map<string, string>,
+  /**
+   * Renderer condiviso (18/09/2026). Senza, ogni tratto e' un <path> SVG
+   * puntinato: con le ciclabili di una citta' sono migliaia di nodi DOM che
+   * il browser ricalcola a ogni zoom. Passando un `L.canvas()` finiscono
+   * tutti in UNA tela. Opzionale: chi non lo passa resta com'era.
+   */
+  renderer?: L.Renderer,
 ): void {
+  const conRenderer = renderer ? { renderer } : {};
   for (const linea of linee) {
     const nome = nomi?.get(linea.poiId);
     const dritta = linea.profile === 'dritta';
@@ -267,14 +328,14 @@ export function drawRouteLines(
     for (const seg of linea.segments) {
       if (dritta) {
         L.polyline(seg, {
-          color: '#64748b', weight: 3, opacity: 0.7, dashArray: '6 8', lineCap: 'round', interactive: false,
+          color: '#64748b', weight: 3, opacity: 0.7, dashArray: '6 8', lineCap: 'round', interactive: false, ...conRenderer,
         }).addTo(group);
         continue;
       }
       // Fascia bianca sotto: i puntini restano leggibili su qualsiasi
       // sfondo. Non intercetta i click, altrimenti coprirebbe i pin.
       L.polyline(seg, {
-        color: '#ffffff', weight: 7, opacity: 0.55, lineCap: 'round', interactive: false,
+        color: '#ffffff', weight: 7, opacity: 0.55, lineCap: 'round', interactive: false, ...conRenderer,
       }).addTo(group);
       const linea2 = L.polyline(seg, {
         color: colore,
@@ -282,6 +343,7 @@ export function drawRouteLines(
         opacity: calcolata ? 0.7 : 0.95,
         dashArray: calcolata ? '1 14' : '1 9',
         lineCap: 'round',
+        ...conRenderer,
       });
       if (nome) {
         const km = linea.km ? ` · ${linea.km < 10 ? linea.km.toFixed(1) : Math.round(linea.km)} km` : '';

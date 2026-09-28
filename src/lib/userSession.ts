@@ -21,6 +21,13 @@ const USER_DATA_KEYS = [
   'mock_db_user_itineraries',
   'wip_pending_fav_sync',
   'wip_played_pois',
+  // Widget della home (23/09/2026): ultimo ascolto, opere di oggi e voti del
+  // confronto, gemma della regione e foto community della zona.
+  'wip_ultimo_ascolto',
+  'wip_widget_opere_oggi',
+  'wip_voti_opere',
+  'wip_widget_regione',
+  'wip_widget_community',
 ];
 
 /** Prefissi di chiavi generate dinamicamente (una per POI/itinerario). */

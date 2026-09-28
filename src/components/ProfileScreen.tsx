@@ -15,6 +15,7 @@ import { resetAllPlayed, getDistances, setDistance } from '../lib/guideSettings'
 const AdminPanel = lazy(() => import('./AdminPanel'));
 import ShopScreen from './ShopScreen';
 import MapStartSetting from './MapStartSetting';
+import NotifichePreferenze from './NotifichePreferenze';
 import UserProfileSummary from './UserProfileSummary';
 import MyVisionTab from './MyVisionTab';
 import GalleryViewToggle, { useGalleryView } from './GalleryViewToggle';
@@ -31,7 +32,7 @@ import PremiumGuideRenderer from './PremiumGuideRenderer';
 import PremiumGuideAudiobook from './PremiumGuideAudiobook';
 import TravelerDashboard from './TravelerDashboard';
 import { downloadGuideAsPdf } from '../services/premiumGuideService';
-import { Download, X, Fingerprint, Lock } from 'lucide-react';
+import { Download, X, Fingerprint, Lock, Users } from 'lucide-react';
 import { useBiometricAuth } from '../hooks/useBiometricAuth';
 import { BIOMETRIC_PREF_KEY, isBiometricPrefEnabled } from './LoginScreen';
 import { APPLOCK_PREF_KEY } from './AppLockGate';
@@ -57,8 +58,10 @@ import AttractionImage from './AttractionImage';
 import PrivacyPolicy from './PrivacyPolicy';
 import AppGuide from './AppGuide';
 import PriceList from './PriceList';
+import DayPassCard from './DayPassCard';
 import FreeFeaturesModal from './FreeFeaturesModal';
-import OfflineMapsTab from './OfflineMapsTab';
+import DownloadsScreen from './DownloadsScreen';
+import { useRaccontoViaggio } from './RaccontoViaggio';
 import RainGuaranteeCard from './RainGuaranteeCard';
 import { PilgrimCertificateAction } from './PilgrimWaysSheet';
 import ProminentDisclosure from './ProminentDisclosure';
@@ -492,40 +495,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
   };
 
   // ── Diario post-viaggio (ondata 5): racconto AI dalle tappe reali ──────
-  const [tripStory, setTripStory] = useState<{ titolo: string; story: string } | null>(null);
-  const [storyLoadingId, setStoryLoadingId] = useState<string | null>(null);
-  const generateTripStory = async (itineraryDb: any) => {
-    const giorniRaw = itineraryDb?.dati_itinerario?.giorni || [];
-    const giorni = giorniRaw.map((g: any, i: number) => ({
-      giorno: g.giorno || i + 1,
-      tappe: (g.tappe || []).map((t: any) => t.titolo_tappa || t.nome).filter(Boolean),
-    })).filter((g: any) => g.tappe.length > 0);
-    if (giorni.length === 0) { notify(getTranslation('pf_story_no_stops', language)); return; }
-    setStoryLoadingId(itineraryDb.id);
-    try {
-      // apiFetch: Bearer automatico (rotta a login obbligatorio) + timeout.
-      const res = await apiFetch(getApiUrl('/api/trip-story'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ titolo: itineraryDb.titolo, giorni, lang: language }),
-      }, 90000);
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.story) throw new Error(data?.error || 'generazione fallita');
-      setTripStory({ titolo: itineraryDb.titolo || getTranslation('pf_nostro_viaggio', language), story: data.story });
-    } catch (e: any) {
-      notify(getTranslation('pf_story_fail', language).replace('{x}', e?.message || getTranslation('pf_riprova', language)));
-    } finally {
-      setStoryLoadingId(null);
-    }
-  };
-  const shareTripStory = async () => {
-    if (!tripStory) return;
-    const text = `${tripStory.titolo}\n\n${tripStory.story}\n\n— raccontato da WIP · wip.guide`;
-    try {
-      if (navigator.share) await navigator.share({ text });
-      else { await navigator.clipboard.writeText(text); notify(getTranslation('pf_story_copied', language)); }
-    } catch { /* condivisione annullata */ }
-  };
+  // Dal 20/09/2026 la logica vive in RaccontoViaggio.tsx: lo stesso tasto sta
+  // anche sulle voci di «I miei download».
+  const { genera: generateTripStory, inCorsoId: storyLoadingId, modale: modaleRacconto } = useRaccontoViaggio(language);
 
   // "start" = distanza di arrivo/inizio guida: un solo controllo che scrive
   // sia walkTrigger che carTrigger (ognuno con il proprio clamp).
@@ -729,8 +701,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
   };
 
   const TABS = profile?.is_admin
-    ? (['diario', 'myvision', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'offline', 'pricing', 'listino', 'guida', 'supporto', 'privacy', 'admin'] as const)
-    : (['diario', 'myvision', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'offline', 'pricing', 'listino', 'guida', 'supporto', 'privacy'] as const);
+    ? (['offline', 'diario', 'myvision', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'pricing', 'listino', 'guida', 'supporto', 'privacy', 'admin'] as const)
+    : (['offline', 'diario', 'myvision', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'pricing', 'listino', 'guida', 'supporto', 'privacy'] as const);
 
   const handleSwipe = (e: any, direction: 'left' | 'right') => {
     if (e.event && e.event.target) {
@@ -904,7 +876,22 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     // emesso da src/lib/pricing.ts) ricarichiamo profilo e contatori.
     const onCreditsUpdated = () => loadProfileData();
     window.addEventListener('wip-credits-updated', onCreditsUpdated);
-    return () => window.removeEventListener('wip-credits-updated', onCreditsUpdated);
+    // «Ricarica crediti» da qualsiasi punto dell'app (03/09/2026): App.tsx
+    // porta al profilo, qui si apre la scheda dei pacchetti.
+    const onOpenShop = () => setActiveTab('pricing');
+    window.addEventListener('wip-open-shop', onOpenShop);
+    // Widget «Meteo e garanzia pioggia» (23/09/2026): la pillola della
+    // garanzia porta qui, alla sotto-scheda degli itinerari (RainGuaranteeCard).
+    const onOpenSezione = (e: Event) => {
+      const s = (e as CustomEvent).detail?.sezione;
+      if (s === 'itinerari') setActiveTab('itinerari');
+    };
+    window.addEventListener('wip-open-profilo-sezione', onOpenSezione);
+    return () => {
+      window.removeEventListener('wip-credits-updated', onCreditsUpdated);
+      window.removeEventListener('wip-open-shop', onOpenShop);
+      window.removeEventListener('wip-open-profilo-sezione', onOpenSezione);
+    };
   }, []);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1244,14 +1231,38 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
           onOpenMyVision={() => setActiveTab('myvision')}
         />
 
+        {/* "I MIEI DOWNLOAD" IN CIMA (08/09/2026): l'unica area con tutto cio'
+            che l'utente ha scaricato — itinerari, mappe, audioguide, guide.
+            Sta qui, sopra le tab, perche' serve soprattutto quando NON c'e'
+            rete e deve essere il primo tasto che si vede. */}
+        {activeTab !== 'offline' && (
+          <button
+            onClick={() => setActiveTab('offline')}
+            className="mt-6 w-full flex items-center gap-3 rounded-2xl bg-primary text-white p-4 shadow-md active:scale-[0.99] transition-transform text-left"
+          >
+            <span className="shrink-0 grid place-items-center w-11 h-11 rounded-xl bg-white/15"><Download className="w-5 h-5" /></span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-black">{getTranslation('dl_titolo', language)}</span>
+              <span className="block text-[11px] text-white/80 font-semibold truncate">{getTranslation('dl_sottotitolo', language)}</span>
+            </span>
+            <ChevronRight className="w-5 h-5 shrink-0 text-white/70" />
+          </button>
+        )}
+
         {/* Navigation Tabs - Minimalist Style */}
         <div className="mt-8 overflow-x-auto pb-2 custom-scrollbar">
           <div className="flex items-center gap-6 min-w-max px-1">
-            <TabButton 
-              active={activeTab === 'diario'} 
-              onClick={() => setActiveTab('diario')} 
-              icon={<BookOpen className="w-3.5 h-3.5" />} 
-              label={getTranslation("diary", language)} 
+            <TabButton
+              active={activeTab === 'offline'}
+              onClick={() => setActiveTab('offline')}
+              icon={<Download className="w-3.5 h-3.5" />}
+              label={getTranslation('dl_titolo', language)}
+            />
+            <TabButton
+              active={activeTab === 'diario'}
+              onClick={() => setActiveTab('diario')}
+              icon={<BookOpen className="w-3.5 h-3.5" />}
+              label={getTranslation("diary", language)}
             />
             <TabButton
               active={activeTab === 'myvision'}
@@ -1287,15 +1298,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               active={activeTab === 'impostazioni'} 
               onClick={() => setActiveTab('impostazioni')} 
               icon={<Settings className="w-3.5 h-3.5" />} 
-              label={getTranslation("setup_tab", language)} 
+              label={getTranslation("setup_tab", language)}
             />
-            <TabButton 
-              active={activeTab === 'offline'} 
-              onClick={() => setActiveTab('offline')} 
-              icon={<Download className="w-3.5 h-3.5" />}
-              label={getTranslation('pf_mappe_offline_tab', language)}
-            />
-            <TabButton 
+            <TabButton
               active={activeTab === 'pricing'} 
               onClick={() => setActiveTab('pricing')} 
               icon={<Ticket className="w-3.5 h-3.5" />} 
@@ -1358,6 +1363,13 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
+              {/* IL DAY PASS IN PRIMO PIANO (03/09/2026, committente: «nel
+                  profilo in primo piano ci deve essere il banner acquista il
+                  Day Pass»). Prima stava solo in Mappe offline e Itinerari,
+                  cioe' dove nessuno lo cercava. Con il pass attivo la stessa
+                  card dice quante guide restano e a che ora scade. */}
+              {userSession && <DayPassCard />}
+
               {/* Dashboard del viaggiatore + Passaporto WIP (ondata 5):
                   numeri e timbri dai dati già raccolti */}
               <TravelerDashboard language={language} />
@@ -1483,6 +1495,16 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                           itinerari-cammino COMPLETATI (si nasconde da sé) */}
                       <PilgrimCertificateAction itinerary={itineraryDb} />
                       <div className="flex mt-auto pt-2 gap-2 flex-wrap">
+                        {/* (20/09/2026) Da qui l'itinerario non si poteva APRIRE:
+                            c'erano racconto, calendario e Maps, ma per rivederlo
+                            bisognava andare a cercarlo nel Piano. Stesso evento
+                            di «I miei download». */}
+                        <button
+                          onClick={() => window.dispatchEvent(new CustomEvent('wip-apri-download', { detail: { tipo: 'itinerario', id: itineraryDb.id } }))}
+                          className="px-4 py-2 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary/90 transition-colors"
+                        >
+                          {getTranslation('resume_btn', language)}
+                        </button>
                         <button
                           onClick={() => generateTripStory(itineraryDb)}
                           disabled={storyLoadingId === itineraryDb.id}
@@ -1505,6 +1527,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                           // senza tappe il bottone è disabilitato, non un
                           // finto link con href="#".
                           let mapsUrl: string | null = null;
+                          let appleMapsUrl: string | null = null;
                           try {
                             const firstDay = itineraryDb.dati_itinerario?.giorni?.[0];
                             const tappe = firstDay?.tappe || [];
@@ -1516,9 +1539,16 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                               const last = tappe[tappe.length - 1];
                               const waypoints = tappe.slice(0, -1).map((t: any) => encodeURIComponent(point(t))).join('|');
                               mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(point(last))}${waypoints ? `&waypoints=${waypoints}` : ''}&travelmode=driving`;
+                              // Mappe di Apple (13/09/2026, App Review Guideline 4):
+                              // stesso limite di PlanScreen, niente waypoint
+                              // intermedi — solo l'ultima tappa, dichiarato
+                              // nell'etichetta quando ce n'è più di una.
+                              appleMapsUrl = `https://maps.apple.com/?daddr=${encodeURIComponent(point(last))}&dirflg=d`;
                             }
                           } catch { /* dati itinerario malformati */ }
+                          const tappeMultiple = (itineraryDb.dati_itinerario?.giorni?.[0]?.tappe?.length || 0) > 1;
                           return mapsUrl ? (
+                            <>
                             <a
                               href={mapsUrl}
                               target="_blank"
@@ -1527,6 +1557,17 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                             >
                               {getTranslation('pf_apri_in_maps', language)} <ChevronRight className="w-4 h-4" />
                             </a>
+                            {Capacitor.getPlatform() === 'ios' && appleMapsUrl && (
+                              <a
+                                href={appleMapsUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="w-full text-center py-3.5 bg-white text-gray-900 border border-gray-300 font-black text-[11px] uppercase tracking-widest rounded-[1.25rem] hover:bg-gray-50 active:scale-95 transition-all flex items-center justify-center gap-2"
+                              >
+                                {getTranslation(tappeMultiple ? 'open_apple_maps_solo_arrivo' : 'open_apple_maps', language)}
+                              </a>
+                            )}
+                            </>
                           ) : (
                             <span className="w-full text-center py-3.5 bg-gray-100 text-gray-400 font-black text-[11px] uppercase tracking-widest rounded-[1.25rem] flex items-center justify-center gap-2 cursor-not-allowed">
                               {getTranslation('pf_no_tappe', language)}
@@ -1730,6 +1771,34 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                         <div>
                           <h5 className="text-xs font-black text-gray-800 mb-0.5">{getTranslation('pf_gratis_geo', language)}</h5>
                           <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_geo_desc', language)}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-3 bg-white px-4 py-3 rounded-2xl shadow-sm border border-emerald-50/50">
+                        <Download className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <div>
+                          <h5 className="text-xs font-black text-gray-800 mb-0.5">{getTranslation('pf_gratis_lib', language)}</h5>
+                          <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_lib_desc', language)}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-3 bg-white px-4 py-3 rounded-2xl shadow-sm border border-emerald-50/50">
+                        <Users className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <div>
+                          <h5 className="text-xs font-black text-gray-800 mb-0.5">{getTranslation('pf_gratis_com', language)}</h5>
+                          <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_com_desc', language)}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-3 bg-white px-4 py-3 rounded-2xl shadow-sm border border-emerald-50/50">
+                        <Star className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <div>
+                          <h5 className="text-xs font-black text-gray-800 mb-0.5">{getTranslation('pf_gratis_ev', language)}</h5>
+                          <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_ev_desc', language)}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-3 bg-white px-4 py-3 rounded-2xl shadow-sm border border-emerald-50/50">
+                        <Award className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <div>
+                          <h5 className="text-xs font-black text-gray-800 mb-0.5">{getTranslation('pf_gratis_diario', language)}</h5>
+                          <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_diario_desc', language)}</p>
                         </div>
                       </div>
                     </div>
@@ -2076,6 +2145,31 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               {/* Dove si apre la mappa (22/08/2026): non più Carrara per tutti */}
               <MapStartSetting language={language} />
 
+              {/* Notifiche push (06/09/2026): servizio / novità e offerte */}
+              <NotifichePreferenze language={language} />
+
+              {/* PERMESSI DAL SETUP (29/08/2026, committente: «tutte queste
+                  autorizzazioni si possono fare anche dal setup dell'utente?»).
+                  Riapre la stessa schermata dell'onboarding (PermissionsModal,
+                  una riga per permesso col tasto «Attiva» e le spunte rilette
+                  dal telefono). Solo sul nativo: sul web non c'è niente da
+                  attivare. */}
+              {Capacitor.isNativePlatform() && (
+                <button
+                  type="button"
+                  onClick={() => window.dispatchEvent(new CustomEvent('wip-apri-permessi'))}
+                  className="w-full flex items-center gap-3 rounded-2xl border border-primary/10 bg-white px-4 py-3 text-left shadow-sm active:scale-[0.99] transition-transform"
+                >
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-primary">
+                    <ShieldCheck className="w-5 h-5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[13px] font-bold text-gray-900 leading-snug">{getTranslation('pf_permessi_riapri', language)}</span>
+                    <span className="block text-[11px] text-gray-500 leading-snug">{getTranslation('pf_permessi_riapri_testo', language)}</span>
+                  </span>
+                </button>
+              )}
+
               {/* Setup Consumi e Costi Dashboard Section */}
               <div className="bg-white p-6 rounded-3xl border border-outline-variant/10 shadow-sm mb-4">
                 <div className="flex items-center gap-3 mb-5 border-b border-gray-100/60 pb-3">
@@ -2132,55 +2226,29 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     <h5 className="text-[11px] font-black uppercase tracking-widest text-amber-800 mb-1 text-center">{getTranslation('pf_listino_ai', language)}</h5>
                     <p className="text-[9px] font-bold uppercase tracking-widest text-amber-900/60 text-center mb-4">{getTranslation('pf_trasparenza', language)}</p>
                     <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-                      <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>{getTranslation('pf_esperto_viaggi', language)}</span>
-                        <div className="text-right leading-tight">
-                          <span className="font-black text-amber-600 text-xs block">3 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_10_msg', language)}</span>
+                      {/* Prezzi da PRICING_LIST (19/09/2026): prima erano numeri
+                          scritti a mano, con «Dettagli POI 5» ormai gratuito e
+                          senza Day Pass, Pass Museo, Visita Museo e Percorso. */}
+                      {([
+                        [getTranslation('pf_esperto_viaggi', language), PRICING_LIST.chat_session, getTranslation('pf_10_msg', language)],
+                        ['Vision AI', PRICING_LIST.photo_search, getTranslation('pf_per_scansione', language)],
+                        [getTranslation('pf_itinerario_ai', language), PRICING_LIST.itinerary_daily, getTranslation('pf_al_giorno', language)],
+                        [getTranslation('pf_audioguida', language), PRICING_LIST.audio_guide, getTranslation('pf_per_luogo', language)],
+                        ['WIP Day Pass', PRICING_LIST.day_pass, getTranslation('vr_b_unit_24h', language)],
+                        [getTranslation('museum_pass_tour_title', language), PRICING_LIST.museum_pass_tour, getTranslation('vr_b_unit_per_museum', language)],
+                        [getTranslation('museum_pass_title', language), PRICING_LIST.museum_pass, getTranslation('vr_b_unit_pass_scans', language)],
+                        [getTranslation('pc_listino_nome', language), PRICING_LIST.custom_route, getTranslation('pc_listino_unit', language)],
+                        ['Podcast AI', PRICING_LIST.podcast_daily, getTranslation('pf_al_giorno', language)],
+                        [getTranslation('pf_guida_pdf', language), PRICING_LIST.premium_guide_daily, getTranslation('pf_al_giorno', language)],
+                      ] as [string, number, string][]).map(([nome, prezzo, unita]) => (
+                        <div key={nome} className="flex justify-between items-center gap-2 text-[10px] font-bold text-amber-900/70">
+                          <span>{nome}</span>
+                          <div className="text-right leading-tight shrink-0">
+                            <span className="font-black text-amber-600 text-xs block">{prezzo} 🪙</span>
+                            <span className="text-[8px] opacity-70 uppercase">{unita}</span>
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>{getTranslation('pf_dettagli_poi', language)}</span>
-                        <div className="text-right leading-tight">
-                          <span className="font-black text-amber-600 text-xs block">5 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_per_luogo', language)}</span>
-                        </div>
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>Vision AI</span>
-                        <div className="text-right leading-tight">
-                          <span className="font-black text-amber-600 text-xs block">5 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_per_scansione', language)}</span>
-                        </div>
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>{getTranslation('pf_itinerario_ai', language)}</span>
-                        <div className="text-right leading-tight">
-                          <span className="font-black text-amber-600 text-xs block">10 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_al_giorno', language)}</span>
-                        </div>
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>{getTranslation('pf_audioguida', language)}</span>
-                        <div className="text-right leading-tight">
-                          <span className="font-black text-amber-600 text-xs block">15 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_per_luogo', language)}</span>
-                        </div>
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>Podcast AI</span>
-                        <div className="text-right leading-tight">
-                          <span className="font-black text-amber-600 text-xs block">15 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_al_giorno', language)}</span>
-                        </div>
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>{getTranslation('pf_guida_pdf', language)}</span>
-                        <div className="text-right leading-tight">
-                          <span className="font-black text-amber-600 text-xs block">20 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_al_giorno', language)}</span>
-                        </div>
-                      </div>
+                      ))}
                     </div>
                     <div className="mt-4 pt-3 border-t border-amber-200/50 text-center">
                       <p className="text-[9px] font-black text-amber-800 uppercase tracking-widest">
@@ -2465,6 +2533,13 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                 </div>
               </div>
               
+              {/* COUPON MAI SU iOS (15/09/2026): quarto rifiuto Apple della 1.3,
+                  Guideline 3.1.1 — lo screenshot del revisore inquadrava proprio
+                  questo riquadro: un codice che «regala crediti» e' uno sblocco
+                  fuori dagli acquisti in-app. Nello Shop era gia' stato tolto il
+                  30/08 per lo stesso motivo; qui era rimasto. Sul web e su
+                  Android resta (voucher delle strutture partner). */}
+              {Capacitor.getPlatform() !== 'ios' && (
               <div className="bg-white p-6 rounded-3xl border border-outline-variant/10 shadow-sm mb-4">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-600">
@@ -2504,7 +2579,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   )}
                 </div>
               </div>
-              
+              )}
+
               <div className="bg-white p-6 rounded-3xl border border-outline-variant/10 shadow-sm">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
@@ -2917,7 +2993,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <OfflineMapsTab language={language} />
+              {/* "I MIEI DOWNLOAD" (08/09/2026): l'area unica di tutto cio' che
+                  l'utente ha scaricato — include il vecchio pannello zone. */}
+              <DownloadsScreen language={language} onApriAscolti={() => setActiveTab('cronologia')} />
             </motion.div>
           )}
 
@@ -3050,7 +3128,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       // Nome file univoco legato alla guida (mai un nome fisso)
                       const titolo = guideToRender?.content?.guida_titolo || 'Guida';
                       const filename = `WIP_${String(titolo).replace(/[^a-zA-Z0-9àèéìòù ]/g, '').trim().replace(/\s+/g, '_').slice(0, 40)}.pdf`;
-                      await downloadGuideAsPdf('premium-guide-pdf-inner', filename);
+                      await downloadGuideAsPdf('premium-guide-pdf-inner', filename, { content: guideToRender.content, mediaManifest: guideToRender.media, language: String(language) });
                     } catch (e) {
                       console.error("PDF Download failed", e);
                       // Prima falliva in silenzio (specie su Android WebView)
@@ -3139,25 +3217,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       )}
 
       {/* Racconto post-viaggio (ondata 5) */}
-      {tripStory && (
-        <div className="fixed inset-0 z-[1350] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setTripStory(null)}>
-          <div className="w-full max-w-lg bg-white rounded-3xl p-6 space-y-4 shadow-2xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="flex items-start justify-between gap-3">
-              <h3 className="font-black text-primary text-lg leading-tight">📖 {tripStory.titolo}</h3>
-              <button onClick={() => setTripStory(null)} className="p-1 text-gray-400 hover:text-gray-600 shrink-0">✕</button>
-            </div>
-            <div className="flex-1 overflow-y-auto text-[15px] leading-relaxed text-gray-700 whitespace-pre-line italic border-l-4 border-amber-200 pl-4">
-              {tripStory.story}
-            </div>
-            <button
-              onClick={shareTripStory}
-              className="w-full py-3 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest"
-            >
-              {getTranslation('pf_condividi_racconto', language)}
-            </button>
-          </div>
-        </div>
-      )}
+      {modaleRacconto}
 
       {isFreeFeaturesOpen && (
         <FreeFeaturesModal onClose={() => setIsFreeFeaturesOpen(false)} />
@@ -3198,6 +3258,31 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
   );
 }
 
+// Difetto dal vivo (10/09): il preferito salva uno snapshot CONGELATO del POI
+// (favorites.ts) e uno script di riparazione del catalogo (fix_legacy_json_pois.ts)
+// ha sistemato shared_pois ma non le copie già dentro saved_pois — la card
+// mostrava il JSON grezzo, es. {"status":"OK","descrizione_breve_it":"..."} ,
+// invece del testo. Correzione difensiva in lettura: se la stringa è JSON
+// proviamo a estrarne un campo di testo leggibile; se non c'è nulla di
+// utilizzabile torniamo stringa vuota (niente JSON a schermo).
+function estraiDescrizioneLeggibile(testo: any): string {
+  if (typeof testo !== 'string') return '';
+  const t = testo.trim();
+  if (!t) return '';
+  if (t[0] !== '{' && t[0] !== '[') return t;
+  try {
+    const parsed = JSON.parse(t);
+    const campiTesto = ['descrizione_breve_it', 'descrizione_breve', 'description_short', 'description'];
+    for (const campo of campiTesto) {
+      const val = parsed?.[campo];
+      if (typeof val === 'string' && val.trim()) return val.trim();
+    }
+  } catch {
+    // JSON malformato: nessun testo da estrarre
+  }
+  return '';
+}
+
 function PoiCard({ poi, onRemove, onClick }: { poi: any; onRemove: () => void; onClick?: () => void; key?: any }) {
   // Componente senza prop language: la lingua UI arriva da localStorage
   const lingua = linguaCorrente();
@@ -3236,7 +3321,7 @@ function PoiCard({ poi, onRemove, onClick }: { poi: any; onRemove: () => void; o
         </div>
         <h4 className="font-black text-gray-900 text-lg leading-tight mb-2">{poi.name}</h4>
         <p className="text-xs text-gray-500 font-medium leading-relaxed line-clamp-2">
-          {poi.description || getTranslation('pf_no_desc', lingua)}
+          {estraiDescrizioneLeggibile(poi.description) || getTranslation('pf_no_desc', lingua)}
         </p>
       </div>
     </motion.div>

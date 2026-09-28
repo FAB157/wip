@@ -9,7 +9,8 @@ import {
   Fragment,
   memo,
 } from "react";
-import { getApiUrl } from "../lib/api";
+import { createPortal } from "react-dom";
+import { getApiUrl, apiFetch } from "../lib/api";
 import {
   CATEGORY_COLORS,
   CATEGORY_EMOJIS,
@@ -22,7 +23,6 @@ import {
   useMap,
   ZoomControl,
   useMapEvents,
-  Popup,
   LayerGroup,
   Polyline,
   CircleMarker,
@@ -48,13 +48,16 @@ import { fetchServicesAround, SERVICE_EMOJI, SERVICE_LABEL } from "../lib/servic
 import { markVisited, getVisitedCells, cityCoveragePercent, FOG_CELL_DEG } from "../lib/visitedFog";
 import { startZtlWatch, stopZtlWatch, fetchZtlZonesAround } from "../lib/ztlAlert";
 import { tasteRoutesInBounds, TASTE_KIND_LABELS } from "../lib/wineRoutesCatalog";
-import { ENO_PRODUTTORI, ENO_BOTTEGHE, TEMATICI_KEYS } from "../lib/poiTaxonomy";
+import { ENO_PRODUTTORI, ENO_BOTTEGHE, TEMATICI_KEYS, ENO_SUB_BY_TYPE, MERCATI_TYPES } from "../lib/poiTaxonomy";
 import { fetchRouteLines, drawRouteLines, drawRouteStops, creaGruppoPercorsi, livelloDaZoom, setRouteAttribution, ATTRIB_SENTIERI, ATTRIB_GUSTO } from "../lib/routeLines";
 import { TASTE_ROUTE_LINES } from "../lib/tasteRouteLines";
 import { decodeSegments } from "../lib/polyline";
 import type { ZtlAlertEvent } from "../lib/ztlAlert";
 import { fetchDatiSole, livelloUv, consiglioSole } from "../lib/sunIndex";
 import type { DatiSole } from "../lib/sunIndex";
+import { fetchDatiClima, fetchConfrontoAdesso, coloreClima, livelloClima, nomeMese, testoPeriodi, consiglioMeseCorrente } from "../lib/climaIndex";
+import type { DatiClima, ConfrontoAdesso } from "../lib/climaIndex";
+import ClimaReportSheet from "./ClimaReportSheet";
 import { orariSole, oraBreve, mancaAllOraOro, fusoDelPunto } from "../lib/sunTimes";
 import type { OrariSole } from "../lib/sunTimes";
 import { fetchBathingSites, aggiungiMisure, BATHING_QUALITY_COLOR } from "../lib/bathingWater";
@@ -116,7 +119,9 @@ const EVERYTHING_CANON: Record<string, string> = (() => {
     'skyscraper', 'cemetery', 'library', 'windmill', 'aqueduct', 'observatory', 'stadium', 'memorial',
     'sculpture', 'university', 'town_hall', 'city_gate', 'city_walls', 'villa', 'amphitheatre',
     'mausoleum', 'obelisk', 'triumphal_arch', 'archaeological_park', 'archaeological_site', 'ruins',
-    'archeo', 'castle', 'castello', 'castelli', 'fortress', 'stronghold', 'harbour', 'pier', 'mine']);
+    'archeo', 'castle', 'castello', 'castelli', 'fortress', 'stronghold', 'harbour', 'pier', 'mine', 'quarry']);
+  // Famiglie: parchi, zoo, acquari e le montagne russe importate il 28/08
+  add('famiglie', ['theme_park', 'parco_divertimenti', 'zoo', 'aquarium', 'acquario', 'water_park', 'playground', 'parco_giochi', 'roller_coaster']);
   add('musei', ['museum', 'museo', 'gallery', 'art_museum', 'art_gallery', 'natural_history_museum',
     'house_museum']);
   add('panorami', ['viewpoint', 'panorama', 'belvedere', 'lighthouse', 'faro', 'scenic_road', 'aerialway',
@@ -135,11 +140,56 @@ function everythingCanonKey(raw: string): string {
   const k = String(raw || '').toLowerCase().trim();
   return EVERYTHING_CANON[k] || k;
 }
+
+/**
+ * GRUPPO DI UNA RIGA DI "TUTTO NEL RAGGIO" (29/08/2026): gli stessi gruppi
+ * delle chip, decisi dalla stessa tassonomia (`resolvePoiTaxonomy`), non da
+ * una mappa locale. Prima Carrara a 5 km dava 50 gruppi, con «formaggi»,
+ * «pasticceria» e «cantina» separati da «Vino e Gusto» e «marketplace» fra
+ * le utilità. Regola del committente: pochi gruppi, quelli delle chip,
+ * mercati sotto Mercatini, gemme per prime.
+ * Le fonti che non sono POI (neve, fontanelle, beni vincolati, percorsi)
+ * hanno il loro gruppo fisso.
+ */
+const EVERYTHING_ORDER = [
+  'gemme', 'monumenti', 'chiese', 'musei', 'panorami', 'natura', 'localita', 'enogastronomia',
+  'famiglie', 'locali', 'mercati', 'terme', 'cinema', 'cieli', 'street_art', 'fioriture', 'memoria', 'lento',
+  'shopping', 'lusso', 'beni_culturali', 'community', 'neve', 'fontanelle', 'percorsi', 'utilita', 'altro',
+];
+function everythingGroupOf(row: { category: string; sub_category: string | null; fonte: string; group_key: string; is_gem?: boolean }): string {
+  // Solo `is_gem` decide (03/09/2026): `group_key === 'gemme'` arriva dalla
+  // `category` del CSV Wikipedia, che per 9.062 righe su 9.093 vale 'gemme'
+  // pur avendo `is_gem=false`. Stesso motivo spiegato in poiTaxonomy.ts.
+  if (row.is_gem === true) return 'gemme';
+  const raw = String(row.category || '').toLowerCase().trim();
+  const sub = String(row.sub_category || '').toLowerCase().trim();
+  if (row.fonte === 'route_geometries' || row.group_key.startsWith('percorsi_')) return 'percorsi';
+  if (row.fonte === 'beni_culturali') return 'beni_culturali';
+  if (row.fonte === 'utility_pois') {
+    if (raw === 'neve') return 'neve';
+    if (raw === 'fontanelle' || sub === 'drinking_water' || sub === 'fontanella') return 'fontanelle';
+    return 'utilita';
+  }
+  // Vino e Gusto: sia le righe con category='enogastronomia' sia quelle
+  // vecchie col tipo direttamente in category (cantina, formaggi, pasticceria…)
+  if (raw === 'enogastronomia' || raw in ENO_SUB_BY_TYPE || ENO_PRODUTTORI.includes(raw) || ENO_BOTTEGHE.includes(raw)) return 'enogastronomia';
+  if (MERCATI_TYPES.includes(raw)) return 'mercati';
+  if (raw === 'shopping' || raw === 'lusso') return raw;
+  const t = resolvePoiTaxonomy({ category: raw, subCategory: sub });
+  if (t.macro === 'tematiche') return t.subId || 'altro';
+  if (t.macro === 'monumenti') return t.subId === 'chiese' || t.subId === 'musei' || t.subId === 'panorami' ? t.subId : 'monumenti';
+  if (t.macro) return t.macro;
+  return everythingCanonKey(raw) in EVERYTHING_LABEL_KEY ? everythingCanonKey(raw) : 'altro';
+}
 /** Chiavi canoniche che hanno una voce in i18n (le stesse delle chip). */
 const EVERYTHING_LABEL_KEY: Record<string, string> = {
   monumenti: 'monumenti', chiese: 'chiese', musei: 'musei', panorami: 'panorami', natura: 'natura',
   gemme: 'gemme', localita: 'localita', utilita: 'utilita', enogastronomia: 'enogastronomia',
-  beni_culturali: 'beni_culturali',
+  beni_culturali: 'beni_culturali', famiglie: 'famiglie', locali: 'locali', community: 'community',
+  // Verticali tematici e i due nuovi del 28/08: la chiave è già quella i18n
+  terme: 'terme', cinema: 'cinema', cieli: 'cieli', street_art: 'street_art', mercati: 'mercati',
+  fioriture: 'fioriture', memoria: 'memoria', lento: 'lento', shopping: 'shopping', lusso: 'lusso',
+  percorsi: 'everything_group_percorsi', altro: 'everything_group_altro',
 };
 
 const CATEGORY_BORDER_COLORS: Record<string, string> = {
@@ -436,6 +486,77 @@ function CachedTiles({ url, attribution }: { url: string; attribution: string })
   return null;
 }
 
+/**
+ * Sfondo satellite (18/09/2026): due TileLayer sopra quello di base — le
+ * foto dall'alto (zIndex 2) e le sole etichette CARTO (zIndex 4). Figlio
+ * della mappa come CachedTiles, cosi' `useMap()` c'e' sempre: un effetto su
+ * `mapRef` nel componente grande al primo giro trova la mappa ancora nulla,
+ * e il satellite rimasto acceso dalla volta prima non ripartiva.
+ * Il perche' delle scelte (fonte, quote, etichette) sta accanto a
+ * `satelliteActive` in MapArea.
+ *
+ * CONTEGGIO TILE (18/09/2026): quando `usaChiave` e' vero, ogni tile
+ * caricata consuma il tetto gratuito da 2M/mese della chiave ArcGIS — il
+ * server lo sa solo se il client glielo dice. Non un invio per tile (100
+ * tile in una schermata = 100 richieste inutili): si accumula in un ref e
+ * si manda un totale ogni 20 tile o ogni 15 secondi, quel che arriva prima,
+ * e un'ultima volta allo smontaggio con `sendBeacon` (sopravvive alla
+ * chiusura della pagina, un `fetch` normale no).
+ */
+function SfondoSatellite({ urlFoto, urlEtichette, usaChiave }: { urlFoto: string; urlEtichette: string; usaChiave: boolean }) {
+  const map = useMap();
+  useEffect(() => {
+    const foto = L.tileLayer(
+      urlFoto,
+      {
+        zIndex: 2,
+        // Oltre il 18 in campagna Esri risponde con la tessera «Map data not
+        // yet available»: meglio la 18 ingrandita che un riquadro grigio.
+        maxNativeZoom: 18,
+        maxZoom: 22,
+        attribution: 'Immagini © <a href="https://www.esri.com/" target="_blank" rel="noopener">Esri</a>, Maxar, Earthstar Geographics, GIS User Community',
+      },
+    );
+    const etichette = L.tileLayer(urlEtichette, { zIndex: 4, maxNativeZoom: 20, maxZoom: 22 });
+
+    let accumulate = 0;
+    const invia = (finale = false) => {
+      if (accumulate === 0) return;
+      const corpo = JSON.stringify({ count: accumulate });
+      accumulate = 0;
+      try {
+        if (finale && navigator.sendBeacon) {
+          navigator.sendBeacon(getApiUrl('/api/maps/satellite-tile-usage'), new Blob([corpo], { type: 'application/json' }));
+        } else {
+          fetch(getApiUrl('/api/maps/satellite-tile-usage'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: corpo, keepalive: finale }).catch(() => {});
+        }
+      } catch { /* un conteggio perso non deve rompere la mappa */ }
+    };
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const onTileLoad = () => {
+      accumulate++;
+      if (accumulate >= 20) invia();
+    };
+    if (usaChiave) {
+      foto.on('tileload', onTileLoad);
+      timer = setInterval(() => invia(), 15000);
+    }
+
+    foto.addTo(map);
+    etichette.addTo(map);
+    return () => {
+      if (usaChiave) {
+        foto.off('tileload', onTileLoad);
+        if (timer) clearInterval(timer);
+        invia(true);
+      }
+      map.removeLayer(foto);
+      map.removeLayer(etichette);
+    };
+  }, [map, urlFoto, urlEtichette, usaChiave]);
+  return null;
+}
+
 function MapController({
   center,
   zoom,
@@ -506,17 +627,21 @@ function MapEventsHandler({
   onMoveEnd,
   onCenterChange,
   onDragStart,
+  onMapClick,
   isFollowing,
 }: {
   onMoveEnd: (bounds: L.LatLngBounds) => void;
   onCenterChange?: (center: [number, number]) => void;
   onDragStart?: () => void;
+  /** Tap sulla mappa (non su un marker, che ferma la propagazione da sé). */
+  onMapClick?: () => void;
   /** Follow-me attivo? Letto a ogni moveend (ref del genitore), mai in deps. */
   isFollowing?: () => boolean;
 }) {
   const onMoveEndRef = useRef(onMoveEnd);
   const onCenterChangeRef = useRef(onCenterChange);
   const onDragStartRef = useRef(onDragStart);
+  const onMapClickRef = useRef(onMapClick);
   const isFollowingRef = useRef(isFollowing);
   // MAP-12: in follow-me `panTo` a ogni fix GPS produceva un moveend ogni
   // 1-5 s, e ognuno scriveva localStorage, dispatchava l'evento (che fa
@@ -529,14 +654,20 @@ function MapEventsHandler({
     onMoveEndRef.current = onMoveEnd;
     onCenterChangeRef.current = onCenterChange;
     onDragStartRef.current = onDragStart;
+    onMapClickRef.current = onMapClick;
     isFollowingRef.current = isFollowing;
-  }, [onMoveEnd, onCenterChange, onDragStart, isFollowing]);
+  }, [onMoveEnd, onCenterChange, onDragStart, onMapClick, isFollowing]);
 
   useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
 
   const map = useMapEvents({
     dragstart: () => {
       onDragStartRef.current?.();
+    },
+    click: () => {
+      // Un tap su un marker ferma la propagazione da sé (comportamento
+      // Leaflet di default): questo scatta solo per un tap sulla mappa vuota.
+      onMapClickRef.current?.();
     },
     moveend: () => {
       try {
@@ -621,6 +752,12 @@ interface MapAreaProps {
   activeTab?: string;
   isRadarMode?: boolean;
   radarPois?: any[];
+  /**
+   * PERCORSO SU MISURA (03/09/2026): il «+» compare su TUTTI i pin delle
+   * categorie accese (ristoranti, farmacie, parcheggi compresi) e la mappa
+   * resta quella normale, non la finestra del radar. Vedi tourService.ModoGiro.
+   */
+  modalitaPercorso?: boolean;
 }
 
 // Haversine formula
@@ -722,8 +859,53 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+/**
+ * FUMETTI DEI LIVELLI SEMPRE PIENI (21/09/2026, committente: «deve essere tutto arricchito — le schede solo dei POI culturali,
+ * il resto la schedina»). I punti dei livelli (gusto, sentieri, ciclabili, shopping, lusso, neve, spiagge) aprono un fumetto
+ * statico: nome e, quando c'e', una riga. All'apertura qui si chiede alla stessa rotta dell'app la versione VELOCE
+ * (`fast`, niente modello): testo breve da una fonte o riga dei dati veri, e foto del luogo. Si aggiunge in fondo al
+ * fumetto. `salva:false` per i punti che NON sono in shared_pois (neve, spiagge): nessuna riga nuova, cache sul server.
+ * Una sola richiesta per punto e per sessione; ospiti: il server risponde 401 e il fumetto resta com'e'.
+ */
+const cacheFumetti = new Map<string, { testo: string; foto: string } | null>();
+function arricchisciFumetto(
+  marker: L.Marker,
+  p: { id: string; name: string; lat: number; lon: number; category?: string; poiType?: string; testo?: string; salva?: boolean },
+  language: string,
+) {
+  const chiave = `${p.id}|${language}`;
+  marker.on('popupopen', async (ev: any) => {
+    const radice = ev?.popup?.getElement?.()?.querySelector?.('.leaflet-popup-content > div') as HTMLElement | null;
+    if (!radice || radice.querySelector('[data-wip-arricchito]')) return;
+    const box = document.createElement('div');
+    box.setAttribute('data-wip-arricchito', '1');
+    box.style.cssText = 'margin-top:6px;';
+    radice.appendChild(box);
+    const disegna = (r: { testo: string; foto: string } | null) => {
+      if (!r || !box.isConnected) return;
+      const gia = String(p.testo || '').trim();
+      const testo = r.testo && r.testo.trim() !== gia ? r.testo : '';
+      box.innerHTML = `${r.foto ? `<img src="${escapeHtml(r.foto)}" alt="" loading="lazy" referrerpolicy="no-referrer" style="display:block;width:100%;max-height:120px;object-fit:cover;border-radius:6px;margin-bottom:5px;" onerror="this.remove()">` : ''}${testo ? `<div style="font-size:11px;color:#374151;line-height:1.35;">${escapeHtml(testo.length > 260 ? testo.slice(0, 257) + '…' : testo)}</div>` : ''}`;
+      ev.popup.update?.();
+    };
+    if (cacheFumetti.has(chiave)) { disegna(cacheFumetti.get(chiave) || null); return; }
+    try {
+      const r = await apiFetch(getApiUrl('/api/poi/enrich'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: p.id, name: p.name, lat: p.lat, lon: p.lon, category: p.category, subCategory: p.poiType, lang: language, fast: true, mode: 'short', ...(p.salva === false ? { salva: false } : {}) }),
+      }, 25000);
+      if (!r.ok) { cacheFumetti.set(chiave, null); return; }
+      const j = await r.json();
+      const esito = { testo: String(j?.description_short || j?.riga_dati || '').trim(), foto: String(j?.thumbnail || '').trim() };
+      cacheFumetti.set(chiave, esito);
+      disegna(esito);
+    } catch { /* rete assente: il fumetto resta com'era */ }
+  });
+}
+
 import PoiPopupContent from "./PoiPopupContent";
-import { tourService, MAX_TAPPE } from "../services/tourService";
+import { tourService } from "../services/tourService";
 import { useBozzaGiro, useVistaGiro } from "../lib/tour/useGiro";
 import TourRouteLayer from "./TourRouteLayer";
 import NavRouteLayer from "./NavRouteLayer";
@@ -737,6 +919,7 @@ const BENI_CULTURALI_MIN_ZOOM = 13;
 // lib/cartoTiles.ts: se la build non aveva VITE_CARTO_API_KEY (IPA di CI del
 // 28/08/2026) la chiave viene chiesta a runtime al server.
 import { cartoTileUrl, ensureCartoKey, onCartoKeyChange } from '../lib/cartoTiles';
+import { fotoSicura } from '../lib/fotoHttps';
 
 function MapArea({
   selectedCategories,
@@ -748,6 +931,7 @@ function MapArea({
   activeTab,
   isRadarMode,
   radarPois = [],
+  modalitaPercorso = false,
 }: MapAreaProps) {
   const [center, setCenter] = useState<[number, number]>(INITIAL_CENTER);
   const [mapZoom, setMapZoom] = useState(13);
@@ -827,6 +1011,21 @@ function MapArea({
   // descrizione = sfarfallio) ogni volta che un fetch aggiornava la lista.
   const [activePoi, setActivePoi] = useState<Poi | null>(null);
 
+  // Un pin già a schermo che viene ritoccato non ha bisogno di un rifetch
+  // dei POI al recentro: lo consuma solo il click su un marker già
+  // renderizzato (vedi poiMarkers più sotto), non gli altri chiamanti di
+  // centerMapOnPoi che saltano su un punto potenzialmente non ancora
+  // caricato (ricerca, "vicino a me"). Senza questo flag, il pan di
+  // centerMapOnPoi supera quasi sempre la soglia anti-sfarfallio di
+  // fetchPois (120 m) e innesca un fetch reale poco dopo l'apertura della
+  // scheda — `pois` cambia riferimento, la catena visiblePois→markerData→
+  // poiMarkers→gruppiPerCategoria si ricalcola tutta, e MarkerClusterGroup
+  // (react-leaflet-cluster, un wrapper imperativo su leaflet.markercluster)
+  // ricostruisce da zero il layer: per un fotogramma tutti i pin tornano
+  // individuali e sparsi sopra la scheda appena aperta, prima di
+  // riraggrupparsi. Segnalato in video il 31/08/2026.
+  const skipNextFetchRef = useRef(false);
+
   // Centra la mappa sul POI mettendo il pin poco sotto il centro: la scheda,
   // che si apre verso l'alto, risulta così centrata nella vista.
   const centerMapOnPoi = useCallback((poi: Poi, targetZoom?: number) => {
@@ -860,6 +1059,29 @@ function MapArea({
   }, [activeTab]);
 
   const [searchQuery, setSearchQuery] = useState("");
+  // La riga di ricerca si APRE sopra la barra (30/08/2026). Prima il campo
+  // stava in mezzo ai tasti, con flex-1: su ~360 px i tasti shrink-0 si
+  // prendevano tutta la riga e il campo collassava a larghezza ZERO —
+  // restava solo la lente, e sembrava un tasto rotto. La barra ora resta
+  // una riga sola e la ricerca ha una riga tutta sua, sopra.
+  const [ricercaAperta, setRicercaAperta] = useState(false);
+  // Il tasto «Componi un percorso» sta in App.tsx, fuori da questo
+  // componente: nessuna prop lo collega qui. Stesso motivo per cui
+  // spariva solo il tasto livelli quando si apre la ricerca città
+  // (07/09/2026, richiesto dal committente) — si avvisa App.tsx con un
+  // evento, come gia' fa 'wip-apri-radar' qualche schermata sotto.
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('wip-city-search-toggle', { detail: { aperta: ricercaAperta } }));
+  }, [ricercaAperta]);
+  // Stessa cosa quando si apre la card di un pin (07/09/2026): la card e'
+  // ancorata in basso e i due tasti (livelli qui sotto, percorso in
+  // App.tsx) le finivano sopra, spuntando dal bordo arrotondato. Il tasto
+  // livelli usa activePoi direttamente (stesso file); il tasto percorso
+  // ha bisogno dell'evento, come sopra per la ricerca città.
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('wip-poi-card-toggle', { detail: { aperta: !!activePoi } }));
+  }, [activePoi]);
+  const campoRicercaRef = useRef<HTMLInputElement | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [suggestions, setSuggestions] = useState<any[]>([]);
   // Accessibilità ricerca: indice del suggerimento evidenziato (frecce ↑↓)
@@ -895,7 +1117,15 @@ function MapArea({
       if (e.detail) focusPoiOnMap(e.detail);
     };
     window.addEventListener('focus-poi', handleFocusPoi);
-    return () => window.removeEventListener('focus-poi', handleFocusPoi);
+    // Chiusa la scheda POI, il popup del pin restava aperto sopra i tasti
+    // livelli/meteo in basso a sinistra finché non si toccava la sua X
+    // (12/09/2026, collaudo). App.tsx lo dice qui e il popup si chiude.
+    const handleClosePopup = () => { mapRef.current?.closePopup(); };
+    window.addEventListener('wip-close-popup', handleClosePopup);
+    return () => {
+      window.removeEventListener('focus-poi', handleFocusPoi);
+      window.removeEventListener('wip-close-popup', handleClosePopup);
+    };
   }, []); // Registrato una sola volta: handleFocusPoi non chiude più su pois/radarPois
 
   // "Apri sulla mappa" da Mappe Offline: centra sull'area scaricata senza
@@ -926,10 +1156,16 @@ function MapArea({
     id: string; name: string; lat: number; lon: number;
     category: string; sub_category: string | null; image_url: string | null;
     distanza_m: number; fonte: string; group_key: string; group_count: number;
+    /** Dalla migration 20260829100000: le gemme arrivano già nel gruppo 'gemme'. */
+    is_gem?: boolean;
   }
   const [showEverythingPanel, setShowEverythingPanel] = useState(false);
   const [everythingRadius, setEverythingRadius] = useState(15000);
   const [everythingLoading, setEverythingLoading] = useState(false);
+  // Un errore di query (timeout, guasto) non e' la stessa cosa di una zona
+  // davvero vuota: senza questo flag i due casi mostravano lo stesso
+  // messaggio "niente qui vicino", che per un errore e' semplicemente falso.
+  const [everythingError, setEverythingError] = useState(false);
   const [everythingGroups, setEverythingGroups] = useState<{ key: string; count: number; items: EverythingItem[] }[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // (28/08/2026) Il pannello deve "ricordare": chi tocca un luogo, lo vede
@@ -956,6 +1192,7 @@ function MapArea({
       return;
     }
     setEverythingLoading(true);
+    setEverythingError(false);
     try {
       const { data, error } = await supabase.rpc('nearby_everything', {
         p_lat: centerPoint.lat,
@@ -968,6 +1205,9 @@ function MapArea({
         // Una lista già a schermo non va cancellata da un errore del
         // "carica tutti" (timeout sul raggio grande): resta quella parziale.
         setEverythingGroups((prev) => (perGroup > 50 && prev.length ? prev : []));
+        // Errore di query, non zona vuota: il pannello deve dirlo, non
+        // mostrare "niente qui vicino" come se la ricerca fosse riuscita.
+        setEverythingError(true);
         return;
       }
       const rows = (data || []) as EverythingItem[];
@@ -976,7 +1216,7 @@ function MapArea({
       // sommato e gli elementi in ordine di distanza.
       const byKey = new Map<string, { items: EverythingItem[]; count: number; raw: Set<string> }>();
       for (const row of rows) {
-        const key = everythingCanonKey(row.group_key);
+        const key = everythingGroupOf(row);
         let g = byKey.get(key);
         if (!g) { g = { items: [], count: 0, raw: new Set() }; byKey.set(key, g); }
         g.items.push(row);
@@ -988,13 +1228,21 @@ function MapArea({
           count: Math.max(g.count, g.items.length),
           items: g.items.sort((a, b) => a.distanza_m - b.distanza_m),
         }))
-        .sort((a, b) => b.count - a.count);
+        // Ordine FISSO, quello delle chip: l'utente trova i gruppi sempre allo
+        // stesso posto; le gemme per prime.
+        .sort((a, b) => {
+          const ia = EVERYTHING_ORDER.indexOf(a.key), ib = EVERYTHING_ORDER.indexOf(b.key);
+          return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || b.count - a.count;
+        });
       setEverythingGroups(groups);
+      // Le gemme già aperte: sono il motivo per cui si apre il pannello.
+      if (groups.some((g) => g.key === 'gemme')) setExpandedGroups((prev) => (prev.size ? prev : new Set(['gemme'])));
       setEverythingFullLoaded(perGroup > 50);
       everythingCenterRef.current = { lat: centerPoint.lat, lng: centerPoint.lng, radius: radiusM };
     } catch (e) {
       console.warn('[nearby_everything] fetch error', e);
       setEverythingGroups((prev) => (perGroup > 50 && prev.length ? prev : []));
+      setEverythingError(true);
     } finally {
       setEverythingLoading(false);
     }
@@ -1062,6 +1310,21 @@ function MapArea({
     percorsi_osm: { emoji: '🥾', label: getTranslation('everything_group_percorsi_osm', language) },
     percorsi_pdipr: { emoji: '🥾', label: getTranslation('everything_group_percorsi_pdipr', language) },
     percorsi_gusto: { emoji: '🍷', label: getTranslation('everything_group_percorsi_gusto', language) },
+    percorsi: { emoji: '🥾', label: getTranslation('everything_group_percorsi', language) },
+    mercati: { emoji: '🧺', label: getTranslation('mercati', language) },
+    altro: { emoji: '📍', label: getTranslation('everything_group_altro', language) },
+  };
+  /** Icona della SOTTO-categoria di una riga (in colonna sotto quella del
+   * gruppo): il tipo del POI se ha un'emoji, altrimenti la categoria grezza. */
+  const everythingRowEmoji = (item: EverythingItem, groupEmoji: string): string | null => {
+    const sub = String(item.sub_category || '').toLowerCase();
+    const cat = String(item.category || '').toLowerCase();
+    if (item.fonte === 'route_geometries') {
+      const k = item.group_key.replace('percorsi_', '');
+      return k === 'gusto' ? '🍷' : k === 'bici' ? '🚲' : '🥾';
+    }
+    const e = (SUB_CATEGORY_EMOJIS as any)[sub] || (SUB_CATEGORY_EMOJIS as any)[cat] || (CATEGORY_EMOJIS as any)[cat] || null;
+    return e && e !== groupEmoji ? e : null;
   };
   const everythingGroupInfo = (key: string): { emoji: string; label: string } => {
     if (EVERYTHING_GROUP_FALLBACK[key]) return EVERYTHING_GROUP_FALLBACK[key];
@@ -1080,7 +1343,7 @@ function MapArea({
    * focusPoiOnMap, ma l'oggetto arriva dalla RPC (forma diversa da Poi),
    * quindi qui si costruisce l'oggetto minimo che il popup/scheda si
    * aspetta invece di forzare un cast. */
-  const openEverythingItem = (item: { id: string; name: string; lat: number; lon: number; category: string; sub_category: string | null }) => {
+  const openEverythingItem = (item: { id: string; name: string; lat: number; lon: number; category: string; sub_category: string | null; is_gem?: boolean }) => {
     setShowEverythingPanel(false);
     // Alla riapertura la lista non si rifà (e lo scroll torna dov'era).
     everythingKeepRef.current = true;
@@ -1091,6 +1354,8 @@ function MapArea({
       lon: item.lon,
       category: item.category,
       subCategory: item.sub_category || undefined,
+      // Serve al percorso (29/08): una gemma parla qualunque sia la categoria.
+      is_gem: item.is_gem === true,
     } as unknown as Poi;
     // Resta segnato sulla mappa anche quando si tocca il luogo successivo.
     setEverythingPinned((prev) => (prev.some((p) => p.id === poi.id) ? prev : [...prev, poi]));
@@ -1162,6 +1427,21 @@ function MapArea({
   const [userHeading, setUserHeading] = useState<number | null>(null);
   const [mapRotation, setMapRotation] = useState(0);
   const compassListenerRef = useRef<((e: DeviceOrientationEvent) => void) | null>(null);
+  // SOGLIA BUSSOLA (06/09/2026) — LA CAUSA DELLO SFARFALLIO su "tutti i POI"
+  // e sulla foto della scheda aperta, segnalato dall'utente ("continua
+  // mentre il pin e' aperto"). `deviceorientation`/`deviceorientationabsolute`
+  // spara eventi al ritmo grezzo del sensore (15-60 Hz), e il magnetometro
+  // e' rumoroso: anche col telefono fermo il valore oscilla di continuo di
+  // qualche decimo di grado. Prima ogni evento chiamava setUserHeading +
+  // setMapRotation, quindi MapArea (l'intero componente, migliaia di righe)
+  // rirenderizzava fino a 60 volte al secondo — e siccome OGNI pin ha
+  // `transform: rotate(var(--map-rotation))`, tutti vibravano insieme, in
+  // sincrono col rumore del sensore. Qui si applica una doppia soglia (gradi
+  // + tempo): un aggiornamento passa solo se la bussola si e' mossa
+  // davvero (>=2°) o se e' passato abbastanza tempo dall'ultimo (150 ms,
+  // ~6-7 aggiornamenti/sec — fluido all'occhio, innocuo per i render).
+  const ultimoHeadingApplicatoRef = useRef<number | null>(null);
+  const ultimoHeadingTsRef = useRef(0);
 
   // Stop follow mode & compass when user manually pans the map
   const stopFollowMode = useCallback((perGesto = false) => {
@@ -1282,11 +1562,17 @@ function MapArea({
   // ── Layer servizi pratici (fontanelle 💧, bagni 🚻, panchine 🪑) ──────
   // Toggle 🚰 nei controlli mappa: layerGroup Leaflet separato dai POI,
   // alimentato da src/lib/servicesLayer.ts (Overpass, cache 24h).
-  const [servicesActive, setServicesActive] = useState(false);
+  const [servicesActive, setServicesActive] = useState(() => {
+    try { return localStorage.getItem('wip_servizi_enabled') === '1'; } catch { return false; }
+  });
   const [servicesLoading, setServicesLoading] = useState(false);
   const servicesLayerRef = useRef<L.LayerGroup | null>(null);
   // Centro dell'ultima query servizi: sopra 1,5 km di pan il layer si aggiorna
   const servicesCenterRef = useRef<{ lat: number; lon: number } | null>(null);
+  // Stato ATTUALE letto dentro loadServices dopo l'await: senza, un
+  // toggle-off durante il fetch non impediva al layer di riaccendersi da solo.
+  const servicesActiveRef = useRef(false);
+  useEffect(() => { servicesActiveRef.current = servicesActive; }, [servicesActive]);
   // Posizione utente letta al momento dell'apertura del popup (mai stantia)
   const userLocationRef = useRef<[number, number] | null>(null);
   useEffect(() => { userLocationRef.current = userLocation; }, [userLocation]);
@@ -1322,7 +1608,10 @@ function MapArea({
         group.addLayer(marker);
       }
 
-      if (!map.hasLayer(group)) group.addTo(map);
+      // Ricontrolla lo stato ATTUALE, non quello di quando il fetch è
+      // partito: se nel frattempo l'utente ha spento il livello, non va
+      // riacceso da sotto.
+      if (servicesActiveRef.current && !map.hasLayer(group)) group.addTo(map);
       servicesCenterRef.current = { lat, lon };
       return true;
     } catch (e) {
@@ -1342,14 +1631,19 @@ function MapArea({
     const map = mapRef.current;
     if (servicesActive) {
       setServicesActive(false);
+      try { localStorage.setItem('wip_servizi_enabled', '0'); } catch { /* storage pieno */ }
       if (map && servicesLayerRef.current) map.removeLayer(servicesLayerRef.current);
       return;
     }
     if (!map) return;
     setServicesActive(true);
+    try { localStorage.setItem('wip_servizi_enabled', '1'); } catch { /* storage pieno */ }
     const c = map.getCenter();
     const ok = await loadServices(c.lat, c.lng);
-    if (!ok) setServicesActive(false);
+    if (!ok) {
+      setServicesActive(false);
+      try { localStorage.setItem('wip_servizi_enabled', '0'); } catch { /* storage pieno */ }
+    }
   }, [servicesActive, loadServices]);
 
   // Aggiornamento del layer quando l'utente sposta la mappa di molto
@@ -1358,6 +1652,13 @@ function MapArea({
     if (!servicesActive) return;
     const map = mapRef.current;
     if (!map) return;
+    // Ripristino da localStorage al mount: se il livello non è ancora mai
+    // stato caricato in questa sessione, lo si carica ora al centro corrente
+    // (altrimenti resterebbe acceso ma invisibile finché non si sposta la mappa).
+    if (!servicesCenterRef.current) {
+      const c = map.getCenter();
+      void loadServices(c.lat, c.lng);
+    }
     const onMoveEnd = () => {
       const last = servicesCenterRef.current;
       if (!last) return;
@@ -1371,6 +1672,163 @@ function MapArea({
     map.on("moveend", onMoveEnd);
     return () => { map.off("moveend", onMoveEnd); };
   }, [servicesActive, loadServices]);
+
+  // ── Turismo dello Shopping e Turismo di Lusso (06/09/2026) ─────────────
+  // STESSA scelta di Vino e Gusto qui sopra: `resolvePoiTaxonomy` (che filtra
+  // le chip) risolve apposta `category='shopping'`/`'lusso'` a `macro: null`
+  // — non sono patrimonio culturale, sono due verticali a sé che si accendono
+  // quando servono, e non devono mescolarsi ai monumenti nella barra delle
+  // chip. Vivono come layer del pannello ⓘ, con una fetch diretta su
+  // shared_pois: stesso schema di `loadServices` qui sopra, senza le reti/i
+  // tracciati di Vino e Gusto, che qui non hanno senso (un centro commerciale
+  // non è una tappa di un percorso).
+  const SHOPPING_LUSSO_MIN_ZOOM = 10;
+  const SHOPPING_EMOJI: Record<string, string> = {
+    vie_shopping: '🛍️', grandi_magazzini: '🏬', mall: '🏢', outlet: '🏷️', souk: '🕌', duty_free: '✈️',
+  };
+  const LUSSO_EMOJI: Record<string, string> = {
+    hotel_lusso: '🏨', ristoranti_stellati: '⭐', marine_yacht: '⛵', club_esclusivi: '🥂',
+    treni_storici: '🚂', sci_lusso: '🎿', noleggio_lusso: '🛥️',
+  };
+
+  const [shoppingActive, setShoppingActive] = useState(() => {
+    try { return localStorage.getItem('wip_shopping_layer_enabled') === '1'; } catch { return false; }
+  });
+  const [shoppingLoading, setShoppingLoading] = useState(false);
+  const shoppingLayerRef = useRef<L.LayerGroup | null>(null);
+
+  const [lussoActive, setLussoActive] = useState(() => {
+    try { return localStorage.getItem('wip_lusso_layer_enabled') === '1'; } catch { return false; }
+  });
+  const [lussoLoading, setLussoLoading] = useState(false);
+  const lussoLayerRef = useRef<L.LayerGroup | null>(null);
+
+  /** Fabbrica comune: interroga shared_pois per `category` nei bounds e disegna i pin nel gruppo dato. */
+  const caricaLayerVerticale = useCallback(async (
+    category: 'shopping' | 'lusso',
+    emojiPerTipo: Record<string, string>,
+    emojiDefault: string,
+    group: L.LayerGroup,
+    bounds: L.LatLngBounds,
+  ) => {
+    const { data } = await supabase
+      .from('shared_pois')
+      .select('id,name,lat,lon,poi_type,description_short,contact_website,contact_phone,is_hidden,status')
+      .eq('category', category)
+      .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
+      .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
+      // .order('id') (06/09/2026): senza un ordine esplicito il limit(200)
+      // non e' stabile fra una richiesta e l'altra — con le decine di
+      // migliaia di righe aggiunte oggi (harvest planet+Wikidata+directory)
+      // ogni pan/zoom poteva tornare un sottoinsieme leggermente diverso
+      // degli stessi 200, e i pin sembravano sfarfallare (apparire/sparire)
+      // anche senza muoversi. Un ordine fisso rende il sottoinsieme stabile.
+      .order('id')
+      .limit(200);
+    // Pulire QUI, dopo la risposta, non prima di interrogare: pulire prima
+    // dell'await lasciava la mappa senza pin per tutta la durata della rete
+    // (i pin "vanno e vengono" a ogni pan/zoom, segnalato 06/09/2026).
+    group.clearLayers();
+    for (const p of data || []) {
+      if (p.is_hidden === true || p.status === 'needs_revision') continue;
+      const emoji = emojiPerTipo[String(p.poi_type)] || emojiDefault;
+      const icon = L.divIcon({
+        html: cerchioMarker(emoji, MARKER_CERCHIO_PX, 14),
+        className: `wip-${category}-marker`,
+        ...cerchioMarkerOpts(),
+      });
+      const mk = L.marker([Number(p.lat), Number(p.lon)], { icon })
+        .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
+          <div style="font-size:12px;font-weight:700;color:#111827;">${emoji} ${escapeHtml(p.name || '')}</div>
+          <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(p.description_short || '')}</div>
+          ${p.contact_website ? `<a href="${escapeHtml(p.contact_website)}" target="_blank" rel="noopener" style="font-size:10px;color:#1e3a8a;font-weight:700;display:block;margin-top:4px;">${getTranslation('mp_sito', language)} ↗</a>` : ''}
+          ${p.contact_phone ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;">${escapeHtml(p.contact_phone)}</div>` : ''}
+        </div>`)
+        .addTo(group);
+      arricchisciFumetto(mk, { id: String(p.id), name: String(p.name || ''), lat: Number(p.lat), lon: Number(p.lon), category, poiType: String(p.poi_type || ''), testo: p.description_short || '' }, language);
+    }
+  }, [language]);
+
+  const loadShopping = useCallback(async (bounds: L.LatLngBounds) => {
+    const map = mapRef.current;
+    if (!map) return;
+    setShoppingLoading(true);
+    try {
+      if (!shoppingLayerRef.current) shoppingLayerRef.current = L.layerGroup();
+      const group = shoppingLayerRef.current;
+      await caricaLayerVerticale('shopping', SHOPPING_EMOJI, '🏬', group, bounds);
+      if (!map.hasLayer(group)) group.addTo(map);
+    } catch (e) {
+      console.warn('[Shopping] fetch fallito:', e);
+    } finally {
+      setShoppingLoading(false);
+    }
+  }, [caricaLayerVerticale]);
+
+  const loadLusso = useCallback(async (bounds: L.LatLngBounds) => {
+    const map = mapRef.current;
+    if (!map) return;
+    setLussoLoading(true);
+    try {
+      if (!lussoLayerRef.current) lussoLayerRef.current = L.layerGroup();
+      const group = lussoLayerRef.current;
+      await caricaLayerVerticale('lusso', LUSSO_EMOJI, '👑', group, bounds);
+      if (!map.hasLayer(group)) group.addTo(map);
+    } catch (e) {
+      console.warn('[Lusso] fetch fallito:', e);
+    } finally {
+      setLussoLoading(false);
+    }
+  }, [caricaLayerVerticale]);
+
+  const toggleShopping = useCallback(() => setShoppingActive((v) => {
+    const next = !v;
+    try { localStorage.setItem('wip_shopping_layer_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+    return next;
+  }), []);
+  const toggleLusso = useCallback(() => setLussoActive((v) => {
+    const next = !v;
+    try { localStorage.setItem('wip_lusso_layer_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+    return next;
+  }), []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!shoppingActive) {
+      if (map && shoppingLayerRef.current && map.hasLayer(shoppingLayerRef.current)) map.removeLayer(shoppingLayerRef.current);
+      return;
+    }
+    if (!map) return;
+    const aggiorna = () => {
+      if (map.getZoom() < SHOPPING_LUSSO_MIN_ZOOM) {
+        if (shoppingLayerRef.current && map.hasLayer(shoppingLayerRef.current)) map.removeLayer(shoppingLayerRef.current);
+        return;
+      }
+      void loadShopping(map.getBounds());
+    };
+    aggiorna();
+    map.on('moveend', aggiorna);
+    return () => { map.off('moveend', aggiorna); };
+  }, [shoppingActive, loadShopping]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!lussoActive) {
+      if (map && lussoLayerRef.current && map.hasLayer(lussoLayerRef.current)) map.removeLayer(lussoLayerRef.current);
+      return;
+    }
+    if (!map) return;
+    const aggiorna = () => {
+      if (map.getZoom() < SHOPPING_LUSSO_MIN_ZOOM) {
+        if (lussoLayerRef.current && map.hasLayer(lussoLayerRef.current)) map.removeLayer(lussoLayerRef.current);
+        return;
+      }
+      void loadLusso(map.getBounds());
+    };
+    aggiorna();
+    map.on('moveend', aggiorna);
+    return () => { map.off('moveend', aggiorna); };
+  }, [lussoActive, loadLusso]);
 
   // ── Fog of war dei luoghi visitati (src/lib/visitedFog.ts) ────────────
   // Toggle 👣 nei controlli mappa: layer canvas di rettangoli Leaflet
@@ -1493,6 +1951,24 @@ function MapArea({
   // Non persiste: è un menù, non una preferenza — gli stati dei singoli
   // layer invece restano salvati come prima.
   const [serviziAperti, setServiziAperti] = useState(false);
+
+  // ANCORA FUORI DALLA MAPPA (06/09/2026, bug del committente: «il pannello
+  // dei livelli deve stare SOPRA le chip»). La colonna in basso a sinistra
+  // (meteo, pillola pioggia, tasto livelli e il suo pannello) vive dentro
+  // il contenitore della mappa (`bg-[#e4e9d5] ... z-0` qui sotto), che
+  // stabilisce il proprio contesto di stacking a livello 0: qualunque
+  // z-index dato agli elementi al suo interno — anche z-[2100] — non può
+  // MAI superare le chip di CategoryChips.tsx (z-[2000]), perché sono sue
+  // SORELLE fuori da quel contenitore, non figlie dello stesso z-0. Alzare
+  // lo z-0 della mappa alzerebbe con sé anche gli altri pannelli interni
+  // (POI, z-[1001]/[1002]) che devono restare SOTTO le chip. Il portale
+  // sposta solo questa colonna, via DOM, dentro lo stesso contenitore di
+  // App.tsx che ospita già le chip (id="wip-map-shell", stessa origine per
+  // il posizionamento assoluto): lì il suo z-index compete davvero.
+  const [mapShellEl, setMapShellEl] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setMapShellEl(document.getElementById('wip-map-shell'));
+  }, []);
   // Lo zoom di adesso, per dire nel pannello «avvicinati»: un layer acceso
   // che non mostra niente perché si sta guardando mezza Europa sembra
   // rotto, e la spiegazione deve stare dove si è appena toccato.
@@ -1616,13 +2092,14 @@ function MapArea({
           className: 'wip-sentiero-marker',
           ...cerchioMarkerOpts(),
         });
-        L.marker([Number(s.lat), Number(s.lon)], { icon })
+        const mkS = L.marker([Number(s.lat), Number(s.lon)], { icon })
           .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:230px;">
             <div style="font-size:12px;font-weight:700;color:#111827;">${emojiFonte} ${escapeHtml(s.name || '')}</div>
             <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(s.description_short || '')}</div>
             <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_punto_partenza_osm', language)}</div>
           </div>`)
           .addTo(group);
+        arricchisciFumetto(mkS, { id: String(s.id), name: String(s.name || ''), lat: Number(s.lat), lon: Number(s.lon), category: 'cammini', poiType: 'trail', testo: s.description_short || '' }, language);
       }
       // I rifugi lungo il cammino, dalla tabella dei servizi.
       if (rifugiQui) {
@@ -1640,13 +2117,14 @@ function MapArea({
             className: 'wip-rifugio-marker',
             ...cerchioMarkerOpts(),
           });
-          L.marker([Number(r.lat), Number(r.lon)], { icon })
+          const mkR = L.marker([Number(r.lat), Number(r.lon)], { icon })
             .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;">
               <div style="font-size:12px;font-weight:700;color:#111827;">🏔 ${escapeHtml(r.name || '')}</div>
               <div style="font-size:11px;color:#374151;margin-top:2px;">${getTranslation('mp_rifugio_alpino', language)}</div>
               <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_osm_contributori', language)}</div>
             </div>`)
             .addTo(group);
+          if (r.name) arricchisciFumetto(mkR, { id: `util-${r.id}`, name: String(r.name), lat: Number(r.lat), lon: Number(r.lon), category: 'neve', poiType: 'rifugio_alpino', salva: false }, language);
         }
       }
 
@@ -1726,8 +2204,22 @@ function MapArea({
       void caricaSentieri(map.getBounds());
     };
     aggiorna();
-    map.on('moveend', aggiorna);
-    return () => { map.off('moveend', aggiorna); };
+    // Soglia come i servizi/ZTL qui sopra: senza, ogni micro-fix GPS del
+    // follow-me durante una passeggiata rilancia la query dei sentieri.
+    let ultimoCentro = map.getCenter();
+    let ultimoZoom = map.getZoom();
+    const onMoveEnd = () => {
+      const c = map.getCenter();
+      const z = map.getZoom();
+      if (z === ultimoZoom && getDistanceFromLatLonInM(ultimoCentro.lat, ultimoCentro.lng, c.lat, c.lng) < 400) {
+        return;
+      }
+      ultimoCentro = c;
+      ultimoZoom = z;
+      aggiorna();
+    };
+    map.on('moveend', onMoveEnd);
+    return () => { map.off('moveend', onMoveEnd); };
   }, [sentieriActive, caricaSentieri]);
 
   // ── BICI ──────────────────────────────────────────────────────────────
@@ -1759,9 +2251,23 @@ function MapArea({
     });
   }, []);
 
+  // PRESTAZIONI (18/09/2026, committente: «con ciclovie e mountain bike
+  // l'app rallenta e si muove male»). Tre cause, tutte qui:
+  //  1. nessuna soglia sul moveend (i sentieri ce l'hanno): ogni micro-fix
+  //     GPS rifaceva due query e ridisegnava tutto;
+  //  2. le chiamate si accavallavano: A svuota e aspetta, B svuota e aspetta,
+  //     poi disegnano TUTTE E DUE → tracciati doppi finche' non si ricarica.
+  //     Ora ogni chiamata ha un numero e solo l'ultima disegna;
+  //  3. migliaia di <path> SVG puntinati: ora stanno in una tela canvas sola
+  //     (e routeLines.ts ritaglia le ciclovie al riquadro: una EuroVelo non
+  //     arriva piu' con i suoi 3.000 km per mostrarne trecento metri).
+  const ciclabiliSeqRef = useRef(0);
+  const ciclabiliRendererRef = useRef<L.Renderer | null>(null);
+
   const caricaCiclabili = useCallback(async (bounds: L.LatLngBounds) => {
     const map = mapRef.current;
     if (!map) return;
+    const seq = ++ciclabiliSeqRef.current;
     setCiclabiliLoading(true);
     try {
       const zoom = map.getZoom();
@@ -1779,8 +2285,32 @@ function MapArea({
         .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
         .limit(zoom < CICLABILI_ZOOM_LOCALI ? 120 : 200);
 
+      // Le linee si chiedono PRIMA di toccare la mappa: si svuota e si
+      // ridisegna in un colpo solo, e solo se nel frattempo non e' partita
+      // una chiamata piu' recente.
+      const livelloBici = livelloDaZoom(zoom);
+      const lineeBici = livelloBici
+        ? await fetchRouteLines(
+          bounds, ['bici'],
+          livelloBici === 'regionale' ? 60 : livelloBici === 'medio' ? 120 : 150,
+          livelloBici === 'medio' ? 2 : 1,
+          livelloBici,
+        )
+        : [];
+      if (seq !== ciclabiliSeqRef.current) return;
+
       if (!ciclabiliLayerRef.current) ciclabiliLayerRef.current = creaGruppoPercorsi('#ea580c', CICLABILI_ZOOM_LOCALI);
       if (!ciclabiliLineeRef.current) ciclabiliLineeRef.current = L.layerGroup();
+      if (!ciclabiliRendererRef.current) {
+        // Tela in un pane suo, SOTTO l'overlayPane (z 400): un <canvas> copre
+        // tutta la mappa e, stando sopra, toglierebbe tocchi e tooltip ai
+        // tracciati SVG degli altri layer (sentieri, giro a tappe).
+        if (!map.getPane('wip-ciclabili')) {
+          const pane = map.createPane('wip-ciclabili');
+          pane.style.zIndex = '390';
+        }
+        ciclabiliRendererRef.current = L.canvas({ padding: 0.5, pane: 'wip-ciclabili' });
+      }
       const group = ciclabiliLayerRef.current;
       const linee = ciclabiliLineeRef.current;
       group.clearLayers();
@@ -1793,25 +2323,19 @@ function MapArea({
           className: 'wip-ciclabile-marker',
           ...cerchioMarkerOpts(),
         });
-        L.marker([Number(c.lat), Number(c.lon)], { icon })
+        const mkC = L.marker([Number(c.lat), Number(c.lon)], { icon })
           .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:230px;">
             <div style="font-size:12px;font-weight:700;color:#111827;">${emojiFonte} ${escapeHtml(c.name || '')}</div>
             <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(c.description_short || '')}</div>
             <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_punto_partenza_osm', language)}</div>
           </div>`)
           .addTo(group);
+        arricchisciFumetto(mkC, { id: String(c.id), name: String(c.name || ''), lat: Number(c.lat), lon: Number(c.lon), category: 'cammini', poiType: 'trail', testo: c.description_short || '' }, language);
       }
 
       const nomi = new Map<string, string>((data || []).map((c: any) => [String(c.id), String(c.name || '')]));
-      const livelloBici = livelloDaZoom(zoom);
       if (livelloBici) {
-        const lineeBici = await fetchRouteLines(
-          bounds, ['bici'],
-          livelloBici === 'regionale' ? 60 : livelloBici === 'medio' ? 120 : 150,
-          livelloBici === 'medio' ? 2 : 1,
-          livelloBici,
-        );
-        drawRouteLines(linee, lineeBici, '#ea580c', nomi);
+        drawRouteLines(linee, lineeBici, '#ea580c', nomi, ciclabiliRendererRef.current ?? undefined);
         if (livelloBici === 'pieno') {
           for (const l of lineeBici) {
             if (l.stops?.length) drawRouteStops(linee, l.stops, '#ea580c', nomi.get(l.poiId));
@@ -1825,7 +2349,7 @@ function MapArea({
     } catch (e) {
       console.warn('[Ciclabili] fetch fallito:', e);
     } finally {
-      setCiclabiliLoading(false);
+      if (seq === ciclabiliSeqRef.current) setCiclabiliLoading(false);
     }
   }, [language]);
 
@@ -1849,8 +2373,33 @@ function MapArea({
       void caricaCiclabili(map.getBounds());
     };
     aggiorna();
-    map.on('moveend', aggiorna);
-    return () => { map.off('moveend', aggiorna); };
+    // Soglia come i sentieri: senza, ogni micro-fix GPS del follow-me (e
+    // ogni trascinamento di due dita) rilanciava query e ridisegno. Il
+    // ritaglio dei tracciati tiene una schermata di margine per lato (mai
+    // meno di ~660 m), quindi entro 400 m non si scopre mai un bordo vuoto.
+    let ultimoCentro = map.getCenter();
+    let ultimoZoom = map.getZoom();
+    const onMoveEnd = () => {
+      const c = map.getCenter();
+      const z = map.getZoom();
+      // A zoom di strada lo schermo e' largo 300 m: con 400 m fissi si
+      // potrebbe attraversarlo tutto senza vedere i pin nuovi. Un terzo
+      // della larghezza, con 400 m come tetto.
+      const b = map.getBounds();
+      const soglia = Math.min(400, map.distance(b.getSouthWest(), b.getSouthEast()) * 0.3);
+      if (z === ultimoZoom && getDistanceFromLatLonInM(ultimoCentro.lat, ultimoCentro.lng, c.lat, c.lng) < soglia) {
+        return;
+      }
+      ultimoCentro = c;
+      ultimoZoom = z;
+      aggiorna();
+    };
+    map.on('moveend', onMoveEnd);
+    return () => {
+      map.off('moveend', onMoveEnd);
+      // Le chiamate ancora in volo non devono ridisegnare un layer spento.
+      ciclabiliSeqRef.current++;
+    };
   }, [ciclabiliActive, caricaCiclabili]);
 
   // ── VINO E GUSTO ──────────────────────────────────────────────────────
@@ -1889,13 +2438,12 @@ function MapArea({
       const next = !prev;
       try {
         localStorage.setItem('wip_strade_gusto_enabled', next ? '1' : '0');
-        // Il verticale è uno solo: acceso il layer, l'audioguida può
-        // raccontare la cantina davanti a cui si passa; spento, tace.
-        // La chiave è quella che leggono anche il servizio Android e iOS.
-        const obj = JSON.parse(localStorage.getItem('wip_active_subcategories') || '{}') || {};
-        obj.enogastronomia = next;
-        localStorage.setItem('wip_active_subcategories', JSON.stringify(obj));
-        window.dispatchEvent(new CustomEvent('wip-settings-updated'));
+        // (28/08/2026, collaudo) IL LIVELLO MOSTRA, NON RACCONTA. Prima qui si
+        // scriveva `enogastronomia: true` in wip_active_subcategories — l'oggetto
+        // che il servizio nativo legge come «categorie da raccontare» — e chi
+        // accendeva le strade del vino PER VEDERLE si sentiva partire
+        // l'audioguida di una pasticceria (Martinelli, Carrara). Le categorie
+        // dell'audioguida le decide SOLO il setup (Profilo → GeoControl).
       } catch { /* storage pieno */ }
       return next;
     });
@@ -1951,7 +2499,7 @@ function MapArea({
           className: 'wip-strada-osm-marker',
           ...cerchioMarkerOpts(),
         });
-        L.marker([Number(s.lat), Number(s.lon)], { icon })
+        const mkV = L.marker([Number(s.lat), Number(s.lon)], { icon })
           .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
             <div style="font-size:12px;font-weight:700;color:#111827;">🍇 ${escapeHtml(s.name || '')}</div>
             <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(s.description_short || '')}</div>
@@ -1959,6 +2507,7 @@ function MapArea({
             <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_punto_partenza_percorso', language)}</div>
           </div>`)
           .addTo(group);
+        arricchisciFumetto(mkV, { id: String(s.id), name: String(s.name || ''), lat: Number(s.lat), lon: Number(s.lon), category: 'enogastronomia', poiType: 'strada_del_vino', testo: s.description_short || '' }, language);
       }
 
       // 2-bis) I TRACCIATI. Le strade del gusto non esistono su OSM come
@@ -2028,7 +2577,7 @@ function MapArea({
             className: 'wip-gusto-marker',
             ...cerchioMarkerOpts(produttore ? 30 : MARKER_CERCHIO_PX),
           });
-          L.marker([Number(p.lat), Number(p.lon)], { icon })
+          const mkG = L.marker([Number(p.lat), Number(p.lon)], { icon })
             .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
               <div style="font-size:12px;font-weight:700;color:#111827;">${emoji} ${escapeHtml(p.name || '')}</div>
               <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(p.description_short || '')}</div>
@@ -2037,6 +2586,7 @@ function MapArea({
               <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_verifica_orari_osm', language)}</div>
             </div>`)
             .addTo(group);
+          arricchisciFumetto(mkG, { id: String(p.id), name: String(p.name || ''), lat: Number(p.lat), lon: Number(p.lon), category: 'enogastronomia', poiType: String(p.poi_type || ''), testo: p.description_short || '' }, language);
         }
       }
 
@@ -2100,8 +2650,22 @@ function MapArea({
       void caricaStradeGusto(map.getBounds());
     };
     aggiorna();
-    map.on('moveend', aggiorna);
-    return () => { map.off('moveend', aggiorna); };
+    // Soglia come i servizi/ZTL: senza, ogni micro-fix GPS del follow-me
+    // rilancia la query delle strade del gusto.
+    let ultimoCentro = map.getCenter();
+    let ultimoZoom = map.getZoom();
+    const onMoveEnd = () => {
+      const c = map.getCenter();
+      const z = map.getZoom();
+      if (z === ultimoZoom && getDistanceFromLatLonInM(ultimoCentro.lat, ultimoCentro.lng, c.lat, c.lng) < 400) {
+        return;
+      }
+      ultimoCentro = c;
+      ultimoZoom = z;
+      aggiorna();
+    };
+    map.on('moveend', onMoveEnd);
+    return () => { map.off('moveend', onMoveEnd); };
   }, [stradeGustoActive, caricaStradeGusto]);
 
   // ── Neve: località sciistiche e rifugi ────────────────────────────────
@@ -2137,6 +2701,56 @@ function MapArea({
     d.setUTCDate(d.getUTCDate() - 2);
     return d.toISOString().slice(0, 10);
   }
+
+  // ── SFONDO SATELLITE (18/09/2026, richiesta del committente) ───────────
+  //
+  // Non sostituisce il layer di base (CachedTiles, che serve anche
+  // l'offline e deve restare identico al byte): gli si SOVRAPPONE. Due
+  // TileLayer nello stesso tilePane:
+  //  · zIndex 2 — le foto dall'alto di ESRI World Imagery. NON Mapbox
+  //    (ordine del committente, 18/09/2026: «non usare Mapbox» — la prima
+  //    stesura usava `mapbox.satellite`, che oltre la fascia gratuita si
+  //    paga a consumo). L'indirizzo, CON o SENZA il token del conto ArcGIS
+  //    Location Platform (2M tile/mese gratis), lo decide il SERVER
+  //    (`/api/maps/satellite-config`) in base al contatore mensile — non
+  //    piu' una chiave letta dal bundle: vedi il commento su
+  //    `ARCGIS_API_KEY` in server.ts. Il layer e' spento di default;
+  //  · zIndex 4 — le sole ETICHETTE di CARTO (`voyager_only_labels`, stessa
+  //    chiave dello sfondo): una foto aerea senza i nomi delle vie e dei
+  //    paesi non si legge, e i nostri pin da soli non bastano a orientarsi.
+  // In mezzo (zIndex 3) resta la copertura neve MODIS.
+  const [configSatellite, setConfigSatellite] = useState<{ urlFoto: string; usaChiave: boolean }>({
+    urlFoto: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', // ripiego finché il server non risponde
+    usaChiave: false,
+  });
+  const [satelliteActive, setSatelliteActive] = useState(() => {
+    try { return localStorage.getItem('wip_satellite_enabled') === '1'; } catch { return false; }
+  });
+  // Chiesta solo quando lo sfondo si accende (mai a chip spenta) e poi ogni
+  // 5 minuti finché resta acceso: il server puo' far scadere il tetto
+  // mentre l'utente sta guardando la mappa, e senza un ricontrollo l'ultima
+  // decisione ("usa la chiave") resterebbe valida per l'intera sessione.
+  useEffect(() => {
+    if (!satelliteActive) return;
+    let annullato = false;
+    const chiedi = () => {
+      fetch(getApiUrl('/api/maps/satellite-config'))
+        .then(r => r.ok ? r.json() : null)
+        .then(j => { if (!annullato && j?.urlFoto) setConfigSatellite({ urlFoto: j.urlFoto, usaChiave: !!j.useKey }); })
+        .catch(() => { /* resta il ripiego pubblico gia' impostato */ });
+    };
+    chiedi();
+    const id = setInterval(chiedi, 5 * 60 * 1000);
+    return () => { annullato = true; clearInterval(id); };
+  }, [satelliteActive]);
+
+  const toggleSatellite = useCallback(() => {
+    setSatelliteActive((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('wip_satellite_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+      return next;
+    });
+  }, []);
 
   const toggleNeve = useCallback(() => {
     setNeveActive((prev) => {
@@ -2179,6 +2793,7 @@ function MapArea({
           ...cerchioMarkerOpts(),
         });
         const marker = L.marker([Number(l.lat), Number(l.lon)], { icon });
+        if (l.name) arricchisciFumetto(marker, { id: `util-${l.id}`, name: String(l.name), lat: Number(l.lat), lon: Number(l.lon), category: 'neve', poiType: sub, salva: false }, language);
         marker.bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:170px;max-width:230px;">
           <div style="font-size:12px;font-weight:700;color:#111827;">${emoji[sub] || '❄️'} ${escapeHtml(l.name || '')}</div>
           <div style="font-size:11px;color:#374151;margin-top:2px;">${escapeHtml(etichetta[sub] || '')}</div>
@@ -2261,6 +2876,8 @@ function MapArea({
         {
           maxNativeZoom: NEVE_MODIS_MAX_NATIVE_ZOOM,
           opacity: 0.55,
+          // Sopra lo sfondo satellitare (zIndex 2), sotto le sue etichette (4).
+          zIndex: 3,
           attribution: 'NASA GIBS · MODIS Terra NDSI Snow Cover',
         },
       );
@@ -2272,8 +2889,22 @@ function MapArea({
       void caricaNeve(map.getBounds());
     };
     aggiorna();
-    map.on('moveend', aggiorna);
-    return () => { map.off('moveend', aggiorna); };
+    // Soglia come i servizi/ZTL: senza, ogni micro-fix GPS del follow-me
+    // rilancia la query neve.
+    let ultimoCentro = map.getCenter();
+    let ultimoZoom = map.getZoom();
+    const onMoveEnd = () => {
+      const c = map.getCenter();
+      const z = map.getZoom();
+      if (z === ultimoZoom && getDistanceFromLatLonInM(ultimoCentro.lat, ultimoCentro.lng, c.lat, c.lng) < 400) {
+        return;
+      }
+      ultimoCentro = c;
+      ultimoZoom = z;
+      aggiorna();
+    };
+    map.on('moveend', onMoveEnd);
+    return () => { map.off('moveend', onMoveEnd); };
   }, [neveActive, caricaNeve]);
 
   // ── Sole: UV e caldo percepito (src/lib/sunIndex.ts) ──────────────────
@@ -2304,10 +2935,12 @@ function MapArea({
   useEffect(() => {
     if (!soleActive) return;
     let vivo = true;
+    let ultimoCentro: { lat: number; lon: number } | null = null;
     const carica = async () => {
       const map = mapRef.current;
       if (!map) return;
       const c = map.getCenter();
+      ultimoCentro = { lat: c.lat, lon: c.lng };
       // Gli orari del Sole non passano dalla rete: si calcolano subito, così
       // la scheda ha già qualcosa da mostrare mentre arriva l'UV.
       setOreLuce(orariSole(c.lat, c.lng));
@@ -2317,9 +2950,19 @@ function MapArea({
       if (vivo) { setDatiSole(d); setSoleLoading(false); }
     };
     carica();
-    // Si aggiorna quando ci si sposta parecchio e comunque ogni mezz'ora.
+    // Si aggiorna quando ci si sposta parecchio (soglia come i servizi/ZTL:
+    // senza, ogni micro-fix GPS del follow-me rilancia la query UV) e
+    // comunque ogni mezz'ora.
     const map = mapRef.current;
-    const onMoveEnd = () => { void carica(); };
+    const onMoveEnd = () => {
+      const mp = mapRef.current;
+      if (!mp) return;
+      const c = mp.getCenter();
+      if (ultimoCentro && getDistanceFromLatLonInM(ultimoCentro.lat, ultimoCentro.lon, c.lat, c.lng) < 400) {
+        return;
+      }
+      void carica();
+    };
     map?.on('moveend', onMoveEnd);
     const timer = setInterval(carica, 30 * 60 * 1000);
     return () => {
@@ -2328,6 +2971,61 @@ function MapArea({
       clearInterval(timer);
     };
   }, [soleActive]);
+
+  // ── Clima: il periodo migliore per visitare (src/lib/climaIndex.ts) ───
+  // Medie 2001-2020 di NASA POWER per la cella di 0,5° al centro della
+  // mappa: la stessa per tutta la città, quindi si ricarica solo dopo uno
+  // spostamento di 15 km, mai a ogni fix. Analisi AI per chi ha l'account
+  // (poi in cache per tutti). Committente, 24/09/2026.
+  const [climaActive, setClimaActive] = useState(() => {
+    try { return localStorage.getItem('wip_clima_enabled') === '1'; } catch { return false; }
+  });
+  const [climaLoading, setClimaLoading] = useState(false);
+  const [datiClima, setDatiClima] = useState<DatiClima | null>(null);
+  const [climaVuoto, setClimaVuoto] = useState(false);
+  const [climaEspansa, setClimaEspansa] = useState(false);
+  // Il report completo: si apre sul centro della mappa del momento.
+  const [climaReport, setClimaReport] = useState<{ lat: number; lon: number } | null>(null);
+  // «Questa settimana rispetto al solito»: i prossimi 7 giorni di MET Norway
+  // contro la media del mese. Si carica dopo le statistiche, per lo stesso punto.
+  const [climaAdesso, setClimaAdesso] = useState<ConfrontoAdesso | null>(null);
+
+  const toggleClima = useCallback(() => {
+    setClimaActive((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('wip_clima_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+      if (!next) { setDatiClima(null); setClimaVuoto(false); }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!climaActive) return;
+    let vivo = true;
+    let ultimoCentro: { lat: number; lon: number } | null = null;
+    const carica = async () => {
+      const map = mapRef.current;
+      if (!map) return;
+      const c = map.getCenter();
+      ultimoCentro = { lat: c.lat, lon: c.lng };
+      setClimaLoading(true);
+      const d = await fetchDatiClima(c.lat, c.lng, language);
+      if (vivo) { setDatiClima(d); setClimaVuoto(!d); setClimaLoading(false); }
+      if (vivo && d) { const a = await fetchConfrontoAdesso(c.lat, c.lng, d); if (vivo) setClimaAdesso(a); }
+      else if (vivo) setClimaAdesso(null);
+    };
+    carica();
+    const map = mapRef.current;
+    const onMoveEnd = () => {
+      const mp = mapRef.current;
+      if (!mp) return;
+      const c = mp.getCenter();
+      if (ultimoCentro && getDistanceFromLatLonInM(ultimoCentro.lat, ultimoCentro.lon, c.lat, c.lng) < 15000) return;
+      void carica();
+    };
+    map?.on('moveend', onMoveEnd);
+    return () => { vivo = false; map?.off('moveend', onMoveEnd); };
+  }, [climaActive, language]);
 
   // ── Allarme ZTL (src/lib/ztlAlert.ts) ─────────────────────────────────
   // Toggle 🚫 nei controlli mappa: in auto (>20 km/h) avvisa quando la
@@ -2524,6 +3222,7 @@ function MapArea({
             <div style="font-size:9px;color:#6b7280;margin-top:4px;line-height:1.3;">${getTranslation('mp_classificazione_eea', language)}</div>
           </div>`
         );
+        arricchisciFumetto(marker, { id: `bw-${site.lat.toFixed(4)}_${site.lon.toFixed(4)}`, name: String(site.name || ''), lat: site.lat, lon: site.lon, category: 'natura', poiType: 'spiagge', salva: false }, language);
         group.addLayer(marker);
       }
       // Il fetch è async: nel frattempo l'utente può aver zoomato sotto soglia
@@ -2732,10 +3431,20 @@ function MapArea({
     }
   }, []);
 
+  // Ritentativo finche' Leaflet non esiste (29/08/2026): l'effetto gira una
+  // volta all'apertura del tab e, se la mappa non e` ancora creata, usciva
+  // con `return` senza riprovare — il listener di moveend non veniva mai
+  // agganciato e la chip meteo non compariva piu` (visto in produzione:
+  // nessuna richiesta a /api/meteo/punto nemmeno spostando la mappa). Stesso
+  // schema del layer balneazione: un tick ogni mezzo secondo finche' non c'e`.
+  const [meteoTick, setMeteoTick] = useState(0);
   useEffect(() => {
     if (activeTab !== undefined && activeTab !== "map") return;
     const map = mapRef.current;
-    if (!map) return;
+    if (!map) {
+      const retry = setTimeout(() => setMeteoTick((t) => t + 1), 500);
+      return () => clearTimeout(retry);
+    }
     try {
       const c = map.getCenter();
       refreshMeteo(c.lat, c.lng);
@@ -2748,7 +3457,7 @@ function MapArea({
     };
     map.on("moveend", onMoveEnd);
     return () => { map.off("moveend", onMoveEnd); };
-  }, [activeTab, refreshMeteo]);
+  }, [activeTab, refreshMeteo, meteoTick]);
 
   // Cleanup completo per gli unmount reali (hot reload, error boundary):
   // il timer di debounce e i fetch in volo non devono sopravvivere al componente.
@@ -2869,13 +3578,56 @@ function MapArea({
     south: number, west: number, north: number, east: number
   ): Promise<Poi[]> => {
     try {
-      const { data } = await supabase
+      const colonne = 'id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, images_json, status, is_hidden';
+      const nati = supabase
         .from('shared_pois')
-        .select('id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, status, is_hidden')
+        .select(colonne)
         .eq('category', 'community')
         .gte('lat', south).lte('lat', north)
         .gte('lon', west).lte('lon', east)
         .limit(300);
+      /**
+       * ANCHE I LUOGHI UFFICIALI CON FOTO DELLA COMMUNITY (07/09/2026, il
+       * committente: «la spiaggia della Lecciona non si vede; le foto
+       * approvate devono essere mostrate nella chip»). Una Vision approvata
+       * con «allega a un POI esistente» finisce nella galleria (images_json,
+       * source 'wip_community') di una spiaggia o di un monumento gia' in
+       * archivio, che resta della sua categoria: la sola query su
+       * category='community' non la vedeva mai. Qui si chiedono anche quei
+       * luoghi (contenimento jsonb), solo a vista ravvicinata: senza indice
+       * sulla galleria una bbox continentale sarebbe una scansione.
+       */
+      /**
+       * (18/09/2026) LA STRADA VERA E' IL SERVER: /api/community/pins parte
+       * dalle Vision approvate e arriva ai luoghi per chiave primaria, a
+       * qualunque zoom. Il contenimento jsonb qui sotto, misurato oggi, fa
+       * 2,5 s su 0,3° e va in timeout (57014) su 2°: con la soglia a 2° la
+       * Lecciona non compariva MAI, e l'errore finiva nel catch in silenzio.
+       * Resta solo come ripiego (server irraggiungibile) e solo sotto 0,3°.
+       */
+      const daServer: Promise<any[] | null> = fetch(
+        getApiUrl(`/api/community/pins?south=${south.toFixed(5)}&west=${west.toFixed(5)}&north=${north.toFixed(5)}&east=${east.toFixed(5)}`),
+        { signal: AbortSignal.timeout(12000) }
+      )
+        .then(r => (r.ok ? r.json() : null))
+        .then(j => (Array.isArray(j?.pins) ? j.pins : null))
+        .catch(() => null);
+      const [{ data }, pinsServer] = await Promise.all([nati, daServer]);
+      let dataAllegati: any[] = [];
+      if (pinsServer) {
+        // `photos` = le foto approvate del luogo: la prima va nel pin.
+        dataAllegati = pinsServer.map((p: any) => ({ ...p, description_ai: p.description, foto_community: Array.isArray(p.photos) ? p.photos : [] }));
+      } else if ((north - south) <= 0.3 && (east - west) <= 0.3) {
+        const { data: ripiego } = await supabase
+          .from('shared_pois')
+          .select(colonne)
+          .neq('category', 'community')
+          .contains('images_json', [{ source: 'wip_community' }])
+          .gte('lat', south).lte('lat', north)
+          .gte('lon', west).lte('lon', east)
+          .limit(300);
+        dataAllegati = ripiego || [];
+      }
       // Denylist status COMPLETA (isVisiblePoiStatus): il solo check su
       // 'draft' lasciava visibili i POI community auto-sospesi dalle
       // segnalazioni utente (status 'needs_revision') e quelli rifiutati.
@@ -2884,22 +3636,41 @@ function MapArea({
       const { isVisiblePoiStatus } = await import('../services/poiRepository');
       const { getBlockedCommunityPoiIds } = await import('../lib/communityModeration');
       const blockedIds = getBlockedCommunityPoiIds();
-      return (data || [])
+      /** La prima foto della community in galleria: copertina se il luogo non ne ha una. */
+      const fotoCommunity = (i: any): string | null => {
+        try {
+          const g = Array.isArray(i.images_json) ? i.images_json : JSON.parse(i.images_json || '[]');
+          const f = g.find((x: any) => x?.source === 'wip_community' && typeof x?.url === 'string' && /^https?:\/\//.test(x.url));
+          return f ? f.url : null;
+        } catch { return null; }
+      };
+      const visti = new Set<string>();
+      // Prima le righe del server: portano le foto approvate del luogo.
+      return [...dataAllegati, ...(data || [])]
         .filter((i: any) => isVisiblePoiStatus(i) && i.name && !blockedIds.has(String(i.id)))
-        .map((i: any) => ({
-          id: i.id,
-          lat: Number(i.lat),
-          lon: Number(i.lon),
-          name: i.name,
-          category: 'community',
-          baseCategory: 'community',
-          subCategory: i.poi_type || 'community',
-          description: i.description_ai || i.description_short,
-          image_url: i.image_url,
-          is_gem: false,
-          isFromDb: true,
-          status: i.status || 'verified'
-        } as Poi));
+        .filter((i: any) => { const k = String(i.id); if (visti.has(k)) return false; visti.add(k); return true; })
+        .map((i: any) => {
+          // Il pin community mostra la foto DELLA COMMUNITY (nel segnaposto e
+          // nel popup), anche quando il luogo ufficiale ha gia' la sua
+          // copertina da Wikimedia: quella resta sul pin della sua categoria.
+          const fotoPin: string | null = (Array.isArray(i.foto_community) && i.foto_community[0]) || fotoCommunity(i)
+            || (i.category === 'community' ? i.image_url : null) || null;
+          return {
+            id: i.id,
+            lat: Number(i.lat),
+            lon: Number(i.lon),
+            name: i.name,
+            category: 'community',
+            baseCategory: 'community',
+            subCategory: i.poi_type || (i.category !== 'community' ? i.category : null) || 'community',
+            description: i.description_ai || i.description_short,
+            image_url: fotoPin || i.image_url,
+            fotoPin,
+            is_gem: false,
+            isFromDb: true,
+            status: i.status || 'verified'
+          } as Poi;
+        });
     } catch {
       return [];
     }
@@ -3038,15 +3809,54 @@ function MapArea({
     tipiDb: string[], macro: string, limite = 500,
   ): Promise<Poi[]> => {
     try {
-      const { data } = await supabase
-        .from('shared_pois')
-        // 'sub_category' non esiste sulla tabella: vedi il commento in
-        // fetchGemmePoisInBounds qui sopra, stesso bug corretto.
-        .select('id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, status, is_hidden, country, city, is_gem')
-        .in('category', tipiDb)
-        .gte('lat', south).lte('lat', north)
-        .gte('lon', west).lte('lon', east)
-        .limit(limite);
+      // CAMPIONE SPARSO SU TUTTA LA VISTA, non un grumo (30/08/2026).
+      //
+      // Prima: UNA select sul riquadro con `.limit(n)` e NESSUN ordinamento.
+      // Postgres in quel caso restituisce le righe nell'ordine in cui le
+      // trova sul disco, cioe' nell'ordine in cui sono state importate — e i
+      // POI sono stati importati per paese e per regione. Risultato: con
+      // l'Europa sullo schermo i 600 pin venivano tutti dalla stessa zona, e
+      // il resto del continente restava vuoto. Non era un tetto troppo
+      // basso: era il campione preso male.
+      //
+      // Ora il riquadro si divide in una griglia e si chiede una quota a
+      // OGNI cella, in parallelo. Ogni interrogazione lavora su un rettangolo
+      // piccolo — quindi e' anche piu' rapida della singola grande — e i pin
+      // risultano distribuiti su tutta la vista. A vista stretta la griglia
+      // non serve e si resta a una sola interrogazione.
+      const COLONNE = 'id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, status, is_hidden, country, city, is_gem';
+      const altezza = Math.abs(north - south);
+      const larghezza = Math.abs(east - west);
+      const lato = (altezza > 1 || larghezza > 1) ? 3 : 1;   // 3×3 = 9 celle
+      const perCella = Math.max(20, Math.ceil(limite / (lato * lato)));
+
+      const richieste: any[] = [];
+      for (let r = 0; r < lato; r++) {
+        for (let c = 0; c < lato; c++) {
+          const s = south + (altezza * r) / lato;
+          const n = south + (altezza * (r + 1)) / lato;
+          const w = west + (larghezza * c) / lato;
+          const e = west + (larghezza * (c + 1)) / lato;
+          richieste.push(
+            supabase.from('shared_pois').select(COLONNE)
+              .in('category', tipiDb)
+              .gte('lat', s).lte('lat', n)
+              .gte('lon', w).lte('lon', e)
+              .limit(perCella)
+              .then((res: any) => res.data || [], () => []),
+          );
+        }
+      }
+      const perCelle = await Promise.all(richieste);
+      // Le celle confinano: lo stesso POI puo' tornare da due riquadri.
+      const visti = new Set<string>();
+      const data = perCelle.flat().filter((i: any) => {
+        const k = String(i?.id ?? '');
+        if (!k || visti.has(k)) return false;
+        visti.add(k);
+        return true;
+      }).slice(0, limite);
+
       const { isVisiblePoiStatus } = await import('../services/poiRepository');
       return (data || [])
         .filter((i: any) => isVisiblePoiStatus(i) && i.name)
@@ -3284,7 +4094,26 @@ function MapArea({
         // di 400 si riempie sempre nelle citta' storiche: senza ordine, a
         // Londra tornavano 357 case a schiera vincolate e nessun monumento.
         // Cosi' i beni turistici vincono il taglio e il resto riempie.
+        //
+        // SECONDO ORDINE PER `id` (06/09/2026) — LA CAUSA DELLO SFARFALLIO
+        // sui pin dell'atlante e sulla loro foto, segnalato dall'utente:
+        // "solo foto e tutto il pin, continua mentre il pin e' aperto".
+        // Postgres NON garantisce un ordine stabile fra righe con lo STESSO
+        // tier quando si taglia con .limit() senza un secondo criterio: a
+        // ogni refetch (la mappa ne fa uno ad ogni pan, anche minimo, come
+        // il micro-spostamento dell'inseguimento GPS) il DB poteva restituire
+        // un sottoinsieme leggermente diverso dei 400 beni a parita' di
+        // riquadro — alcuni entravano, altri uscivano, in modo che sembrava
+        // casuale. Il pin apparso/sparito rifaceva il giro marker-cluster
+        // (animazione = "sfarfallio del pin"), e se era proprio quello con
+        // il popup aperto, la sua card rimontava da zero: la foto lampeggiava
+        // ricaricandosi. Il fix generale del 22/08/2026 (positionCacheRef)
+        // risolveva SOLO le posizioni duplicate a parita' di dati, non
+        // questo: qui il dato stesso cambiava selezione ad ogni richiesta.
+        // Con `id` come secondo criterio lo stesso riquadro restituisce
+        // sempre lo stesso taglio dei 400, quindi gli stessi beni.
         .order('tier', { ascending: true })
+        .order('id', { ascending: true })
         .limit(limite);
       return (data || [])
         .filter((i: any) => i.name && i.lat != null && i.lon != null)
@@ -3324,7 +4153,9 @@ function MapArea({
           posizioneApprossimata: /comune/i.test(String(i.geocode_source || '')),
           // La foto libera gia' in casa (Wikimedia Commons) e il suo credito:
           // CC BY-SA obbliga a nominare l'autore, quindi viaggiano insieme.
-          image_url: i.image_url || undefined,
+          // fotoSicura: le foto del catalogo MiC arrivano con schema http e
+          // il browser le blocca dentro una pagina https (04/09/2026).
+          image_url: fotoSicura(i.image_url),
           imageAttribution: i.image_attribution || undefined,
           // La scheda del catalogo nazionale: si apre in una scheda dentro
           // l'app (vedi src/lib/apriScheda.ts). E' la porta che resta ai beni
@@ -3630,48 +4461,97 @@ function MapArea({
       const UTILITY_UI_CATS = ['locali', 'utilita', 'famiglie'];
       const wantsUtility = activeCategories.some(c => UTILITY_UI_CATS.includes(c));
 
-      // Circuit breaker condiviso con poiRepository.ts (src/lib/circuitBreaker.ts):
-      // le due RPC del fetch mappa passano da qui invece che dritte su
-      // supabase.rpc(). Se il breaker è aperto (troppi fallimenti di rete
-      // recenti) la chiamata viene rifiutata subito e, oltre al log, lo
-      // segnaliamo con mapDataDegraded invece di lasciare la mappa
-      // silenziosamente vuota.
+      // NIENTE PAUSA DI SICUREZZA SULLA MAPPA (30/08/2026, decisione del
+      // committente: «il nostro database non deve bloccare la chiamata anche
+      // se dura 10 secondi — la pausa di sicurezza non deve esistere»).
+      //
+      // Qui prima passava il circuit breaker condiviso con poiRepository: dopo
+      // qualche risposta lenta si apriva e da quel momento le chiamate al
+      // database venivano RIFIUTATE SUBITO, senza nemmeno provare. La mappa
+      // restava senza POI — e quindi senza foto — e compariva «Troppi errori
+      // di rete recenti». Era il rimedio peggiore del male: il database e'
+      // lento, non irraggiungibile, e una risposta lenta e' comunque una
+      // risposta.
+      //
+      // Ora ogni chiamata viene sempre tentata. Un errore singolo si limita a
+      // lasciare i pin che c'erano: la fetch successiva riprova. Il breaker
+      // resta in uso altrove (poiRepository, geofencing), dove serve davvero
+      // a non consumare batteria a vuoto in background.
       const runPoiRpc = async (
         fn: () => Promise<{ data: any; error: any }>,
         label: string,
       ): Promise<{ data: any; error: any }> => {
         try {
-          return await supabaseCircuitBreaker.execute(async () => {
-            const res = await fn();
-            if (res.error) throw new Error(res.error.message);
-            return res;
-          });
+          const res = await fn();
+          if (res.error) throw new Error(res.error.message);
+          return res;
         } catch (e: any) {
-          if (/circuit breaker is open/i.test(e?.message || "")) {
-            console.warn(`[MapArea] Circuit breaker aperto, salto ${label}`);
-            setMapDataDegraded(true);
-            // Riusa lo stesso banner/chiave "db" del listener wip-radar-degraded:
-            // stessa causa di fondo (RPC dati luoghi non raggiungibile).
-            setFetchErrors((prev) => ({
-              ...prev,
-              db: getTranslation('mp_db_pausa', language),
-            }));
-          } else {
-            console.warn(`[MapArea] ${label} fallita:`, e?.message || e);
-          }
+          console.warn(`[MapArea] ${label} fallita (si riprovera' al prossimo spostamento):`, e?.message || e);
           return { data: null, error: e };
         }
       };
 
       const [{ data, error }, utilRes] = await Promise.all([
         runPoiRpc(
-          () => supabase.rpc('nearby_pois', {
-            p_lat: center.lat,
-            p_lon: center.lng,
-            radius_m: Math.min(radius, 25000),
-            limit_num: 1000
-          }),
-          'nearby_pois',
+          // FUNZIONE LEGGERA PER LA MAPPA (30/08/2026).
+          //
+          // `nearby_pois` restituisce TRENTATRE colonne per POI, fra cui
+          // `description_ai` (testo lungo) e SETTE campi teaser, uno per
+          // lingua. Per disegnare un pin ne servono undici: nome, coordinate,
+          // categoria, foto, descrizione breve, gemma, stato. Moltiplicato per
+          // 500 pin a ogni spostamento della mappa, quel peso si paga tre
+          // volte — il database lo legge dal disco (e su istanza MICRO, con
+          // 1 GB di RAM, nulla sta in cache), la rete lo trasporta, il
+          // telefono lo interpreta. I testi lunghi si scaricano quando si
+          // APRE la scheda di un POI, uno per volta.
+          //
+          // Foto e descrizione breve restano nel primo giro di proposito: sono
+          // quello che si vede subito toccando il pin.
+          //
+          // Ripiego: se `nearby_pois_map` non c'e' ancora sul database si
+          // ricade su `nearby_pois`, cosi' il client funziona prima e dopo.
+          //
+          // REGOLA sul tetto (30/08/2026): sulla mappa compaiono TUTTI i pin
+          // di quel livello di zoom, e allargando se ne aggiungono FINO A 500.
+          // Il raggio e' quello del cerchio circoscritto al riquadro visibile,
+          // quindi la vista e' coperta per intero anche agli angoli.
+          async () => {
+            const leggera = await supabase.rpc('nearby_pois_map', {
+              p_lat: center.lat,
+              p_lon: center.lng,
+              radius_m: Math.min(radius, 25000),
+              limit_num: 500,
+              // La lingua serve al teaser: la funzione ne restituisce UNO,
+              // quello giusto, invece dei sette che c'erano prima. Senza,
+              // fuori dall'italiano la scheda del pin mostrerebbe per un
+              // istante il testo italiano prima di correggersi.
+              p_lang: String(language || 'it').toLowerCase(),
+            });
+            if (!leggera.error) return leggera;
+
+            // Ripiego intermedio: la prima versione di `nearby_pois_map` non
+            // aveva il parametro della lingua. Se sul database c'e' ancora
+            // quella, va usata lo stesso — e' comunque leggera (undici colonne
+            // invece di trentatre): si perde solo il teaser tradotto, non il
+            // guadagno di velocita'. Senza questo passaggio si finiva dritti
+            // sulla funzione pesante.
+            const senzaLingua = await supabase.rpc('nearby_pois_map', {
+              p_lat: center.lat,
+              p_lon: center.lng,
+              radius_m: Math.min(radius, 25000),
+              limit_num: 500,
+            });
+            if (!senzaLingua.error) return senzaLingua;
+
+            console.warn('[MapArea] nearby_pois_map non disponibile, uso nearby_pois:', leggera.error.message);
+            return supabase.rpc('nearby_pois', {
+              p_lat: center.lat,
+              p_lon: center.lng,
+              radius_m: Math.min(radius, 25000),
+              limit_num: 500,
+            });
+          },
+          'nearby_pois_map',
         ),
         wantsUtility
           ? runPoiRpc(
@@ -3705,7 +4585,13 @@ function MapArea({
             playground: "famiglie", marketplace: "utilita"
           };
 
-          const derivedCategory = item.category === 'gemme' ? 'gemme' : (osmToUiCategory[item.category] || item.category || "monumenti");
+          // `category='gemme'` NON basta a fare una gemma (03/09/2026): e' la
+          // categoria dell'import CSV di Wikipedia, e 9.062 righe su 9.093 la
+          // portano con `is_gem=false`. Solo il flag decide; le altre finiscono
+          // fra i monumenti, come stabilito in poiTaxonomy.resolvePoiTaxonomy.
+          const eGemma = item.is_gem === true;
+          const derivedCategory = eGemma ? 'gemme'
+            : (item.category === 'gemme' ? 'monumenti' : (osmToUiCategory[item.category] || item.category || "monumenti"));
 
           return {
             id: item.id,
@@ -3720,8 +4606,15 @@ function MapArea({
             baseCategory: derivedCategory,
             subCategory: item.sub_category || item.category,
             description: item.description_ai || item.description_short,
+            description_short: item.description_short,
+            // La funzione leggera restituisce UN teaser, gia' nella lingua
+            // dell'utente. La scheda del pin lo cerca in `teaser_text_<lingua>`
+            // (PoiPopupContent), quindi lo si rimette li' con quel nome: cosi'
+            // il testo giusto compare SUBITO, senza aspettare la chiamata di
+            // dettaglio.
+            ...(item.teaser ? { [`teaser_text_${String(language || 'it').toLowerCase()}`]: item.teaser } : {}),
             image_url: item.image_url,
-            is_gem: item.is_gem || item.category === 'gemme',
+            is_gem: eGemma,
             isFromDb: true,
             status: item.status || 'verified'
           };
@@ -3775,8 +4668,10 @@ function MapArea({
       // I POI community non devono dipendere dal clamp 25km / limit 1000
       // della RPC: fetch dedicato per bbox e merge (la versione bbox vince
       // sugli eventuali doppioni della RPC).
+      let communityVince: Poi[] = [];
       if (activeCategories.includes('community')) {
         const communityExtra = await fetchCommunityPoisInBounds(south, west, north, east);
+        communityVince = communityExtra;
         if (communityExtra.length > 0) {
           const seen = new Set(communityExtra.map(p => String(p.id)));
           dbPois = dbPois.filter(p => !seen.has(String(p.id))).concat(communityExtra);
@@ -3858,6 +4753,16 @@ function MapArea({
           dbPois = dbPois.filter(p => !visti.has(String(p.id))).concat(tematiciExtra);
           console.log(`[MapArea] +${tematiciExtra.length} POI tematici (${temAttivi.join(', ')})`);
         }
+      }
+
+      // (18/09/2026) A chip community accesa il pin community VINCE sui
+      // doppioni: le fetch dedicate qui sopra (natura, gemme, tematici…)
+      // girano dopo e si riprendevano la spiaggia della Lecciona come
+      // semplice 'beach', togliendo dalla mappa il pin con la foto. La
+      // scheda che si apre e' la stessa (stesso id), galleria compresa.
+      if (communityVince.length > 0) {
+        const idCommunity = new Set(communityVince.map(p => String(p.id)));
+        dbPois = dbPois.filter(p => !idCommunity.has(String(p.id))).concat(communityVince);
       }
 
       // Atlante dei beni vincolati: tabella a parte, quindi fetch a parte.
@@ -3959,10 +4864,12 @@ function MapArea({
 
     const queriedCats = new Set<string>();
 
-    // Categorie pratiche con Overpass come fallback. "locali" incluso:
-    // Foursquare è la fonte primaria, ma se il DB/Foursquare hanno poco
-    // (<15 risultati in zona) OSM fa da rete di sicurezza.
-    const allowedOverpassCats = ["locali", "utilita", "famiglie", "eventi"];
+    // Categorie pratiche con Overpass come fallback. "locali" TOLTO
+    // (31/08/2026, ordine del committente: i locali vengono da Supabase):
+    // con 10 milioni di righe in locali_pois la rete di sicurezza Overpass
+    // non serve piu', e i mirror giu' facevano comparire l'errore
+    // «OpenStreetMap non raggiungibile» proprio sulla chip Locali.
+    const allowedOverpassCats = ["utilita", "famiglie", "eventi"];
     
     const categoriesToIterate = activeCategories.length > 0 
       ? activeCategories.filter(c => allowedOverpassCats.includes(c))
@@ -4124,6 +5031,53 @@ function MapArea({
           ? bounds.getCenter()
           : { lat: INITIAL_CENTER[0], lng: INITIAL_CENTER[1] };
 
+        // (29/08/2026) PRIMA LA TABELLA locali_pois: i locali di Overture
+        // importati in casa (nome, cucina, indirizzo con civico, sito,
+        // telefono, marchio, stato). Foursquare ha esaurito il credito e
+        // rispondeva 429 a ogni chiamata; TripAdvisor consuma quota a ogni
+        // spostamento della mappa. Le due API restano SOLO come rete di
+        // sicurezza per i riquadri dove la tabella e' vuota.
+        if (bounds.isValid() && (bounds.getNorth() - bounds.getSouth()) < 0.6) {
+          try {
+            const { data: locali } = await supabase
+              .from('locali_pois')
+              .select('id,name,lat,lon,sub_category,cucina,brand,address,city,website,phone,socials,operating_status,confidence')
+              .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
+              .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
+              // NEQ scarta anche i NULL (trappola PostgREST già vista): quasi
+              // tutti i locali hanno operating_status vuoto e la chip mostrava
+              // 0 su 607 a Carrara (31/08). Il filtro giusto: vuoto O non chiuso.
+              .or('operating_status.is.null,operating_status.neq.closed')
+              .order('confidence', { ascending: false })
+              .limit(400);
+            if (locali && locali.length > 0) {
+              return locali.map((l: any) => ({
+                id: l.id,
+                lat: Number(l.lat),
+                lon: Number(l.lon),
+                name: l.name,
+                category: 'locali',
+                baseCategory: 'locali',
+                subCategory: l.sub_category || 'ristorante',
+                poi_type: l.cucina || null,
+                brand: l.brand || null,
+                address: l.address || null,
+                city: l.city || null,
+                contact_website: l.website || null,
+                contact_phone: l.phone || null,
+                socials: Array.isArray(l.socials) ? l.socials : null,
+                operating_status: l.operating_status || null,
+                source: 'overture',
+                status: 'verified',
+                is_gem: false,
+                isFromDb: true,
+              }));
+            }
+          } catch (e) {
+            console.warn('[MapArea] locali_pois non leggibile, passo alle API live', e);
+          }
+        }
+
         const fsqPromise = (async () => {
           logApiCall('foursquare', 'mappa_ricerca_locali');
           try {
@@ -4145,7 +5099,8 @@ function MapArea({
         const taPromise = (async () => {
           logApiCall('tripadvisor', 'mappa_ricerca_locali');
           try {
-            const res = await fetch(`/api/trip/search?searchQuery=ristorante&latLong=${center.lat},${center.lng}`);
+            // getApiUrl: percorso relativo = bundle locale sull'app nativa.
+            const res = await fetch(getApiUrl(`/api/trip/search?searchQuery=ristorante&latLong=${center.lat},${center.lng}`));
             if (!res.ok) return [];
             const data = await res.json();
             const rows = (data.data || []).slice(0, 8);
@@ -4365,11 +5320,20 @@ function MapArea({
       const allPois = results.flat();
 
       // 1. Crea mappe per il merge ibrido
+      // Due mappe: per ID e per coordinate. Prima ce n'era una sola, con le
+      // sole chiavi di coordinate, e il «match per ID» non trovava mai nulla:
+      // una riga del DB col nome corretto o la categoria riclassificata non
+      // superava il confronto nome+categoria del ripiego, il POI grezzo
+      // occupava l'ID e la riga curata veniva scartata al passo 3.
       const dbMap = new Map<string, Poi>();
+      const dbPerId = new Map<string, Poi>();
       dbPois.forEach(p => {
         const coordKey = `${p.lat.toFixed(4)},${p.lon.toFixed(4)}`;
         dbMap.set(coordKey, p);
+        dbPerId.set(String(p.id), p);
       });
+      let agganciPerId = 0;
+      let agganciSoloPerId = 0;
 
       const mergedPoisMap = new Map<string, Poi>();
       const newPoisToSave: Poi[] = [];
@@ -4379,9 +5343,10 @@ function MapArea({
         const idStr = String(poi.id);
         const coordKey = `${poi.lat.toFixed(4)},${poi.lon.toFixed(4)}`;
         
-        // Cerca per ID esatto o per coordinate
-        let cached = dbMap.get(idStr);
-        if (!cached) {
+        // Cerca per ID esatto o per coordinate: l'ID vince sempre.
+        const perId = dbPerId.get(idStr);
+        let cached: Poi | undefined;
+        {
           const cachedByCoord = dbMap.get(coordKey);
           // Se troviamo un POI alle stesse coordinate, uniamo SOLO se la categoria è la stessa
           // Questo evita che un "Bar" prenda la descrizione di un "Museo" (Teatro) adiacente
@@ -4402,6 +5367,11 @@ function MapArea({
               && stessoNome(cachedByCoord.name, poi.name)) {
             cached = cachedByCoord;
           }
+        }
+        if (perId) {
+          agganciPerId++;
+          if (!cached) agganciSoloPerId++;
+          cached = perId;
         }
 
         if (cached) {
@@ -4442,7 +5412,7 @@ function MapArea({
 
       // Filtra i POI in base alle categorie attualmente attive
       const finalPois = finalMergedList.filter(matchesActiveFilters);
-      console.log(`[MapArea] Hybrid Merge: Live ${allPois.length} + DB ${dbPois.length} = Merged ${finalMergedList.length}`);
+      console.log(`[MapArea] Hybrid Merge: Live ${allPois.length} + DB ${dbPois.length} = Merged ${finalMergedList.length} · agganci per ID ${agganciPerId} (di cui ${agganciSoloPerId} che il solo match per coordinate perdeva)`);
 
       // 4. Salva silenziosamente i nuovi POI scoperti nel database in background per il caching geografico
       if (newPoisToSave.length > 0) {
@@ -4675,6 +5645,13 @@ function MapArea({
         // MapController, panTo del follow-me a ogni fix GPS, centratura su un
         // POI). Senza una soglia il follow-me lanciava un fetch al secondo:
         // ogni risposta riscriveva la lista POI e i pin sfarfallavano.
+        if (skipNextFetchRef.current) {
+          // Recentro su un pin appena toccato: il POI è già in lista, un
+          // rifetch qui serve solo a far sfarfallare il cluster (vedi
+          // commento su centerMapOnPoi).
+          skipNextFetchRef.current = false;
+          return;
+        }
         try {
           const center = bounds.getCenter();
           const zoom = mapRef.current?.getZoom() ?? 13;
@@ -4696,8 +5673,9 @@ function MapArea({
   );
 
   const visiblePois = useMemo(() => {
-    // Se la modalità Radar è attiva, mostriamo SOLO i POI monitorati dall'audioguida
-    if (isRadarMode) {
+    // Se la modalità Radar è attiva, mostriamo SOLO i POI monitorati dall'audioguida.
+    // Col percorso su misura no: si sceglie fra TUTTI i pin delle chip accese.
+    if (isRadarMode && !modalitaPercorso) {
       return radarPois || [];
     }
 
@@ -4747,7 +5725,7 @@ function MapArea({
       // passesCategoryRule (src/lib/poiTaxonomy.ts), euristiche comprese.
       return passesCategoryRule(p, selectedCategories, subFilter);
     });
-  }, [pois, selectedCategories, subFilter, isRadarMode, radarPois]);
+  }, [pois, selectedCategories, subFilter, isRadarMode, radarPois, modalitaPercorso]);
 
 
   // Initial fetch when map is ready — e a ogni cambio di categorie/sotto-filtro.
@@ -4819,6 +5797,9 @@ function MapArea({
     // Immediate feedback: clear suggestions
     setSuggestions([]);
     setNostri([]);
+    // Scelto un risultato, la riga di ricerca si richiude: la mappa e' quello
+    // che si vuole guardare, non la casella (30/08/2026).
+    setRicercaAperta(false);
 
     // I nostri risultati (23/08/2026).
     if (suggestion.kind === 'categoria') {
@@ -4875,9 +5856,13 @@ function MapArea({
     }, 8000);
 
     try {
-      // Remove viewbox restriction to allow worldwide search
+      // getApiUrl e non un percorso relativo (30/08/2026): sull'app nativa la
+      // pagina sta su capacitor://localhost, quindi «/api/...» puntava al
+      // bundle dentro l'APK e la ricerca non trovava NIENTE — mentre sulla
+      // PWA, dove l'origine e' wip.guide, funzionava. E` la ragione per cui la
+      // ricerca della citta' andava sul sito e non nell'app.
       const response = await fetch(
-        `/api/nominatim/search?q=${encodeURIComponent(searchQuery)}&format=json`,
+        getApiUrl(`/api/nominatim/search?q=${encodeURIComponent(searchQuery)}&format=json&lang=${language.toLowerCase()}`),
         { signal: searchAbort.signal }
       );
 
@@ -4927,7 +5912,10 @@ function MapArea({
             console.warn('[GPS] Centering error:', err);
             setFetchErrors((prev) => ({
               ...prev,
-              location: getTranslation("geolocation_error_unsupported", language),
+              // Chiave giusta (07/09/2026): "unsupported" diceva "il tuo
+              // browser non supporta la geolocalizzazione" anche quando la
+              // vera causa era il permesso negato o il timeout del GPS.
+              location: getTranslation("geolocation_error_unavailable", language),
             }));
             setTimeout(() => setFetchErrors((prev) => { const n = {...prev}; delete n.location; return n; }), 6000);
           });
@@ -4946,7 +5934,10 @@ function MapArea({
                   // non succedeva nulla. Ora almeno lo segnaliamo.
                   setFetchErrors((prev) => ({
                     ...prev,
-                    location: getTranslation("geolocation_error_unsupported", language),
+                    // Chiave giusta (07/09/2026): "unsupported" diceva "il tuo
+                    // browser non supporta la geolocalizzazione" anche quando
+                    // la vera causa era il permesso negato o il timeout GPS.
+                    location: getTranslation("geolocation_error_unavailable", language),
                   }));
                   setTimeout(() => setFetchErrors((prev) => { const n = {...prev}; delete n.location; return n; }), 6000);
                }
@@ -4968,6 +5959,15 @@ function MapArea({
     // 1. Centra mappa immediatamente sulla posizione corrente se disponibile
     if (userLocation && mapRef.current) {
       mapRef.current.flyTo(userLocation, 18, { duration: 1.2 });
+    } else {
+      // Follow-me senza posizione: prima il badge "Follow ON" si accendeva
+      // e la mappa restava immobile senza nessun avviso. Ora si segnala,
+      // come per il tap breve qui sopra.
+      setFetchErrors((prev) => ({
+        ...prev,
+        location: getTranslation("geolocation_error_unavailable", language),
+      }));
+      setTimeout(() => setFetchErrors((prev) => { const n = {...prev}; delete n.location; return n; }), 6000);
     }
 
     // 2. Assicuriamoci che locationService stia guardando attivamente
@@ -4996,6 +5996,19 @@ function MapArea({
         }
 
         if (heading !== null && Number.isFinite(heading)) {
+          // Doppia soglia (gradi + tempo): vedi il commento su
+          // `ultimoHeadingApplicatoRef` piu' sopra. La differenza angolare
+          // va calcolata sul cerchio (0°/360° sono lo stesso punto), non
+          // come sottrazione semplice.
+          const now = Date.now();
+          const prev = ultimoHeadingApplicatoRef.current;
+          const grezza = prev === null ? Infinity : Math.abs(heading - prev);
+          const delta = Math.min(grezza, 360 - grezza);
+          if (prev !== null && delta < 2 && now - ultimoHeadingTsRef.current < 150) {
+            return;
+          }
+          ultimoHeadingApplicatoRef.current = heading;
+          ultimoHeadingTsRef.current = now;
           setUserHeading(heading);
           setMapRotation(heading);
           if (mapRef.current) {
@@ -5038,7 +6051,8 @@ function MapArea({
    * destra) e un tocco mette il POI nella bozza o nel giro in corso.
    */
   const createPoiIcon = (poi: Poi, conPiu = false) => {
-    const isGem = !!(poi.is_gem || poi.category === "gemme");
+    // Solo il flag: vedi poiTaxonomy.resolvePoiTaxonomy (03/09/2026).
+    const isGem = poi.is_gem === true;
     const pinSize = isGem ? 46 : 34;
     const effectiveCat = poi.baseCategory || poi.category;
     const osmSubCat = poi.subCategory || "";
@@ -5047,6 +6061,11 @@ function MapArea({
       gemme:             "#0f766e",
       monumenti:         "#92400e",
       monument:          "#92400e",
+      // Targhe/lapidi commemorative (poi_type/category "memorial", es. sito
+      // plaques): mancava qui, ricadeva sul grigio generico (#6b7280) invece
+      // dell'ambra dei monumenti di cui fa parte — 13/09/2026, segnalato
+      // dall'utente su una targa a Ostiano.
+      memorial:          "#92400e",
       castle:            "#78350f",
       ruins:             "#57534e",
       archaeological_site: "#a16207",
@@ -5116,6 +6135,38 @@ function MapArea({
     // centro del comune, 23/08/2026): il pin si vede ma non finge. Contorno
     // tratteggiato e leggera trasparenza — chi guarda la mappa capisce prima
     // di aprire la scheda che quel punto indica il paese, non la porta.
+    /**
+     * PIN COMMUNITY CON LA FOTO DENTRO (18/09/2026, il committente: «le foto
+     * devono essere anche nel pin oltre che nella scheda»). Stessa goccia
+     * magenta, piu' grande (48×58) perche' in 22 px una foto non si legge; al
+     * posto dell'emoji c'e' lo scatto approvato. Se la foto non si carica
+     * l'<img> si toglie da solo e sotto resta l'emoji: mai un pin rotto.
+     */
+    const fotoPin: string = isCommunity ? String((poi as any).fotoPin || "") : "";
+    if (fotoPin && /^https?:\/\//.test(fotoPin)) {
+      const src = fotoPin.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+      const htmlFoto = `
+        <div style="position:relative;width:48px;height:58px;filter:drop-shadow(0 3px 5px rgba(0,0,0,.35));transform: rotate(calc(-1 * var(--map-rotation, 0deg)));transition: transform 0.15s ease-out;">
+          <svg viewBox="0 0 34 42" width="48" height="58" xmlns="http://www.w3.org/2000/svg" style="position:absolute;inset:0;">
+            <path d="M17 0C7.6 0 0 7.6 0 17c0 12.7 17 25 17 25S34 29.7 34 17C34 7.6 26.4 0 17 0z" fill="${bgHex}" stroke="#ffffff" stroke-width="1.5"/>
+            <circle cx="17" cy="17" r="13" fill="white"/>
+            <text x="17" y="22" text-anchor="middle" font-size="14" font-family="system-ui,sans-serif">${emoji}</text>
+          </svg>
+          <img src="${src}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none'" style="position:absolute;top:5px;left:5px;width:38px;height:38px;border-radius:50%;object-fit:cover;border:2px solid #fff;box-sizing:border-box;background:#fff;"/>
+          ${subLeftBadge ? `<div style="position:absolute;top:-4px;left:-8px;min-width:18px;height:18px;background:#fff;border-radius:9px;border:1.5px solid #e5e7eb;display:flex;align-items:center;justify-content:center;font-size:9px;box-shadow:0 1px 4px rgba(0,0,0,.25);z-index:10;">${subLeftBadge}</div>` : ""}
+          ${conPiu ? `<div class="wip-poi-piu" title="${getTranslation('tour_aggiungi', language).replace(/"/g, '&quot;')}" style="position:absolute;top:-9px;right:-9px;width:22px;height:22px;border-radius:50%;background:#ffffff;border:2px solid #059669;color:#059669;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;line-height:1;font-family:system-ui,-apple-system,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.3);cursor:pointer;z-index:11;">+</div>` : ""}
+          <div style="position:absolute;bottom:12px;right:-8px;min-width:18px;height:18px;background:#fff;border-radius:9px;border:1.5px solid #e5e7eb;display:flex;align-items:center;justify-content:center;font-size:9px;box-shadow:0 1px 4px rgba(0,0,0,.25);z-index:10;">📸</div>
+        </div>
+      `;
+      return L.divIcon({
+        html: htmlFoto,
+        className: "custom-poi-marker",
+        iconSize: [48, 58],
+        iconAnchor: [24, 58],
+        popupAnchor: [0, -58]
+      });
+    }
+
     const approssimato = (poi as any).posizioneApprossimata === true;
     const html = `
       <div style="position:relative;width:34px;height:42px;filter:drop-shadow(0 3px 5px rgba(0,0,0,.3));transform: rotate(calc(-1 * var(--map-rotation, 0deg)));transition: transform 0.15s ease-out;${approssimato ? 'opacity:.75;' : ''}">
@@ -5151,7 +6202,7 @@ function MapArea({
     // `conPiu` fa parte della chiave: senza, il primo pin disegnato deciderebbe
     // per tutti e il "+" verde non comparirebbe (o non sparirebbe entrando nel
     // giro). E` un solo bit: la cache resta efficace.
-    const cacheKey = `${!!(poi.is_gem || poi.category === "gemme")}|${poi.baseCategory || poi.category}|${poi.category || ""}|${poi.subCategory || ""}|${isAccessible(poi)}|${(poi as any).posizioneApprossimata ? 'approx' : ''}|${conPiu ? 'piu' : ''}`;
+    const cacheKey = `${poi.is_gem === true}|${poi.baseCategory || poi.category}|${poi.category || ""}|${poi.subCategory || ""}|${isAccessible(poi)}|${(poi as any).posizioneApprossimata ? 'approx' : ''}|${conPiu ? 'piu' : ''}|${(poi as any).fotoPin || ''}`;
     let icon = iconCacheRef.current.get(cacheKey);
     if (!icon) {
       icon = createPoiIcon(poi, conPiu);
@@ -5248,11 +6299,12 @@ function MapArea({
   /** Dieci tappe vive e non se ne aggiungono altre: il "+" sparisce da tutti. */
   const giroPieno = useMemo(() => {
     const g = tourService.datiGiro();
-    if (g && tourService.inCorso()) return g.tappe.filter((t) => !t.esclusa).length >= MAX_TAPPE;
-    return bozzaGiro.tappe.length >= MAX_TAPPE;
+    // Il tetto e` del giro (dieci) o del percorso su misura (trenta).
+    if (g && tourService.inCorso()) return g.tappe.filter((t) => !t.esclusa).length >= tourService.tettoTappe();
+    return bozzaGiro.tappe.length >= tourService.bozzaTetto();
   }, [bozzaGiro, vistaGiroMappa]);
-  /** Il "+" ha senso solo con il radar/giro acceso: altrove e` rumore sul pin. */
-  const mostraPiuSuiPin = !!isRadarMode && !giroPieno && !tourService.eSospeso();
+  /** Il "+" ha senso solo con il radar/giro o il percorso su misura acceso: altrove e` rumore sul pin. */
+  const mostraPiuSuiPin = (!!isRadarMode || modalitaPercorso) && !giroPieno && !tourService.eSospeso();
 
   /** Un tocco sul "+" del pin: alla bozza, o al giro se e` gia` partito. */
   const aggiungiAlGiroDaPin = useCallback((poi: any) => {
@@ -5291,10 +6343,11 @@ function MapArea({
   );
 
   // Memoizza gli elementi Marker: vengono ricostruiti SOLO quando cambia la
-  // lista dei POI. Il popup non è più figlio di ogni Marker: prima bastava
+  // lista dei POI. La scheda non è più figlia di ogni Marker: prima bastava
   // aprire/chiudere una scheda per ricostruire tutti i ~500 <Marker> (era la
-  // causa principale della lentezza di apertura). Ora c'è un unico <Popup>
-  // condiviso renderizzato a livello mappa (vedi activePoi più sotto).
+  // causa principale della lentezza di apertura). Ora c'è un'unica scheda
+  // condivisa, guidata solo da `activePoi` (vedi più sotto) e dal 06-07/09/2026
+  // non più un Popup di Leaflet ma un pannello React ancorato in basso.
   // Il colore della categoria, in esadecimale: CATEGORY_COLORS lo tiene
   // dentro una classe Tailwind («bg-[#0f766e]») perché serve così ai pin,
   // ma il cerchio del raggruppamento è HTML disegnato a mano.
@@ -5367,6 +6420,9 @@ function MapArea({
               }
               setActivePopupId(poi.id);
               setActivePoi(poi);
+              // Il pin toccato è già renderizzato: il recentro qui sotto non
+              // deve innescare un rifetch che fa sfarfallare il cluster.
+              skipNextFetchRef.current = true;
               centerMapOnPoi(poi);
             }
           }}
@@ -5444,6 +6500,13 @@ function MapArea({
       dettaglio: '', onClick: toggleSole,
     },
     {
+      id: 'clima', gruppo: 'condizioni', on: climaActive, loading: climaLoading, emoji: '📅',
+      tinta: 'bg-teal-600 border-teal-400', zoomMin: 0,
+      nome: getTranslation('mp_layer_clima_nome', language),
+      dettaglio: getTranslation('mp_layer_clima_det', language),
+      onClick: toggleClima,
+    },
+    {
       id: 'balneazione', gruppo: 'condizioni', on: bathingActive, loading: bathingLoading, emoji: '🏖',
       tinta: 'bg-cyan-600 border-cyan-400', zoomMin: 0,
       nome: getTranslation('mp_layer_balneazione_nome', language),
@@ -5456,18 +6519,48 @@ function MapArea({
       dettaglio: getTranslation('mp_layer_natura2000_det', language),
       onClick: toggleAree,
     },
+    {
+      id: 'shopping', gruppo: 'reti', on: shoppingActive, loading: shoppingLoading, emoji: '🏬',
+      tinta: 'bg-fuchsia-700 border-fuchsia-400', zoomMin: SHOPPING_LUSSO_MIN_ZOOM,
+      nome: getTranslation('mp_layer_shopping_nome', language),
+      dettaglio: getTranslation('mp_layer_shopping_det', language),
+      onClick: toggleShopping,
+    },
+    {
+      id: 'lusso', gruppo: 'reti', on: lussoActive, loading: lussoLoading, emoji: '👑',
+      tinta: 'bg-violet-950 border-violet-600', zoomMin: SHOPPING_LUSSO_MIN_ZOOM,
+      nome: getTranslation('mp_layer_lusso_nome', language),
+      dettaglio: getTranslation('mp_layer_lusso_det', language),
+      onClick: toggleLusso,
+    },
+    // Lo SFONDO e' una terza natura: non e' una rete ne' una condizione.
+    // Ultimo gruppo = in fondo al pannello, cioe' il piu' vicino al pollice
+    // (il pannello si apre sopra il tasto).
+    {
+      id: 'satellite', gruppo: 'sfondo', on: satelliteActive, loading: false, emoji: '🛰️',
+      tinta: 'bg-slate-700 border-slate-400', zoomMin: 0,
+      nome: getTranslation('mp_layer_satellite_nome', language),
+      dettaglio: getTranslation('mp_layer_satellite_det', language),
+      onClick: toggleSatellite,
+    },
   ], [
     language, sentieriActive, sentieriLoading, ciclabiliActive, ciclabiliLoading,
     stradeGustoActive, stradeGustoLoading, servicesActive, servicesLoading,
-    neveActive, neveLoading, soleActive, soleLoading, bathingActive, bathingLoading,
-    areeActive, areeLoading, AREE_MIN_ZOOM,
-    toggleSentieri, toggleCiclabili, toggleStradeGusto, toggleServices, toggleNeve, toggleSole, toggleBathing, toggleAree,
+    neveActive, neveLoading, soleActive, soleLoading, climaActive, climaLoading, bathingActive, bathingLoading,
+    areeActive, areeLoading, AREE_MIN_ZOOM, shoppingActive, shoppingLoading, lussoActive, lussoLoading,
+    toggleSentieri, toggleCiclabili, toggleStradeGusto, toggleServices, toggleNeve, toggleSole, toggleClima, toggleBathing, toggleAree,
+    toggleShopping, toggleLusso, satelliteActive, toggleSatellite,
   ]);
 
   const layerAccesi = useMemo(() => LIVELLI.filter((l) => l.on), [LIVELLI]);
 
-  const spegniTuttiILivelli = useCallback(() => {
-    for (const l of layerAccesi) l.onClick();
+  const spegniTuttiILivelli = useCallback(async () => {
+    // In serie e attesi: alcuni onClick (es. toggleServices) sono async, e
+    // chiamarli tutti insieme senza attendere lasciava lo stato finale
+    // indeterminato quando due toggle si accavallavano.
+    for (const l of layerAccesi) {
+      await l.onClick();
+    }
   }, [layerAccesi]);
 
   const focusPoiOnMap = (poi: Poi) => {
@@ -5552,8 +6645,29 @@ function MapArea({
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
             url={cartoUrl}
           />
+          {satelliteActive && (
+            <SfondoSatellite
+              urlFoto={configSatellite.urlFoto}
+              urlEtichette={cartoUrl.replace('/rastertiles/voyager/', '/rastertiles/voyager_only_labels/')}
+              usaChiave={configSatellite.usaChiave}
+            />
+          )}
           <MapController center={center} zoom={mapZoom} />
-          <MapEventsHandler onMoveEnd={fetchPois} onCenterChange={onCenterChange} onDragStart={() => stopFollowMode(true)} isFollowing={() => followModeRef.current} />
+          <MapEventsHandler
+            onMoveEnd={fetchPois}
+            onCenterChange={onCenterChange}
+            onDragStart={() => stopFollowMode(true)}
+            isFollowing={() => followModeRef.current}
+            // Un modo per chiudere la card di un POI oltre alla X interna:
+            // un tap sulla mappa (i marker fermano la propagazione da sé,
+            // quindi non si chiude riaprendo lo stesso pin).
+            onMapClick={() => {
+              if (activePoi) {
+                setActivePopupId(null);
+                setActivePoi(null);
+              }
+            }}
+          />
 
           {userLocation &&
             typeof userLocation[0] === "number" &&
@@ -5644,65 +6758,62 @@ function MapArea({
             );
           })()}
 
-          {/* Popup condiviso: uno solo per tutta la mappa. key per poi.id così
-              cambiando POI la scheda rimonta pulita (stati e fetch propri). */}
-          {activePoi && (
-            <Popup
-              key={`popup-${activePoi.id}`}
-              className="custom-popup"
-              minWidth={290}
-              maxWidth={290}
-              // La X nativa di Leaflet si sommava a quella disegnata da
-              // PoiPopupContent: due X visibili nello stesso angolo
-              // (24/08/2026, segnalato sui beni culturali). Ora ne resta
-              // una sola, quella della card, più grande e coerente su ogni
-              // variante — chiude comunque nello stesso modo (onClose sotto).
-              closeButton={false}
-              position={[activePoi.lat, activePoi.lon]}
-              offset={[0, -42]}
-              // L'autoPan di Leaflet combatteva col flyTo di centerMapOnPoi
-              // (due animazioni simultanee sulla stessa mappa = schermo e pin
-              // che sfarfallano all'apertura). Il flyTo posiziona già il pin
-              // sotto il centro apposta per lasciare spazio al popup.
-              autoPan={false}
-              eventHandlers={{
-                // Leaflet emette `remove` anche quando il popup viene solo
-                // ri-agganciato durante un re-render: chiudere la scheda in
-                // quel caso la faceva apparire e sparire in pochi millisecondi.
-                // Chiudiamo solo se, esaurito il ciclo di render, il popup non
-                // è più sulla mappa (chiusura vera dell'utente).
-                remove: (e: any) => {
-                  const closedId = activePoi.id;
-                  setTimeout(() => {
-                    const map = mapRef.current;
-                    if (map && e?.target && map.hasLayer(e.target)) return;
-                    setActivePopupId((cur) => (cur === closedId ? null : cur));
-                    setActivePoi((cur) => (cur && cur.id === closedId ? null : cur));
-                  }, 0);
-                },
-              }}
-            >
-              <PoiPopupContent
-                poi={activePoi}
-                onGuideClick={() => selectPoi(activePoi)}
-                language={language}
-                // Dieci Tappe: col radar acceso la scheda offre "Aggiungi al
-                // giro", cosi` le tappe si scelgono anche toccando i pin.
-                modalitaGiro={!!isRadarMode}
-                // La X della card chiude davvero: si chiude il popup di
-                // Leaflet e si azzera lo stato, altrimenti il popup resta
-                // "aperto" per React e non si riapre sullo stesso POI.
-                onClose={() => {
-                  try { mapRef.current?.closePopup(); } catch { /* mappa gia' smontata */ }
-                  setActivePopupId(null);
-                  setActivePoi(null);
-                }}
-              />
-            </Popup>
-          )}
-
         </MapContainer>
       </div>
+
+      {/* SCHEDA POI: pannello ancorato in basso, NON PIU` un Popup di Leaflet
+          (06-07/09/2026, richiesto dal committente dopo un video: "la scheda
+          appare e scompare velocissimo"). La causa vera era strutturale, non
+          un bug da rattoppare: un Leaflet Popup vive DENTRO l'albero della
+          mappa (posizione via setLatLng, autoPan, l'evento `remove` che
+          Leaflet spara anche solo per un ri-aggancio durante un re-render —
+          vedi la cronologia di pezze qui sopra, mai bastate). MapArea
+          rirenderizza spesso (bussola, GPS, fetch): ogni volta il Popup
+          rischiava di essere tolto e rimesso, con un lampo. Un pannello React
+          comune, fuori da MapContainer e guidato solo da `activePoi`, non ha
+          nessuno di questi problemi — non è mai stato "dentro" la mappa.
+          Posizione e aspetto seguono la richiesta: ancorato appena sopra la
+          barra "Trova vicino"/"Tutto" (stesso bordo, non più una bolla sul
+          pin), e alla chiusura la mappa torna a centrare il pin per davvero
+          (prima restava spostato del 22% per lasciare posto alla bolla). */}
+      <AnimatePresence>
+        {activePoi && (
+          <motion.div
+            key={`poi-sheet-${activePoi.id}`}
+            initial={{ y: '100%', opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: '100%', opacity: 0 }}
+            transition={{ type: 'spring', stiffness: 260, damping: 30 }}
+            // bottom: 5.25rem, lo STESSO offset gia' collaudato in questo file
+            // per la colonna meteo/livelli qui sopra — cancella esattamente la
+            // barra "Trova vicino"/Tutto (1rem di margine + la sua altezza),
+            // non un valore indovinato a occhio.
+            // z-[2150] e non z-[1150] (10/09/2026): sotto le chip categoria
+            // (z-[2000], CategoryChips.tsx) la card finiva coperta.
+            className="absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 right-3 md:left-6 md:right-auto md:w-[360px] z-[2150] max-h-[50dvh] md:max-h-[65dvh]"
+          >
+            <PoiPopupContent
+              poi={activePoi}
+              onGuideClick={() => selectPoi(activePoi)}
+              language={language}
+              // Dieci Tappe: col radar acceso la scheda offre "Aggiungi al
+              // giro", cosi` le tappe si scelgono anche toccando i pin.
+              // Lo stesso tasto serve al percorso su misura.
+              modalitaGiro={!!isRadarMode || modalitaPercorso}
+              onClose={() => {
+                // Il pin torna al centro vero dello schermo, non piu` spostato
+                // per lasciare posto a una bolla che non c'e` piu`.
+                try {
+                  const map = mapRef.current;
+                  if (map) map.flyTo([activePoi.lat, activePoi.lon], map.getZoom(), { duration: 0.5 });
+                } catch { /* mappa gia' smontata */ }
+                setActivePopupId(null);
+                setActivePoi(null);
+              }}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Banner offline discreto: stessa famiglia visiva del badge "Follow ON"
           qui sotto (pillola blur, testo maiuscolo). useNetworkStatus() era
@@ -5835,22 +6946,64 @@ function MapArea({
 
       {/* ── Colonna controlli in alto a sinistra: meteo + servizi pratici ──
           Angolo non invasivo: il banner offline sta al centro, gli errori a
-          destra, la ricerca in basso. */}
+          destra, la ricerca in basso.
+          PORTALE (06/09/2026): finché `mapShellEl` non è pronto (primo
+          render, prima dell'effetto) questa colonna resta invisibile per un
+          istante — meglio che disegnarla intrappolata sotto le chip anche
+          solo per un frame. Vedi il commento su `mapShellEl` più sopra. */}
+      {mapShellEl && createPortal(
+      <>
       {/* IN BASSO A SINISTRA, sopra la barra di ricerca (22/08/2026). Stava
           in alto a 0,75 rem, ma le chip partono a 0,25 rem con z-index 2000
           e le loro righe di sotto-chip crescono verso il basso: la chip
           Gemme copriva il tasto dei livelli, e la riga dei sotto-chip anche
           il meteo. In basso nessuna riga cresce, e il pannello dei livelli
           si apre verso l'alto (flex-col-reverse). */}
-      <div className="absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 z-[1000] flex flex-col-reverse items-start gap-2 pointer-events-none">
-        {/* Chip meteo (Open-Meteo, cache 30 min) */}
-        {meteo && (
+      {/* z-index PIU` ALTO DELLE CHIP QUANDO IL PANNELLO E` APERTO
+          (31/08/2026, richiesta del committente: «magari sovrasta le chips
+          finché non si chiude»).
+
+          Le chip delle categorie stanno a z-[2000] e sono sempre in primo
+          piano. Tenendo il pannello sotto, con tutti i layer accesi restava
+          una fessura che scorre: leggibile, ma scomoda. Mentre si SCEGLIE un
+          livello le chip non servono — si sta guardando l'elenco, non la
+          barra — quindi il pannello sale sopra di loro e usa tutta l'altezza.
+          Appena si chiude torna sotto, e le chip riappaiono: nessuno stato da
+          ricordare, nessun pulsante in piu'. */}
+      {/* 06/09/2026: nascosta del tutto quando la ricerca città è aperta —
+          il solo z-index (2200 sulla barra di ricerca, sopra questo z-2100)
+          bastava a mettere la ricerca sopra, ma meteo e tasto livelli
+          restavano visibili sotto e si affollavano visivamente contro il
+          riquadro dei risultati. "Sovrapposta a tutto" qui vuol dire anche
+          non condividere lo schermo con loro, non solo vincere lo z-fight.
+          07/09/2026: stessa cosa con la card di un pin aperta — il chip
+          meteo sta alla sua stessa quota (5.25rem) e le spuntava sopra. */}
+      {/* 18/09/2026 (committente): «il tasto dei livelli portalo in basso
+          all'altezza del tasto percorsi, e il meteo mettilo al centro, stessa
+          altezza, tra di loro». Una fila sola a 5.25rem dal fondo:
+          livelli a sinistra (questa colonna) · meteo al centro (qui sotto) ·
+          percorsi a destra (App.tsx). Il meteo esce dalla colonna: stando
+          SOTTO il tasto livelli lo alzava di una riga rispetto ai percorsi. */}
+      {meteo && (
+        <div className={`absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-[1000] h-11 flex items-center pointer-events-none transition-opacity ${(ricercaAperta || activePoi) ? 'opacity-0 invisible' : ''}`}>
+          {/* Chip meteo (Open-Meteo, cache 30 min) */}
           <div className="pointer-events-auto bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-2xl rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.12)] border border-white/60 dark:border-white/10 px-3 py-1.5 flex items-center gap-1.5 text-[12px] font-black text-[#1e3a8a] dark:text-white select-none">
             <span className="text-[14px] leading-none">{weatherEmoji(meteo.code)}</span>
             {Math.round(meteo.temp)}°
           </div>
-        )}
+        </div>
+      )}
 
+      {/* `top` fissato oltre a `bottom`: la colonna ha un'altezza vera (quella
+          del guscio della mappa meno i margini), e il pannello dei livelli si
+          restringe e scorre dentro invece di uscire dall'alto. E' tutta
+          `pointer-events-none`: lo spazio vuoto sopra il tasto non ruba i
+          tocchi alla mappa. In fondo alla colonna sta il blocco dei livelli
+          (`order-first` piu' sotto: in col-reverse il primo e' in basso),
+          pioggia e «al coperto» gli stanno sopra. */}
+      {/* 24/09/2026 (committente: «quando selezionato deve sovrapporsi alle chips»): anche con la scheda del
+          clima o del sole aperta la colonna sale sopra le chip, come per il pannello dei livelli. */}
+      <div className={`absolute top-[calc(env(safe-area-inset-top)+0.5rem)] bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 ${(serviziAperti || (climaActive && (datiClima || climaVuoto)) || (soleActive && (datiSole || oreLuce))) ? 'z-[2100]' : 'z-[1000]'} flex flex-col-reverse items-start gap-2 pointer-events-none transition-opacity ${(ricercaAperta || activePoi) ? 'opacity-0 pointer-events-none invisible' : ''}`}>
         {/* Banner pioggia: propone l'evidenziazione dei luoghi al coperto */}
         <AnimatePresence>
           {meteo && meteo.rainProb >= 50 && !rainBannerDismissed && !indoorMode && (
@@ -5903,8 +7056,16 @@ function MapArea({
           Il toggle "zone esplorate" è stato tolto su richiesta: era un
           diario, non un servizio, e non c'entrava con gli altri tre.
         */}
-        {/* col-reverse: il tasto sta in basso e il pannello si apre sopra */}
-        <div className="pointer-events-auto flex flex-col-reverse items-start gap-2">
+        {/* col-reverse: il tasto sta in basso e il pannello si apre sopra.
+            Trasparente e non cliccabile con la card di un pin aperta: la
+            card e' ancorata alla stessa quota e altrimenti il tasto le
+            spunta sopra dal bordo arrotondato (07/09/2026, committente). */}
+        {/* `order-first` = in fondo alla colonna, alla quota del tasto
+            percorsi. `min-h-0` = puo' restringersi: e' cosi' che il pannello
+            dentro eredita il tetto e scorre. `pointer-events-none` sul blocco
+            e `auto` sui figli: il blocco e' largo quanto il pannello anche
+            nei punti vuoti accanto al tasto, e li' i tocchi sono della mappa. */}
+        <div className={`order-first min-h-0 pointer-events-none [&>*]:pointer-events-auto flex flex-col-reverse items-start gap-2 transition-opacity ${activePoi ? 'opacity-0 !pointer-events-none invisible' : ''}`}>
           <button
             onClick={() => setServiziAperti((v) => !v)}
             // Era una ⓘ, che vuol dire «informazioni» e non «livelli»: chi
@@ -5916,7 +7077,7 @@ function MapArea({
               layerAccesi.length ? ` · ${layerAccesi.length} ${getTranslation('mp_attivi', language)}` : ''}`}
             aria-expanded={serviziAperti}
             // 44 px: la soglia sotto la quale il pollice sbaglia bersaglio.
-            className={`relative w-11 h-11 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60 ${
+            className={`relative shrink-0 w-11 h-11 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60 ${
               serviziAperti || layerAccesi.length
                 ? 'bg-[#1e3a8a] text-white border-blue-400 ring-2 ring-blue-500/40'
                 : 'bg-white/70 dark:bg-[#1C1C1E]/70 border-white/60 dark:border-white/10 text-[#1e3a8a] dark:text-white'
@@ -5946,7 +7107,7 @@ function MapArea({
             <button
               onClick={() => setServiziAperti(true)}
               aria-label={`${getTranslation('mp_livelli_attivi', language)}: ${layerAccesi.map((l) => l.nome).join(', ')}`}
-              className="pointer-events-auto flex items-center gap-1.5 h-11 bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-full shadow-[0_2px_10px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 px-3 active:scale-95 transition-all focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60"
+              className="pointer-events-auto shrink-0 flex items-center gap-1.5 h-11 bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-full shadow-[0_2px_10px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 px-3 active:scale-95 transition-all focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60"
             >
               {layerAccesi.map((l) => (
                 <span key={l.id} aria-hidden="true" className="text-[15px] leading-none">{l.emoji}</span>
@@ -5964,16 +7125,58 @@ function MapArea({
                 transition={{ duration: menoMovimento ? 0.08 : 0.16 }}
                 role="group"
                 aria-label={getTranslation('mp_livelli_mappa', language)}
-                className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-2 flex flex-col gap-0.5 min-w-[232px] max-h-[70vh] overflow-y-auto"
+                // IL TETTO DI ALTEZZA, PER DAVVERO (31/08/2026).
+                //
+                // Con molti layer accesi il pannello cresce verso l'alto
+                // (col-reverse) e finiva SOTTO la barra delle chip, che sta a
+                // z-[2000] ed e' sempre in primo piano: coperto a meta' invece
+                // di scorrere dentro i suoi bordi.
+                //
+                // Il 29/08 era stato messo un tetto, ma non ha mai funzionato
+                // per DUE motivi:
+                //  1. era scritto `calc(100dvh-9rem-env(...))`. In CSS il meno
+                //     dentro calc() vuole gli spazi attorno, e in Tailwind gli
+                //     spazi si scrivono con l'underscore: senza, la regola e'
+                //     sintatticamente invalida e il browser la SCARTA. Il
+                //     pannello restava quindi senza alcun tetto.
+                //  2. il conto era comunque incompleto: sottraeva la barra
+                //     delle chip ma non i 5,25rem a cui questo blocco e'
+                //     ancorato dal basso, ne' il pulsante da 2,75rem sotto al
+                //     pannello.
+                //
+                // Ora il tetto sottrae solo cio' che sta DAVVERO sotto il
+                // pannello — le due aree di sicurezza, l'ancoraggio dal basso
+                // (5,25rem), il pulsante col suo spazio (3,25rem) e un margine
+                // di respiro in cima — e non piu' la barra delle chip, perche'
+                // il pannello ora le passa sopra (vedi lo z-index qui sopra).
+                // Cosi' anche con tutti i layer accesi si legge tutto, e se
+                // proprio non ci sta scorre dentro i suoi bordi invece di
+                // finire tagliato.
+                // 18/09/2026 — IL TETTO NON SI CALCOLA PIU`, SI EREDITA.
+                // Il conto in `100dvh - …` qui sopra presumeva che la mappa
+                // fosse alta quanto lo schermo e che sotto il pannello ci
+                // fosse solo il tasto: ma sotto c'erano anche il chip meteo
+                // e il banner pioggia, e la mappa non arriva al bordo dello
+                // schermo (c'e' la barra delle schede). Risultato: la cima
+                // del pannello usciva dall'alto e «Sentieri e cammini», la
+                // prima voce, non si poteva toccare — scorreva, ma la parte
+                // che scorreva in vista era fuori schermo (committente).
+                // Ora la colonna ha un'altezza VERA (top e bottom fissati
+                // sul guscio della mappa) e il pannello e' un figlio flex
+                // che si restringe (`min-h-0`) e scorre dentro i suoi bordi,
+                // qualunque cosa gli stia sopra o sotto.
+                className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-2 flex flex-col gap-0.5 min-w-[232px] min-h-0 shrink overflow-y-auto overscroll-contain touch-pan-y [&>*]:shrink-0"
               >
-                {(['reti', 'condizioni'] as const).map((gruppo) => (
+                {(['reti', 'condizioni', 'sfondo'] as const).filter((g) => LIVELLI.some((v) => v.gruppo === g)).map((gruppo) => (
                   <Fragment key={gruppo}>
-                    {/* Due nature diverse, separate anche a vedersi: dove si
-                        va e com'è adesso. */}
+                    {/* Nature diverse, separate anche a vedersi: dove si
+                        va, com'è adesso, e su che sfondo lo si guarda. */}
                     <div className="px-2 pt-1.5 pb-1 text-[10px] font-black uppercase tracking-wider text-[#1e3a8a]/55 dark:text-white/50">
                       {gruppo === 'reti'
                         ? getTranslation('mp_dove_andare', language)
-                        : getTranslation('mp_come_adesso', language)}
+                        : gruppo === 'condizioni'
+                          ? getTranslation('mp_come_adesso', language)
+                          : getTranslation('mp_sfondo_mappa', language)}
                     </div>
                     {LIVELLI.filter((v) => v.gruppo === gruppo).map((v) => (
                       <button
@@ -6034,7 +7237,7 @@ function MapArea({
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
-                className="bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 px-3 py-2.5 max-w-[240px]"
+                className="shrink-0 bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 px-3 py-2.5 max-w-[240px]"
               >
                 {datiSole && (
                 <div className="flex items-center gap-2.5">
@@ -6114,8 +7317,118 @@ function MapArea({
               </motion.div>
             )}
           </AnimatePresence>
+
+          {/* Scheda clima: i dodici mesi con il punteggio per chi visita a
+              piedi, il periodo migliore, i mesi estremi e l'analisi AI.
+              Una scheda sola perché il clima medio è lo stesso per tutta la
+              città: quello che cambia è il MESE, non il punto sulla mappa. */}
+          <AnimatePresence>
+            {climaActive && (datiClima || climaVuoto) && (
+              <motion.div
+                key="scheda-clima"
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                className="shrink-0 bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 px-3 py-2.5 max-w-[240px]"
+              >
+                {!datiClima ? (
+                  <p className="text-[10px] text-primary/70 dark:text-white/70">{getTranslation('mp_clima_non_disp', language)}</p>
+                ) : (
+                  <>
+                    <p className="text-[11px] font-black text-[#1e3a8a] dark:text-white leading-tight">
+                      📅 {getTranslation('mp_clima_migliore', language)}: <span className="text-teal-700 dark:text-teal-300">{testoPeriodi(datiClima.migliori, language) || '—'}</span>
+                    </p>
+                    {datiClima.peggiori.length > 0 && (
+                      <p className="text-[10px] text-primary/60 dark:text-white/60 leading-tight mt-0.5">
+                        {getTranslation('mp_clima_evitare', language)}: {testoPeriodi(datiClima.peggiori, language)}
+                      </p>
+                    )}
+                    <p className="text-[10px] text-primary/70 dark:text-white/70 mt-1 leading-snug">{consiglioMeseCorrente(datiClima, language)}</p>
+                    {climaAdesso && climaAdesso.deltaTmax != null && (
+                      <p className="text-[10px] text-primary/70 dark:text-white/70 mt-0.5 leading-snug">
+                        🌡 {getTranslation('mp_clima_adesso', language)}: {climaAdesso.deltaTmax > 0 ? '+' : ''}{climaAdesso.deltaTmax}° {getTranslation(Math.abs(climaAdesso.deltaTmax) < 1.5 ? 'mp_clima_nella_media' : climaAdesso.deltaTmax > 0 ? 'mp_clima_sopra_media' : 'mp_clima_sotto_media', language)}
+                        {climaAdesso.mmAttesi != null && ` · ☔ ${climaAdesso.mmPrevisti} mm ${getTranslation('mp_clima_pioggia_prevista', language)} (${climaAdesso.mmAttesi} ${getTranslation('mp_clima_attesa_mese', language)})`}
+                      </p>
+                    )}
+
+                    {/* I dodici mesi: barra = punteggio, colore = livello; tocco = dettaglio del mese. */}
+                    <div className="flex gap-[3px] mt-2 items-end h-9">
+                      {datiClima.mesi.map((x) => {
+                        const oggi = x.m === new Date().getMonth() + 1;
+                        return (
+                          <button
+                            key={x.m}
+                            type="button"
+                            onClick={() => setClimaEspansa((e) => !e)}
+                            className="flex-1 flex flex-col items-center justify-end gap-0.5 h-full"
+                            title={`${nomeMese(x.m, language, true)}: ${x.punteggio}/100`}
+                          >
+                            <span className="w-full rounded-sm" style={{ height: `${Math.max(8, x.punteggio * 0.28)}px`, background: coloreClima(x.punteggio), outline: oggi ? '2px solid #1e3a8a' : 'none' }} />
+                            <span className={`text-[8px] leading-none ${oggi ? 'font-black text-[#1e3a8a] dark:text-white' : 'text-primary/60 dark:text-white/60'}`}>{nomeMese(x.m, language).slice(0, 1).toUpperCase()}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {climaEspansa && (
+                      <div className="mt-1.5 grid grid-cols-[auto_1fr_1fr_1fr] gap-x-2 gap-y-0.5 text-[9px] text-primary/70 dark:text-white/70">
+                        {datiClima.mesi.map((x) => (
+                          <Fragment key={x.m}>
+                            <span className="font-bold">{nomeMese(x.m, language)}</span>
+                            <span>🌡 {x.tmin ?? '?'}–{x.tmax ?? '?'}°</span>
+                            <span>☔ {x.mm ?? '?'} mm</span>
+                            <span style={{ color: coloreClima(x.punteggio) }} className="font-bold">{getTranslation(`mp_clima_${livelloClima(x.punteggio)}`, language)}</span>
+                          </Fragment>
+                        ))}
+                      </div>
+                    )}
+
+                    <p className="text-[9px] text-primary/60 dark:text-white/60 mt-1.5 leading-snug">
+                      {datiClima.piuPiovoso && `☔ ${getTranslation('mp_clima_piovoso', language)}: ${nomeMese(datiClima.piuPiovoso, language)} (${datiClima.mesi[datiClima.piuPiovoso - 1]?.mm ?? '?'} mm)`}
+                      {datiClima.piuCaldo && ` · 🔥 ${getTranslation('mp_clima_caldo', language)}: ${nomeMese(datiClima.piuCaldo, language)} ${datiClima.mesi[datiClima.piuCaldo - 1]?.tmax ?? '?'}°`}
+                      {datiClima.piuFreddo && ` · ❄️ ${getTranslation('mp_clima_freddo', language)}: ${nomeMese(datiClima.piuFreddo, language)} ${datiClima.mesi[datiClima.piuFreddo - 1]?.tmin ?? '?'}°`}
+                    </p>
+
+                    {datiClima.analisi ? (
+                      <p className="text-[10px] text-primary/80 dark:text-white/80 mt-2 pt-2 border-t border-black/5 dark:border-white/10 leading-snug">
+                        ✨ {datiClima.analisi}
+                      </p>
+                    ) : datiClima.analisiRichiedeAccesso ? (
+                      <button
+                        type="button"
+                        onClick={() => { try { window.dispatchEvent(new CustomEvent('wip-auth-required', { detail: { url: '/api/meteo/clima' } })); } catch { /* niente */ } }}
+                        className="text-[10px] font-bold text-[#1e3a8a] dark:text-blue-300 mt-2 pt-2 border-t border-black/5 dark:border-white/10 text-left leading-snug"
+                      >
+                        🔒 {getTranslation('mp_clima_accedi', language)}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => { const c = mapRef.current?.getCenter(); if (c) setClimaReport({ lat: c.lat, lon: c.lng }); }}
+                      className="mt-2 w-full rounded-xl bg-[#1e3a8a] text-white text-[11px] font-black py-1.5"
+                    >
+                      📋 {getTranslation('mp_clima_report', language)}
+                    </button>
+                    <p className="text-[8px] text-primary/45 dark:text-white/45 mt-1.5">{datiClima.attribuzione}</p>
+                  </>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
+      </>,
+      mapShellEl)}
+
+      <ClimaReportSheet
+        aperto={!!climaReport}
+        onClose={() => setClimaReport(null)}
+        lat={climaReport?.lat ?? 0}
+        lon={climaReport?.lon ?? 0}
+        dati={datiClima}
+        adesso={climaAdesso}
+        language={language}
+      />
 
       <AnimatePresence>
         {followMode && (
@@ -6124,13 +7437,28 @@ function MapArea({
             initial={{ opacity: 0, y: 40 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 40 }}
-            className="absolute bottom-16 md:bottom-20 right-2 md:right-4 z-[1001] flex flex-col items-center gap-2 pointer-events-auto"
+            /* SOPRA A TUTTO, E NELLA FILA DEI TASTI (18/09/2026, committente:
+               «l'icona rimane coperta, deve essere visivamente sopra a
+               tutto»). Stava a `bottom-16` fisso, senza l'area di sicurezza:
+               su iPhone l'etichetta finiva SOTTO la barra di ricerca
+               (z-2200) e la bussola sotto il tasto dei percorsi di App.tsx,
+               che sta alla stessa quota sul bordo destro. Ora:
+                · stessa quota della fila livelli / meteo / percorsi
+                  (5.25rem + safe area), subito a SINISTRA del tasto percorsi
+                  (right 4.25rem = 1rem di margine + 2.75rem di tasto + gap);
+                · z-[2300]: sopra chip (2000), pannelli (2100-2150) e barra
+                  di ricerca (2200);
+                · etichetta sopra la bussola, allineata a destra, cosi' non
+                  invade la colonna di tasti di App.tsx.
+               Sparisce solo con la ricerca o la card di un pin aperte, come
+               il resto della fila: li' lo spazio serve a loro. */
+            className={`absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] right-[4.25rem] z-[2300] flex flex-col-reverse items-end gap-1.5 pointer-events-auto transition-opacity ${(ricercaAperta || activePoi) ? 'opacity-0 pointer-events-none invisible' : ''}`}
           >
             {/* Bussola: era un <div onClick> muto per lo screen reader (UX-11).
                 Tocco = esci dal follow-me; l'etichetta dice orientamento e azione. */}
             <button
               type="button"
-              className={`w-12 h-12 bg-white/60 dark:bg-black/60 backdrop-blur-3xl rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/50 dark:border-white/20 flex items-center justify-center cursor-pointer hover:scale-105 active:scale-95 transition-all ${followMode ? 'ring-2 ring-blue-500' : ''}`}
+              className={`w-11 h-11 bg-white/90 dark:bg-black/80 backdrop-blur-3xl rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.25)] border border-white/50 dark:border-white/20 flex items-center justify-center cursor-pointer hover:scale-105 active:scale-95 transition-all ${followMode ? 'ring-2 ring-blue-500' : ''}`}
               title={`${getTranslation('map_orientamento', language)}: ${Math.round(mapRotation)}°`}
               aria-label={`${getTranslation('map_orientamento', language)}: ${Math.round(mapRotation)}°. ${getTranslation('a11y_esci_follow', language)}`}
               onClick={() => stopFollowMode()}
@@ -6150,7 +7478,7 @@ function MapArea({
               </svg>
             </button>
 
-            <div className="bg-blue-600/80 backdrop-blur-2xl text-white text-[11px] font-black uppercase tracking-wider px-3 py-1.5 rounded-full shadow-2xl border border-white/20 flex items-center gap-2" aria-live="polite">
+            <div className="bg-blue-600/95 backdrop-blur-2xl text-white text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full shadow-2xl border border-white/20 flex items-center gap-1.5 whitespace-nowrap" aria-live="polite">
               <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse inline-block" aria-hidden="true" />
               {getTranslation('map_follow_on', language)}
             </div>
@@ -6158,7 +7486,12 @@ function MapArea({
         )}
       </AnimatePresence>
 
-      <div className={`absolute md:top-[60px] right-4 z-[1000] flex flex-col gap-2 max-w-[280px] pointer-events-none ${followMode ? 'top-[160px]' : 'top-[60px]'}`}>
+      {/* z-[2100] e non z-[1000] (10/09/2026): le chip categoria stanno a
+          z-[2000] (CategoryChips.tsx) e questo banner ci finiva sotto. */}
+      {/* 18/09/2026: niente piu' scalino a 160px col follow-me acceso — la
+          bussola non sta piu' in alto a destra da tempo, ora e' nella fila
+          dei tasti in basso, e gli avvisi scendevano di 100px per nulla. */}
+      <div className="absolute top-[60px] right-4 z-[2100] flex flex-col gap-2 max-w-[280px] pointer-events-none">
         <AnimatePresence>
           {Object.entries(fetchErrors).map(([key, error]) => (
             <motion.div
@@ -6222,7 +7555,7 @@ function MapArea({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setShowNearbyList(false)}
-              className="absolute inset-0 bg-black/40 backdrop-blur-md z-[1001]"
+              className="absolute inset-0 bg-black/40 backdrop-blur-md z-[2100]"
             />
             <motion.div
               key="nearby-panel"
@@ -6230,7 +7563,9 @@ function MapArea({
               animate={{ y: 0, opacity: 1, scale: 1 }}
               exit={{ y: "100%", opacity: 0, scale: 0.98 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
-              className="absolute bottom-0 left-0 w-full md:left-6 md:bottom-6 md:w-[420px] max-h-[65dvh] md:max-h-[60dvh] bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-3xl shadow-[0_16px_64px_rgba(0,0,0,0.3)] border border-white/40 dark:border-white/10 rounded-t-[2.5rem] md:rounded-[2rem] z-[1002] flex flex-col overflow-hidden"
+              // z-[2101] e non z-[1002] (10/09/2026): sotto le chip categoria
+              // (z-[2000], CategoryChips.tsx).
+              className="absolute bottom-0 left-0 w-full md:left-6 md:bottom-6 md:w-[420px] max-h-[65dvh] md:max-h-[60dvh] bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-3xl shadow-[0_16px_64px_rgba(0,0,0,0.3)] border border-white/40 dark:border-white/10 rounded-t-[2.5rem] md:rounded-[2rem] z-[2101] flex flex-col overflow-hidden"
             >
               <div className="px-6 py-5 border-b border-black/5 dark:border-white/5 flex items-center justify-between sticky top-0 z-10">
                 <div>
@@ -6348,14 +7683,37 @@ function MapArea({
                   </h2>
                   <div className="flex items-center gap-1.5">
                     {everythingPinned.length > 0 && (
-                      <button
-                        onClick={() => { setEverythingPinned([]); }}
-                        title={getTranslation('everything_pinned_clear', language)}
-                        aria-label={getTranslation('everything_pinned_clear', language)}
-                        className="min-h-9 px-2.5 rounded-full bg-[#1e3a8a]/10 text-[#1e3a8a] text-[11px] font-black flex items-center gap-1 hover:bg-[#1e3a8a]/20 transition-colors"
-                      >
-                        📍 {everythingPinned.length} <X className="w-3.5 h-3.5" />
-                      </button>
+                      <>
+                        {/* PERCORSO DALLE TAPPE SELEZIONATE (29/08/2026, committente):
+                            le stesse regole di Dieci Tappe e degli itinerari —
+                            chi ha l'audioguida la ascolta (al volo o col Day
+                            Pass), chi non ce l'ha (ristorante, fontanella…) e`
+                            solo una tappa del navigatore — ma senza il vincolo
+                            delle dieci tappe. La bozza si riempie e si apre il
+                            radar, dove il percorso e` gia` disegnato e c'e`
+                            «Crea il giro» con pass e pagamento come sempre. */}
+                        <button
+                          onClick={() => {
+                            const n = tourService.bozzaDaTappe(everythingPinned, { senzaLimite: true, ordinaServer: true });
+                            if (!n) return;
+                            setShowEverythingPanel(false);
+                            window.dispatchEvent(new CustomEvent('wip-apri-radar'));
+                          }}
+                          title={getTranslation('everything_crea_percorso', language)}
+                          aria-label={getTranslation('everything_crea_percorso', language)}
+                          className="min-h-9 px-3 rounded-full bg-emerald-600 text-white text-[11px] font-black flex items-center gap-1.5 hover:bg-emerald-700 transition-colors shadow-sm"
+                        >
+                          🧭 {getTranslation('everything_crea_percorso', language)}
+                        </button>
+                        <button
+                          onClick={() => { setEverythingPinned([]); }}
+                          title={getTranslation('everything_pinned_clear', language)}
+                          aria-label={getTranslation('everything_pinned_clear', language)}
+                          className="min-h-9 px-2.5 rounded-full bg-[#1e3a8a]/10 text-[#1e3a8a] text-[11px] font-black flex items-center gap-1 hover:bg-[#1e3a8a]/20 transition-colors"
+                        >
+                          📍 {everythingPinned.length} <X className="w-3.5 h-3.5" />
+                        </button>
+                      </>
                     )}
                     <button
                       onClick={() => setShowEverythingPanel(false)}
@@ -6398,7 +7756,10 @@ function MapArea({
                   <div className="flex flex-col items-center justify-center py-20 text-center opacity-60">
                     <MapPin className="w-12 h-12 mb-4 text-[#1e3a8a]/50" />
                     <p className="font-bold text-sm px-10 text-[#1e3a8a]">
-                      {getTranslation('everything_nearby_empty', language)}
+                      {/* Un errore di query (timeout, guasto) non è una zona
+                          davvero vuota: messaggi diversi, non lo stesso
+                          "niente qui vicino" per entrambi i casi. */}
+                      {getTranslation(everythingError ? 'mp_luoghi_vicini_errore' : 'everything_nearby_empty', language)}
                     </p>
                   </div>
                 ) : (
@@ -6430,6 +7791,12 @@ function MapArea({
                                 onClick={() => openEverythingItem(item)}
                                 className="w-full flex items-center gap-3 p-2.5 bg-white/60 dark:bg-white/5 hover:bg-white/90 dark:hover:bg-white/15 rounded-xl transition-all text-left"
                               >
+                                {/* Colonna icone: sopra il gruppo, sotto la sotto-categoria
+                                    (regola del committente 29/08) — poi il nome. */}
+                                <span className="flex flex-col items-center justify-center w-7 shrink-0 leading-none">
+                                  <span className="text-[13px]">{info.emoji}</span>
+                                  {(() => { const sub = everythingRowEmoji(item, info.emoji); return sub ? <span className="text-[11px] mt-0.5 opacity-80">{sub}</span> : null; })()}
+                                </span>
                                 <span className="flex-1 font-bold text-[#1e3a8a] dark:text-white text-xs line-clamp-1">
                                   {item.name}
                                 </span>
@@ -6467,7 +7834,22 @@ function MapArea({
       </AnimatePresence>
 
       <div
-        className="absolute bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 md:bottom-8 md:left-8 md:max-w-md md:mx-auto z-[1000] flex flex-row items-center bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-3xl rounded-[2rem] shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 p-1.5 gap-2 select-none touch-manipulation"
+        /* UNA RIGA SOLA (30/08/2026): due tasti di pari larghezza, la lente e
+           il mirino. Prima qui dentro c'era anche il campo di ricerca, con
+           flex-1: su ~360 px i tasti shrink-0 si prendevano tutta la riga e il
+           campo collassava a larghezza ZERO — restava solo la lente e
+           sembrava un tasto rotto. E` il motivo per cui la ricerca della
+           citta' «non funzionava» nell'app mentre sulla PWA, in una finestra
+           larga, andava. Il campo ora si apre in una riga SOPRA la barra. */
+        /* z-[2200] e non z-[1000] (06/09/2026): il meteo sta a z-[1000] e il
+           pannello livelli sale a z-[2100] quando è aperto (vedi sopra) — la
+           riga di ricerca e i suoi risultati restavano sotto entrambi, e
+           cercare una città con un livello acceso mostrava un menu coperto.
+           Trasparente con la card di un pin aperta (07/09/2026, committente):
+           sta a bottom-1rem, sotto la card che arriva fin verso 5.25rem, e lo
+           z-index altissimo la faceva comunque vincere sul fondo della card
+           (tasti Guida/Naviga/Audio). Stessa regola degli altri due tasti. */
+        className={`absolute bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 md:bottom-8 md:left-8 md:max-w-md md:mx-auto z-[2200] flex flex-row items-center bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-3xl rounded-[2rem] shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 p-1.5 gap-2 select-none touch-manipulation transition-opacity ${activePoi ? 'opacity-0 pointer-events-none invisible' : ''}`}
         onMouseDown={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
@@ -6479,10 +7861,14 @@ function MapArea({
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={handleFindNear}
-            className="px-4 py-2.5 bg-[#1e3a8a] text-white rounded-[1.5rem] font-black text-[11px] shadow-[0_4px_16px_rgba(30,58,138,0.4)] hover:bg-[#123628] transition-all flex items-center justify-center gap-2 group shrink-0"
+            /* flex-1 e non shrink-0 (30/08/2026): «Trova vicino» e «Trova
+               tutto» ora dividono in parti uguali lo spazio della barra —
+               prima il primo si prendeva tutto con l'etichetta intera e il
+               secondo restava una sola emoji. */
+            className="flex-1 min-w-0 px-2.5 py-2.5 bg-[#1e3a8a] text-white rounded-[1.5rem] font-black text-[10px] shadow-[0_4px_16px_rgba(30,58,138,0.4)] hover:bg-[#123628] transition-all flex items-center justify-center gap-1.5 group"
           >
-            <MapPin className="w-4 h-4 fill-white/20" />
-            <span className="uppercase tracking-[0.1em]">{getTranslation("find_near", language)}</span>
+            <MapPin className="w-4 h-4 fill-white/20 shrink-0" />
+            <span className="uppercase tracking-[0.06em] truncate">{getTranslation("find_near", language)}</span>
             <span className="min-w-5 h-5 px-1 bg-[#2c6e54] text-white rounded-full flex items-center justify-center text-[11px] font-black shadow-inner">
               {
                 visiblePois.filter((p) => {
@@ -6512,23 +7898,65 @@ function MapArea({
             whileTap={{ scale: 0.95 }}
             onClick={handleOpenEverythingPanel}
             title={getTranslation('everything_nearby_title', language)}
-            className="px-3 py-2.5 bg-white/60 dark:bg-white/10 text-[#1e3a8a] dark:text-white rounded-[1.5rem] font-black text-[11px] shadow-sm hover:bg-white/90 dark:hover:bg-white/20 transition-all flex items-center justify-center gap-1.5 shrink-0 border border-[#1e3a8a]/10"
+            /* Stessa misura di «Trova vicino» e etichetta SEMPRE visibile:
+               con `hidden sm:inline` sul telefono restava solo la bussola e
+               non si capiva cosa fosse. */
+            className="flex-1 min-w-0 px-2.5 py-2.5 bg-white/60 dark:bg-white/10 text-[#1e3a8a] dark:text-white rounded-[1.5rem] font-black text-[10px] shadow-sm hover:bg-white/90 dark:hover:bg-white/20 transition-all flex items-center justify-center gap-1.5 border border-[#1e3a8a]/10"
           >
-            <span className="text-sm leading-none">🧭</span>
-            <span className="uppercase tracking-[0.1em] hidden sm:inline">{getTranslation('everything_nearby_button', language)}</span>
+            <span className="text-sm leading-none shrink-0">🧭</span>
+            <span className="uppercase tracking-[0.06em] truncate">{getTranslation('everything_nearby_button', language)}</span>
           </motion.button>
         )}
 
-        <div className="flex-1 relative flex items-center bg-transparent px-3">
-          <Search className="w-5 h-5 text-[#1e3a8a] mr-2 shrink-0" />
+        {/* LENTE: apre e chiude la riga di ricerca qui sopra. */}
+        <button
+          type="button"
+          onClick={() => {
+            setRicercaAperta((aperta) => {
+              if (aperta) {
+                setSearchQuery("");
+                setSuggestions([]);
+                setNostri([]);
+                setSearchNoResults(false);
+                return false;
+              }
+              setTimeout(() => campoRicercaRef.current?.focus(), 80);
+              return true;
+            });
+          }}
+          aria-label={getTranslation("search_city_placeholder", language)}
+          aria-expanded={ricercaAperta}
+          className={`shrink-0 p-2 rounded-full transition-all active:scale-90 ${
+            ricercaAperta
+              ? 'bg-[#1e3a8a] text-white shadow-md'
+              : 'bg-white/60 dark:bg-white/10 text-[#1e3a8a] dark:text-white border border-[#1e3a8a]/10'
+          }`}
+        >
+          <Search className="w-5 h-5" />
+        </button>
+
+        {/* LA RIGA DI RICERCA, sopra la barra: qui il campo ha tutta la
+            larghezza dello schermo, non i quattro pixel che gli restavano
+            fra i tasti. */}
+        <AnimatePresence>
+          {ricercaAperta && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 8 }}
+              transition={{ type: "spring", stiffness: 320, damping: 26 }}
+              className="absolute bottom-full left-0 right-0 mb-2 flex items-center gap-1 px-4 py-1 bg-white/90 dark:bg-[#1C1C1E]/90 backdrop-blur-3xl rounded-[2rem] shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10"
+            >
+              <Search className="w-5 h-5 text-[#1e3a8a] dark:text-white mr-1 shrink-0" />
           <form
             onSubmit={handleSearch}
-            className="flex-1 flex items-center"
+            className="flex-1 min-w-0 flex items-center"
           >
             <input
+              ref={campoRicercaRef}
               type="text"
               placeholder={getTranslation("search_city_placeholder", language)}
-              className="flex-1 bg-transparent py-2 text-base font-bold focus:outline-none text-[#1e3a8a] placeholder:text-[#1e3a8a]/50 w-full"
+              className="flex-1 min-w-0 bg-transparent py-2 text-base font-bold focus:outline-none text-[#1e3a8a] dark:text-white placeholder:text-[#1e3a8a]/50 w-full"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               role="combobox"
@@ -6560,23 +7988,26 @@ function MapArea({
               }}
             />
           </form>
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => { setSearchQuery(""); campoRicercaRef.current?.focus(); }}
+                  aria-label={getTranslation('a11y_cancella_ricerca', language)}
+                  className="shrink-0 min-w-11 min-h-11 flex items-center justify-center hover:bg-surface-container rounded-full transition-colors text-[#1e3a8a] dark:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-          <div className="flex items-center gap-0.5 ml-1">
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery("")}
-                aria-label={getTranslation('a11y_cancella_ricerca', language)}
-                className="min-w-11 min-h-11 -my-2 flex items-center justify-center hover:bg-surface-container rounded-full transition-colors text-[#1e3a8a]"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            )}
-            {isSearching || isLoadingPois ? (
-              <div className="p-1">
-                <Loader2 className="w-4 h-4 text-primary animate-spin" />
-              </div>
-            ) : (
+        <div className="flex items-center gap-0.5 shrink-0">
+            {/* Il mirino resta sempre presente e cliccabile: prima lo
+                spinner lo SOSTITUIVA durante ogni caricamento POI, e il
+                bottone spariva proprio mentre si camminava. Ora il
+                caricamento è solo un indicatore in più, non al posto del
+                bottone. */}
               <button
                 type="button"
                 onMouseDown={() => {
@@ -6618,8 +8049,12 @@ function MapArea({
                 {followMode && (
                   <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-green-400 rounded-full border border-white animate-pulse" />
                 )}
+                {(isSearching || isLoadingPois) && (
+                  <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-white dark:bg-[#1C1C1E] rounded-full flex items-center justify-center shadow">
+                    <Loader2 className="w-2.5 h-2.5 text-primary animate-spin" />
+                  </span>
+                )}
               </button>
-            )}
           </div>
 
           <AnimatePresence>
@@ -6632,7 +8067,10 @@ function MapArea({
                 id="map-search-results"
                 role="listbox"
                 aria-label={getTranslation("search_city_placeholder", language)}
-                className="absolute bottom-full mb-4 left-0 right-0 bg-white/95 dark:bg-[#1C1C1E]/95 backdrop-blur-3xl rounded-[2rem] shadow-[0_16px_64px_rgba(0,0,0,0.2)] border border-white/50 dark:border-white/10 overflow-hidden max-h-[300px] overflow-y-auto overscroll-none select-none touch-pan-y"
+                /* mb-16 e non mb-4: i risultati stanno SOPRA la riga di
+                   ricerca, che ora e' anch'essa sopra la barra. Con mb-4 le
+                   due cose si sovrapponevano. */
+                className="absolute bottom-full mb-16 left-0 right-0 bg-white/95 dark:bg-[#1C1C1E]/95 backdrop-blur-3xl rounded-[2rem] shadow-[0_16px_64px_rgba(0,0,0,0.2)] border border-white/50 dark:border-white/10 overflow-hidden max-h-[300px] overflow-y-auto overscroll-none select-none touch-pan-y"
               >
                 {displayedSuggestions.length === 0 ? (
                   <div className="px-5 py-4 text-[15px] font-bold text-[#1e3a8a]/70 flex items-center gap-3" aria-live="polite">
@@ -6686,7 +8124,6 @@ function MapArea({
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
       </div>
 
       <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-black/10 to-transparent pointer-events-none z-10" />
@@ -6708,7 +8145,8 @@ function areMapAreaPropsEqual(prev: MapAreaProps, next: MapAreaProps) {
     prev.language === next.language &&
     prev.activeTab === next.activeTab &&
     prev.isRadarMode === next.isRadarMode &&
-    prev.radarPois === next.radarPois
+    prev.radarPois === next.radarPois &&
+    prev.modalitaPercorso === next.modalitaPercorso
   );
 }
 

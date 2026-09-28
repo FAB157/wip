@@ -1,10 +1,54 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Shield, FileText } from 'lucide-react';
+import { Shield, FileText, Bot } from 'lucide-react';
 import { Language, getTranslation } from '../lib/i18n';
+import { haConsensoAi, salvaConsensoAi, chiediConsensoAi, EVENTO_CONSENSO_AI_CAMBIATO } from '../lib/aiConsent';
+import { testiConsensoAi, FORNITORI_AI } from './AiConsentHost';
 
 interface PrivacyPolicyProps {
   language: Language;
+}
+
+/**
+ * Il controllo promesso dalla finestra di consenso AI («puoi revocarlo da
+ * Profilo → Privacy», 18/09/2026). Un interruttore solo: acceso mostra la
+ * finestra di consenso vera e propria (stesso testo, stesse tre cose
+ * richieste da App Review), spento la spegne subito senza chiedere altro.
+ */
+function ConsensoAiToggle({ language }: { language: Language }) {
+  const [concesso, setConcesso] = useState(() => haConsensoAi());
+  useEffect(() => {
+    const su = (e: Event) => setConcesso(Boolean((e as CustomEvent).detail?.concesso));
+    window.addEventListener(EVENTO_CONSENSO_AI_CAMBIATO, su);
+    return () => window.removeEventListener(EVENTO_CONSENSO_AI_CAMBIATO, su);
+  }, []);
+  const t = testiConsensoAi(language);
+
+  return (
+    <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 mb-6">
+      <div className="flex items-start gap-3">
+        <div className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center shrink-0">
+          <Bot className="w-5 h-5" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-black text-gray-900 text-sm">{t.titolo}</p>
+          <p className="text-xs text-gray-600 mt-1 leading-snug">{t.chi}</p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={concesso}
+          onClick={() => {
+            if (concesso) { salvaConsensoAi(false); return; }
+            void chiediConsensoAi();
+          }}
+          className={`shrink-0 w-12 h-7 rounded-full transition-colors relative ${concesso ? 'bg-blue-600' : 'bg-gray-300'}`}
+        >
+          <span className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-transform ${concesso ? 'translate-x-5' : 'translate-x-0.5'}`} />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export default function PrivacyPolicy({ language }: PrivacyPolicyProps) {
@@ -23,9 +67,11 @@ export default function PrivacyPolicy({ language }: PrivacyPolicyProps) {
           </div>
           <div>
             <h2 className="text-2xl font-black text-gray-900">Privacy Policy</h2>
-            <p className="text-xs text-gray-500 font-bold tracking-widest uppercase mt-1">Ultimo aggiornamento: Agosto 2026</p>
+            <p className="text-xs text-gray-500 font-bold tracking-widest uppercase mt-1">Ultimo aggiornamento: Settembre 2026</p>
           </div>
         </div>
+
+        <ConsensoAiToggle language={language} />
 
         <div className="prose prose-sm prose-blue max-w-none text-gray-600 space-y-6">
           <section>
@@ -71,7 +117,9 @@ export default function PrivacyPolicy({ language }: PrivacyPolicyProps) {
             <ul className="list-disc pl-5 space-y-1">
               <li><strong>Supabase</strong> (database e autenticazione): conserva account, preferiti, cronologia ascolti e crediti.</li>
               <li><strong>Stripe</strong> (pagamenti web) e <strong>Google Play / App Store con RevenueCat</strong> (acquisti in-app): gestiscono i pagamenti; noi <strong>non</strong> vediamo né conserviamo i dati della tua carta.</li>
-              <li><strong>Fornitori AI</strong> (generazione testi e voci delle audioguide): ricevono il nome del luogo e la lingua, mai la tua identità.</li>
+              <li>
+                <strong>Fornitori AI</strong> ({FORNITORI_AI}): generano i testi e le voci delle audioguide (ricevono nome del luogo e lingua) e, quando usi la chat "Chiedi a WIP", AI Scan, "Chiedi alla guida" o la creazione di un itinerario, elaborano anche il testo dei tuoi messaggi, le foto che scatti o carichi, la posizione approssimativa e le preferenze di viaggio che indichi. Non ricevono mai nome, email, dati di pagamento o altri identificativi dell'account, e nessun dato è usato per pubblicità. Per queste funzioni l'app chiede il tuo consenso esplicito prima del primo invio (revocabile qui sopra).
+              </li>
               <li><strong>Servizi mappe e luoghi</strong> (OpenStreetMap, Mapbox, Wikipedia e simili): ricevono le coordinate dell'area visualizzata per mostrarti mappa e punti di interesse.</li>
             </ul>
             <p>

@@ -4,7 +4,7 @@ import { UserProfile } from '../lib/quotaManager';
 import {
   User, Search, Calendar, Check, Shield, Tag, Edit, Trash2, Flag,
   RefreshCw, Award, Key, CheckCircle2, AlertTriangle, Users, BarChart3, Edit3, Activity, Bell, Camera, MapPin, Wallet, Ticket,
-  ClipboardList, SlidersHorizontal
+  ClipboardList, SlidersHorizontal, Share2, Eye, Landmark
 } from 'lucide-react';
 import { getApiUrl } from '../lib/api';
 import AdminCounters from './AdminCounters';
@@ -31,13 +31,22 @@ import UserEditModal from './admin/UserEditModal';
 const AdminUsersPro = lazy(() => import('./admin/AdminUsersPro'));
 const AdminContentQueue = lazy(() => import('./admin/AdminContentQueue'));
 const AdminOpsConsole = lazy(() => import('./admin/AdminOpsConsole'));
+// Cruscotto del lancio (social, ricavi, install): caricato a richiesta.
+const AdminSocialStats = lazy(() => import('./admin/AdminSocialStats'));
+// Visite del sito (pagine, referrer, dispositivi): caricato a richiesta.
+const AdminVisits = lazy(() => import('./admin/AdminVisits'));
+const AdminNotifiche = lazy(() => import('./admin/AdminNotifiche'));
+// Completezza dei musei prioritari + editor dei pin sulla pianta (12/09/2026).
+const AdminMusei = lazy(() => import('./admin/AdminMusei'));
+// Foto candidate (blog, social, guide, Commons alla larga) da approvare a mano (18/09/2026).
+const AdminFotoVerifica = lazy(() => import('./admin/AdminFotoVerifica'));
 
 const CaricamentoScheda = () => (
   <div className="py-16 text-center text-sm font-bold text-on-surface-variant/70">Carico la scheda…</div>
 );
 
 export default function AdminPanel() {
-  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision' | 'content_queue' | 'ops'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision' | 'content_queue' | 'ops' | 'social' | 'visits' | 'notifiche' | 'musei' | 'foto'>('users');
   // La scheda Utenti ora e' quella nuova (ricerca, consumo per utente, azioni
   // tracciate). La vista storica resta raggiungibile con un interruttore:
   // mostra cose che la nuova non ha (storico ascolti, righe dei pass).
@@ -506,6 +515,56 @@ export default function AdminPanel() {
             <BarChart3 className="w-4 h-4" />
             Statistiche
           </button>
+          {/* Cruscotto del lancio: profili social, visite sito, ricavi, install */}
+          <button
+            onClick={() => setActiveTab('social')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'social' ? 'bg-white text-sky-600 shadow-sm' : 'text-primary/60 hover:text-sky-600'
+            }`}
+          >
+            <Share2 className="w-4 h-4" />
+            Social
+          </button>
+          {/* Notifiche push/email ai clienti (06/09/2026) */}
+          <button
+            onClick={() => setActiveTab('notifiche')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'notifiche' ? 'bg-white text-amber-600 shadow-sm' : 'text-primary/60 hover:text-amber-600'
+            }`}
+          >
+            <Bell className="w-4 h-4" />
+            Notifiche
+          </button>
+          {/* Visite del sito: pagine, referrer, dispositivi (04/09/2026) */}
+          <button
+            onClick={() => setActiveTab('visits')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'visits' ? 'bg-white text-sky-600 shadow-sm' : 'text-primary/60 hover:text-sky-600'
+            }`}
+          >
+            <Eye className="w-4 h-4" />
+            Visite
+          </button>
+          {/* Completezza dei musei prioritari + editor dei pin (12/09/2026) */}
+          <button
+            onClick={() => setActiveTab('musei')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'musei' ? 'bg-white text-sky-600 shadow-sm' : 'text-primary/60 hover:text-sky-600'
+            }`}
+          >
+            <Landmark className="w-4 h-4" />
+            Musei
+          </button>
+          {/* Foto candidate da approvare a mano: mai in app senza un sì (18/09/2026) */}
+          <button
+            onClick={() => setActiveTab('foto')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'foto' ? 'bg-white text-sky-600 shadow-sm' : 'text-primary/60 hover:text-sky-600'
+            }`}
+          >
+            <Camera className="w-4 h-4" />
+            Foto da verificare
+          </button>
           <button
             onClick={() => setActiveTab('editor')}
             className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
@@ -608,6 +667,21 @@ export default function AdminPanel() {
       )}
       {activeTab === 'ops' && (
         <Suspense fallback={<CaricamentoScheda />}><AdminOpsConsole /></Suspense>
+      )}
+      {activeTab === 'social' && (
+        <Suspense fallback={<CaricamentoScheda />}><AdminSocialStats /></Suspense>
+      )}
+      {activeTab === 'notifiche' && (
+        <Suspense fallback={<CaricamentoScheda />}><AdminNotifiche /></Suspense>
+      )}
+      {activeTab === 'visits' && (
+        <Suspense fallback={<CaricamentoScheda />}><AdminVisits /></Suspense>
+      )}
+      {activeTab === 'musei' && (
+        <Suspense fallback={<CaricamentoScheda />}><AdminMusei /></Suspense>
+      )}
+      {activeTab === 'foto' && (
+        <Suspense fallback={<CaricamentoScheda />}><AdminFotoVerifica /></Suspense>
       )}
       {managedUser && <UserManageModal user={managedUser} onClose={() => setManagedUser(null)} onChanged={() => fetchData()} />}
 

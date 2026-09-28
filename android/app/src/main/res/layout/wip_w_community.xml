@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget «Foto dalla community» (23/09/2026): l'ultima foto APPROVATA vicino
+     a te, a tutto campo, con il bollino «verificata». -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_fc_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/wip_widget_bg"
+    android:clipToOutline="true">
+
+    <ImageView android:id="@+id/w_fc_foto" android:layout_width="match_parent" android:layout_height="match_parent"
+        android:scaleType="centerCrop" android:contentDescription="@null" android:visibility="gone" />
+    <ImageView android:layout_width="match_parent" android:layout_height="match_parent"
+        android:background="@drawable/wip_w_velo" android:contentDescription="@null" />
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="12dp">
+        <TextView android:id="@+id/w_fc_titolo" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" android:textStyle="bold"
+            android:shadowColor="#99000000" android:shadowRadius="3" android:shadowDx="0" android:shadowDy="1" />
+
+        <TextView android:id="@+id/w_fc_vuoto" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+            android:gravity="center" android:textColor="#B8FFFFFF" android:textSize="12sp" android:textStyle="bold" android:visibility="gone" />
+
+        <LinearLayout android:id="@+id/w_fc_corpo" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+            android:orientation="vertical" android:gravity="bottom">
+            <TextView android:id="@+id/w_fc_badge" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/wip_w_pillola"
+                android:layout_marginBottom="4dp" android:paddingStart="6dp" android:paddingEnd="6dp" android:paddingTop="1dp" android:paddingBottom="1dp"
+                android:textColor="#1E3A8A" android:textSize="8sp" android:textStyle="bold" />
+            <TextView android:id="@+id/w_fc_nome" android:layout_width="match_parent" android:layout_height="wrap_content" android:maxLines="2" android:ellipsize="end"
+                android:textColor="#FFFFFF" android:textSize="16sp" android:textStyle="bold"
+                android:shadowColor="#99000000" android:shadowRadius="3" android:shadowDx="0" android:shadowDy="1" />
+            <TextView android:id="@+id/w_fc_dettagli" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end"
+                android:textColor="#E6FFFFFF" android:textSize="11sp"
+                android:shadowColor="#99000000" android:shadowRadius="3" android:shadowDx="0" android:shadowDy="1" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

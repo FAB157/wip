@@ -13,11 +13,14 @@ import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { X, Volume2, Car, Footprints } from 'lucide-react';
 import { CATEGORY_EMOJI } from '../lib/poiCategories';
+import { migliorFoto } from '../lib/fotoHttps';
 import type { PoiCategory } from '../types/poi';
 import { getTranslation, Language } from '../lib/i18n';
 import { puntoArrivo } from '../lib/puntoArrivo';
 import { vibra } from './hapticsHelper';
 import { useAudioState } from '../hooks/useAudioState';
+import { PRICING_LIST } from '../lib/pricing';
+import { getDayPassState, DAY_PASS_UPDATED_EVENT, possiedePoiSync, caricaPoiPosseduti } from '../services/dayPassService';
 
 // ─── Tipi ─────────────────────────────────────────────────────────
 
@@ -86,17 +89,64 @@ function getBearing(lat1: number, lon1: number, lat2: number, lon2: number) {
           osc.frequency.value = count === 1 ? 760 : 920;
           gain.gain.setValueAtTime(0.4, ctx.currentTime);
           gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+          // (23/09/2026, batteria, voce 20) Il contesto si chiude dopo l'ultimo
+          // beep: prima ne restava uno «running» per ogni POI annunciato, ognuno
+          // col suo thread audio sveglio per tutta la camminata. Suono identico.
+          if (i === count - 1) osc.onended = () => { ctx.close().catch(() => {}); };
           osc.start(ctx.currentTime);
           osc.stop(ctx.currentTime + 0.25);
         }, i * 380);
       }
+      // Rete di sicurezza: se un oscillatore non parte (contesto sospeso dal
+      // browser senza gesto) onended non arriva mai.
+      setTimeout(() => { if (ctx.state !== 'closed') ctx.close().catch(() => {}); }, count * 380 + 1500);
     } catch (_) {}
   }
 
 export default function ApproachBanner({ language = 'IT' }: Props) {
   const [entries, setEntries] = useState<ApproachEntry[]>([]);
   const [navInstruction, setNavInstruction] = useState<string>('');
+  const navTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [userLocation, setUserLocation] = useState<{lat: number, lon: number, heading?: number | null} | null>(null);
+
+  // DAY PASS ATTIVO (03/09/2026, segnalato dal committente: «perche' mi ha
+  // richiesto il pagamento anche se ho gia' il day pass?»).
+  //
+  // Il tasto mostrava il prezzo guardando SOLO `entry.alreadyPaid`, che ogni
+  // punto che emette 'wip-poi-trigger' cabla a `false`
+  // (foregroundTriggers, useWalkingNavigation, giroDriver). Quindi con un pass
+  // attivo e 37 guide residue il banner chiedeva comunque 15 crediti: il
+  // pagamento non partiva davvero — `authorizeGuidePlayback` il pass lo
+  // rispetta — ma l'utente leggeva di dover pagare due volte, che e' un danno
+  // di fiducia anche senza addebito.
+  //
+  // Qui il diritto si RICALCOLA da chi lo sa: lo stato del pass e il registro
+  // dei POI gia' posseduti. `alreadyPaid` resta come terza fonte per chi lo
+  // valorizza davvero.
+  const [passAttivo, setPassAttivo] = useState(false);
+  const [possedutiVersione, setPossedutiVersione] = useState(0);
+  useEffect(() => {
+    let vivo = true;
+    const aggiorna = async () => {
+      try {
+        const p = await getDayPassState();
+        if (vivo) setPassAttivo(!!p?.active && (p.used ?? 0) < (p.cap ?? 0));
+      } catch { /* in dubbio si mostra il prezzo: fail-closed */ }
+    };
+    aggiorna();
+    // Il registro dei posseduti ha una cache condivisa: si scalda una volta e
+    // poi `possiedePoiSync` risponde senza rete.
+    caricaPoiPosseduti().then(() => vivo && setPossedutiVersione(v => v + 1)).catch(() => {});
+    const suPass = () => aggiorna();
+    const suPosseduto = () => setPossedutiVersione(v => v + 1);
+    window.addEventListener(DAY_PASS_UPDATED_EVENT, suPass);
+    window.addEventListener('wip-poi-posseduto', suPosseduto);
+    return () => {
+      vivo = false;
+      window.removeEventListener(DAY_PASS_UPDATED_EVENT, suPass);
+      window.removeEventListener('wip-poi-posseduto', suPosseduto);
+    };
+  }, []);
 
   // Il mini-player (AudioPlayerBanner) è ancorato a 5,5 rem dal fondo: quando
   // è visibile il banner di avvicinamento sale di ~4 rem per non coprirlo.
@@ -182,7 +232,7 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
           isCar: d.isCar ?? false,
           queueNames: [],
           enteredAt: Date.now(),
-          image: poi.image_url || poi.photo_url || undefined,
+          image: migliorFoto(poi) || undefined,
           lat,
           lon,
           poi,
@@ -258,7 +308,12 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
 
     const onNavInstruction = (e: Event) => {
       const text = (e as CustomEvent).detail?.text;
-      if (text) setNavInstruction(text);
+      if (!text) return;
+      setNavInstruction(text);
+      // Si spegne da sola (13/09/2026, committente: «rimane per sempre,
+      // bisogna swipare l'app»): il tempo di leggerla, mai oltre 15 s.
+      if (navTimerRef.current) clearTimeout(navTimerRef.current);
+      navTimerRef.current = setTimeout(() => setNavInstruction(''), Math.min(15000, 4000 + String(text).length * 60));
     };
 
     /**
@@ -375,12 +430,43 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
   // AgentControls (6 rem + safe-area); +4 rem quando c'è il mini-player.
   return (
     <div
+      // Cambia quando il registro dei POI posseduti si aggiorna: serve solo a
+      // far ridisegnare le etichette dei tasti (possiedePoiSync legge una
+      // cache, non uno stato React).
+      data-posseduti={possedutiVersione}
       className="absolute left-4 right-4 z-[99999] flex flex-col gap-3 pointer-events-none transition-[bottom] duration-300"
-      style={{ bottom: `calc(${miniPlayerVisible ? '10rem' : '6rem'} + env(safe-area-inset-bottom, 0px))` }}
+      style={{ bottom: `calc(${miniPlayerVisible ? '10rem' : '6rem'} + var(--wip-cruscotto-h, 0px) + env(safe-area-inset-bottom, 0px))` /* + il cruscotto del giro (TourBanner pubblica --wip-cruscotto-h): le due card non si sovrappongono */ }}
     >
       <AnimatePresence>
+        {/* Istruzione di navigazione (es. "gira a destra"): l'evento
+            wip-nav-instruction aggiornava lo stato ma non compariva mai a
+            schermo — il testo restava solo nel commento di ttsService.ts.
+            Stesso stile del banner riassuntivo qui sotto. */}
+        {navInstruction && (
+          <motion.div
+            key="nav-instruction"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 10 }}
+            className="pointer-events-auto bg-stone-900/80 backdrop-blur-lg text-white rounded-xl pl-4 pr-1 py-1 flex items-center gap-2 shadow-lg border border-white/10"
+          >
+            <span aria-hidden="true">🧭</span>
+            <span className="text-[13px] font-black flex-1 max-h-24 overflow-hidden">{navInstruction}</span>
+            <button
+              type="button"
+              onClick={() => { if (navTimerRef.current) clearTimeout(navTimerRef.current); setNavInstruction(''); }}
+              aria-label={getTranslation('close', language)}
+              className="min-w-11 min-h-11 flex items-center justify-center rounded-full text-white/80 hover:bg-white/10 shrink-0"
+            >
+              <span aria-hidden="true">✕</span>
+            </button>
+          </motion.div>
+        )}
+
         {entries.slice(0, 2).map((entry, index) => {
-          const isGem = entry.poi?.premium || entry.poi?.is_gem || entry.poi?.category === 'gemme';
+          // Solo il flag (03/09/2026), come in poiTaxonomy: la categoria
+          // 'gemme' e' il contenitore dell'import CSV, non un giudizio.
+          const isGem = entry.poi?.premium || entry.poi?.is_gem === true;
           const isLead = index === 0;
 
           return (
@@ -443,7 +529,12 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
                       onClick={() => handlePlayNow(entry)}
                       className={`flex-1 min-h-11 py-2 rounded-lg ${isGem ? 'bg-amber-500 hover:bg-amber-600' : 'bg-primary hover:bg-primary-hover'} text-white text-[13px] font-black shadow transition-all flex items-center justify-center gap-1.5`}
                     >
-                      {entry.alreadyPaid ? (
+                      {/* Niente prezzo se l'ascolto e' gia' coperto: pass
+                          attivo, POI gia' acquistato, o `alreadyPaid` dal
+                          chiamante. Il costo NON e' piu' scritto a mano: era
+                          "15" cablato nel JSX, che sarebbe restato 15 anche
+                          cambiando il listino dal pannello admin. */}
+                      {(entry.alreadyPaid || passAttivo || possiedePoiSync(String(entry.poiId))) ? (
                         <>
                           <span>🔊</span>
                           {getTranslation('poi_play', language)}
@@ -451,7 +542,7 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
                       ) : (
                         <>
                           <div className="flex items-center gap-1">
-                            <span>🪙 15</span>
+                            <span>🪙 {PRICING_LIST.audio_guide}</span>
                             <span className="opacity-60">|</span>
                             <span>{getTranslation('poi_play', language)}</span>
                           </div>

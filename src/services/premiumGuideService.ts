@@ -5,8 +5,10 @@
  */
 
 import { supabase } from '../lib/supabase';
+import { chiediConsensoAi } from '../lib/aiConsent';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { Capacitor } from '@capacitor/core';
+import { registraDownload } from '../lib/downloadsRegistry';
 
 // ── Salvataggio file: browser (<a download>) oppure nativo (Filesystem) ──────
 // Nel WebView di Capacitor il click su un <a download> con blob: URL non fa
@@ -26,7 +28,18 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-export async function saveBlobAsFile(blob: Blob, filename: string): Promise<boolean> {
+/**
+ * `archivio` (20/09/2026): quando il file e' un PDF «stampato» (itinerario,
+ * Guida Premium, guida museo) se ne tiene una copia in pdfArchivio, cosi'
+ * «I miei download» lo ritrova nella cartella giusta. Senza, nessuna copia.
+ */
+export async function saveBlobAsFile(blob: Blob, filename: string, archivio?: { tipo: 'itinerario' | 'guida' | 'museo'; nome: string }): Promise<boolean> {
+  if (archivio) {
+    try {
+      const { archiviaPdf } = await import('../lib/pdfArchivio');
+      await archiviaPdf(archivio.tipo, archivio.nome, filename, blob);
+    } catch { /* best-effort */ }
+  }
   if (Capacitor.isNativePlatform()) {
     try {
       const { Filesystem, Directory } = await import('@capacitor/filesystem');
@@ -156,6 +169,20 @@ export async function saveGuideLocally(result: GenerateGuideResult): Promise<voi
       media_manifest: result.media_manifest,
       savedAt: Date.now(),
     });
+    // REGISTRO UNICO (12/09/2026): la Guida d'Autore restava fruibile offline
+    // (IndexedDB, sopra) ma invisibile in "I miei download" — nessuno la
+    // registrava. È già pagata e non si ripaga: comparire qui è solo
+    // visibilità, non un nuovo costo. Riapre nell'Archivio del Piano, che
+    // legge già le guide salvate (fetchSavedPremiumGuides), stesso posto
+    // delle guide/audiolibri esistenti.
+    const giorni = result.content?.giorni?.length || 0;
+    void registraDownload('guida', result.hash, {
+      nome: result.content?.guida_titolo || 'Guida d\'autore',
+      sottotitolo: giorni ? `${giorni} ${giorni === 1 ? 'giorno' : 'giorni'}` : undefined,
+      bytes: new TextEncoder().encode(JSON.stringify(result.content || {})).length,
+      parti: { poi: true },
+      meta: { hash: result.hash },
+    });
   } catch (e) {
     console.warn('[PremiumGuide] Salvataggio locale fallito:', e);
   }
@@ -222,6 +249,9 @@ export async function generatePremiumGuide(
     if (dedica?.trim()) cached.content = { ...cached.content, dedica: dedica.trim() };
     return cached;
   }
+
+  // Consenso AI (22/09/2026): itinerario e dedica scritta dall'utente vanno a un modello esterno.
+  if (!(await chiediConsensoAi())) throw new Error('CONSENSO_AI_NEGATO');
 
   // 2. Call server endpoint (quota check + Groq + Unsplash are server-side)
   const response = await fetch('/api/premium-guide/generate', {
@@ -291,11 +321,29 @@ async function verifyGuideAntiAllucinazioni(content: any, itinerary: any, langua
   }
 }
 
-// ── PDF generation (client-side via html2pdf.js) ─────────────────────────────
+// ── PDF generation ───────────────────────────────────────────────────────────
+// DAL 05/09/2026 IL PDF E' UN LIBRO, NON UNA FOTO. Con `dati` la guida si
+// impagina con @react-pdf/renderer (src/lib/pdf): testo reale, flusso
+// continuo, sommario, segnalibri, «wip.guide» su ogni pagina. html2pdf.js —
+// che fotografava la pagina e lasciava mezza pagina bianca a ogni scheda —
+// resta solo come ripiego (lingue non latine, o errore del motore).
 export async function downloadGuideAsPdf(
   elementId: string,
-  filename: string
+  filename: string,
+  dati?: { content: PremiumGuideContent; mediaManifest?: Record<string, string>; language?: string }
 ): Promise<Blob | null> {
+  if (dati?.content) {
+    try {
+      const { generaPdfGuida } = await import('../lib/pdf/generaPdf');
+      const blob = await generaPdfGuida(dati.content, dati.mediaManifest || {}, dati.language || 'IT');
+      if (blob) {
+        const saved = await saveBlobAsFile(blob, filename, { tipo: 'guida', nome: String(dati.content.guida_titolo || filename.replace(/\.pdf$/i, '')) });
+        return saved ? blob : null;
+      }
+    } catch (e) {
+      console.error('[PremiumGuide] PDF (react-pdf) non riuscito, ripiego su html2pdf:', e);
+    }
+  }
   // Dynamically import html2pdf to avoid SSR issues
   let html2pdf: any;
   try {
@@ -340,18 +388,38 @@ export async function downloadGuideAsPdf(
     return null;
   }
 
+  // LARGHEZZA DEL FOGLIO, NON DELLO SCHERMO (30/08/2026).
+  //
+  // Prima: `windowWidth: element.scrollWidth`. Sul telefono vale ~360 px,
+  // quindi il PDF veniva disegnato su una colonna da telefono e poi scalato
+  // ad A4: caratteri enormi, una colonna sola, e un documento DIVERSO da
+  // quello generato dal computer. Il PDF invece deve essere lo stesso ovunque
+  // — si legge su telefono, tablet e computer, e si stampa.
+  //
+  // 794 px = 210 mm a 96 dpi, la larghezza di un A4. Fissandola qui, sia le
+  // unita' `vw` sia le griglie `auto-fit` del renderer si risolvono contro il
+  // FOGLIO: due colonne dove le vuole l'impaginato, margini pieni, corpi al
+  // massimo. onclone tocca solo la copia usata per la cattura, non la pagina
+  // che l'utente sta guardando.
+  const A4_PX = 794;
   const opt = {
     margin:       [10, 12, 15, 12],
     filename:     filename,
     image:        { type: 'jpeg', quality: 0.95 },
-    html2canvas:  { 
-      scale: 2, 
-      useCORS: true, 
-      logging: false, 
+    html2canvas:  {
+      scale: 2,
+      useCORS: true,
+      logging: false,
       allowTaint: true,
       scrollY: 0,
-      windowHeight: element.scrollHeight,
-      windowWidth: element.scrollWidth
+      windowWidth: A4_PX,
+      onclone: (doc: Document) => {
+        const clone = doc.getElementById(elementId) as HTMLElement | null;
+        if (clone) {
+          clone.style.width = `${A4_PX}px`;
+          clone.style.maxWidth = 'none';
+        }
+      },
     },
     jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
     pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] },
@@ -361,7 +429,7 @@ export async function downloadGuideAsPdf(
     // Il PDF viene renderizzato UNA volta sola: il vecchio codice rifaceva
     // l'intero rendering html2canvas una seconda volta per il download.
     const pdfBlob: Blob = await html2pdf().set(opt).from(element).outputPdf('blob');
-    const saved = await saveBlobAsFile(pdfBlob, filename);
+    const saved = await saveBlobAsFile(pdfBlob, filename, { tipo: 'guida', nome: String(dati?.content?.guida_titolo || filename.replace(/\.pdf$/i, '')) });
     return saved ? pdfBlob : null;
   } catch (err) {
     console.error('[PremiumGuide] PDF generation failed:', err);

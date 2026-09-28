@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget «Eventi e mostre» (23/09/2026): fino a 4 eventi dei prossimi 7
+     giorni, ognuno toccabile (biglietto affiliato via /api/out, risolto
+     dall'app). Righe esplicite con id unici, niente <include>. Niente foto:
+     le immagini dei partner non sono foto del luogo. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_ev_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/wip_widget_bg"
+    android:padding="12dp">
+
+    <TextView android:id="@+id/w_ev_titolo" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" android:textStyle="bold" />
+
+    <TextView android:id="@+id/w_ev_vuoto" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:gravity="center" android:textColor="#B8FFFFFF" android:textSize="12sp" android:textStyle="bold" android:visibility="gone" />
+
+    <LinearLayout android:id="@+id/w_ev_corpo" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="vertical" android:layout_marginTop="2dp">
+
+        <LinearLayout android:id="@+id/w_ev_r1" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="3dp" android:paddingBottom="3dp">
+            <TextView android:id="@+id/w_ev_r1_icona" android:layout_width="30dp" android:layout_height="30dp" android:gravity="center" android:background="@drawable/wip_w_riquadro" android:textSize="15sp" />
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginStart="8dp">
+                <TextView android:id="@+id/w_ev_r1_titolo" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+                <TextView android:id="@+id/w_ev_r1_dettagli" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" />
+            </LinearLayout>
+            <TextView android:id="@+id/w_ev_r1_bigl" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/wip_w_pillola" android:layout_marginStart="6dp" android:paddingStart="6dp" android:paddingEnd="6dp" android:paddingTop="1dp" android:paddingBottom="1dp" android:textColor="#1E3A8A" android:textSize="8sp" android:textStyle="bold" android:visibility="gone" />
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/w_ev_r2" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="3dp" android:paddingBottom="3dp">
+            <TextView android:id="@+id/w_ev_r2_icona" android:layout_width="30dp" android:layout_height="30dp" android:gravity="center" android:background="@drawable/wip_w_riquadro" android:textSize="15sp" />
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginStart="8dp">
+                <TextView android:id="@+id/w_ev_r2_titolo" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+                <TextView android:id="@+id/w_ev_r2_dettagli" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" />
+            </LinearLayout>
+            <TextView android:id="@+id/w_ev_r2_bigl" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/wip_w_pillola" android:layout_marginStart="6dp" android:paddingStart="6dp" android:paddingEnd="6dp" android:paddingTop="1dp" android:paddingBottom="1dp" android:textColor="#1E3A8A" android:textSize="8sp" android:textStyle="bold" android:visibility="gone" />
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/w_ev_r3" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="3dp" android:paddingBottom="3dp">
+            <TextView android:id="@+id/w_ev_r3_icona" android:layout_width="30dp" android:layout_height="30dp" android:gravity="center" android:background="@drawable/wip_w_riquadro" android:textSize="15sp" />
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginStart="8dp">
+                <TextView android:id="@+id/w_ev_r3_titolo" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+                <TextView android:id="@+id/w_ev_r3_dettagli" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" />
+            </LinearLayout>
+            <TextView android:id="@+id/w_ev_r3_bigl" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/wip_w_pillola" android:layout_marginStart="6dp" android:paddingStart="6dp" android:paddingEnd="6dp" android:paddingTop="1dp" android:paddingBottom="1dp" android:textColor="#1E3A8A" android:textSize="8sp" android:textStyle="bold" android:visibility="gone" />
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/w_ev_r4" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="3dp" android:paddingBottom="3dp">
+            <TextView android:id="@+id/w_ev_r4_icona" android:layout_width="30dp" android:layout_height="30dp" android:gravity="center" android:background="@drawable/wip_w_riquadro" android:textSize="15sp" />
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginStart="8dp">
+                <TextView android:id="@+id/w_ev_r4_titolo" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+                <TextView android:id="@+id/w_ev_r4_dettagli" android:layout_width="match_parent" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end" android:textColor="#B8FFFFFF" android:textSize="10sp" />
+            </LinearLayout>
+            <TextView android:id="@+id/w_ev_r4_bigl" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/wip_w_pillola" android:layout_marginStart="6dp" android:paddingStart="6dp" android:paddingEnd="6dp" android:paddingTop="1dp" android:paddingBottom="1dp" android:textColor="#1E3A8A" android:textSize="8sp" android:textStyle="bold" android:visibility="gone" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

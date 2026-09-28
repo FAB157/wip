@@ -10,7 +10,7 @@ import {
   incrementAudioguidePlay,
   ensureSharedPoi,
 } from './poiRepository';
-import { ensurePoiDetails, type EnrichInput } from './enrichmentService';
+import { ensurePoiDetails, fotoStantia, type EnrichInput } from './enrichmentService';
 import { getApiUrl, apiFetch } from '../lib/api';
 import { bearerHeaders } from '../lib/audioFetch';
 import type { GuideCharacter } from '../types/poi';
@@ -154,6 +154,25 @@ export async function getOrCreateAudioguideText(
   return null;
 }
 
+/**
+ * SOLO LETTURA (23/09/2026, widget «Ascolta ora» e «In un'altra lingua»):
+ * il testo gia' scritto in poi_audioguides per poi+lingua+personaggio, o
+ * null. Mai /api/poi/audioguide, mai /api/regenerate, mai play_count: un
+ * widget che si aggiorna ogni 10 minuti non deve ne' generare ne' contare
+ * ascolti. Stessa cautela della cache di sopra sull'italiano sospetto.
+ */
+export async function leggiTestoInCache(poiId: string, language: string, character: GuideCharacter): Promise<string | null> {
+  try {
+    if (!poiId) return null;
+    const languageDb = String(language || 'IT').toUpperCase();
+    const cached = await getAudioguide(String(poiId), languageDb, character);
+    const testo = cached?.audio_text;
+    if (!testo || testo.trim().length < 30) return null;
+    if (languageDb === 'IT' && !sembraItaliano(testo)) return null;
+    return testo;
+  } catch { return null; }
+}
+
 async function getOrCreateAudioguideTextInterno(
   poi: EnrichInput,
   language: string,
@@ -176,6 +195,15 @@ async function getOrCreateAudioguideTextInterno(
   // gratis come prima — e' cio' che il server chiama "colpo di cache".
   if (cached?.audio_text && !cacheSospetta && !charge) {
     if (incrementPlay) await incrementAudioguidePlay(cached.id);
+    // BUGFIX 06/09/2026: con testo gia' in cache si usciva qui SENZA MAI
+    // passare da ensurePoiDetails — quindi un POI visitato una volta con
+    // una foto rotta (es. i vecchi link source.unsplash.com, dismessi)
+    // restava con la foto rotta per sempre: ogni visita successiva
+    // "on the fly" leggeva solo l'audioguida in cache e non ritentava mai
+    // la foto. Qui si rilancia l'arricchimento in BACKGROUND (mai atteso,
+    // mai in blocco della risposta) solo quando la foto risulta assente o
+    // e' uno di quei link morti — non ad ogni ascolto.
+    if (fotoStantia(poi)) void ensurePoiDetails(poi, language, true).catch(() => {});
     return { status: 'ok', text: cached.audio_text, charged: false, cached: true };
   }
 
