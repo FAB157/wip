@@ -5101,19 +5101,62 @@ function MapArea({
         // rispondeva 429 a ogni chiamata; TripAdvisor consuma quota a ogni
         // spostamento della mappa. Le due API restano SOLO come rete di
         // sicurezza per i riquadri dove la tabella e' vuota.
-        if (bounds.isValid() && (bounds.getNorth() - bounds.getSouth()) < 0.6) {
+        // (28/09/2026, committente: «deve mostrarsi tutti, zoom senza
+        // limiti») Il tetto a 0,6° di altezza mappa e' tolto: con l'indice
+        // GIST la RPC regge anche una regione/paese intero, e senza questa
+        // tabella lo zoom ampio ripiegava su shared_pois — che non ha i dati
+        // di dieta di Overture/OSM — mostrando solo i locali con "gluten"
+        // nel NOME (2 in tutta Italia invece delle centinaia reali).
+        if (bounds.isValid()) {
           try {
-            const { data: locali } = await supabase
-              .from('locali_pois')
-              .select('id,name,lat,lon,sub_category,cucina,brand,address,city,website,phone,socials,operating_status,confidence')
-              .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
-              .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
-              // NEQ scarta anche i NULL (trappola PostgREST già vista): quasi
-              // tutti i locali hanno operating_status vuoto e la chip mostrava
-              // 0 su 607 a Carrara (31/08). Il filtro giusto: vuoto O non chiuso.
-              .or('operating_status.is.null,operating_status.neq.closed')
-              .order('confidence', { ascending: false })
-              .limit(400);
+            // (28/09/2026) RPC locali_pois_vicini invece della select diretta:
+            // il filtro gte/lte su lat/lon separati non usa l'indice GIST
+            // aggiunto oggi (serve un operatore spaziale). Il filtro
+            // operating_status e l'ordine per confidence restano dentro la
+            // funzione (vedi migration 20260928140000_gist_locali_pois.sql).
+            // p_diete filtra su osm_diet DENTRO la query (prima del taglio
+            // per confidence): sub_category non è MAI valorizzato a
+            // "glutenfree" in locali_pois (0 righe su tutta la tabella), il
+            // dato vero sta solo in osm_diet (vedi
+            // 20260928150000_fix_locali_pois_diete_e_zoom.sql).
+            const dieteAttive = Array.isArray(subFilter)
+              ? subFilter.reduce<string[]>((acc, s) => {
+                  if (['glutenfree', 'gluten_free_only', 'gluten_free_options'].includes(s)) acc.push('gluten_free');
+                  if (s === 'vegetariano') acc.push('vegetarian');
+                  return acc;
+                }, [])
+              : [];
+            // (28/09/2026) Stesso motivo del gluten-free: senza questo, una
+            // sotto-chip rara (vegetariano 29.800 nel mondo, carne/pesce/
+            // sushi) veniva tagliata via dal taglio per confidence PRIMA che
+            // il filtro client la vedesse. "bar" copre sia sub_category
+            // "bar" sia "caffe" (due valori distinti, quasi alla pari).
+            const MAPPA_SUB: Record<string, string[]> = {
+              ristorante: ['ristorante'], pizzeria: ['pizzeria'], pesce: ['pesce'],
+              carne: ['carne'], sushi: ['sushi'], gelateria: ['gelateria'],
+              bar: ['bar', 'caffe'],
+            };
+            const subCategorieAttive = Array.isArray(subFilter)
+              ? subFilter.reduce<string[]>((acc, s) => { if (MAPPA_SUB[s]) acc.push(...MAPPA_SUB[s]); return acc; }, [])
+              : [];
+            // Diete e sotto-categorie strutturali sono due filtri ANDati
+            // dentro la funzione: se sono attive insieme (es. "Vegetariano"
+            // E "Pizzeria" contemporaneamente) l'AND sarebbe sbagliato
+            // (l'utente vuole l'UNO O l'ALTRO) — in quel caso non si manda
+            // nessuno dei due al server, resta il filtro lato client.
+            const misti = dieteAttive.length > 0 && subCategorieAttive.length > 0;
+            const zoomAmpio = (bounds.getNorth() - bounds.getSouth()) >= 0.6;
+            const filtroAttivo = !misti && (dieteAttive.length > 0 || subCategorieAttive.length > 0);
+            const { data: locali } = await supabase.rpc('locali_pois_vicini', {
+              p_south: bounds.getSouth(), p_west: bounds.getWest(),
+              p_north: bounds.getNorth(), p_east: bounds.getEast(),
+              p_sub_category: !misti && subCategorieAttive.length > 0 ? subCategorieAttive : null,
+              // Zoom ampio o filtro specifico: più margine, il cluster
+              // accorpa i punti visivamente (vedi nota sulle sette chip
+              // "anche a scala di paese/continente" più sotto in questo file).
+              p_limit: zoomAmpio || filtroAttivo || misti ? 800 : 400,
+              p_diete: !misti && dieteAttive.length > 0 ? dieteAttive : null,
+            });
             if (locali && locali.length > 0) {
               return locali.map((l: any) => ({
                 id: l.id,
@@ -5131,6 +5174,7 @@ function MapArea({
                 contact_phone: l.phone || null,
                 socials: Array.isArray(l.socials) ? l.socials : null,
                 operating_status: l.operating_status || null,
+                osm_diet: l.osm_diet || null,
                 source: 'overture',
                 status: 'verified',
                 is_gem: false,

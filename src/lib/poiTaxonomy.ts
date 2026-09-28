@@ -487,8 +487,15 @@ export function matchesSubByHeuristics(p: any, macro: string, activeSubs: string
     if (has("pizzeria") && (name.includes("pizz") || amenity.includes("pizza") || types.includes("pizza"))) return true;
     if (has("pesce") && (name.includes("pesce") || name.includes("mare") || name.includes("sea") || name.includes("fish") || types.includes("seafood_restaurant"))) return true;
     if (has("carne") && (name.includes("carne") || name.includes("steak") || name.includes("brace") || name.includes("grill") || types.includes("steak_house"))) return true;
-    if (has("vegetariano") && (name.includes("vega") || name.includes("bio") || name.includes("vegetariano") || name.includes("salad") || types.includes("vegetarian_restaurant"))) return true;
-    if ((has("glutenfree") || has("gluten_free_only") || has("gluten_free_options")) && (name.includes("senza glutine") || name.includes("gluten") || name.includes("celiac"))) return true;
+    // osm_diet (locali_pois, Overture/OSM: {"gluten_free":true,"vegetarian":true,...})
+    // e' il dato VERO, verificato: sub_category non e' mai valorizzato per le
+    // diete (0 righe su tutta la tabella, 27/09/2026) e il nome da solo
+    // trovava 2 locali senza glutine in tutta Italia invece delle centinaia
+    // reali. Controllato PRIMA del nome, che resta rete di sicurezza per i
+    // POI Foursquare/TripAdvisor senza osm_diet.
+    const dieta = (p as any).osm_diet as Record<string, boolean> | null | undefined;
+    if (has("vegetariano") && (dieta?.vegetarian === true || name.includes("vega") || name.includes("bio") || name.includes("vegetariano") || name.includes("salad") || types.includes("vegetarian_restaurant"))) return true;
+    if ((has("glutenfree") || has("gluten_free_only") || has("gluten_free_options")) && (dieta?.gluten_free === true || name.includes("senza glutine") || name.includes("gluten") || name.includes("celiac"))) return true;
     if (has("bar") && (amenity.includes("bar") || amenity.includes("cafe") || types.includes("bar") || types.includes("cafe") || name.includes("bar ") || name.includes("caffé"))) return true;
     if (has("gelateria") && (name.includes("gelat") || name.includes("ice cream"))) return true;
     if (has("sushi") && (name.includes("sushi") || name.includes("giapponese") || name.includes("japanese") || types.includes("sushi_restaurant"))) return true;
@@ -606,6 +613,12 @@ export function passesCategoryRule(p: any, selectedCategories: string[], subFilt
   // Una gemma senza famiglia riconosciuta (import CSV, `category='gemme'`) vale
   // come «monumenti_sub», esattamente come la sua gemella non-gemma qui sopra.
   if (macro === "gemme" && !subId && activeSubs.includes("monumenti_sub")) return true;
+  // La chip "Bar & Caffè" ha un solo id ("bar") ma in locali_pois sono DUE
+  // valori distinti di sub_category, quasi alla pari (1,6M "bar" e 1,46M
+  // "caffe", 27/09/2026): senza questa equivalenza il confronto esatto
+  // prendeva solo "bar" e perdeva 1,46M locali "caffe" dalla mappa.
+  const BARCAFE = ["bar", "caffe", "cafe", "bar_caffe"];
+  if (BARCAFE.includes(subId) && activeSubs.includes("bar")) return true;
   // glutenfree ha tre id equivalenti tra chip e dati.
   const GF = ["glutenfree", "gluten_free_only", "gluten_free_options"];
   if (GF.includes(subId) && activeSubs.some(s => GF.includes(s))) return true;
