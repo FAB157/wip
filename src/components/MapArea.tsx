@@ -343,6 +343,8 @@ import {
   FAMIGLIE_TYPES,
   UTILITA_TYPES,
 } from "../lib/poiTaxonomy";
+import { GF_VINCOLI } from "../lib/glutenSafetyStore";
+import { caricaGlutenSafety } from "../lib/glutenSafetyCache";
 
 // Ri-esportata: altri componenti la importano storicamente da qui.
 export { subCategoryToFilterId };
@@ -4695,6 +4697,18 @@ function MapArea({
     [selectedCategories, subFilter],
   );
 
+  // Filtri di sicurezza per celiaci (cucina/friggitrice dedicata, certificato):
+  // il dato sta in poi_gluten_safety, non nel POI. Lo si carica per i locali in
+  // vista solo quando un vincolo e' acceso, e gfVersion fa ricalcolare i pin.
+  const [gfVersion, setGfVersion] = useState(0);
+  useEffect(() => {
+    if (!subFilter?.some((s) => (GF_VINCOLI as readonly string[]).includes(s))) return;
+    const ids = pois
+      .filter((p: any) => String(p.baseCategory || p.category || '').toLowerCase() === 'locali')
+      .map((p: any) => p.id);
+    caricaGlutenSafety(ids).then((cambiata) => { if (cambiata) setGfVersion((v) => v + 1); });
+  }, [pois, subFilter]);
+
   const visiblePois = useMemo(() => {
     // Se la modalità Radar è attiva, mostriamo SOLO i POI monitorati dall'audioguida
     if (isRadarMode) {
@@ -4747,7 +4761,7 @@ function MapArea({
       // passesCategoryRule (src/lib/poiTaxonomy.ts), euristiche comprese.
       return passesCategoryRule(p, selectedCategories, subFilter);
     });
-  }, [pois, selectedCategories, subFilter, isRadarMode, radarPois]);
+  }, [pois, selectedCategories, subFilter, isRadarMode, radarPois, gfVersion]);
 
 
   // Initial fetch when map is ready — e a ogni cambio di categorie/sotto-filtro.

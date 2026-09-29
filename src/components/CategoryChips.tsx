@@ -117,6 +117,11 @@ const SUB_FILTER_TRANSLATIONS: Record<string, Partial<Record<Language, string>>>
   glutenfree: { IT: "Gluten-Free", EN: "Gluten-Free", FR: "Sans Gluten", ES: "Sin Gluten", RU: "Без глютена", ZH: "无麸质" },
   gluten_free_only: { IT: "100% Senza Glutine", EN: "100% Gluten-Free", FR: "100% Sans Gluten", ES: "100% Sin Gluten", RU: "100% без глютена", ZH: "100%无麸质", DE: "100% glutenfrei" },
   gluten_free_options: { IT: "Con opzioni", EN: "GF options", FR: "Avec options", ES: "Con opciones", RU: "Есть опции", ZH: "有无麸质选择", DE: "Mit Optionen" },
+  panetteria: { IT: "Panetterie", EN: "Bakeries", FR: "Boulangeries", ES: "Panaderías", RU: "Пекарни", ZH: "面包店", DE: "Bäckereien" },
+  negozio_gf: { IT: "Negozi senza glutine", EN: "GF shops", FR: "Magasins sans gluten", ES: "Tiendas sin gluten", RU: "Магазины без глютена", ZH: "无麸质商店", DE: "Glutenfreie Läden" },
+  gf_cucina: { IT: "Cucina dedicata", EN: "Dedicated kitchen", FR: "Cuisine dédiée", ES: "Cocina dedicada", RU: "Отдельная кухня", ZH: "专用厨房", DE: "Eigene Küche" },
+  gf_friggitrice: { IT: "Friggitrice dedicata", EN: "Dedicated fryer", FR: "Friteuse dédiée", ES: "Freidora dedicada", RU: "Отдельная фритюрница", ZH: "专用油炸锅", DE: "Eigene Fritteuse" },
+  gf_certificato: { IT: "Certificato", EN: "Certified", FR: "Certifié", ES: "Certificado", RU: "Сертификат", ZH: "已认证", DE: "Zertifiziert" },
   bar: { IT: "Bar & Caffè", EN: "Bars & Cafés", FR: "Bars & Cafés", ES: "Bares y Cafés", RU: "Бары и кафе", ZH: "酒吧与咖啡" },
   gelateria: { IT: "Gelati", EN: "Gelato", FR: "Glaces", ES: "Helados", RU: "Мороженое", ZH: "冰淇淋" },
   // utilita
@@ -588,11 +593,31 @@ export default function CategoryChips({
               { id: "vegetariano", emoji: "🥬" },
               { id: "gluten_free_only", emoji: "🌾" },
               { id: "gluten_free_options", emoji: "🌾" },
+              { id: "panetteria", emoji: "🥖" },
+              { id: "negozio_gf", emoji: "🛒" },
               { id: "bar", emoji: "☕" },
               { id: "gelateria", emoji: "🍦" },
             ].map((f) => (
               <SubChip key={f.id ?? "all"} f={f} isSelected={isSubSelected(f.id)}
                 label={f.id === null ? SUB_FILTER_TRANSLATIONS.all_m[language] : SUB_FILTER_TRANSLATIONS[f.id]?.[language] || f.id}
+                onSelect={() => onSetSubFilter?.(f.id)} />
+            ))}
+          </motion.div>
+        )}
+
+        {/* SICUREZZA PER CELIACI (fase 5): compare solo con un chip senza glutine
+            acceso. Sono vincoli che si sommano ai chip; un locale senza dato
+            verificato non li soddisfa. */}
+        {selectedIds.includes("locali") && ["glutenfree", "gluten_free_only", "gluten_free_options"].some(g => isSubSelected(g)) && (
+          <motion.div key="gf-vincoli" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+            className="flex flex-row gap-1.5 px-3 overflow-x-auto no-scrollbar pointer-events-auto pb-1">
+            {[
+              { id: "gf_cucina", emoji: "🍳" },
+              { id: "gf_friggitrice", emoji: "🍟" },
+              { id: "gf_certificato", emoji: "✅" },
+            ].map((f) => (
+              <SubChip key={f.id} f={f} isSelected={isSubSelected(f.id)}
+                label={SUB_FILTER_TRANSLATIONS[f.id]?.[language] || f.id}
                 onSelect={() => onSetSubFilter?.(f.id)} />
             ))}
           </motion.div>

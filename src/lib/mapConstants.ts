@@ -269,6 +269,8 @@ export const SUB_CATEGORY_EMOJIS: Record<string, string> = {
   glutenfree: "🌾",
   gluten_free_only: "🌾💯",
   gluten_free_options: "🌾",
+  panetteria: "🥖",
+  negozio_gf: "🛒",
   fontanella: "🚰",
   drinking_water: "🚰",
   bagni: "🚺🚹",

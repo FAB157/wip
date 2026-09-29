@@ -46,6 +46,17 @@ async function listaPaesi() {
   return [...new Set(j.elements.map((e) => e.tags['ISO3166-1']).filter(Boolean))].sort();
 }
 
+// Sotto-categoria WIP (ids dei chip Locali) da amenity/shop/cuisine di OSM.
+function sottoCategoria(t) {
+  if (t.shop === 'bakery' || t.shop === 'pastry' || t.craft === 'bakery') return 'panetteria';
+  if (['supermarket', 'convenience', 'health_food', 'deli', 'organic', 'greengrocer', 'general'].includes(t.shop)) return 'negozio_gf';
+  if (t.amenity === 'ice_cream' || t.shop === 'ice_cream') return 'gelateria';
+  if (['cafe', 'bar', 'pub'].includes(t.amenity)) return 'bar';
+  if (/pizza/i.test(t.cuisine || '')) return 'pizzeria';
+  if (['restaurant', 'fast_food', 'food_court'].includes(t.amenity)) return 'ristorante';
+  return '';
+}
+
 function riga(e, paese) {
   const t = e.tags || {};
   const lat = e.lat ?? e.center?.lat;
@@ -60,6 +71,7 @@ function riga(e, paese) {
     lat, lon,
     tipo: TIPO[t['diet:gluten_free']] || null,
     amenity: t.amenity || t.shop || '',
+    sotto_categoria: sottoCategoria(t),
     cucina: t.cuisine || '',
     via: [t['addr:street'], t['addr:housenumber']].filter(Boolean).join(' '),
     citta: t['addr:city'] || '',
@@ -95,7 +107,7 @@ async function main() {
     await sleep(3000);
   }
 
-  const cols = ['osm', 'paese', 'nome', 'lat', 'lon', 'tipo', 'amenity', 'cucina', 'via', 'citta', 'sito', 'telefono', 'orari', 'check_date'];
+  const cols = ['osm', 'paese', 'nome', 'lat', 'lon', 'tipo', 'amenity', 'sotto_categoria', 'cucina', 'via', 'citta', 'sito', 'telefono', 'orari', 'check_date'];
   fs.writeFileSync(OUT_DIR + 'gluten-free-mondo.csv',
     [cols.join(','), ...tutte.map((r) => cols.map((c) => csvCell(r[c])).join(','))].join('\n'));
   fs.writeFileSync(OUT_DIR + 'gluten-free-mondo.json', JSON.stringify(tutte));

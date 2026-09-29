@@ -498,6 +498,22 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Есть безглютеновое меню",
     ZH: "有无麸质餐食"
   , DE: "Glutenfreie Optionen"},
+  panetteria: {
+    IT: "Panetteria",
+    EN: "Bakery",
+    FR: "Boulangerie",
+    ES: "Panadería",
+    RU: "Пекарня",
+    ZH: "面包店"
+  , DE: "Bäckerei"},
+  negozio_gf: {
+    IT: "Negozio senza glutine",
+    EN: "Gluten-free shop",
+    FR: "Magasin sans gluten",
+    ES: "Tienda sin gluten",
+    RU: "Магазин без глютена",
+    ZH: "无麸质商店"
+  , DE: "Glutenfreier Laden"},
   fontanella: {
     IT: "Fontanella",
     EN: "Drinking Water",

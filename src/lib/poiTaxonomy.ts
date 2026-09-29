@@ -6,6 +6,8 @@
 // importa il CSS di Leaflet). Qui si puo' testare, ed e' proprio la parte
 // dove un errore si vede subito dall'utente: POI deselezionati che
 // restano sulla mappa.
+import { GF_VINCOLI, rispettaVincolo, type GfVincolo } from "./glutenSafetyStore";
+
 /**
  * Riconduce una subCategory (etichetta italiana da normalizeSubCategory, tag
  * OSM grezzo o id già canonico) all'id chip usato dai sub-filtri. Senza questa
@@ -35,6 +37,9 @@ export function subCategoryToFilterId(subCat?: string | null): string {
     "gelateria": "gelateria", "ice_cream": "gelateria",
     "ristorante": "ristorante", "restaurant": "ristorante",
     "bar caffè": "bar", "cafe": "bar", "bar": "bar",
+    // Panetterie e negozi senza glutine (fase 3): sotto Locali, come i bar.
+    "panetteria": "panetteria", "bakery": "panetteria", "forno": "panetteria", "pasticceria": "panetteria",
+    "negozio senza glutine": "negozio_gf", "gluten_free_shop": "negozio_gf", "negozio_gf": "negozio_gf",
   };
   return map[l] || l;
 }
@@ -166,7 +171,7 @@ export const SUBS_BY_MACRO: Record<string, string[]> = {
   // (Elenco letterale e non NATURA_FAMIGLIE: quella e' dichiarata piu' sotto
   // e un `const` letto prima della sua riga fa esplodere il modulo.)
   natura: ["spiagge", "vette", "acque", "grotte", "parchi"],
-  locali: ["ristorante", "pizzeria", "pesce", "carne", "sushi", "vegetariano", "glutenfree", "gluten_free_only", "gluten_free_options", "bar", "gelateria"],
+  locali: ["ristorante", "pizzeria", "pesce", "carne", "sushi", "vegetariano", "glutenfree", "gluten_free_only", "gluten_free_options", "panetteria", "negozio_gf", "bar", "gelateria"],
   // ev_charging (27/08/2026): colonnine di ricarica EV da OpenChargeMap
   // (CC BY 4.0). Stesso schema delle altre utilita': `category` sul DB e'
   // gia' il valore specifico ('ev_charging'), non un bucket generico.
@@ -459,6 +464,7 @@ export function matchesSubByHeuristics(p: any, macro: string, activeSubs: string
     if ((has("glutenfree") || has("gluten_free_only") || has("gluten_free_options")) && (name.includes("senza glutine") || name.includes("gluten") || name.includes("celiac"))) return true;
     if (has("bar") && (amenity.includes("bar") || amenity.includes("cafe") || types.includes("bar") || types.includes("cafe") || name.includes("bar ") || name.includes("caffé"))) return true;
     if (has("gelateria") && (name.includes("gelat") || name.includes("ice cream"))) return true;
+    if (has("panetteria") && (name.includes("panetter") || name.includes("forno") || name.includes("bakery") || name.includes("boulanger") || name.includes("bäckerei") || name.includes("panader") || name.includes("pasticcer"))) return true;
     if (has("sushi") && (name.includes("sushi") || name.includes("giapponese") || name.includes("japanese") || types.includes("sushi_restaurant"))) return true;
     return false;
   }
@@ -531,7 +537,28 @@ export function datiBeneCulturale(p: any): { registro?: string; tutela?: string 
   return { registro: b.registro || undefined, tutela: b.tutela || undefined };
 }
 
+/**
+ * Regola completa: sub-chip (OR fra loro, vedi passesCategoryRuleBase) piu' i
+ * VINCOLI di sicurezza per celiaci (AND): "cucina dedicata", "friggitrice
+ * dedicata", "certificato". I vincoli non sono sub-chip di una macro: si
+ * applicano ai soli locali e leggono poi_gluten_safety dalla cache. Un locale
+ * senza dato verificato NON li soddisfa (mai "dedicata" per default).
+ */
 export function passesCategoryRule(p: any, selectedCategories: string[], subFilter?: string[] | null): boolean {
+  const vincoli = (subFilter || []).filter((s): s is GfVincolo => (GF_VINCOLI as readonly string[]).includes(s));
+  if (vincoli.length === 0) return passesCategoryRuleBase(p, selectedCategories, subFilter);
+
+  const soloSub = (subFilter || []).filter(s => !(GF_VINCOLI as readonly string[]).includes(s));
+  if (!passesCategoryRuleBase(p, selectedCategories, soloSub)) return false;
+  // I vincoli hanno senso solo con un chip senza glutine acceso (e' l'unico caso
+  // in cui la loro riga e' visibile): altrimenti sarebbero un filtro invisibile.
+  if (!soloSub.some(s => s === "glutenfree" || s === "gluten_free_only" || s === "gluten_free_options")) return true;
+  // I vincoli riguardano solo i locali; gli altri POI passano invariati.
+  if (resolvePoiTaxonomy(p).macro !== "locali") return true;
+  return vincoli.every(v => rispettaVincolo(p.id, v));
+}
+
+function passesCategoryRuleBase(p: any, selectedCategories: string[], subFilter?: string[] | null): boolean {
   const { macro, subId } = resolvePoiTaxonomy(p);
 
   // DOPPIA APPARTENENZA. Un POI che e' anche bene vincolato compare sotto
