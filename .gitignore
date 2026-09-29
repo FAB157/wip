@@ -28,3 +28,4 @@ translate_trivia.cjs
 temp_db.cjs
 test_agnes.ts
 enrich_pois_wiki.cjs
+scratch/out/

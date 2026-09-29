@@ -560,9 +560,17 @@ export function passesCategoryRule(p: any, selectedCategories: string[], subFilt
   if (activeSubs.length === 0) return true;
 
   if (subId && activeSubs.includes(subId)) return true;
-  // glutenfree ha tre id equivalenti tra chip e dati.
+  // Senza glutine: due chip distinti. "Solo senza glutine" (gluten_free_only,
+  // cucina interamente gluten free) mostra SOLO quei locali; "Con opzioni"
+  // (gluten_free_options) mostra anche i 100%, perche' offrono di certo
+  // opzioni. "glutenfree" e' l'id storico, di cui non si sa se e' 100% o solo
+  // con opzioni: compare sotto "Con opzioni" e sotto il chip storico.
   const GF = ["glutenfree", "gluten_free_only", "gluten_free_options"];
-  if (GF.includes(subId) && activeSubs.some(s => GF.includes(s))) return true;
+  if (GF.includes(subId)) {
+    if (activeSubs.includes("glutenfree")) return true;
+    if (activeSubs.includes("gluten_free_options")) return true;
+    if (activeSubs.includes("gluten_free_only") && subId === "gluten_free_only") return true;
+  }
 
   // Molti POI da Overpass/Google non hanno subCategory (un ristorante con solo
   // amenity=restaurant). L'ultima parola spetta alle euristiche su nome e tag,

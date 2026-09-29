@@ -115,6 +115,8 @@ const SUB_FILTER_TRANSLATIONS: Record<string, Partial<Record<Language, string>>>
   sushi: { IT: "Sushi", EN: "Sushi", FR: "Sushi", ES: "Sushi", RU: "Суши", ZH: "寿司" },
   vegetariano: { IT: "Vegetariano", EN: "Vegetarian", FR: "Végétarien", ES: "Vegetariano", RU: "Вегетарианское", ZH: "素食" },
   glutenfree: { IT: "Gluten-Free", EN: "Gluten-Free", FR: "Sans Gluten", ES: "Sin Gluten", RU: "Без глютена", ZH: "无麸质" },
+  gluten_free_only: { IT: "100% Senza Glutine", EN: "100% Gluten-Free", FR: "100% Sans Gluten", ES: "100% Sin Gluten", RU: "100% без глютена", ZH: "100%无麸质", DE: "100% glutenfrei" },
+  gluten_free_options: { IT: "Con opzioni", EN: "GF options", FR: "Avec options", ES: "Con opciones", RU: "Есть опции", ZH: "有无麸质选择", DE: "Mit Optionen" },
   bar: { IT: "Bar & Caffè", EN: "Bars & Cafés", FR: "Bars & Cafés", ES: "Bares y Cafés", RU: "Бары и кафе", ZH: "酒吧与咖啡" },
   gelateria: { IT: "Gelati", EN: "Gelato", FR: "Glaces", ES: "Helados", RU: "Мороженое", ZH: "冰淇淋" },
   // utilita
@@ -584,7 +586,8 @@ export default function CategoryChips({
               { id: "carne", emoji: "🥩" },
               { id: "sushi", emoji: "🍣" },
               { id: "vegetariano", emoji: "🥬" },
-              { id: "glutenfree", emoji: "🌾" },
+              { id: "gluten_free_only", emoji: "🌾" },
+              { id: "gluten_free_options", emoji: "🌾" },
               { id: "bar", emoji: "☕" },
               { id: "gelateria", emoji: "🍦" },
             ].map((f) => (
