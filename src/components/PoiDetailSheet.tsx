@@ -124,6 +124,7 @@ import PoiExtraDetails from "./poi/PoiExtraDetails";
 import PoiBiodiversity from "./poi/PoiBiodiversity";
 import DenominazioniZona from "./DenominazioniZona";
 import PoiNearbyList from "./poi/PoiNearbyList";
+import PoiGlutenSafety from "./poi/PoiGlutenSafety";
 
 interface PoiDetailSheetProps {
   poi: {
@@ -2894,6 +2895,12 @@ export default function PoiDetailSheet({
                   );
                 })}
               </div>
+            )}
+
+            {/* Sicurezza per celiaci: livello, cucina/friggitrice, prova e fonte.
+                Compare solo se c'e' una riga verificata in poi_gluten_safety. */}
+            {poi.category === "locali" && (
+              <PoiGlutenSafety poiId={poi.id} language={language} />
             )}
 
             {/* Special "Senza Glutine" Highlight - New Prominent Badge */}
