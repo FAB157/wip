@@ -10,12 +10,15 @@
 //   limited -> gluten_free_limited  (pochissime opzioni: da mostrare con avviso)
 // Licenza dati: ODbL, © OpenStreetMap contributors.
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const MIRRORS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
 ];
-const OUT_DIR = new URL('./out/', import.meta.url).pathname;
+// fileURLToPath e non URL.pathname: su Windows pathname da '/C:/...' (non valido).
+const OUT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'out') + path.sep;
 const TIPO = { only: 'gluten_free_only', yes: 'gluten_free_options', limited: 'gluten_free_limited' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
