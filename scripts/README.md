@@ -35,6 +35,8 @@ solo per contesto restano riconoscibili da `enrichment_source =
 |---|---|
 | `npm run enrich` | Arricchisce i POI mai lavorati (`enriched_at` nullo), regione per regione: testi, teaser, audioguide Nicky/Dante, foto. |
 | `npx tsx scripts/wikidata_retro_enrich.ts` | Ripassa i POI già arricchiti e ne riscrive i testi quando trova fonti verificate. Parte in simulazione: serve `--apply`. |
+| `npx tsx scripts/audit-testi.mts` | **Audit dei testi già pubblicati**: per ogni POI confronta testo e audioguida con le fonti verificate (Wikipedia/Wikidata per coordinate) e segnala le affermazioni non presenti (anni, numeri, nomi, paesaggio). Simulazione di default, scrive un CSV in `scratch/out/`; con `--apply` marca i POI `da_rifare` (la scheda smette di servirne il testo dalla cache), con `--clear-audio` azzera anche le audioguide in cache. |
+| `npx tsx scripts/mass_enrich_background.ts --redo-da-rifare` | Rigenera i POI marcati `da_rifare`. Senza fonti azzera il vecchio testo e le audioguide (`senza_fonti`): una scheda vuota è meglio di una falsa. |
 | `npm run fix-photos` | Sostituisce le foto generiche con quelle ufficiali del luogo. Parte in simulazione: serve `--apply`. |
 
 Opzioni utili: `--limit=N`, `--delay=ms`; `fix-photos` accetta anche

@@ -17100,8 +17100,11 @@ ${extract || "Nessuna fonte trovata"}
       // client esistenti lo parsano senza modifiche) senza toccare l'LLM.
       let dbPoiId: string | null = null;
       let existingImage: string | null = null;
+      // Marcatore dell'audit (scripts/audit-testi.mts): testo vecchio che contiene
+      // affermazioni non presenti nelle fonti. Non si serve dalla cache.
+      let testoDaRifare = false;
       try {
-        const selectFields = "id,description_short,description_long,description_ai,audio_script,is_gem,image_url,photo_url";
+        const selectFields = "id,description_short,description_long,description_ai,audio_script,is_gem,image_url,photo_url,enrichment_source";
         for (const candidate of [idStr, cleanId]) {
           if (!candidate) continue;
           const r = await axios.get(
@@ -17115,7 +17118,11 @@ ${extract || "Nessuna fonte trovata"}
             // assenti, così i POI marcati in passato si riparano da soli.
             const storedImg = row.image_url || row.photo_url || null;
             existingImage = storedImg && !String(storedImg).includes('source.unsplash.com') ? storedImg : null;
-            const cachedLong = row.description_long || row.description_ai;
+            // TESTO DA RIFARE: marcato dall'audit come non ancorato alle fonti
+            // (inventato o da dépliant). Mai servito dalla cache: si rigenera
+            // dalle fonti sotto, e se non esistono fonti il testo viene azzerato.
+            testoDaRifare = row.enrichment_source === 'da_rifare';
+            const cachedLong = testoDaRifare ? null : (row.description_long || row.description_ai);
             if (cachedLong && String(cachedLong).length > 80) {
               console.log(`[enrich-stream] Cache HIT su shared_pois per ${candidate} — nessuna chiamata LLM`);
               res.setHeader("Content-Type", "text/event-stream");
@@ -17213,6 +17220,20 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
         }
 
         const patch: any = {};
+        // POI marcato da_rifare: senza fonti il vecchio testo inventato viene
+        // AZZERATO (una scheda vuota e' meglio di una falsa), con fonti viene
+        // sostituito dal testo nuovo e il marcatore cambia.
+        if (testoDaRifare) {
+          if (nienteMateriale) {
+            patch.description_short = null;
+            patch.description_long = null;
+            patch.description_ai = null;
+            patch.audio_script = null;
+            patch.enrichment_source = 'senza_fonti';
+          } else {
+            patch.enrichment_source = 'enrich_stream_fonti';
+          }
+        }
         if (parsed.description_long || parsed.description_short) {
           patch.description_long = parsed.description_long || parsed.description_short;
           patch.description_ai = parsed.description_long || parsed.description_short;

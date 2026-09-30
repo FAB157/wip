@@ -5,6 +5,7 @@ import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import { collectPoiSources, findOfficialPhoto, fetchWikivoyageContext } from './lib/wiki';
+import { valutaAncoraggio } from './lib/ancoraggio';
 
 dotenv.config();
 
@@ -30,6 +31,11 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 
 // ── Parametri da riga di comando ────────────────────────────────────────────
 const argv = process.argv.slice(2);
+// --redo-da-rifare: invece dei POI mai lavorati, ripassa quelli marcati
+// 'da_rifare' da scripts/audit-testi.mts (testi non ancorati alle fonti).
+// Se le fonti non ci sono, il vecchio testo e le audioguide in cache vengono
+// AZZERATI: una scheda vuota e' meglio di una scheda falsa.
+const REDO_DA_RIFARE = argv.includes('--redo-da-rifare');
 const getArg = (name: string, fallback: string) =>
   (argv.find(a => a.startsWith(`--${name}=`))?.split('=')[1] ?? fallback);
 
@@ -173,10 +179,14 @@ async function fetchUnsplashImages(searchQuery: string): Promise<string[]> {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function processBatchForRegion(region: typeof REGIONS[0]) {
-  const { data: pois, error } = await supabase
+  let selezione = supabase
     .from('shared_pois')
-    .select('id, name, city, region, category, is_gem, lat, lon')
-    .is('enriched_at', null)
+    .select('id, name, city, region, category, is_gem, lat, lon');
+  // Normale: POI mai lavorati. Con --redo-da-rifare: quelli marcati dall'audit.
+  selezione = REDO_DA_RIFARE
+    ? selezione.eq('enrichment_source', 'da_rifare')
+    : selezione.is('enriched_at', null);
+  const { data: pois, error } = await selezione
     .in('category', CULTURAL_CATEGORIES)
     .gte('lat', region.minLat)
     .lte('lat', region.maxLat)
@@ -262,7 +272,7 @@ REGOLA ASSOLUTA 3 — Scrivi in italiano e inglese naturali, mai tradotti alla l
 Racconta questo luogo usando i fatti delle fonti: date, nomi, stili e materiali che vi compaiono. Più sono concreti, meglio è. Se le fonti riguardano CHIARAMENTE un altro luogo (nome o zona incompatibili), ignorale del tutto e comportati come in assenza di fonti, descrivendo solo il contesto.`;
 
     const modalitaContesto = `MODALITÀ: NESSUNA FONTE SPECIFICA SU QUESTO LUOGO.
-Non hai dati verificati su questo POI: NON inventarli. Scrivi comunque un testo utile e piacevole, ma parlando di ciò che è realmente noto e verificabile del CONTESTO:
+Non hai dati verificati su questo POI: NON inventarli. REGOLA DI LUNGHEZZA: il testo è BREVE. Meno fatti hai, meno scrivi: 2-4 frasi sostanziali bastano, e allungare con aggettivi, atmosfere o paesaggi è un difetto, non un pregio. Vietato descrivere il paesaggio (colline, vigneti, panorami, mare, montagne) se non è scritto nelle fonti qui sotto: il paesaggio della REGIONE non è il paesaggio di QUESTO luogo. Scrivi ciò che è realmente noto e verificabile del CONTESTO:
 — il territorio e la città ("${poi.city || region.name}"): paesaggio, tradizioni, materiali locali, storia generale della zona;
 — che cosa è un "${poi.category}" e che ruolo ha di solito nella vita di un luogo così;
 — che cosa può aspettarsi chi ci arriva davanti, in termini generali.
@@ -280,15 +290,15 @@ JSON da restituire:
   "status": "OK",
   "descrizione_breve_it": "Max 25 parole (italiano). Con fonti: il dettaglio più caratterizzante. Senza fonti: che cos'è e dove si trova, senza fatti inventati.",
   "descrizione_breve_en": "Max 25 words (English), stesso criterio.",
-  "descrizione_dettagliata_it": "800-1500 caratteri (italiano). Con fonti: nomi, date, vicende. Senza fonti: contesto territoriale e culturale reale, senza attribuire nulla di preciso a questo edificio.",
-  "descrizione_dettagliata_en": "800-1500 chars (English), stesso criterio.",
+  "descrizione_dettagliata_it": "${hasSources ? '800-1500 caratteri (italiano). Nomi, date, vicende delle fonti.' : '200-450 caratteri (italiano), BREVE. Che cos\'è e dove si trova, contesto reale della città; nulla di preciso attribuito a questo luogo.'}",
+  "descrizione_dettagliata_en": "${hasSources ? '800-1500 chars (English), same criterion.' : '200-450 chars (English), SHORT, same criterion.'}",
   "ulteriori_informazioni_it": "Info pratiche solo se ricavabili dalle fonti; altrimenti indicazioni generali sulla visita, senza inventare orari o prezzi.",
   "teaser_it": "Teaser invitante di 25-30 parole, perfetto da leggere ad alta voce. Con fonti: un fatto concreto. Senza fonti: un invito legato al luogo e alla città, senza fatti inventati.",
   "teaser_en": "Inviting teaser, 25-30 words (English), stesso criterio.",
-  "testo_nicky_it": "120-150 parole. Stile informale e vivace, dettagli visivi concreti di ciò che si vede. (Inizia con ✨)",
-  "testo_nicky_en": "Nicky style in English, 120-150 words (start with ✨).",
-  "testo_dante_it": "120-150 parole. Stile formale e colto. Con fonti: date ed eventi tangibili. Senza fonti: inquadramento storico del territorio, senza date attribuite a questo edificio. (Inizia con 📜)",
-  "testo_dante_en": "Dante style in English, 120-150 words (start with 📜)."
+  "testo_nicky_it": "${hasSources ? '120-150 parole. Stile informale e vivace; usa SOLO fatti delle fonti.' : '40-70 parole, BREVE. Stile informale, solo contesto reale della città; nessun dettaglio visivo inventato.'} (Inizia con ✨)",
+  "testo_nicky_en": "Nicky style in English, ${hasSources ? '120-150' : '40-70, SHORT'} words (start with ✨).",
+  "testo_dante_it": "${hasSources ? '120-150 parole. Stile formale e colto, date ed eventi delle fonti.' : '40-70 parole, BREVE. Stile formale; inquadramento storico del territorio, senza date attribuite a questo edificio.'} (Inizia con 📜)",
+  "testo_dante_en": "Dante style in English, ${hasSources ? '120-150' : '40-70, SHORT'} words (start with 📜)."
 }
 
 LUOGO DA ARRICCHIRE: "${searchQuery}" — Categoria: "${poi.category}"
@@ -320,6 +330,60 @@ Wikivoyage: ${wvRaw || 'Nessun dato.'}`;
       }
 
       parsed.status = "OK";
+
+      // CONTROLLO DI ANCORAGGIO (scripts/lib/ancoraggio.ts). Il prompt vieta di
+      // inventare, ma un divieto non e' una garanzia: qui si verifica che ogni
+      // anno, numero, nome proprio e parola di paesaggio/stile del testo
+      // compaia nelle fonti. Un tentativo di correzione; se ne restano, il
+      // testo NON si salva (una scheda da rifare e' meglio di una falsa).
+      const fontiVerificate = [wikiRaw, wikiData].filter(Boolean) as string[];
+      const ctxAncoraggio = { name: poi.name, city: poi.city || '', region: region.name, fonti: fontiVerificate };
+      const nonAncorate = (o: any): string[] => {
+        const out = new Set<string>();
+        for (const t of [o.descrizione_dettagliata_it, o.testo_nicky_it, o.testo_dante_it, o.teaser_it]) {
+          if (!t) continue;
+          const r = valutaAncoraggio(String(t), ctxAncoraggio);
+          if (r.verdetto === 'non_ancorato') r.nonAncorate.forEach(x => out.add(x));
+        }
+        return [...out];
+      };
+      let inventati = nonAncorate(parsed);
+      if (inventati.length > 0) {
+        console.log(`   ⚠️ ${poi.name}: elementi non presenti nelle fonti (${inventati.slice(0, 8).join(', ')}) — riscrittura.`);
+        const secondo = await activeClient.chat.completions.create({
+          model: MODEL_NAME,
+          messages: [
+            { role: 'user', content: systemPrompt },
+            { role: 'assistant', content: rawText },
+            { role: 'user', content: `Nel testo hai usato elementi che NON compaiono nelle fonti: ${inventati.join(', ')}. Riscrivi TUTTO il JSON senza di essi. Non sostituirli con altri dettagli: se mancano fatti, scrivi di meno.` },
+          ],
+          temperature: 0.2,
+          response_format: { type: "json_object" }
+        });
+        try {
+          parsed = JSON.parse((secondo.choices[0]?.message?.content || '{}').replace(/```json/g, '').replace(/```/g, '').trim());
+          parsed.status = "OK";
+          inventati = nonAncorate(parsed);
+        } catch { inventati = ['json_non_valido']; }
+      }
+      if (inventati.length > 0) {
+        console.log(`   🚫 ${poi.name}: ancora elementi non verificabili (${inventati.slice(0, 8).join(', ')}) — testo NON salvato.`);
+        if (REDO_DA_RIFARE) {
+          // Nessun testo ancorato e' possibile: il vecchio testo falso e le
+          // audioguide in cache vengono azzerati, e il POI esce dalla coda.
+          await supabase.from('shared_pois').update({
+            description_short: null, description_long: null, description_ai: null, audio_script: null,
+            enriched_at: new Date().toISOString(), enrichment_source: 'senza_fonti'
+          }).eq('id', poi.id);
+          await supabase.from('poi_audioguides').delete().eq('poi_id', poi.id);
+        } else {
+          await supabase.from('shared_pois').update({
+            enriched_at: new Date().toISOString(),
+            enrichment_source: 'da_rifare'
+          }).eq('id', poi.id);
+        }
+        return;
+      }
 
       // Traccia con quale materiale è stato scritto il testo: i POI descritti
       // solo per contesto vanno riprocessati quando compaiono fonti vere.
