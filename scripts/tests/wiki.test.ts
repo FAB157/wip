@@ -50,8 +50,21 @@ async function main() {
   const estranei = nameSimilarity('Bar Gelateria Da Mario', 'Piazza Alberica');
   check('nomi estranei ~ 0', estranei < 0.15, `(${estranei.toFixed(2)})`);
 
+  console.log('\n=== 1b. Stabilimenti termali, qualificativi, parole di tipo ===');
+  const titoloRedi = 'Terme nuove Redi';
+  for (const n of ['Terme Redi', 'Stabilimento Redi', 'Stabilimento Termale Redi', 'Terme Redi Montecatini', 'Redi']) {
+    check(`"${n}" si abbina a "${titoloRedi}"`, isAcceptableMatch(nameSimilarity(n, titoloRedi), 0));
+  }
+  check('"Terme" da sole NON si abbinano a "Terme nuove Redi"', !isAcceptableMatch(nameSimilarity('Terme', titoloRedi), 0));
+  check('"Chiesa Nuova" non si abbina a "Chiesa Vecchia"', !isAcceptableMatch(nameSimilarity('Chiesa Nuova', 'Chiesa Vecchia'), 0));
+  check('"Via Roma" non si abbina a "Via Milano"', !isAcceptableMatch(nameSimilarity('Via Roma', 'Via Milano'), 0));
+  check('"Piazza Duomo" si abbina a "Piazza del Duomo"', isAcceptableMatch(nameSimilarity('Piazza Duomo', 'Piazza del Duomo'), 0));
+  check('nome di sola parola di tipo identico resta pieno', nameSimilarity('Terme', 'Terme') === 1);
+
   console.log('\n=== 2. Soglia con la distanza ===');
-  check('nome debole ma stesso punto (3m) accettato', isAcceptableMatch(0.2, 3));
+  // Dal 26/08/2026 la soglia e' una sola, indipendente dalla distanza (vedi
+  // nota in wiki.ts: "10th Street" prendeva l'hotel accanto perche' vicino).
+  check('nome debole rifiutato anche a 3m', !isAcceptableMatch(0.2, 3));
   check('nome debole a 56m rifiutato', !isAcceptableMatch(0.2, 56));
   check('nome forte a 150m accettato', isAcceptableMatch(0.5, 150));
 

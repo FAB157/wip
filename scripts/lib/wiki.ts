@@ -46,7 +46,34 @@ const SYNONYMS: Record<string, string> = {
   bridge: 'ponte', square: 'piazza', palace: 'palazzo', gallery: 'galleria',
   fountain: 'fontana', theatre: 'teatro', theater: 'teatro', abbey: 'abbazia',
   chapel: 'cappella',
+  // Stabilimenti termali: "Stabilimento Termale Redi" e "Terme nuove Redi" sono
+  // lo stesso posto. Senza queste righe il POI non trovava la sua pagina e la
+  // scheda finiva in "solo contesto" (caso Terme Redi, Montecatini, 30/09/2026).
+  stabilimento: 'terme', stabilimenti: 'terme', termale: 'terme', termali: 'terme',
+  thermal: 'terme', spa: 'terme', baths: 'terme', therme: 'terme',
 };
+
+/**
+ * Qualificativi che distinguono due luoghi omonimi ("Chiesa Nuova" / "Chiesa
+ * Vecchia") ma che una fonte aggiunge o toglie a piacere ("Terme Redi" / "Terme
+ * nuove Redi"). Si ignorano SOLO se compaiono da una parte sola: se li hanno
+ * entrambi e sono diversi, sono proprio quello che distingue i due luoghi.
+ */
+const QUALIFICATIVI = new Set([
+  'nuovo', 'nuova', 'nuove', 'nuovi', 'vecchio', 'vecchia', 'vecchie', 'vecchi',
+  'antico', 'antica', 'antiche', 'antichi', 'moderno', 'moderna', 'new', 'old',
+]);
+
+/**
+ * Parole di TIPO cosi' generiche che condividerle non dimostra nulla: "Terme"
+ * vicino a "Terme nuove Redi" non e' quel posto, e una "Via" qualunque non e'
+ * "Via Roma". Un abbinamento deve avere in comune almeno una parola NON di
+ * questo elenco (stessa cautela del caso "10th Street", vedi nota sopra).
+ */
+const SOLO_TIPO = new Set([
+  'terme', 'hotel', 'albergo', 'parco', 'villa', 'giardino', 'giardini',
+  'piazza', 'via', 'viale', 'corso', 'strada', 'ristorante', 'bar',
+]);
 
 function normalizeName(s: string): string[] {
   return (s || '')
@@ -69,10 +96,27 @@ export function nameSimilarity(a: string, b: string): number {
   const ta = new Set(normalizeName(a));
   const tb = new Set(normalizeName(b));
   if (ta.size === 0 || tb.size === 0) return 0;
-  let common = 0;
-  ta.forEach(t => { if (tb.has(t)) common++; });
-  const union = ta.size + tb.size - common;
-  return union === 0 ? 0 : common / union;
+
+  // Qualificativi ("nuove", "antico"): ignorati solo se su un lato soltanto.
+  const qa = [...ta].filter(t => QUALIFICATIVI.has(t));
+  const qb = [...tb].filter(t => QUALIFICATIVI.has(t));
+  if ((qa.length === 0) !== (qb.length === 0)) {
+    qa.forEach(t => ta.delete(t));
+    qb.forEach(t => tb.delete(t));
+    if (ta.size === 0 || tb.size === 0) return 0;
+  }
+
+  const comuni: string[] = [];
+  ta.forEach(t => { if (tb.has(t)) comuni.push(t); });
+  const union = ta.size + tb.size - comuni.length;
+  if (union === 0) return 0;
+  const punteggio = comuni.length / union;
+
+  // Nomi identici: sempre un abbinamento pieno (anche se fatti di sole parole di tipo).
+  if (comuni.length === ta.size && comuni.length === tb.size) return punteggio;
+  // Solo parole di tipo in comune: non dimostra nulla, resta sotto la soglia.
+  if (comuni.length > 0 && comuni.every(t => SOLO_TIPO.has(t))) return Math.min(punteggio, MIN_NAME_SCORE - 0.01);
+  return punteggio;
 }
 
 /** Nome compatibile — unica soglia, vedi nota sopra su perché non ce n'è una ridotta per distanza. */
