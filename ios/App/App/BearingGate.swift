@@ -29,6 +29,12 @@ import CoreLocation
 /// davvero — cioè da fermo, quando il `course` del GPS è rumore — e si spegne
 /// quando la guida si ferma o quando per un paio di minuti è bastato il GPS.
 /// Un magnetometro acceso a vuoto in background è consumo puro.
+/// (23/09/2026, R-BUSSOLA, identica su Android) Si spegne appena il gate ha
+/// deciso per il candidato corrente (nessun altro rinvio in sospeso) o dopo
+/// 120 s senza richieste — controllo fatto dal manager a OGNI fix — e si
+/// riaccende alla richiesta successiva del gate, oppure un fix prima
+/// (`preRiscalda`) se nella stessa finestra armata era già stata chiesta e
+/// resta un candidato non raccontato. Vedi docs/nav-nativo-spec.md, REVISIONE 3.
 final class BearingGate: NSObject, CLLocationManagerDelegate {
     static let shared = BearingGate()
 
@@ -75,6 +81,11 @@ final class BearingGate: NSObject, CLLocationManagerDelegate {
     private var headingGradi: Double?
     private var headingAggiornatoMs: Double = 0
     private var ultimaRichiestaBussolaMs: Double = 0
+    /// (23/09/2026, R-BUSSOLA, identica a Android `richiestaNellaFinestra`)
+    /// true dopo che il gate ha chiesto la bussola in questa finestra armata,
+    /// fino a `chiudiFinestra()`. Solo con questo flag `preRiscalda` può
+    /// riaccenderla: la PRIMA accensione resta della sola richiesta del gate.
+    private var richiestaNellaFinestra = false
 
     /// Stato per POI: isteresi + scadenza del rinvio. Vive in memoria e NON va
     /// persistito (punto 8 della specifica).
@@ -135,16 +146,57 @@ final class BearingGate: NSObject, CLLocationManagerDelegate {
 
     /// Guida spenta / manager a riposo: bussola giù e stato dimenticato.
     func spegni() {
-        spegniBussola()
+        chiudiFinestra()
         azzera()
     }
 
-    private func spegniBussolaSeInattiva() {
+    /// (23/09/2026, R-BUSSOLA, identica a Android `disattiva`) Fine della
+    /// finestra armata (GPS davvero a riposo, non per sosta): bussola giù e la
+    /// prossima accensione la decide di nuovo solo il gate.
+    func chiudiFinestra() {
+        lock.lock()
+        richiestaNellaFinestra = false
+        lock.unlock()
+        spegniBussola()
+    }
+
+    /// (23/09/2026, R-BUSSOLA, identica a Android `preRiscalda`) Resta un
+    /// candidato che può chiedere il gate: se la bussola era già stata chiesta
+    /// in questa finestra armata, si tiene (o si riaccende) pronta, così
+    /// all'arrivo successivo la lettura c'è come quando restava sempre accesa
+    /// e i tempi della guida non cambiano. Mai la prima accensione.
+    func preRiscalda() {
+        lock.lock()
+        let chiesta = richiestaNellaFinestra
+        lock.unlock()
+        if chiesta { accendiBussola() }
+    }
+
+    /// (23/09/2026, R-BUSSOLA, identica su Android) Spegne la bussola se da
+    /// 120 s nessuno l'ha chiesta, cioè 120 s senza candidati al gate. Prima
+    /// si chiamava solo dal ramo «in movimento» di `direzioneConFonte`, che a
+    /// sua volta gira solo su un ARRIVO: dopo il primo arrivo a passo lento la
+    /// bussola restava accesa per ore. Ora il manager la chiama a OGNI fix:
+    /// costa un lock e un confronto.
+    func spegniBussolaSeInattiva() {
         lock.lock()
         let accesa = bussolaAccesa
         let ferma = nowMs() - ultimaRichiestaBussolaMs > Self.inattivitaBussolaMs
         lock.unlock()
         if accesa && ferma { spegniBussola() }
+    }
+
+    /// (23/09/2026, R-BUSSOLA) Il gate ha DECISO per il candidato corrente
+    /// (passa o ignoraGate: il racconto parte): la bussola non serve più e si
+    /// spegne subito — a meno che un altro POI sia ancora in sospeso (rinvio
+    /// in corso), che al fix successivo la rileggerà. Si riaccende da sola alla
+    /// richiesta successiva del gate (`headingBussola`).
+    private func spegniDopoDecisione(poiId: String) {
+        lock.lock()
+        stato.removeValue(forKey: poiId)
+        let nessunRinvio = stato.isEmpty
+        lock.unlock()
+        if nessunRinvio { spegniBussola() }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
@@ -164,6 +216,7 @@ final class BearingGate: NSObject, CLLocationManagerDelegate {
     private func headingBussola() -> Double? {
         accendiBussola()
         lock.lock(); defer { lock.unlock() }
+        richiestaNellaFinestra = true
         guard let h = headingGradi, nowMs() - headingAggiornatoMs <= Self.headingValidoMs else { return nil }
         return h
     }
@@ -254,6 +307,26 @@ final class BearingGate: NSObject, CLLocationManagerDelegate {
         dentroPerimetro: Bool,
         distanzaM: Double,
         raggioArrivoM: Double = BearingGate.raggioArrivoM
+    ) -> EsitoGate {
+        let esito = valutaSenzaSpegnere(
+            poi: poi, location: location, dentroPerimetro: dentroPerimetro,
+            distanzaM: distanzaM, raggioArrivoM: raggioArrivoM
+        )
+        // R-BUSSOLA: decisione presa (il racconto parte, e il chiamante azzera
+        // comunque lo stato del POI in handleArrival) → bussola giù. Su
+        // `.rimanda` resta accesa: al fix successivo serve di nuovo.
+        if esito != .rimanda { spegniDopoDecisione(poiId: poi.id) }
+        return esito
+    }
+
+    /// La decisione vera e propria, INVARIATA: `valuta` la avvolge solo per
+    /// spegnere la bussola dopo.
+    private func valutaSenzaSpegnere(
+        poi: Poi,
+        location: CLLocation,
+        dentroPerimetro: Bool,
+        distanzaM: Double,
+        raggioArrivoM: Double
     ) -> EsitoGate {
         guard abilitato else { return .ignoraGate }
 

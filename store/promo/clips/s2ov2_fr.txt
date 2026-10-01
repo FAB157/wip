@@ -1,0 +1,2 @@
+WIP démarre tout seul devant chaque lieu.
+Même écran éteint.

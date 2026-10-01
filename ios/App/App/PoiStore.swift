@@ -522,11 +522,54 @@ final class PoiStore {
 
     // MARK: - poi_cache (radar online/offline)
 
+    /// (23/09/2026, batteria) Tetto della cache radar. Prima il dizionario non
+    /// veniva MAI potato e si riscriveva per intero a ogni refresh del radar
+    /// (ogni 200 m a piedi): dopo qualche settimana in più città erano MB di
+    /// JSON codificati e scritti sulla flash, e tenuti in RAM in background.
+    /// Serve solo a nome e dati delle notifiche («Ascolta») dei POI appena
+    /// incontrati: un radar sta in ≤ 120 voci, 1.500 coprono chilometri.
+    private static let tettoPoiCache = 1_500
+    /// Ordine d'uso per la potatura FIFO (solo in memoria: le voci lette dal
+    /// file all'avvio valgono «le più vecchie» e sono le prime a uscire).
+    private var poiCacheUso: [String: Int] = [:]
+    private var poiCacheContatore = 0
+
     func insertPois(_ pois: [Poi]) {
         queue.sync {
             loadIfNeeded()
-            for p in pois { poiCache[p.id] = p }
-            writeFile(poiCache, to: poiCacheFile)
+            // Si riscrive il file solo se qualcosa è cambiato davvero: lo
+            // stesso radar riscaricato a ogni refresh era una riscrittura a
+            // vuoto. Il confronto è sulla codifica del singolo POI (Poi non è
+            // Equatable), molto più leggera della codifica di tutto il file.
+            let enc = JSONEncoder()
+            enc.outputFormatting = .sortedKeys
+            var cambiato = false
+            for p in pois {
+                if !cambiato {
+                    if let vecchio = poiCache[p.id] {
+                        let a = try? enc.encode(vecchio)
+                        let b = try? enc.encode(p)
+                        if a == nil || a != b { cambiato = true }
+                    } else {
+                        cambiato = true
+                    }
+                }
+                poiCache[p.id] = p
+                poiCacheContatore += 1
+                poiCacheUso[p.id] = poiCacheContatore
+            }
+            if poiCache.count > Self.tettoPoiCache {
+                let daTogliere = poiCache.count - Self.tettoPoiCache
+                let piuVecchi = poiCache.keys
+                    .sorted { (poiCacheUso[$0] ?? 0) < (poiCacheUso[$1] ?? 0) }
+                    .prefix(daTogliere)
+                for id in piuVecchi {
+                    poiCache.removeValue(forKey: id)
+                    poiCacheUso.removeValue(forKey: id)
+                }
+                cambiato = true
+            }
+            if cambiato { writeFile(poiCache, to: poiCacheFile) }
         }
     }
 

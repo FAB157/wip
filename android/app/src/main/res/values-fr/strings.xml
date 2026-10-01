@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Sélecteur de widgets et raccourcis en français (23/09/2026). Les textes
+     DANS les widgets viennent du snapshot de l'app, déjà traduits. -->
+<resources>
+    <string name="wip_widget_name">WIP — Radar de poche</string>
+    <string name="wip_widget_description">Solde de crédits, prochaine étape de l\'itinéraire et POI le plus proche en un coup d\'œil.</string>
+
+    <string name="wip_w_itinerario_nome">WIP · Itinéraire</string>
+    <string name="wip_w_itinerario_desc">La prochaine étape du jour, avec l\'heure et les minutes à pied.</string>
+    <string name="wip_w_visita_nome">WIP · Visite du musée</string>
+    <string name="wip_w_visita_desc">Le musée en cours : œuvres écoutées et la prochaine à écouter.</string>
+    <string name="wip_w_crediti_nome">WIP · Crédits et Pass</string>
+    <string name="wip_w_crediti_desc">Le solde de crédits et le Day Pass actif avec son échéance.</string>
+    <string name="wip_w_vicini_nome">WIP · Près de vous</string>
+    <string name="wip_w_vicini_desc">Pépites et lieux avec audioguide près de vous : un toucher et la voix démarre.</string>
+
+    <string name="wip_w_ultimo_nome">WIP · Dernier audioguide</string>
+    <string name="wip_w_ultimo_desc">Réécoutez ou reprenez votre dernier audioguide</string>
+    <string name="wip_w_luogo_nome">WIP · Lieu du jour</string>
+    <string name="wip_w_luogo_desc">Une pépite proche, différente chaque jour</string>
+    <string name="wip_w_vision_nome">WIP · Qu\'est-ce que je vois ?</string>
+    <string name="wip_w_vision_desc">Ouvrez l\'appareil photo et reconnaissez ce que vous avez devant vous</string>
+    <string name="wip_w_vision_breve">Qu\'est-ce que je vois ?</string>
+    <string name="wip_w_meteo_nome">WIP · Météo</string>
+    <string name="wip_w_meteo_desc">Météo de l\'étape du jour, meilleur moment, garantie pluie</string>
+    <string name="wip_w_ascolta_nome">WIP · Écouter maintenant</string>
+    <string name="wip_w_ascolta_desc">Un toucher : l\'audioguide du lieu le plus proche</string>
+    <string name="wip_w_ascolta_breve">Écouter maintenant</string>
+    <string name="wip_w_eventi_nome">WIP · Événements près de vous</string>
+    <string name="wip_w_eventi_desc">Événements et expositions des prochains jours</string>
+    <string name="wip_w_regione_nome">WIP · Pépite de la région</string>
+    <string name="wip_w_regione_desc">Une pépite de la région où vous êtes</string>
+    <string name="wip_w_confronto_nome">WIP · Comparer les œuvres</string>
+    <string name="wip_w_confronto_desc">Deux œuvres écoutées aujourd\'hui : laquelle préférez-vous ?</string>
+    <string name="wip_w_lingua_nome">WIP · Répéter dans une autre langue</string>
+    <string name="wip_w_lingua_desc">Votre dernier audioguide dans une autre langue</string>
+    <string name="wip_w_pdf_nome">WIP · Guide imprimé</string>
+    <string name="wip_w_pdf_desc">Votre dernier guide PDF, à rouvrir ou partager</string>
+    <string name="wip_w_community_nome">WIP · Photo de la communauté</string>
+    <string name="wip_w_community_desc">La dernière photo vérifiée prise près de vous</string>
+</resources>

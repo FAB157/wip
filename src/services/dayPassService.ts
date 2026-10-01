@@ -21,6 +21,7 @@ import {
 } from '../lib/pricing';
 import { isNativeOfflineSupported } from './offlinePackageService';
 import { getTranslation, linguaCorrente } from '../lib/i18n';
+import { getApiUrl, apiFetch } from '../lib/api';
 
 // Wrapper tipizzato condiviso (src/plugins/ItaintaBackgroundPoi.ts).
 const plugin = ItaintaBackgroundPoi;
@@ -41,17 +42,38 @@ export async function getDayPassState(): Promise<DayPassState> {
   if (isNativeOfflineSupported()) {
     try {
       const s = await plugin.getDayPassState();
-      return {
-        active: !!s?.active,
-        expiresAt: Number(s?.expiresAt) || 0,
-        used: Number(s?.used) || 0,
-        cap: Number(s?.cap) || 0,
-      };
+      // (29/08/2026, collaudo) Il mirror nativo e' una COPIA: dopo un reset
+      // dei dati, un telefono nuovo o un'attivazione fatta sul web dice
+      // «inattivo» anche con un pass valido sul server — e l'app proponeva
+      // di comprare il Day Pass a chi lo aveva. Se il nativo dice si' ci si
+      // fida (vale anche offline); se dice no si chiede al server e, se il
+      // pass c'e', si riallinea il mirror.
+      if (s?.active) {
+        return {
+          active: true,
+          expiresAt: Number(s?.expiresAt) || 0,
+          used: Number(s?.used) || 0,
+          cap: Number(s?.cap) || 0,
+        };
+      }
+      const dalServer = await leggiPassDalServer();
+      if (dalServer.active) {
+        try { await plugin.setDayPass({ expiresAt: dalServer.expiresAt, cap: dalServer.cap, used: dalServer.used }); } catch { /* mirror non aggiornabile: si usa lo stato del server */ }
+      }
+      return dalServer;
     } catch { /* fallthrough al server */ }
   }
+  return leggiPassDalServer();
+}
+
+/** Lo stato del pass com'e' sul server (user_passes), senza mirror. */
+async function leggiPassDalServer(): Promise<DayPassState> {
   try {
-    const { data: userData } = await supabase.auth.getUser();
-    const userId = userData?.user?.id;
+    // getSession (locale) e non getUser (una chiamata /auth/v1/user in rete a
+    // ogni lettura): serve solo l'id per il filtro, la select resta protetta
+    // dalla RLS di user_passes (23/09/2026, batteria, voce 19).
+    const { data: sessionData } = await supabase.auth.getSession();
+    const userId = sessionData?.session?.user?.id;
     if (!userId) return { active: false, expiresAt: 0, used: 0, cap: 0 };
     const { data } = await supabase
       .from('user_passes')
@@ -84,20 +106,31 @@ export async function activateDayPass(): Promise<DayPassState> {
   const userId = userData?.user?.id;
   if (!userId) throw new Error(getTranslation('gr_dp_accedi', linguaCorrente()));
 
-  // ATTIVAZIONE ATOMICA VIA RPC: l'INSERT diretto su user_passes è stato
-  // rimosso (permetteva un pass gratis con cap arbitrario). activate_day_pass
-  // verifica "nessun pass attivo", addebita 200 crediti e inserisce con
-  // cap=40/24h lato server, tutto in una transazione.
-  const { data: passRow, error: rpcError } = await supabase.rpc('activate_day_pass');
-  if (rpcError) {
-    const m = rpcError.message || '';
-    if (m.includes('insufficient_credits')) {
+  // ATTIVAZIONE LATO SERVER (03/09/2026). Prima si chiamava direttamente la
+  // RPC `activate_day_pass` col token dell'utente, e NON POTEVA FUNZIONARE:
+  // quella funzione chiama `consume_credits`, che scrive su `user_profiles`,
+  // dove il trigger `protect_profile_sensitive_cols` ammette solo
+  // `service_role` o admin. `security definer` cambia il ruolo di esecuzione,
+  // non la rivendicazione del JWT, quindi `auth.role()` restava
+  // 'authenticated' e ogni acquisto moriva con
+  //   P0001 «Campo riservato: modifica non consentita».
+  // Non era un caso limite: il Day Pass non funzionava per NESSUNO.
+  //
+  // Ora l'addebito lo fa il server con la chiave di servizio, come per tutto
+  // il resto dell'economia. Il trigger resta com'e': ha ragione lui, nessun
+  // client deve poter muovere i crediti.
+  const r = await apiFetch(getApiUrl('/api/day-pass/activate'), { method: 'POST' });
+  if (!r.ok) {
+    const corpo = await r.json().catch(() => ({} as any));
+    const e = String(corpo?.error || '');
+    if (r.status === 402 || e === 'insufficient_credits') {
       throw new Error(getTranslation('gr_dp_crediti_insufficienti', linguaCorrente()).replace('{n}', String(DAY_PASS_COST)));
     }
-    if (m.includes('pass_already_active')) throw new Error(getTranslation('gr_dp_gia_attivo', linguaCorrente()));
-    if (m.includes('login_required')) throw new Error(getTranslation('gr_dp_accedi', linguaCorrente()));
+    if (r.status === 409 || e === 'pass_already_active') throw new Error(getTranslation('gr_dp_gia_attivo', linguaCorrente()));
+    if (r.status === 401 || e === 'login_required') throw new Error(getTranslation('gr_dp_accedi', linguaCorrente()));
     throw new Error(getTranslation('gr_dp_fallita_riprova', linguaCorrente()));
   }
+  const passRow = await r.json().catch(() => ({} as any));
   const expiresAtMs = passRow?.expires_at ? new Date(passRow.expires_at).getTime() : Date.now() + 24 * 60 * 60 * 1000;
   notifyCreditsChanged({ userId });
 

@@ -101,7 +101,13 @@ export default function Pricing({ userSession, language }: PricingProps) {
       } else if (data?.sessionId) {
         const stripeModule = await import('@stripe/stripe-js');
         const loadStripe = stripeModule.loadStripe;
-        const stripe = await loadStripe('pk_test_51TZDL16ssNLgb6zHYHEMKH3dDjFfnPg8VNKpEvhBo8xy0IqBIR6sCqtDims4ArBQK2FkI9pZGvhvFGZmMhkF7ly900Z0IJZuZV');
+        // Chiave pubblicabile dall'ambiente (25/09/2026, passaggio a Stripe live):
+        // qui c'era scritta a mano una pk_test, che avrebbe aperto una cassa di
+        // prova anche con le chiavi live sul server. Senza chiave si prosegue
+        // solo con `data.url` (il ramo sopra), mai con una chiave inventata.
+        const chiavePubblica = String(import.meta.env.VITE_STRIPE_PUBLIC_KEY || '');
+        if (!chiavePubblica.startsWith('pk_')) throw new Error('Cassa non configurata');
+        const stripe = await loadStripe(chiavePubblica);
         if (stripe) {
           await (stripe as any).redirectToCheckout({ sessionId: data.sessionId });
         }

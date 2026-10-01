@@ -8,6 +8,7 @@
 // =====================================================================
 
 import { supabase } from './supabase';
+import * as Sentry from '@sentry/react';
 
 const MAX_PER_MINUTE = 5;
 let sentTimestamps: number[] = [];
@@ -34,6 +35,16 @@ export const logSystemError = (
   try {
     const msg = String(message || 'Errore sconosciuto').slice(0, 500);
     if (!canSend(msg)) return;
+    // SENTRY (30/08/2026): stesso dedupe/rate-limit di canSend qui sopra —
+    // niente flusso a parte da tenere sincronizzato. No-op se VITE_SENTRY_DSN
+    // non è impostata (Sentry.init non è mai stato chiamato).
+    try {
+      Sentry.withScope((scope) => {
+        scope.setLevel(opts?.level === 'critical' ? 'fatal' : opts?.level === 'warning' ? 'warning' : 'error');
+        if (opts?.context) scope.setContext('wip', opts.context);
+        Sentry.captureMessage(msg);
+      });
+    } catch { /* mai bloccare il log per Sentry */ }
     supabase.auth.getSession().then(({ data }) => {
       const userId = data?.session?.user?.id || null;
       supabase.from('system_errors').insert({

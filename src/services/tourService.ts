@@ -24,14 +24,16 @@ import { getApiUrl, apiFetch } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { saveOfflineAudio, getOfflineAudioUrl } from '../lib/offlineStorage';
 import { postForAudioBlob } from '../lib/audioFetch';
-import { getGuideCharacter } from '../lib/guideSettings';
+import { getGuideCharacter, isCategoryAllowed, CHIAVI_NATIVO_AUDIOGUIDA } from '../lib/guideSettings';
+import { puntoArrivo, haPuntoArrivo } from '../lib/puntoArrivo';
 import { getTranslation, linguaCorrente, type Language } from '../lib/i18n';
 import {
   prossimoStato, durataAscolto, durataGiro, raggruppaTappeVicine, SOGLIE,
   type TappaGiro, type StatoCorrente, type StatoGiro, type LivelloIngresso,
 } from '../lib/tour/tourState';
 import { decidi, CodaVoci, VOLUME_ABBASSATO } from '../lib/tour/audioDirector';
-import { istruzionePerStep } from './osrmService';
+import { istruzionePerStep, getEvitaScale } from './osrmService';
+import { prescaricaGuideNativo } from '../plugins/ItaintaBackgroundPoi';
 import { poiLungoIlCorridoio, type PoiLungoStrada } from '../lib/tour/corridoio';
 import { getOrCreateAudioguideText } from './audioguideService';
 import { azureVoiceName } from './ttsService';
@@ -39,6 +41,14 @@ import { locationService } from './locationService';
 
 /** Il tetto delle tappe: decisione di prodotto, non tecnica. */
 export const MAX_TAPPE = 10;
+/**
+ * IL PERCORSO DA «TUTTO NEL RAGGIO» (29/08/2026). Committente: le tappe
+ * selezionate nel pannello diventano un percorso «senza vincolo delle dieci
+ * tappe». Il tetto qui e` tecnico (la matrice OSRM), non di prodotto, ed e`
+ * lo stesso del server (TOUR_MAX_TAPPE). Vale solo per le bozze marcate
+ * `senzaLimite`; Dieci Tappe resta a dieci.
+ */
+export const MAX_TAPPE_ESTESO = 30;
 
 /** Quanto si stima di ascoltare a una tappa di cui non si ha ancora il testo. */
 const ASCOLTO_STIMATO_S = 180;
@@ -55,8 +65,48 @@ const PROPOSTA_VALIDA_MS = 120_000;
  */
 export type RientroAnello = 'originale' | 'corrente';
 
+/**
+ * DUE FUNZIONI, DUE INGRESSI (03/09/2026, committente: «devono essere 2
+ * funzioni diverse e attivate in modo diverso»).
+ *  - 'giro'     — Dieci Tappe con audioguida: si compone dal radar (cuffie
+ *                 accese), le tappe parlano, il navigatore multi-tappa vuole
+ *                 il Day Pass.
+ *  - 'percorso' — Percorso su misura: si compone dal tasto «Componi un
+ *                 percorso», con i pin di QUALSIASI categoria (monumenti,
+ *                 ristoranti, farmacie, parcheggi…); WIP ottimizza l'ordine e
+ *                 il navigatore porta da una tappa all'altra. Nessuna
+ *                 audioguida, nessun Day Pass: costa PRICING_LIST.custom_route
+ *                 crediti, tre modifiche incluse, e NON si sospende quando le
+ *                 cuffie sono spente — non ha niente a che fare con loro.
+ * La bozza e il giro sono gli stessi oggetti (stessa mappa, stesso
+ * navigatore, stesso cruscotto): cambia chi paga, che cosa parla e da dove
+ * si entra. Il modo si decide alla composizione e viaggia col giro.
+ */
+export type ModoGiro = 'giro' | 'percorso';
+
+/**
+ * L'esito di «Ricalcola da qui» (03/09/2026): ogni valore ha una risposta
+ * diversa — 'pass' apre la cassa, 'posizione' chiede il GPS, 'rete' dice di
+ * riprovare, 'niente' = nessun giro o niente da rifare.
+ */
+export type EsitoRicalcolo = 'ok' | 'rete' | 'pass' | 'posizione' | 'niente';
+
 export interface GiroInCorso {
   id: string;
+  /** 'giro' (audioguida, Day Pass) o 'percorso' (su misura, a crediti). Assente = 'giro' (giri salvati prima del 03/09/2026). */
+  modo?: ModoGiro;
+  /** Id del percorso su misura sul server: e` la chiave con cui il server ricorda l'addebito e conta le modifiche. */
+  percorsoId?: string;
+  /** Modifiche (aggiungi/togli) gia` usate, come le conta il server. */
+  modifiche?: number;
+  modificheMax?: number;
+  /**
+   * METRI GIA` CAMMINATI prima dell'ultimo ricalcolo (03/09/2026). `metri` e`
+   * la lunghezza del percorso CORRENTE (da dove si e` a fine giro) e dopo un
+   * ricalcolo perdeva la strada fatta: «1,5 km mancanti · 1,5 km in tutto»
+   * e barra a zero. Il totale onesto e` metriPercorsi + metri.
+   */
+  metriPercorsi?: number;
   tappe: TappaGiro[];
   /** Ordine deciso dal server: indici dentro `tappe`. Dopo un ricalcolo contiene SOLO le tappe ancora da fare. */
   ordine: number[];
@@ -94,6 +144,14 @@ export interface GiroInCorso {
   incontri?: string[];
   /** Citta` del giro, se la sappiamo: serve al titolo quando lo si salva. */
   citta?: string | null;
+  /** Nato da «Tutto nel raggio»: il tetto delle tappe vive e` MAX_TAPPE_ESTESO. */
+  senzaLimite?: boolean;
+  /**
+   * Creato con «Solo il giro, dalla 1ª tappa»: parte dalla prima tappa e non da
+   * dove si era. Finche' non si preme «Avvia la navigazione» la mappa mostra il
+   * solo itinerario; all'avvio si aggancia la posizione vera (vedi avvia()).
+   */
+  soloItinerario?: boolean;
 }
 
 export interface PropostaSostituta {
@@ -124,6 +182,10 @@ export interface StatoPrescarico {
 
 export interface VistaGiro {
   stato: StatoGiro;
+  /** Vedi ModoGiro: il cruscotto nasconde Riascolta e pre-scaricamento a un percorso senza audioguida. */
+  modo: ModoGiro;
+  modifiche: number;
+  modificheMax: number;
   tappaCorrente: number;
   tappeFatte: number;
   tappeTotali: number;
@@ -137,8 +199,12 @@ export interface VistaGiro {
   /** Coordinate della tappa corrente: il banner ci chiede il meteo. */
   tappaLat: number | null;
   tappaLon: number | null;
+  /** Foto della tappa corrente (URL) per il cruscotto a display spento. */
+  fotoTappa: string | null;
   istruzione: string | null;
   metriAllaSvolta: number | null;
+  /** Tipo/verso della manovra OSRM (per la freccia della card in alto). */
+  manovra: { type: string; modifier: string } | null;
   /** La prossima manovra e' un attraversamento e siamo a ridosso: il direttore audio tace. */
   suAttraversamento: boolean;
   inPausa: boolean;
@@ -190,6 +256,8 @@ function stepEAttraversamento(s: any): boolean {
  * dire "anteprima non disponibile" e chi disegna tira una linea dritta.
  */
 export interface BozzaGiro {
+  /** Giro con audioguida o percorso su misura: vedi ModoGiro. */
+  modo: ModoGiro;
   /** Nell'ordine in cui l'utente le ha scelte — o trascinate, se ha riordinato a mano. */
   tappe: TappaGiro[];
   /** Ordine di cammino deciso dal server: indici dentro `tappe`. */
@@ -213,6 +281,8 @@ export interface BozzaGiro {
   erroreDettaglio: string | null;
   /** L'utente ha trascinato le tappe: l'ordine e` il suo, il server non lo tocca. */
   ordineManuale: boolean;
+  /** Bozza nata da «Tutto nel raggio»: tetto MAX_TAPPE_ESTESO invece di dieci. */
+  senzaLimite?: boolean;
   /** "Ho un'ora": il giro si taglia alle tappe che ci stanno. null = nessun limite. */
   minutiDisponibili: number | null;
   /** Quante tappe, in ordine di cammino, stanno nel tempo. null = nessun limite. */
@@ -234,10 +304,22 @@ export interface BozzaGiro {
    * che vale anche a giro gia` partito.
    */
   rientro: RientroAnello;
+  /**
+   * SOLO IL GIRO (05/09/2026, committente: «mi fa partire dal punto in cui
+   * sono: sarebbe meglio che mostrasse anche solo l'itinerario»). Vero =
+   * l'anteprima parte dalla PRIMA TAPPA, senza la tratta dalla posizione
+   * attuale: si vede l'itinerario in se', com'e' fra le sue tappe, da
+   * qualunque posto lo si guardi (a casa, in albergo, in un'altra citta').
+   * Riguarda solo l'anteprima: il giro che si avvia parte sempre da dove si
+   * e' davvero, altrimenti il navigatore non saprebbe da dove portare.
+   * Preferenza, sopravvive allo svuotamento come `anello`.
+   */
+  soloItinerario: boolean;
 }
 
 const CHIAVE_RIPRESA = 'wip_giro_in_corso';
 const CHIAVE_ANELLO = 'wip_giro_anello';
+const CHIAVE_SOLO_ITINERARIO = 'wip_giro_solo_itinerario';
 /** 'originale' (predefinita) o 'corrente': dove si chiude l'anello. Vedi metaAnello. */
 const CHIAVE_RIENTRO = 'wip_giro_rientro';
 /**
@@ -249,14 +331,18 @@ const CHIAVE_RIENTRO = 'wip_giro_rientro';
  */
 const CHIAVE_BOZZA = 'wip_giro_bozza';
 const BOZZA_VUOTA: BozzaGiro = {
+  modo: 'giro',
   tappe: [], ordine: null, geometria: [], metri: 0, minutiCammino: 0, tratteSecondi: [],
   problemi: [], partenza: null, calcolando: false, errore: null, erroreDettaglio: null,
   ordineManuale: false, minutiDisponibili: null, tappeNelTempo: null,
   lungoLaStrada: [], cercandoLungoStrada: false,
-  anello: true, rientro: 'originale',
+  anello: true, rientro: 'originale', soloItinerario: false,
 };
 function leggiPreferenzaAnello(): boolean {
   try { return localStorage.getItem(CHIAVE_ANELLO) !== 'false'; } catch { return true; }
+}
+function leggiPreferenzaSoloItinerario(): boolean {
+  try { return localStorage.getItem(CHIAVE_SOLO_ITINERARIO) === 'true'; } catch { return false; }
 }
 /** Predefinita: il punto di partenza ORIGINALE — e` li` che c'e` l'auto. */
 function leggiPreferenzaRientro(): RientroAnello {
@@ -268,16 +354,19 @@ function leggiBozzaSalvata(): Partial<BozzaGiro> | null {
   try {
     const grezzo = localStorage.getItem(CHIAVE_BOZZA);
     if (!grezzo) return null;
-    const { tappe, minutiDisponibili, ordineManuale, quando } = JSON.parse(grezzo);
+    const { tappe, minutiDisponibili, ordineManuale, senzaLimite, quando, modo } = JSON.parse(grezzo);
     // Una bozza di ieri non si riprende: si e` cambiata citta`, non idea.
     if (!Array.isArray(tappe) || tappe.length === 0 || Date.now() - Number(quando || 0) > 12 * 60 * 60 * 1000) {
       localStorage.removeItem(CHIAVE_BOZZA);
       return null;
     }
+    const percorso = modo === 'percorso';
     return {
-      tappe: tappe.filter((t: any) => t && Number.isFinite(Number(t.lat)) && Number.isFinite(Number(t.lon))).slice(0, MAX_TAPPE),
+      modo: percorso ? 'percorso' : 'giro',
+      tappe: tappe.filter((t: any) => t && Number.isFinite(Number(t.lat)) && Number.isFinite(Number(t.lon))).slice(0, senzaLimite || percorso ? MAX_TAPPE_ESTESO : MAX_TAPPE),
       minutiDisponibili: Number.isFinite(Number(minutiDisponibili)) ? Number(minutiDisponibili) : null,
       ordineManuale: !!ordineManuale,
+      senzaLimite: !!senzaLimite,
     };
   } catch { return null; }
 }
@@ -301,6 +390,20 @@ function livelloIngresso(p: any): LivelloIngresso {
   return 'civico';
 }
 
+/**
+ * IL POI PUO` PARLARE? (29/08/2026). Regola del committente per il percorso
+ * da «Tutto nel raggio»: «se ha l'audioguida la ascolti (o la paghi al volo
+ * o col Day Pass), se non ce l'ha (ristorante ecc.) e` solo una tappa del
+ * navigatore». La risposta e` la stessa dell'audioguida in cammino
+ * (guideSettings.isCategoryAllowed) con TUTTI gli interruttori accesi: cosi`
+ * un ristorante, una fontanella o un murale sono tappe mute, una gemma parla
+ * qualunque sia la sua categoria.
+ */
+const TUTTO_ACCESO: Record<string, boolean> = Object.fromEntries([...CHIAVI_NATIVO_AUDIOGUIDA].map((k) => [k, true]));
+export function puoParlare(p: any): boolean {
+  return isCategoryAllowed({ category: p?.category || p?.poiType || p?.baseCategory || null, is_gem: p?.is_gem === true, premium: p?.premium === true }, TUTTO_ACCESO);
+}
+
 /** Da un POI qualsiasi (radar, mappa, scheda) alla tappa del giro. */
 export function tappaDaPoi(p: any): TappaGiro {
   return {
@@ -310,14 +413,34 @@ export function tappaDaPoi(p: any): TappaGiro {
     categoria: p.category || p.poiType || p.baseCategory || null,
     citta: p.city || p.citta || null,
     // Se il POI porta gia` un ingresso, e` li` che si arriva: la differenza
-    // fra "sei arrivato" davanti a un muro e davanti a una porta.
-    ingresso: (p.entrance_lat && p.entrance_lon)
-      ? { lat: Number(p.entrance_lat), lon: Number(p.entrance_lon), livello: livelloIngresso(p) }
-      : null,
+    // fra "sei arrivato" davanti a un muro e davanti a una porta. Dal v3.1
+    // (05/09/2026) prima ancora il PUNTO D'ARRIVO: la porta proiettata sul
+    // marciapiede davanti, gia` sulla rete percorribile — e` da li` che
+    // partono avviso, teaser e "sei arrivato". Il punto e` gia` sulla way
+    // giusta: OSRM non deve piu` indovinare la via.
+    ingresso: haPuntoArrivo(p)
+      ? { ...puntoArrivo(p), livello: 'dichiarato' as LivelloIngresso }
+      : (p.entrance_lat && p.entrance_lon)
+        ? { lat: Number(p.entrance_lat), lon: Number(p.entrance_lon), livello: livelloIngresso(p) }
+        : null,
     // Pranzo, pausa, trasferimento: tappe del percorso ma senza racconto.
     senzaGuida: p.senzaGuida === true || undefined,
+    // La foto del luogo per il cruscotto a display spento. Solo se e' del POI
+    // (niente ricerche per parola chiave: regola delle foto in CLAUDE.md).
+    foto: (() => {
+      const u = p.image_url || p.photo_url || p.imageUrl || p.foto || p.image || null;
+      return typeof u === 'string' && /^https?:\/\//.test(u) ? u : null;
+    })(),
   };
 }
+
+/** Un passo del giro per il follower nativo (vedi passiPerNativo e lib/nav/navNativo.PassoNav). */
+type PassoPerNativo = {
+  lat: number; lon: number; testo: string; tipo: 'depart' | 'turn' | 'arrive';
+  tappa?: string; manovraTipo?: string; manovraVerso?: string;
+  /** Metri lungo il percorso fino al passo seguente (step.distance), se noti. */
+  metriDopo?: number;
+};
 
 class TourService {
   private giro: GiroInCorso | null = null;
@@ -325,6 +448,13 @@ class TourService {
   private coda = new CodaVoci();
   private ascoltatori = new Set<(v: VistaGiro | null) => void>();
   private pausaManuale = false;
+  /**
+   * Il giro il cui rientro l'ha chiuso il follower nativo (concludiRientro,
+   * 21/09/2026). Senza, il primo fix oltre gli 80 m dal punto di partenza
+   * — si sblocca il telefono piu` in la` — riapriva il rientro e riportava
+   * indietro. Un giro nuovo, o una scelta dell'utente sul rientro, lo azzera.
+   */
+  private rientroConclusoPer: GiroInCorso | null = null;
   /**
    * AVVIO ESPLICITO (28/08/2026, committente: «deve avere un avvio
    * esplicito»). Il giro nasce PRONTO e fermo: tracciato e tappe sulla mappa,
@@ -336,7 +466,7 @@ class TourService {
   private proposta: PropostaSostituta | null = null;
 
   private preferenzaRientro: RientroAnello = leggiPreferenzaRientro();
-  private bozzaStato: BozzaGiro = { ...BOZZA_VUOTA, anello: leggiPreferenzaAnello(), rientro: leggiPreferenzaRientro(), ...(leggiBozzaSalvata() || {}) };
+  private bozzaStato: BozzaGiro = { ...BOZZA_VUOTA, anello: leggiPreferenzaAnello(), rientro: leggiPreferenzaRientro(), soloItinerario: leggiPreferenzaSoloItinerario(), ...(leggiBozzaSalvata() || {}) };
   /**
    * GUIDA SPENTA = GIRO SOSPESO, NON CHIUSO (28/08/2026).
    *
@@ -374,6 +504,13 @@ class TourService {
   /** L'ultima posizione vista da `aggiorna`: serve al ricalcolo quando nessuno ne passa una. */
   private ultimaPosizione: { lat: number; lon: number } | null = null;
   /**
+   * Percorso su misura: il prossimo ricalcolo e` una modifica voluta
+   * dall'utente (aggiungi/togli), da dichiarare al server. Si consuma in
+   * `ricalcola`. I ricalcoli da deviazione, da tappa fatta o saltata non lo
+   * accendono: non sono modifiche, e non si pagano.
+   */
+  private modificaPendente = false;
+  /**
    * IL NAVIGATORE DEL GIRO. Le tratte OSRM arrivano dal server con gli step
    * (le manovre), ma fino al 22/08/2026 nessuno le leggeva: vista() tornava
    * istruzione null e il giro camminava muto fra una tappa e l'altra.
@@ -383,7 +520,7 @@ class TourService {
   private lingua = 'it';
   private passoCorrente = 0;
   private tappaDelPasso = -1;
-  private navAttuale: { istruzione: string | null; metri: number | null; attraversamento: boolean } = { istruzione: null, metri: null, attraversamento: false };
+  private navAttuale: { istruzione: string | null; metri: number | null; attraversamento: boolean; manovra: { type: string; modifier: string } | null } = { istruzione: null, metri: null, attraversamento: false, manovra: null };
   private ultimoRicalcoloDeviazione = 0;
   private posizioneCache: { p: { lat: number; lon: number }; ts: number } | null = null;
   private prescarico: StatoPrescarico = { ...PRESCARICO_VUOTO };
@@ -421,7 +558,13 @@ class TourService {
       else if (this.bozzaStato.tappe.length > 0 && !this.bozzaStato.ordine) this.programmaAnteprima();
     }
   }
-  eSospeso(): boolean { return this.sospeso; }
+  /**
+   * Sospeso = cuffie spente. Ma il PERCORSO SU MISURA con le cuffie non ha
+   * niente a che fare (03/09/2026): non ha audioguide da tacere, e chi lo ha
+   * pagato lo vuole vedere e seguire anche con la guida spenta. Per lui la
+   * sospensione non esiste — ne' per il giro in corso ne' per la bozza.
+   */
+  eSospeso(): boolean { return this.sospeso && !this.ePercorso(); }
 
   /** Guida riaccesa lontano dal tracciato: si rifa` la strada, non il giro. */
   private async riallineaDopoLaSospensione() {
@@ -439,7 +582,15 @@ class TourService {
 
   bozza(): BozzaGiro { return this.bozzaStato; }
   bozzaHa(id: string | number): boolean { return this.bozzaStato.tappe.some(t => String(t.id) === String(id)); }
-  bozzaPiena(): boolean { return this.bozzaStato.tappe.length >= MAX_TAPPE; }
+  /** Il tetto della bozza: dieci, o trenta se nata da «Tutto nel raggio» o se e` un percorso su misura. */
+  bozzaTetto(): number { return this.bozzaStato.senzaLimite || this.bozzaStato.modo === 'percorso' ? MAX_TAPPE_ESTESO : MAX_TAPPE; }
+  /** Il tetto delle tappe vive del giro in corso (o della bozza, se non c'e` giro). */
+  tettoTappe(): number {
+    const g = this.giro;
+    if (g) return g.senzaLimite || g.modo === 'percorso' ? MAX_TAPPE_ESTESO : MAX_TAPPE;
+    return this.bozzaTetto();
+  }
+  bozzaPiena(): boolean { return this.bozzaStato.tappe.length >= this.bozzaTetto(); }
 
   /** Posizione della tappa nel giro (1-based): l'ordine del server se c'e`, altrimenti quello di scelta. */
   bozzaNumero(id: string | number): number | null {
@@ -466,7 +617,9 @@ class TourService {
   }
 
   bozzaAggiungi(poi: any): boolean {
-    const t = tappaDaPoi(poi);
+    // In un percorso su misura NESSUNA tappa parla: e` un navigatore, non un
+    // racconto. Anche un monumento con l'audioguida entra muto.
+    const t = tappaDaPoi(this.bozzaStato.modo === 'percorso' ? { ...poi, senzaGuida: true } : poi);
     if (!Number.isFinite(t.lat) || !Number.isFinite(t.lon)) return false;
     if (this.bozzaHa(t.id)) return true;
     if (this.bozzaPiena()) return false;
@@ -506,6 +659,14 @@ class TourService {
     this.programmaAnteprima();
   }
 
+  /** Solo il giro (dalla prima tappa) o dalla posizione attuale: vedi BozzaGiro.soloItinerario. */
+  bozzaImpostaSoloItinerario(solo: boolean) {
+    if (this.bozzaStato.soloItinerario === solo) return;
+    this.bozzaStato = { ...this.bozzaStato, soloItinerario: solo, errore: null };
+    try { localStorage.setItem(CHIAVE_SOLO_ITINERARIO, solo ? 'true' : 'false'); } catch {}
+    this.programmaAnteprima();
+  }
+
   /**
    * DOVE SI TORNA, ad anello: al punto di partenza originale o a quello
    * dell'ultimo ricalcolo. E` una preferenza come `anello` — sopravvive allo
@@ -522,7 +683,7 @@ class TourService {
     // Sulla bozza non cambia niente finche` non si e` ricalcolato almeno una
     // volta (partenza originale e corrente coincidono). Sul giro in corso si`.
     const giro = this.giro;
-    if (!giro || !giro.anello || this.sospeso) { this.avvisa(); return; }
+    if (!giro || !giro.anello || this.eSospeso()) { this.avvisa(); return; }
     if (this.tappaCorrente()) void this.ricalcola();
     else void this.ricalcolaRientro();
   }
@@ -534,20 +695,21 @@ class TourService {
    * gratis, nessun pass in ballo) e si sostituisce l'ultima tratta, cosi` la
    * linea sulla mappa e i metri rimanenti restano veri.
    */
-  private async ricalcolaRientro(posizione?: { lat: number; lon: number }) {
+  private async ricalcolaRientro(posizione?: { lat: number; lon: number }): Promise<boolean> {
     const giro = this.giro;
-    if (!giro || !giro.anello) return;
+    if (!giro || !giro.anello) return false;
     const meta = this.puntoDiRientro();
-    if (!meta) return;
+    if (!meta) return false;
     const partenza = posizione ?? this.ultimaPosizione ?? await this.posizioneAttuale();
-    if (!partenza || this.giro !== giro) return;
+    if (!partenza || this.giro !== giro) return false;
     try {
       const finta: TappaGiro = { id: '__rientro__', nome: '', lat: meta.lat, lon: meta.lon, categoria: null, citta: null, ingresso: null };
       const { dati } = await this.chiediRotta([finta], { partenza, anello: false, ordina: false });
-      if (this.giro !== giro) return;
+      if (this.giro !== giro) return false;
       const leg = dati.routes?.[0]?.legs?.[0];
-      if (!leg) return;
+      if (!leg) return false;
       giro.geometria = (dati.routes?.[0]?.geometry?.coordinates || []).map((c: number[]) => [c[1], c[0]]);
+      this.ultimoIndiceSnap = 0;
       // `tappaCorrente` (indice) e` gia` oltre l'ultima tappa: la tratta di
       // rientro deve stare proprio li`, altrimenti navigatore e metri
       // rimanenti leggerebbero un buco.
@@ -557,10 +719,16 @@ class TourService {
       // della barra di avanzamento. Cambiarlo qui farebbe saltare indietro
       // l'avanzamento a giro quasi finito.
       this.passoCorrente = 0; this.tappaDelPasso = -1;
-      this.navAttuale = { istruzione: null, metri: null, attraversamento: false };
+      this.navAttuale = { istruzione: null, metri: null, attraversamento: false, manovra: null };
+      // Un rientro rifatto (scelta o «Ricalcola» dell'utente) si cammina di
+      // nuovo, anche se il nativo l'aveva chiuso (vedi concludiRientro).
+      this.rientroConclusoPer = null;
       this.salva();
+      this.avvisa();
+      return true;
     } catch { /* senza rete si tiene la linea che c'era; la meta` e` gia` cambiata */ }
     this.avvisa();
+    return false;
   }
 
   /** "Riordina per me": si torna all'ordine che fa camminare meno. */
@@ -618,8 +786,40 @@ class TourService {
     this.bozzaVersione++;
     if (this.bozzaTimer) { clearTimeout(this.bozzaTimer); this.bozzaTimer = null; }
     // Il tempo scelto si tiene: e` una preferenza, non parte della selezione.
-    this.bozzaStato = { ...BOZZA_VUOTA, minutiDisponibili: this.bozzaStato.minutiDisponibili, anello: this.bozzaStato.anello, rientro: this.bozzaStato.rientro };
+    // Anche il MODO: svuotare un percorso su misura non lo trasforma in un giro.
+    // E «solo il giro»: e` una preferenza salvata, ma qui tornava a `false` —
+    // la chip si spegneva da sola dopo ogni giro creato (19/09/2026).
+    this.bozzaStato = { ...BOZZA_VUOTA, modo: this.bozzaStato.modo, minutiDisponibili: this.bozzaStato.minutiDisponibili, anello: this.bozzaStato.anello, rientro: this.bozzaStato.rientro, soloItinerario: this.bozzaStato.soloItinerario };
     this.avvisaBozza();
+  }
+
+  // ── PERCORSO SU MISURA: il modo della bozza ──────────────────────────────
+
+  /**
+   * Da quale tasto si e` entrati: il radar (giro con audioguida) o «Componi
+   * un percorso». Le due funzioni condividono la bozza, quindi cambiare modo
+   * con dei luoghi gia` scelti li svuota — sono selezioni di due prodotti
+   * diversi, con prezzi e regole diverse, e mescolarle sarebbe un inganno.
+   * Ritorna false se il cambio avrebbe svuotato una selezione e il chiamante
+   * ha chiesto di NON farlo (`senzaSvuotare`): tocca a lui chiedere conferma.
+   */
+  bozzaImpostaModo(modo: ModoGiro, opzioni: { senzaSvuotare?: boolean } = {}): boolean {
+    if (this.bozzaStato.modo === modo) return true;
+    if (this.bozzaStato.tappe.length > 0) {
+      if (opzioni.senzaSvuotare) return false;
+      this.bozzaSvuota();
+    }
+    this.bozzaStato = { ...this.bozzaStato, modo, errore: null, erroreDettaglio: null };
+    this.avvisaBozza();
+    return true;
+  }
+
+  modoBozza(): ModoGiro { return this.bozzaStato.modo; }
+
+  /** C'e` un percorso su misura in mano (in corso o in composizione)? */
+  ePercorso(): boolean {
+    if (this.giro) return this.giro.modo === 'percorso';
+    return this.bozzaStato.modo === 'percorso';
   }
 
   /**
@@ -649,12 +849,23 @@ class TourService {
    * li` in poi e` un giro come gli altri — tracciato, aggiunte lungo la
    * strada, X sui pin, «Crea il giro». Ritorna quante tappe sono entrate.
    */
-  bozzaDaTappe(poi: any[]): number {
+  bozzaDaTappe(poi: any[], opzioni: { senzaLimite?: boolean; ordinaServer?: boolean } = {}): number {
     this.bozzaSvuota();
+    // «Tutto nel raggio» (29/08/2026): niente vincolo delle dieci tappe, e le
+    // tappe che non hanno un'audioguida (ristoranti, fontanelle, murales)
+    // entrano MUTE — tappe del navigatore, non del racconto.
+    if (opzioni.senzaLimite) this.bozzaStato = { ...this.bozzaStato, senzaLimite: true };
     let n = 0;
-    for (const p of poi) { if (n >= MAX_TAPPE) break; if (this.bozzaAggiungi(p)) n++; }
+    const tetto = this.bozzaTetto();
+    for (const p of poi) {
+      if (n >= tetto) break;
+      const conVoce = opzioni.senzaLimite ? puoParlare(p) : p?.senzaGuida !== true;
+      if (this.bozzaAggiungi(conVoce ? p : { ...p, senzaGuida: true })) n++;
+    }
     // L'ordine del piano e` una scelta dell'autore: il server non lo tocca.
-    if (n > 1) this.bozzaStato = { ...this.bozzaStato, ordineManuale: true };
+    // Le tappe scelte dal pannello invece non hanno un ordine: lo decide il server.
+    if (n > 1 && !opzioni.ordinaServer) this.bozzaStato = { ...this.bozzaStato, ordineManuale: true };
+    this.programmaAnteprima();
     return n;
   }
 
@@ -680,7 +891,7 @@ class TourService {
     this.bozzaStato = { ...this.bozzaStato, calcolando: this.bozzaStato.tappe.length > 0 };
     this.avvisaBozza();
     if (this.bozzaStato.tappe.length === 0) {
-      this.bozzaStato = { ...BOZZA_VUOTA, minutiDisponibili: this.bozzaStato.minutiDisponibili, anello: this.bozzaStato.anello, rientro: this.bozzaStato.rientro };
+      this.bozzaStato = { ...BOZZA_VUOTA, modo: this.bozzaStato.modo, minutiDisponibili: this.bozzaStato.minutiDisponibili, anello: this.bozzaStato.anello, rientro: this.bozzaStato.rientro, soloItinerario: this.bozzaStato.soloItinerario };
       this.avvisaBozza();
       return;
     }
@@ -689,7 +900,14 @@ class TourService {
 
   private async calcolaAnteprima(mia: number) {
     const tappe = this.bozzaStato.tappe;
-    const partenza = await this.posizioneAttuale();
+    // SOLO IL GIRO: si parte dalla prima tappa (dal suo punto d'arrivo), non
+    // da dove si e'. La prima tratta e' lunga zero e il server la lascia
+    // prima nell'ordine; ad anello si torna alla prima tappa. Cosi' si vede
+    // l'itinerario in se', e non serve nemmeno la posizione.
+    const primaTappa = this.bozzaStato.soloItinerario && tappe.length > 0
+      ? (tappe[0].ingresso ? { lat: tappe[0].ingresso.lat, lon: tappe[0].ingresso.lon } : { lat: tappe[0].lat, lon: tappe[0].lon })
+      : null;
+    const partenza = primaTappa ?? await this.posizioneAttuale();
     if (mia !== this.bozzaVersione) return;
     if (!partenza) {
       this.bozzaStato = { ...this.bozzaStato, partenza: null, ordine: null, geometria: [], tratteSecondi: [], calcolando: false, errore: 'POSIZIONE' };
@@ -704,7 +922,7 @@ class TourService {
     // ricevuto una volta si smette di chiedere — la selezione continua a
     // funzionare, con la linea dritta al posto del percorso e la pillola
     // `gr_linea_stimata_pass` a dire perche'.
-    if (this.passMancante && tappe.length > 1) {
+    if (this.passMancante && tappe.length > 1 && this.bozzaStato.modo !== 'percorso') {
       this.bozzaStato = { ...this.bozzaStato, partenza, ordine: null, geometria: [], tratteSecondi: [], calcolando: false, errore: 'PASS_RICHIESTO', erroreDettaglio: this.passMotivo };
       this.bozzaStato.tappeNelTempo = this.contaTappeNelTempo(this.bozzaStato);
       this.avvisaBozza();
@@ -788,28 +1006,78 @@ class TourService {
     const n = this.bozzaStato.tappeNelTempo;
     if (n != null && n < tappe.length) tappe = tappe.slice(0, Math.max(1, n));
     if (tappe.length === 0) throw new Error('nessuna tappa');
-    const partenza = await this.posizioneAttuale(true);
+    // «SOLO IL GIRO» VALE ANCHE PER IL GIRO CREATO, NON SOLO PER L'ANTEPRIMA
+    // (19/09/2026, committente, da Carrara con un itinerario di Savona: «ho
+    // selezionato solo giro dalla prima tappa, ma mi fa partire da dove sono»
+    // — 185 km e una tappa in piu' sul cruscotto). L'anteprima partiva dalla
+    // prima tappa, ma qui si riprendeva comunque la posizione. Ora il giro
+    // creato e' quello visto in anteprima: parte dalla prima tappa, e ad anello
+    // si chiude li'. Non serve nemmeno la posizione: si guarda l'itinerario di
+    // un'altra citta' anche dal divano. La posizione vera entra solo con
+    // «Avvia la navigazione» (avvia()), quando serve al navigatore.
+    const soloScelto = this.bozzaStato.soloItinerario;
+    const puntoPrimaTappa = tappe[0].ingresso ? { lat: tappe[0].ingresso.lat, lon: tappe[0].ingresso.lon } : { lat: tappe[0].lat, lon: tappe[0].lon };
+    // Il PERCORSO SU MISURA parte subito e si paga una volta sola: non c'e' un
+    // «dopo» in cui agganciare la posizione. Con «solo il giro» parte da dove
+    // si e' se la prima tappa e' raggiungibile a piedi (25 km), altrimenti
+    // dalla prima tappa — la stessa soglia di avvia().
+    let partenzaPercorso: { lat: number; lon: number } | null = null;
+    if (soloScelto && this.bozzaStato.modo === 'percorso') {
+      const qui = await this.posizioneAttuale(true).catch(() => null);
+      partenzaPercorso = qui && metri(qui, puntoPrimaTappa) <= 25_000 ? qui : puntoPrimaTappa;
+    }
+    const solo = soloScelto && this.bozzaStato.modo !== 'percorso';
+    const primaTappa = solo ? puntoPrimaTappa : null;
+    const partenza = partenzaPercorso ?? primaTappa ?? await this.posizioneAttuale(true);
     if (!partenza) throw new Error('Non riesco a sapere dove sei: serve la posizione per costruire il giro.');
     // Si ritenta sempre il server: il pass puo` essere stato attivato nel frattempo.
     this.passMancante = false;
     // La sequenza e` gia` in ordine di cammino (del server o dell'utente):
     // si passa com'e`, cosi` il giro e` quello che si e` visto in anteprima.
-    const giro = await this.crea(tappe, { partenza, anello: this.bozzaStato.anello, ordina: false });
+    // CREARE IL GIRO E` GRATIS (29/08/2026, committente: «il crea giro puo'
+    // essere gratis e la funzione navigatore solo col Day Pass»). Qui si
+    // chiede la rotta in ANTEPRIMA — percorso, ordine, metri, minuti, senza
+    // le svolte — che il server da` a chiunque sia loggato. Il Day Pass lo
+    // si chiede in avvia(), quando servono le istruzioni: prima, chi non
+    // aveva il pass (o a cui il server non lo riconosceva) non vedeva mai
+    // il tasto verde e restava con una bozza in mano.
+    // PERCORSO SU MISURA: qui si PAGA (03/09/2026). Niente anteprima e niente
+    // Day Pass: si chiede subito la rotta completa con le svolte, il server
+    // scala i crediti (PRICING_LIST.custom_route) e ricorda l'id del percorso
+    // per contare le modifiche. Se i crediti non bastano l'errore
+    // CREDITI_INSUFFICIENTI risale al pannello, che offre la ricarica.
+    const percorso = this.bozzaStato.modo === 'percorso';
+    const giro = await this.crea(tappe, {
+      partenza,
+      anello: this.bozzaStato.anello,
+      ordina: false,
+      senzaLimite: !!this.bozzaStato.senzaLimite || percorso,
+      anteprima: !percorso,
+      percorso: percorso ? { id: `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` } : undefined,
+    });
+    if (solo) { giro.soloItinerario = true; this.salva(); }
     this.bozzaSvuota();
+    // Il percorso ha gia` le svolte: parte subito, senza il secondo tasto.
+    if (percorso) await this.avvia();
     return giro;
   }
 
   // ── GIRO ─────────────────────────────────────────────────────────────────
 
   /** Crea il giro: chiede l'ordine al server e prepara le tappe. */
-  async crea(tappe: TappaGiro[], opzioni: { anello?: boolean; ordina?: boolean; partenza: { lat: number; lon: number } }): Promise<GiroInCorso> {
+  async crea(tappe: TappaGiro[], opzioni: { anello?: boolean; ordina?: boolean; partenza: { lat: number; lon: number }; senzaLimite?: boolean; anteprima?: boolean; percorso?: { id: string } }): Promise<GiroInCorso> {
     if (tappe.length === 0) throw new Error('nessuna tappa');
-    if (tappe.length > MAX_TAPPE) throw new Error('il giro accetta al massimo dieci tappe');
+    const tetto = opzioni.senzaLimite ? MAX_TAPPE_ESTESO : MAX_TAPPE;
+    if (tappe.length > tetto) throw new Error(opzioni.senzaLimite ? `il percorso accetta al massimo ${MAX_TAPPE_ESTESO} tappe` : 'il giro accetta al massimo dieci tappe');
 
     const { g, dati } = await this.chiediRotta(tappe, opzioni);
 
     const giro: GiroInCorso = {
       id: `giro-${Date.now()}`,
+      modo: opzioni.percorso ? 'percorso' : 'giro',
+      percorsoId: opzioni.percorso?.id,
+      modifiche: Number(g?.percorso?.modifiche) || 0,
+      modificheMax: Number(g?.percorso?.max) || undefined,
       tappe: tappe.map(t => ({ ...t, durata_ascolto_s: t.durata_ascolto_s ?? durataAscolto(t.testo) })),
       ordine: g.ordine,
       geometria: (dati.routes?.[0]?.geometry?.coordinates || []).map((c: number[]) => [c[1], c[0]]),
@@ -824,11 +1092,13 @@ class TourService {
       creatoIl: Date.now(),
       incontri: [],
       citta: tappe.map(t => t.citta).find(Boolean) || null,
+      senzaLimite: !!opzioni.senzaLimite,
     };
     const d = durataGiro(giro.tappe, g.minuti_cammino * 60);
     giro.minutiAscolto = d.ascolto_min;
 
     this.giro = giro;
+    this.ultimoIndiceSnap = 0;
     this.proposta = null;
     this.pausaManuale = false;
     this.corridoio = [];
@@ -851,16 +1121,84 @@ class TourService {
    * creazione — che le tappe entrano nel geofencing nativo e il driver
    * comincia a leggere le svolte.
    */
-  avvia() {
+  async avvia(): Promise<void> {
     if (!this.giro || this.avviato) return;
+    // POSIZIONE APPROSSIMATIVA = NAVIGATORE MUTO (21/09/2026, revisione 2).
+    // Con la sola posizione approssimativa (Android 12+) ogni fix arriva a ~2 km
+    // e lo scartano sia questo driver (50 m) sia il follower nativo (60 m):
+    // nessuna svolta, nessun arrivo, cruscotto fermo, senza un perche`. Si
+    // chiede la precisa (o si spiega dove attivarla) e senza non si parte: il
+    // giro resta «pronto». Sul web e su iOS la verifica risponde subito si`.
+    if (!(await locationService.verificaPosizionePrecisaPerNav())) return;
+    if (!this.giro || this.avviato) return;
+    // IL NAVIGATORE SI PAGA QUI (29/08/2026). Il giro creato in anteprima ha
+    // il percorso ma non le svolte (`steps` vuoti in ogni tratta): sono le
+    // istruzioni a essere premium. Si richiede la rotta completa — stesso
+    // ordine, stessa partenza — e il server risponde 402 senza Day Pass:
+    // l'errore risale al tasto, che lo scrive, e il giro resta «pronto».
+    // Un giro ripreso che le svolte le ha gia` non le richiede.
+    // GIRO CREATO «DALLA 1ª TAPPA»: il navigatore parte da dove si e' DAVVERO.
+    // Fin qui la mappa mostrava il solo itinerario; ora che si cammina serve la
+    // strada fino alla prima tappa. Ma solo se ci si puo' arrivare a piedi:
+    // oltre 25 km (si sta guardando da un'altra citta') il giro resta quello
+    // dalla prima tappa, invece di trasformarsi in una camminata di 185 km.
+    // Il punto «da dove parto» resta la prima tappa: «Torno da dove parto»
+    // chiude li', «Torno dove mi trovo» chiude dove si e' adesso.
+    let agganciato = false;
+    if (this.giro.soloItinerario) {
+      const qui = await this.posizioneAttuale(true).catch(() => null);
+      const prima = this.giro.ordine.map((i: number) => this.giro!.tappe[i]).find((t: TappaGiro | undefined) => !!t && !t.esclusa);
+      const pPrima = prima ? (prima.ingresso ?? { lat: prima.lat, lon: prima.lon }) : null;
+      if (qui && pPrima && metri(qui, pPrima) <= 25_000) {
+        this.giro.partenzaCorrente = { lat: qui.lat, lon: qui.lon };
+        agganciato = true;
+      }
+      this.giro.soloItinerario = false;
+    }
+    const senzaSvolte = agganciato || !(this.giro.tratte || []).some((l: any) => Array.isArray(l?.steps) && l.steps.length > 0);
+    if (senzaSvolte) {
+      const giro = this.giro;
+      const tappe = giro.ordine.map((i: number) => giro.tappe[i]).filter((t: TappaGiro | undefined): t is TappaGiro => !!t && !t.esclusa);
+      const { g, dati } = await this.chiediRotta(tappe, {
+        partenza: giro.partenzaCorrente,
+        anello: giro.anello,
+        ordina: false,
+        // `rientroDaMandare`, non `puntoDiRientro()`: quest'ultimo vale solo a
+        // tappe FINITE e qui, a inizio giro, rispondeva sempre null — l'anello
+        // si chiudeva per forza sulla partenza. Innocuo finche' partenza e
+        // meta` coincidevano; col giro «dalla 1ª tappa» agganciato alla
+        // posizione, «Torno da dove parto» deve chiudere alla PRIMA TAPPA e
+        // «Torno dove mi trovo» dove si e' adesso (19/09/2026).
+        rientro: this.rientroDaMandare(giro, giro.partenzaCorrente),
+      });
+      if (this.giro !== giro) return; // chiuso nel frattempo
+      giro.tratte = dati.routes?.[0]?.legs || giro.tratte;
+      const geometria = (dati.routes?.[0]?.geometry?.coordinates || []).map((c: number[]) => [c[1], c[0]]);
+      if (geometria.length > 1) giro.geometria = geometria;
+      if (Number.isFinite(g?.metri_totali)) giro.metri = g.metri_totali;
+      if (Number.isFinite(g?.minuti_cammino)) giro.minutiCammino = g.minuti_cammino;
+    }
     this.avviato = true;
     this.pausaManuale = false;
     this.stato = { ...this.stato, stato: 'IN_CAMMINO', da: Date.now(), fermoDa: null };
+    // LA PRIMA ISTRUZIONE, SUBITO (03/09/2026, collaudo: «appena creato il
+    // percorso, cliccato l'altoparlante, non e' uscita l'istruzione»).
+    // aggiornaPasso(pos) calcola la svolta SOLO quando arriva un fix GPS: fra
+    // «Avvia» e il primo campione la card e il tasto «Ripeti» restavano
+    // muti, e in un percorso su misura (senza audioguide) e' l'unica voce
+    // che si sente. Qui si legge lo step iniziale senza aspettare una
+    // posizione — stesso principio di useWalkingNavigation, che mostra la
+    // prima istruzione appena calcolato il percorso, non al primo passo.
+    this.aggiornaPassoIniziale();
     this.salva();
     this.avvisa();
     // Sul telefono l'arrivo lo dichiara il servizio nativo: le tappe entrano
     // nel suo geofencing come tappe d'itinerario (isFromItinerary=true).
     this.sincronizzaTappeNative();
+    // Il percorso su misura cammina anche a cuffie spente: il GPS che
+    // alimenta il driver (wip-location-update) parte con le cuffie o con chi
+    // si iscrive alla posizione — qui ci si assicura che stia gia` andando.
+    if (this.giro.modo === 'percorso') { try { void locationService.startWatching(); } catch { /* senza GPS il driver non sente */ } }
   }
 
   /** Creato ma non ancora avviato: il cruscotto mostra «Avvia». */
@@ -869,6 +1207,10 @@ class TourService {
   /** Le tappe ancora da fare al geofencing nativo (no-op sul web). */
   private sincronizzaTappeNative() {
     if (!this.giro || !Capacitor.isNativePlatform()) return;
+    // Un percorso su misura NON entra nel geofencing nativo: le sue tappe
+    // sono mute per definizione, e il servizio in background all'arrivo
+    // farebbe partire teaser e audioguida. L'arrivo lo dichiara il driver JS.
+    if (this.giro.modo === 'percorso') return;
     try {
       locationService.syncTappeGiroToNative(this.giro.tappe.filter(t => !t.fatta && !t.saltata && !t.esclusa));
     } catch { /* best-effort */ }
@@ -896,6 +1238,14 @@ class TourService {
       anteprima?: boolean;
       /** Ad anello: dove chiudere il giro, se non e` la partenza (vedi puntoDiRientro). */
       rientro?: { lat: number; lon: number } | null;
+      /**
+       * PERCORSO SU MISURA (03/09/2026): niente Day Pass, si paga a crediti
+       * una volta per `id`; il server conta le modifiche (nuove tappe, o
+       * `modifica` esplicito per una tolta) e oltre il tetto risponde
+       * MODIFICHE_ESAURITE. Un ricalcolo per deviazione o per tappa fatta
+       * non e` una modifica: si manda senza flag.
+       */
+      percorso?: { id: string; modifica?: boolean };
     },
   ): Promise<{ g: any; dati: any }> {
     // Il punto a cui si arriva e` l'INGRESSO quando lo conosciamo, non il
@@ -916,12 +1266,35 @@ class TourService {
     } catch { /* senza sessione il server rispondera` 402, ed e` giusto cosi` */ }
 
     const r2 = opzioni.anello && opzioni.rientro ? `&rientro=${opzioni.rientro.lon},${opzioni.rientro.lat}` : '';
-    const url = getApiUrl(`/api/tour/foot/${coords}?anello=${opzioni.anello ? 'true' : 'false'}&ordina=${opzioni.ordina === false ? 'false' : 'true'}${opzioni.anteprima ? '&anteprima=true' : ''}${r2}`);
+    // LA LINGUA DELLE SVOLTE (29/08/2026, committente: «anche il navigatore
+    // deve essere nella lingua dell'utente»). Il server la legge da
+    // `?language=` (server.ts, /api/tour/foot) e la passa a OSRM per le
+    // istruzioni passo-passo — ma qui non gliela mandava NESSUNO: un utente
+    // inglese o tedesco si sentiva dire «Gira a destra in Via Carducci».
+    // linguaCorrente() PRIMA di this.lingua: quest'ultima nasce 'it' e la
+    // imposta il driver del giro, che parte DOPO questa chiamata — usarla per
+    // prima avrebbe lasciato tutti in italiano lo stesso.
+    const linguaGiro = String(linguaCorrente() || this.lingua || 'it').toLowerCase().slice(0, 2) || 'it';
+    const p = opzioni.percorso && !opzioni.anteprima
+      ? `&modo=percorso&percorso=${encodeURIComponent(opzioni.percorso.id)}${opzioni.percorso.modifica ? '&modifica=1' : ''}`
+      : '';
+    // EVITA SCALE (10/09/2026): la preferenza e` persistente e globale (vedi
+    // osrmService.ts), non solo per il percorso singolo — chi la attiva si
+    // aspetta che valga anche nel giro a piu` tappe.
+    const evita = getEvitaScale() ? '&evita=scale' : '';
+    const url = getApiUrl(`/api/tour/foot/${coords}?anello=${opzioni.anello ? 'true' : 'false'}&ordina=${opzioni.ordina === false ? 'false' : 'true'}&language=${linguaGiro}${opzioni.anteprima ? '&anteprima=true' : ''}${r2}${p}${evita}`);
     // 45 s: il server ottimizza l'ordine e chiede OSRM per ogni tratta; oltre
     // e' rete morta, e prima la promise restava appesa per sempre (ITI-07).
     const r = await apiFetch(url, { headers: intestazioni }, 45000);
+    if (r.status === 401) {
+      throw new Error('ACCESSO_RICHIESTO');
+    }
     if (r.status === 402) {
       const j = await r.json().catch(() => ({}));
+      // I tre «no» del server, distinti perche' la risposta giusta e` diversa:
+      // il Day Pass (cassa), i crediti (negozio), le modifiche (nuovo percorso).
+      if (j?.code === 'CreditiInsufficienti') throw new Error(`CREDITI_INSUFFICIENTI:${Number(j?.costo) || ''}`);
+      if (j?.code === 'ModificheEsaurite') throw new Error(`MODIFICHE_ESAURITE:${Number(j?.max) || ''}`);
       throw new Error(`PASS_RICHIESTO:${j?.motivo || 'serve il Day Pass attivo'}`);
     }
     if (!r.ok) {
@@ -947,6 +1320,8 @@ class TourService {
     personaggio?: 'nicky' | 'dante',
   ): Promise<{ testi: number; audio: number; totali: number; mancanti: number }> {
     if (!this.giro) return { testi: 0, audio: 0, totali: 0, mancanti: 0 };
+    // Un percorso su misura non ha niente da scaricare: nessuna tappa parla.
+    if (this.giro.modo === 'percorso') return { testi: 0, audio: 0, totali: 0, mancanti: 0 };
     if (this.prescarico.inCorso) return { testi: this.prescarico.testi, audio: this.prescarico.audio, totali: this.prescarico.totali, mancanti: this.prescarico.mancanti };
     const giroId = this.giro.id;
     // Le tappe «senza guida» (pranzo, pause) non hanno nulla da scaricare:
@@ -1006,6 +1381,17 @@ class TourService {
       onProgresso?.(fatte, tappe.length);
     }));
 
+    // ANCHE NELLA CACHE DEL SERVIZIO NATIVO (18/09/2026, committente: «fai che
+    // sia scaricato sempre in nativo anche»). Qui sopra testi e MP3 sono
+    // finiti nell'IndexedDB della WebView — che a schermo spento dorme: il
+    // servizio nativo non li vede, e gli restava il solo prefetch
+    // all'avvicinamento, cioe` proprio dove nel centro storico la rete manca.
+    // DOPO lo scarico JS, non insieme: a questo punto il server ha gia` testo e
+    // voce in cache, quindi per il nativo sono colpi di cache e non seconde
+    // sintesi. Non addebita nulla (vedi prescaricaGuideNativo). Si fa anche se
+    // qui l'audio non e` riuscito: il nativo ha la sua strada e i suoi tempi.
+    void prescaricaGuideNativo(tappe.map(t => String(t.id)), lang, carattere);
+
     const esito = { testi, audio, totali: tappe.length, mancanti: tappe.length - audio };
     if (this.giro?.id === giroId) {
       this.prescarico = { inCorso: false, fatte, ...esito, finitoIl: Date.now() };
@@ -1019,11 +1405,12 @@ class TourService {
   statoPrescarico(): StatoPrescarico { return this.prescarico; }
 
   /** Un campione di posizione: fa avanzare la macchina a stati. */
-  aggiorna(pos: { lat: number; lon: number; velocita?: number }, extra?: { guidaInCorso?: boolean; pausaManuale?: boolean; suAttraversamento?: boolean; metriAllaSvolta?: number | null }) {
+  aggiorna(pos: { lat: number; lon: number; velocita?: number; accuratezza?: number }, extra?: { guidaInCorso?: boolean; pausaManuale?: boolean; suAttraversamento?: boolean; metriAllaSvolta?: number | null }) {
     this.ultimaPosizione = { lat: pos.lat, lon: pos.lon };
     // Guida spenta: la posizione si ricorda (serve alla ripresa) ma la
     // macchina a stati sta ferma — niente arrivi, niente voce, niente ricalcoli.
-    if (!this.giro || this.sospeso) return;
+    // eSospeso(), non sospeso: il percorso su misura cammina a cuffie spente.
+    if (!this.giro || this.eSospeso()) return;
     const tappa = this.tappaCorrente();
     if (!tappa) {
       // TUTTE LE TAPPE FATTE, MA AD ANELLO IL GIRO NON E` FINITO (28/08/2026):
@@ -1033,9 +1420,24 @@ class TourService {
       // chilometro si camminava senza istruzioni e col cruscotto gia` chiuso.
       // Non e` una tappa: niente audioguida, niente conteggio, solo la strada.
       const rientro = this.puntoDiRientro();
-      if (rientro && metri(pos, rientro) > SOGLIE.arrivo_m) {
+      if (rientro && this.rientroConclusoPer !== this.giro && metri(pos, rientro) > SOGLIE.arrivo_m) {
         if (this.stato.stato !== 'IN_PAUSA') this.stato = { ...this.stato, stato: 'IN_CAMMINO' };
         this.aggiornaPasso(pos);
+        // ANCHE IN RIENTRO SI PUO` SBAGLIARE STRADA (03/09/2026): prima
+        // l'ultimo chilometro era senza deviazione. Stesse soglie del giro;
+        // fuori da abbastanza tempo si rifa` la sola tratta di ritorno.
+        if (this.stato.stato !== 'IN_PAUSA') {
+          const s = this.scostamentoDalPercorso(pos);
+          const soglia = Math.max(SOGLIE.deviazione_m, (pos.accuratezza ?? 0) * 1.5);
+          const eraFuori = this.stato.fuoriPercorsoDa != null;
+          const fuori = s > soglia || (eraFuori && s > SOGLIE.deviazione_rientro_m);
+          const adesso = Date.now();
+          this.stato = { ...this.stato, fuoriPercorsoDa: fuori ? (this.stato.fuoriPercorsoDa ?? adesso) : null };
+          if (fuori && adesso - (this.stato.fuoriPercorsoDa ?? adesso) > SOGLIE.deviazione_s * 1000 && adesso >= this.prossimoTentativoDeviazione) {
+            this.prossimoTentativoDeviazione = adesso + 60_000;
+            void this.ricalcolaRientro(pos).then((ok) => { if (ok) this.stato = { ...this.stato, fuoriPercorsoDa: null }; });
+          }
+        }
         this.salva();
         this.avvisa();
         return;
@@ -1050,6 +1452,7 @@ class TourService {
     this.stato = prossimoStato(this.stato, tappa, {
       distanzaTappa: distanza,
       scostamento,
+      accuratezza: pos.accuratezza,
       velocita: pos.velocita ?? 1.3,
       guidaInCorso: !!extra?.guidaInCorso,
       pausaManuale: extra?.pausaManuale ?? this.pausaManuale,
@@ -1082,11 +1485,236 @@ class TourService {
    * manovra (15 m) o quando la successiva e` gia` piu` vicina: cosi` un fix
    * saltato non lascia il navigatore a ripetere una svolta gia` fatta.
    */
+  /**
+   * La prima istruzione, senza aspettare un fix GPS (03/09/2026). Si legge
+   * il primo step della tratta corrente: la distanza resta sconosciuta
+   * (nessuna posizione da cui misurarla) ma il TESTO della svolta c'e' gia',
+   * ed e' quello che manca fra «Avvia» e il primo campione GPS.
+   */
+  private aggiornaPassoIniziale() {
+    const leg: any = this.giro?.tratte?.[this.stato.tappaCorrente];
+    const steps: any[] = Array.isArray(leg?.steps) ? leg.steps : [];
+    this.tappaDelPasso = this.stato.tappaCorrente;
+    this.passoCorrente = 0;
+    if (steps.length < 2) { this.navAttuale = { istruzione: null, metri: null, attraversamento: false, manovra: null }; return; }
+    const s = steps[0];
+    this.navAttuale = {
+      istruzione: istruzionePerStep(s, this.lingua, this.tappaCorrente()?.nome || undefined),
+      metri: null,
+      attraversamento: false,
+      manovra: s?.maneuver ? { type: String(s.maneuver.type || ''), modifier: String(s.maneuver.modifier || '') } : null,
+    };
+  }
+
+  /**
+   * IL GIRO PER IL FOLLOWER NATIVO (18/09/2026, navigatore a schermo spento:
+   * vedi lib/nav/navNativo). Le tratte ANCORA DA FARE, appiattite in una sola
+   * lista di manovre col testo gia` tradotto: a schermo spento questa pagina e`
+   * congelata e non puo` consegnare la tratta dopo, quindi il nativo le riceve
+   * tutte insieme e le scorre da solo, fermandosi a ogni arrivo finche' non ci
+   * si allontana dalla tappa.
+   *  - partenze: testo vuoto (nemmeno aggiornaPasso le dice: lo step 0 si salta);
+   *  - arrivi: «Sei arrivato a <tappa>» — a schermo spento e` l'unico segnale
+   *    che la tappa e` quella; teaser e audioguida li fa partire, come sempre,
+   *    il geofence del servizio, nella stessa coda vocale;
+   *  - `firma` cambia quando cambia il percorso (ricalcolo, tappa fatta o
+   *    saltata, lingua): il driver la confronta a ogni fix e riconsegna.
+   * null = niente da seguire (nessun giro, sospeso, in pausa, finito).
+   */
+  /** La firma da sola, economica: il driver la guarda a OGNI fix. null = niente da seguire. */
+  firmaPerNativo(): string | null {
+    const giro = this.giro;
+    // LA PAUSA MANUALE NON TOGLIE PIU` IL PERCORSO AL NATIVO (21/09/2026,
+    // revisione 2 del navigatore a schermo spento): ritirato, «Riprendi» dalla
+    // lock screen non trovava niente da riprendere. In pausa il follower lo
+    // tiene IN PAUSA (vedi inPausaManuale) e la firma NON cambia con la pausa.
+    // Resta fuori il giro creato e non ancora avviato («pronto»), che prima
+    // stava fuori proprio perche' nasce in pausa manuale.
+    if (!giro || this.eSospeso() || !this.avviato || this.stato.stato === 'FINITO') return null;
+    const tratte: any[] = Array.isArray(giro.tratte) ? giro.tratte : [];
+    if (tratte.length === 0) return null;
+    return `giro:${giro.id}|${Math.max(0, this.stato.tappaCorrente)}|${tratte.length}|${Math.round(giro.metri || 0)}|${giro.geometria?.length || 0}|${this.lingua}|${this.sospeso ? 'cuffie-spente' : 'cuffie-accese'}`;
+  }
+
+  /** Pausa MANUALE (tasto, cruscotto): il percorso resta al follower nativo, ma in pausa. */
+  inPausaManuale(): boolean { return this.pausaManuale; }
+
+  /** Indice della prossima manovra DENTRO la lista di passiPerNativo (che parte dalla tratta corrente). */
+  indicePerNativo(): number {
+    return this.tappaDelPasso === this.stato.tappaCorrente ? Math.max(0, this.passoCorrente) : 0;
+  }
+
+  /**
+   * AL RISVEGLIO DALLO SCHERMO SPENTO (dalla revisione del 18/09/2026): il
+   * follower nativo ha camminato per noi, e `aggiornaPasso` da solo non si
+   * rimette in pari — avanza solo per prossimita` (15 m / 40 m), quindi dopo
+   * una tratta intera a pagina congelata restava fermo su una manovra ormai
+   * alle spalle. `i` e` il passo DENTRO la tratta corrente. Solo in avanti.
+   * Le tappe fatte nel frattempo le chiude il driver con completaTappa().
+   */
+  allineaPassoDaNativo(i: number) {
+    const steps: any[] = this.giro?.tratte?.[this.stato.tappaCorrente]?.steps || [];
+    if (!Number.isFinite(i) || steps.length < 2) return;
+    if (this.tappaDelPasso !== this.stato.tappaCorrente) { this.tappaDelPasso = this.stato.tappaCorrente; this.passoCorrente = 0; }
+    this.passoCorrente = Math.max(this.passoCorrente, Math.min(Math.round(i), steps.length - 1));
+  }
+
+  passiPerNativo(fraseArrivo: string): {
+    firma: string;
+    passi: PassoPerNativo[];
+    linea: [number, number][];
+    indice: number;
+  } | null {
+    const giro = this.giro;
+    const firma = this.firmaPerNativo();
+    if (!giro || !firma) return null;
+    const tratte: any[] = Array.isArray(giro.tratte) ? giro.tratte : [];
+    const da = Math.max(0, this.stato.tappaCorrente);
+    const passi: PassoPerNativo[] = [];
+    const valido = (p: { lat: number; lon: number } | null | undefined): p is { lat: number; lon: number } =>
+      !!p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon));
+    for (let j = da; j < tratte.length; j++) {
+      const steps: any[] = Array.isArray(tratte[j]?.steps) ? tratte[j].steps : [];
+      const iTappa = giro.ordine?.[j];
+      const tappaJ = iTappa != null ? giro.tappe?.[iTappa] : null;
+      const nomeTappa = String(tappaJ?.nome || '').trim();
+      // «Sei arrivato a X» lo dice il follower SOLO dove non lo dice gia` il
+      // geofence del servizio (dalla revisione): a cuffie accese l'arrivo a
+      // una tappa con guida lo annuncia il receiver («Sei arrivato a X.
+      // <teaser>»), e si sentiva due volte di fila. Lo dice invece per le
+      // tappe senza guida e a cuffie spente (percorso su misura).
+      const arrivoParlato = !!nomeTappa && (tappaJ?.senzaGuida === true || this.sospeso);
+      // IL NOME DELLA META SUL CRUSCOTTO (21/09/2026, revisione 2): la tratta
+      // di RIENTRO dell'anello non ha una tappa, `tappa` era vuota e a schermo
+      // spento il follower ripiegava sull'ultimo nome mostrato dal JS — una
+      // tappa gia` visitata, con la sua foto, per tutto il ritorno. Ci va la
+      // stessa etichetta della vista, «Ritorno al punto di partenza». SOLO nel
+      // campo del cruscotto: `nomeTappa` resta vuota per la voce (altrimenti
+      // «Sei arrivato a Ritorno al punto di partenza»).
+      const etichettaTappa = nomeTappa || (iTappa == null ? getTranslation('tour_ritorno_partenza', (this.lingua || 'it').toUpperCase() as Language) : '');
+      const testoArrivo = arrivoParlato ? `${fraseArrivo} ${nomeTappa}`.trim() : '';
+      const primoDellaTratta = passi.length;
+      for (const s of steps) {
+        const l = s?.maneuver?.location;
+        if (!Array.isArray(l) || l.length < 2) continue;
+        const lat = Number(l[1]), lon = Number(l[0]);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+        const tipoOsrm = String(s?.maneuver?.type || '').toLowerCase();
+        // tappa + manovra grezza: a schermo spento il cruscotto (notifica /
+        // Live Activity) lo ridisegna il follower, e gli servono il nome
+        // della meta di QUESTA tratta e la freccia.
+        // `metriDopo` (22/09/2026): i metri LUNGO IL PERCORSO fino al passo
+        // seguente (step.distance): il cruscotto a schermo spento li usa al
+        // posto della linea d'aria. Solo se e` un numero vero.
+        const dopo = Number(s?.distance);
+        const extra = {
+          tappa: etichettaTappa,
+          manovraTipo: String(s?.maneuver?.type || ''),
+          manovraVerso: String(s?.maneuver?.modifier || ''),
+          ...(Number.isFinite(dopo) && dopo > 0 ? { metriDopo: dopo } : {}),
+        };
+        if (tipoOsrm === 'depart') passi.push({ lat, lon, testo: '', tipo: 'depart', ...extra });
+        else if (tipoOsrm === 'arrive') passi.push({ lat, lon, testo: testoArrivo, tipo: 'arrive', ...extra });
+        else passi.push({ lat, lon, testo: istruzionePerStep(s, this.lingua, nomeTappa || undefined) || '', tipo: 'turn', ...extra });
+      }
+      // OGNI TRATTA HA ESATTAMENTE UN ARRIVO (22/09/2026). La tratta «linea
+      // retta» (nessun percorso pedonale: `steps` vuoti) non ne aveva, e quelle
+      // servite da ORS/Geoapify hanno solo passi di cammino: a schermo spento il
+      // follower passava alla tratta dopo senza fermarsi alla tappa, e al
+      // risveglio il giro — che chiude una tappa per ogni arrivo superato —
+      // restava indietro. Senza arrivo, l'ultimo passo diventa l'arrivo sulla
+      // tappa (la porta, se la sappiamo); una tratta senza passi ha una
+      // partenza vuota dal punto di prima e l'arrivo. Il JS naviga i passi
+      // OSRM veri: gli indici della tratta corrente non cambiano.
+      const dellaTratta = passi.slice(primoDellaTratta);
+      if (!dellaTratta.some(p => p.tipo === 'arrive')) {
+        const metaTappa = tappaJ ? (tappaJ.ingresso ?? { lat: tappaJ.lat, lon: tappaJ.lon }) : (iTappa == null ? this.metaAnello(giro) : null);
+        const ultimo = dellaTratta.length > 0 ? dellaTratta[dellaTratta.length - 1] : null;
+        const dove = valido(metaTappa) ? { lat: Number(metaTappa.lat), lon: Number(metaTappa.lon) } : (ultimo ? { lat: ultimo.lat, lon: ultimo.lon } : null);
+        if (dove) {
+          const arrivo: PassoPerNativo = { ...dove, testo: testoArrivo, tipo: 'arrive', tappa: etichettaTappa, manovraTipo: 'arrive', manovraVerso: '' };
+          if (ultimo && ultimo.tipo !== 'depart') passi[passi.length - 1] = arrivo;
+          else if (ultimo) passi.push(arrivo);
+          else {
+            // Il punto di prima: la fine della tratta precedente, la tappa
+            // precedente, o la partenza del giro.
+            const tPrima = j > 0 ? giro.tappe?.[giro.ordine?.[j - 1] as number] : null;
+            const primaTappa = tPrima ? (tPrima.ingresso ?? { lat: tPrima.lat, lon: tPrima.lon }) : null;
+            const prima = passi.length > 0 ? passi[passi.length - 1] : (valido(primaTappa) ? primaTappa : (valido(giro.partenzaCorrente) ? giro.partenzaCorrente : null));
+            const lunga = Number(tratte[j]?.distance);
+            if (prima) passi.push({
+              lat: Number(prima.lat), lon: Number(prima.lon), testo: '', tipo: 'depart', tappa: etichettaTappa, manovraTipo: 'depart', manovraVerso: '',
+              ...(Number.isFinite(lunga) && lunga > 0 ? { metriDopo: lunga } : {}),
+            });
+            passi.push(arrivo);
+          }
+        }
+      }
+    }
+    if (passi.length < 2) return null;
+    // SOLO LA STRADA ANCORA DA FARE (22/09/2026). La linea consegnata al
+    // follower era l'intero giro, tratte gia` fatte comprese: chi ripartiva da
+    // una tappa tornando sui propri passi restava «sul percorso» e non sentiva
+    // mai «Sei fuori percorso». Si parte dal vertice in cui comincia la tratta
+    // corrente (lo stesso inizio che usa scostamentoDalPercorso).
+    const geo: [number, number][] = Array.isArray(giro.geometria) ? giro.geometria : [];
+    return {
+      firma,
+      passi,
+      linea: geo.length >= 2 ? geo.slice(this.inizioTrattaInGeometria()) : geo,
+      indice: Math.min(this.indicePerNativo(), passi.length - 1),
+    };
+  }
+
+  /**
+   * Il vertice di `geometria` da cui comincia la tratta corrente (22/09/2026).
+   * Si cerca in avanti da poco prima dell'ultimo aggancio (come
+   * scostamentoDalPercorso) il primo vertice entro 5 m dalla partenza della
+   * tratta, altrimenti il piu` vicino: su un anello lo stesso punto puo`
+   * ripassare piu` avanti, e conta il primo. Se in quella finestra non c'e`
+   * niente entro 30 m, la partenza e` gia` alle spalle dell'aggancio: si
+   * comincia dall'inizio della finestra (15 vertici prima dell'aggancio).
+   * Si calcola una volta per tratta (cambia con la tappa o con la geometria).
+   */
+  private inizioTratta: { geo: unknown; tappa: number; i: number } | null = null;
+  private inizioTrattaInGeometria(): number {
+    const g = this.giro?.geometria;
+    if (!this.giro || !Array.isArray(g) || g.length < 2) return 0;
+    const tc = Math.max(0, this.stato.tappaCorrente);
+    const c = this.inizioTratta;
+    if (c && c.geo === g && c.tappa === tc) return c.i;
+    let i0 = 0;
+    const partenza = this.partenzaDellaTratta(tc);
+    if (partenza) {
+      const da = Math.max(0, Math.min(this.ultimoIndiceSnap, g.length - 2) - 15);
+      let min = Infinity, idx = 0;
+      for (let i = da; i < g.length; i++) {
+        const d = metri(partenza, { lat: g[i][0], lon: g[i][1] });
+        if (d < min) { min = d; idx = i; }
+        if (d <= 5) break;
+      }
+      i0 = Math.min(min <= 30 ? idx : da, g.length - 2);
+    }
+    this.inizioTratta = { geo: g, tappa: tc, i: i0 };
+    return i0;
+  }
+
+  /** Dove comincia la tratta `tc`: la sua prima manovra, altrimenti la tappa di prima o la partenza. */
+  private partenzaDellaTratta(tc: number): { lat: number; lon: number } | null {
+    const g = this.giro;
+    if (!g) return null;
+    const l = g.tratte?.[tc]?.steps?.[0]?.maneuver?.location;
+    if (Array.isArray(l) && l.length >= 2 && Number.isFinite(Number(l[0])) && Number.isFinite(Number(l[1]))) return { lat: Number(l[1]), lon: Number(l[0]) };
+    const t = tc > 0 ? g.tappe?.[g.ordine?.[tc - 1] as number] : null;
+    const p = t ? (t.ingresso ?? { lat: t.lat, lon: t.lon }) : (g.partenzaCorrente ?? null);
+    return p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon)) ? { lat: Number(p.lat), lon: Number(p.lon) } : null;
+  }
+
   private aggiornaPasso(pos: { lat: number; lon: number }) {
     const leg: any = this.giro?.tratte?.[this.stato.tappaCorrente];
     const steps: any[] = Array.isArray(leg?.steps) ? leg.steps : [];
     if (this.tappaDelPasso !== this.stato.tappaCorrente) { this.tappaDelPasso = this.stato.tappaCorrente; this.passoCorrente = 0; }
-    if (steps.length < 2) { this.navAttuale = { istruzione: null, metri: null, attraversamento: false }; return; }
+    if (steps.length < 2) { this.navAttuale = { istruzione: null, metri: null, attraversamento: false, manovra: null }; return; }
     const punto = (s: any) => {
       const l = s?.maneuver?.location;
       return Array.isArray(l) && l.length >= 2 ? { lat: Number(l[1]), lon: Number(l[0]) } : null;
@@ -1109,6 +1737,9 @@ class TourService {
       // OSRM foot non ha un tipo di manovra "crossing" proprio: si legge dal
       // tipo, dal nome della via o dalle classi dell'intersezione, se ci sono.
       attraversamento: m != null && m <= 20 && stepEAttraversamento(s),
+      // Tipo e verso della manovra OSRM: la card in alto disegna la freccia
+      // giusta (destra, sinistra, rotonda…) invece di un'icona generica.
+      manovra: s?.maneuver ? { type: String(s.maneuver.type || ''), modifier: String(s.maneuver.modifier || '') } : null,
     };
   }
 
@@ -1126,9 +1757,62 @@ class TourService {
    */
   async ricalcolaDaDeviazione(pos: { lat: number; lon: number }): Promise<boolean | null> {
     if (!this.giro || this.stato.stato !== 'DEVIATO') return null;
-    if (Date.now() - this.ultimoRicalcoloDeviazione < 60_000) return null;
+    if (Date.now() < this.prossimoTentativoDeviazione) return null;
+    // Il tempo di attesa si decide DOPO il tentativo (03/09/2026): un minuto
+    // pieno dopo un ricalcolo riuscito, mezzo dopo un fallimento (rete
+    // assente), cosi` senza rete si ritenta prima senza martellare.
+    this.prossimoTentativoDeviazione = Date.now() + 60_000;
+    const ok = await this.ricalcola(pos, { daDeviazione: true });
+    this.prossimoTentativoDeviazione = Date.now() + (ok ? 60_000 : 30_000);
     this.ultimoRicalcoloDeviazione = Date.now();
-    return await this.ricalcola(pos, { daDeviazione: true });
+    return ok;
+  }
+
+  /**
+   * «RICALCOLA DA QUI» (03/09/2026, collaudo: «ero uscito dal percorso e la
+   * mappa mi mostra sempre il percorso originale, ci vuole un tasto di
+   * ricalcolo immediato dal punto in cui si clicca, lasciando intatte le
+   * tappe e tutto il resto»). Il ricalcolo automatico ha le sue soglie
+   * (120 m per 30 s, un fix accurato, un minuto di cooldown): chi vede la
+   * linea sbagliata non deve aspettare che l'algoritmo se ne accorga.
+   * Stesso `ricalcola` delle deviazioni — tappe fatte, ordine di quelle da
+   * fare, anello e punto di rientro restano com'erano — ma senza cooldown e
+   * senza stato richiesto. In un percorso su misura NON e` una modifica.
+   * Ritorna false se il server non ha risposto (si resta sulla linea vecchia).
+   */
+  async ricalcolaDaQui(posizione?: { lat: number; lon: number }): Promise<EsitoRicalcolo> {
+    const esito = await this.ricalcolaDaQuiInterno(posizione);
+    // Chi ha premuto (cruscotto, card blu, lock screen) puo` non avere una
+    // riga dove scriverlo: lo dice il driver del giro, a voce, passando dal
+    // direttore audio — mai sopra la guida che sta raccontando.
+    try { window.dispatchEvent(new CustomEvent('wip-giro-ricalcolato', { detail: { esito } })); } catch { /* SSR */ }
+    return esito;
+  }
+
+  private async ricalcolaDaQuiInterno(posizione?: { lat: number; lon: number }): Promise<EsitoRicalcolo> {
+    if (!this.giro) return 'niente';
+    const pos = posizione ?? this.posizioneFresca() ?? await this.posizioneAttuale(true);
+    if (!pos) return 'posizione';
+    this.modificaPendente = false;
+    this.prossimoTentativoDeviazione = Date.now() + 60_000;
+    this.ultimoRicalcoloDeviazione = Date.now();
+    // In rientro (tutte le tappe fatte, anello) non c'e` un ordine da rifare:
+    // si rifa` la sola tratta di ritorno, come fa impostaRientro. Senza
+    // questo ramo `ricalcola` con zero tappe restanti dichiarava FINITO.
+    if (!this.tappaCorrente()) {
+      if (!this.puntoDiRientro()) return 'niente';
+      return (await this.ricalcolaRientro(pos)) ? 'ok' : 'rete';
+    }
+    const inPausa = this.pausaManuale;
+    try {
+      const ok = await this.ricalcola(pos, { senzaRipiego: true });
+      // La pausa e` una scelta dell'utente: il ricalcolo non la toglie.
+      if (ok && inPausa) { this.stato = { ...this.stato, stato: 'IN_PAUSA' }; this.salva(); this.avvisa(); }
+      return ok ? 'ok' : 'rete';
+    } catch (e: any) {
+      const m = String(e?.message || '');
+      return m.startsWith('PASS_RICHIESTO') || m.startsWith('ACCESSO_RICHIESTO') ? 'pass' : 'rete';
+    }
   }
 
   /** La pausa dal banner: la macchina a stati la vede al prossimo campione. */
@@ -1168,6 +1852,27 @@ class TourService {
     this.coda.svuota();
     this.salva();
     this.avvisa();
+    // (23/09/2026, voce 7) La tappa fatta esce dal geofencing nativo: prima
+    // restava prioritaria fino a fine giro e, ripassandoci dopo 30 min (giro
+    // ad anello), il nativo la riannunciava e ripeteva la guida. Si
+    // riconsegnano le sole tappe non fatte (unite ai preferiti, voce 1); la
+    // tappa fatta resta un POI del radar con le regole di sempre.
+    if (this.avviato && !this.sospeso) this.sincronizzaTappeNative();
+  }
+
+  /**
+   * Il RIENTRO dell'anello e` finito (21/09/2026, revisione 2): l'arrivo al
+   * punto di partenza l'ha detto il follower nativo a schermo spento. Il JS lo
+   * chiude da qui (giroDriver.allineaAlNativo) — prima, sbloccando il telefono
+   * lontano dal punto, il rientro ripartiva e riportava indietro.
+   */
+  concludiRientro() {
+    if (!this.giro || this.tappaCorrente() || this.stato.stato === 'FINITO') return;
+    this.rientroConclusoPer = this.giro;
+    this.stato = { ...this.stato, stato: 'FINITO', da: Date.now() };
+    this.coda.svuota();
+    this.salva();
+    this.avvisa();
   }
 
   /**
@@ -1200,8 +1905,20 @@ class TourService {
     const eraCorrente = this.tappaCorrente() === t;
     if (eraCorrente) this.coda.svuota();
     this.proposta = null;
-    await this.ricalcola(posizione);
-    this.proposta = this.cercaSostituta(t);
+    // Togliere da un percorso su misura e` una MODIFICA (la conta il server).
+    const percorso = this.giro.modo === 'percorso';
+    this.modificaPendente = percorso;
+    try {
+      await this.ricalcola(posizione);
+    } catch (e) {
+      // Rifiutata: la tappa resta dov'era.
+      t.esclusa = false;
+      this.salva(); this.avvisa();
+      throw e;
+    }
+    // La sostituta e` un'idea dell'audioguida («al posto del museo chiuso, un
+    // altro museo»): in un percorso su misura ognuno sceglie da se'.
+    this.proposta = percorso ? null : this.cercaSostituta(t);
     this.avvisa();
   }
 
@@ -1261,16 +1978,27 @@ class TourService {
   async aggiungiTappaAlVolo(poi: any): Promise<boolean> {
     const giro = this.giro;
     if (!giro) return false;
-    const t = tappaDaPoi(poi);
+    const percorso = giro.modo === 'percorso';
+    const t = tappaDaPoi(percorso ? { ...poi, senzaGuida: true } : poi);
     if (!Number.isFinite(t.lat) || !Number.isFinite(t.lon)) return false;
     if (this.giroHa(t.id)) return false;
     const vive = giro.tappe.filter(x => !x.esclusa).length;
-    if (vive >= MAX_TAPPE) return false;
+    if (vive >= this.tettoTappe()) return false;
     giro.tappe.push({ ...t, durata_ascolto_s: t.durata_ascolto_s ?? durataAscolto(t.testo) });
     // Era FINITO (ultima tappa fatta) e si vuole proseguire: si riparte.
-    await this.ricalcola();
-    // Geofence prioritari sul telefono: la lista e` cambiata.
-    if (Capacitor.isNativePlatform()) {
+    // In un percorso su misura questa e` una MODIFICA: il server la conta.
+    this.modificaPendente = percorso;
+    try {
+      await this.ricalcola();
+    } catch (e) {
+      // Rifiutata (modifiche finite / crediti): la tappa non entra.
+      giro.tappe.pop();
+      this.salva(); this.avvisa();
+      throw e;
+    }
+    // Geofence prioritari sul telefono: la lista e` cambiata (mai per il
+    // percorso su misura: le sue tappe non entrano nel geofencing nativo).
+    if (Capacitor.isNativePlatform() && !percorso) {
       try { locationService.syncTappeGiroToNative(giro.tappe.filter(x => !x.fatta && !x.saltata && !x.esclusa)); } catch { /* best-effort */ }
     }
     return true;
@@ -1283,7 +2011,7 @@ class TourService {
    */
   private async ricalcola(
     posizione?: { lat: number; lon: number },
-    opzioni: { daDeviazione?: boolean } = {},
+    opzioni: { daDeviazione?: boolean; senzaRipiego?: boolean } = {},
   ): Promise<boolean> {
     const giro = this.giro;
     if (!giro) return false;
@@ -1303,13 +2031,29 @@ class TourService {
     }
 
     const partenza = posizione ?? this.ultimaPosizione ?? await this.posizioneAttuale();
+    // La modifica esplicita (aggiungi/togli, vedi aggiungiTappaAlVolo ed
+    // escludi) si legge e si consuma qui: un solo ricalcolo la porta al server.
+    const modifica = this.modificaPendente;
+    this.modificaPendente = false;
+    // Contabilita` dei metri (03/09/2026): la parte del percorso corrente
+    // gia` alle spalle si mette da parte PRIMA di sostituire le tratte, in
+    // entrambi i rami (rotta nuova o ripiego). Vedi GiroInCorso.metriPercorsi.
+    const restantiPrima = giro.tratte.slice(this.stato.tappaCorrente).reduce((s: number, l: any) => s + (l?.distance || 0), 0);
+    const metriPercorsiPrima = (giro.metriPercorsi || 0) + Math.max(0, (giro.metri || 0) - restantiPrima);
     if (partenza) {
       try {
         // Il punto su cui il server deve chiudere l'anello glielo diciamo
         // esplicitamente: e` lo stesso che `puntoDiRientro()` dichiara al
         // cruscotto, quindi linea disegnata e meta` non possono divergere.
         const rientro = this.rientroDaMandare(giro, partenza);
-        const { g, dati } = await this.chiediRotta(restanti, { partenza, anello: giro.anello, rientro });
+        const { g, dati } = await this.chiediRotta(restanti, {
+          partenza, anello: giro.anello, rientro,
+          percorso: giro.modo === 'percorso' && giro.percorsoId ? { id: giro.percorsoId, modifica } : undefined,
+        });
+        if (giro.modo === 'percorso' && g?.percorso) {
+          giro.modifiche = Number(g.percorso.modifiche) || 0;
+          giro.modificheMax = Number(g.percorso.max) || giro.modificheMax;
+        }
         // Solo a rotta ottenuta: la partenza CORRENTE e` quella da cui il
         // percorso appena disegnato comincia davvero. Quella ORIGINALE non si
         // tocca mai (e si ripara se un giro vecchio non ce l'ha).
@@ -1317,24 +2061,39 @@ class TourService {
         if (!giro.partenzaOriginale) giro.partenzaOriginale = { lat: partenza.lat, lon: partenza.lon };
         giro.ordine = (g.ordine as number[]).map(i => giro.tappe.indexOf(restanti[i]));
         giro.geometria = (dati.routes?.[0]?.geometry?.coordinates || []).map((c: number[]) => [c[1], c[0]]);
+        this.ultimoIndiceSnap = 0;
         giro.tratte = dati.routes?.[0]?.legs || [];
+        giro.metriPercorsi = metriPercorsiPrima;
         giro.metri = g.metri_totali;
         giro.minutiCammino = g.minuti_cammino;
         giro.problemi = g.problemi || [];
         this.stato = { stato: 'IN_CAMMINO', tappaCorrente: 0, da: Date.now() };
         this.passoCorrente = 0; this.tappaDelPasso = -1;
-        this.navAttuale = { istruzione: null, metri: null, attraversamento: false };
+        // La prima svolta della strada nuova, subito (03/09/2026): stesso
+        // buco di avvia(), qui dopo un ricalcolo riuscito.
+        this.aggiornaPassoIniziale();
         this.salva(); this.avvisa();
         void this.cercaLungoLaStradaGiro();
         return true;
-      } catch { /* si continua nell'ordine che c'era, senza la tappa tolta */ }
+      } catch (e: any) {
+        // Il «no» del server a un percorso su misura (modifiche finite,
+        // crediti) NON e` un guasto di rete da assorbire in silenzio: risale
+        // a chi ha chiesto la modifica, che la annulla e lo dice.
+        const m = String(e?.message || '');
+        if (m.startsWith('MODIFICHE_ESAURITE') || m.startsWith('CREDITI_INSUFFICIENTI')) throw e;
+        // Dal tasto manuale anche il 402/401 deve arrivare a chi lo ha
+        // premuto (cassa del Day Pass, login): non e` «rete assente».
+        if (opzioni.senzaRipiego && (m.startsWith('PASS_RICHIESTO') || m.startsWith('ACCESSO_RICHIESTO'))) throw e;
+        /* altrimenti si continua nell'ordine che c'era, senza la tappa tolta */
+      }
     }
 
     // Da DEVIAZIONE il ripiego non ha senso: l'ordine e' gia' quello giusto,
     // manca solo la strada nuova. Si lascia lo stato DEVIATO com'e' (con
     // fuoriPercorsoDa) e si ritentera' fra un minuto; il driver avvisa
-    // l'utente di seguire la linea sulla mappa.
-    if (opzioni.daDeviazione) return false;
+    // l'utente di seguire la linea sulla mappa. Lo stesso dal tasto
+    // «Ricalcola da qui» (senzaRipiego): senza rotta nuova non si tocca niente.
+    if (opzioni.daDeviazione || opzioni.senzaRipiego) return false;
 
     // Riserva senza server: stesso ordine, meno la tappa tolta. Le tratte si
     // tengono allineate all'ordine, altrimenti i metri rimanenti mentirebbero.
@@ -1345,9 +2104,13 @@ class TourService {
     // senza rete la buttava via, e con lei l'ultimo chilometro del giro.
     const ritorno = giro.anello && giro.tratte.length > giro.ordine.length ? giro.tratte[giro.tratte.length - 1] : null;
     giro.tratte = [...posizioniTenute.map(p => giro.tratte[p]).filter(Boolean), ...(ritorno ? [ritorno] : [])];
+    // Anche qui la contabilita`: la tratta della tappa tolta non e` stata
+    // camminata, quindi il percorso corrente si riallinea alle tratte tenute.
+    giro.metriPercorsi = metriPercorsiPrima;
+    giro.metri = Math.round(giro.tratte.reduce((s: number, l: any) => s + (l?.distance || 0), 0)) || giro.metri;
     this.stato = { ...this.stato, tappaCorrente: 0, stato: 'IN_CAMMINO', da: Date.now() };
     this.passoCorrente = 0; this.tappaDelPasso = -1;
-    this.navAttuale = { istruzione: null, metri: null, attraversamento: false };
+    this.aggiornaPassoIniziale();
     this.salva(); this.avvisa();
     // Ordine aggiornato ma SENZA rotta nuova: non e' un ricalcolo riuscito.
     return false;
@@ -1356,6 +2119,7 @@ class TourService {
   termina() {
     const aveva = !!this.giro;
     this.giro = null;
+    this.ultimoIndiceSnap = 0;
     this.proposta = null;
     this.pausaManuale = false;
     this.corridoio = [];
@@ -1367,7 +2131,8 @@ class TourService {
     this.stato = { stato: 'FINITO', tappaCorrente: 0, da: Date.now() };
     try { localStorage.removeItem(CHIAVE_RIPRESA); } catch {}
     // Le tappe non devono restare geofence prioritari sul telefono.
-    if (aveva && Capacitor.isNativePlatform()) { try { locationService.unsyncTappeGiroFromNative(); } catch { /* best-effort */ } }
+    // (23/09/2026) Con la guida accesa i preferiti restano nel nativo (voce 1).
+    if (aveva && Capacitor.isNativePlatform()) { try { locationService.unsyncTappeGiroFromNative({ conPreferiti: true }); } catch { /* best-effort */ } }
     this.avvisa();
   }
 
@@ -1380,6 +2145,7 @@ class TourService {
       // Un giro di ieri non si riprende: si e` andati a dormire, non in pausa.
       if (!giro || Date.now() - giro.creatoIl > 12 * 60 * 60 * 1000) { localStorage.removeItem(CHIAVE_RIPRESA); return null; }
       this.giro = giro;
+      this.ultimoIndiceSnap = 0;
       // I timer "da fermo" e "fuori percorso" di PRIMA della chiusura non
       // valgono piu': riaprendo l'app dopo dieci minuti il giro andava
       // dritto in IN_PAUSA (fermoDa vecchio) o in DEVIATO senza averlo mai
@@ -1398,9 +2164,10 @@ class TourService {
       this.avvisa();
       // Con la guida spenta il giro si riprende ma resta fermo: niente rete,
       // niente geofence nativi finche` non lo si riaccende.
-      if (!this.sospeso) {
+      if (!this.eSospeso()) {
         void this.cercaLungoLaStradaGiro();
         if (this.avviato) this.sincronizzaTappeNative();
+        if (this.avviato && giro.modo === 'percorso') { try { void locationService.startWatching(); } catch { /* vedi avvia() */ } }
       }
       return giro;
     } catch { return null; }
@@ -1409,7 +2176,7 @@ class TourService {
   vista(): VistaGiro | null {
     // Sospeso = invisibile. Un solo punto di verita`: banner, layer della
     // mappa e tasto di navigazione leggono tutti da qui.
-    if (!this.giro || this.sospeso) return null;
+    if (!this.giro || this.eSospeso()) return null;
     const t = this.tappaCorrente();
     // Le escluse non contano: non dovevano esserci. Le saltate si`, come fatte.
     const valide = this.giro.tappe.filter(x => !x.esclusa);
@@ -1422,10 +2189,15 @@ class TourService {
     const nomeRientro = getTranslation('tour_ritorno_partenza', (this.lingua || 'it').toUpperCase() as Language);
     return {
       stato: this.stato.stato,
+      modo: this.giro.modo === 'percorso' ? 'percorso' : 'giro',
+      modifiche: Number(this.giro.modifiche) || 0,
+      modificheMax: Number(this.giro.modificheMax) || 3,
       tappaCorrente: this.stato.tappaCorrente,
       tappeFatte: fatte,
       tappeTotali: valide.length,
-      metriTotali: this.giro.metri,
+      // Il totale onesto: strada gia` fatta prima dell'ultimo ricalcolo +
+      // percorso corrente. Prima, dopo un ricalcolo, totale = residuo.
+      metriTotali: (this.giro.metriPercorsi || 0) + this.giro.metri,
       metriRimanenti: Math.round(restanti),
       nomeTappa: t?.nome ?? (rientro ? nomeRientro : null),
       // "poi: X" — la tappa successiva nell'ordine di cammino, se c'e'.
@@ -1444,8 +2216,11 @@ class TourService {
       })(),
       tappaLat: t ? (t.ingresso?.lat ?? t.lat) : (rientro?.lat ?? null),
       tappaLon: t ? (t.ingresso?.lon ?? t.lon) : (rientro?.lon ?? null),
+      // In rientro non c'e' una tappa: niente foto.
+      fotoTappa: t?.foto ?? null,
       istruzione: this.navAttuale.istruzione,
       metriAllaSvolta: this.navAttuale.metri,
+      manovra: this.navAttuale.manovra,
       suAttraversamento: this.navAttuale.attraversamento,
       inPausa: this.stato.stato === 'IN_PAUSA',
       avviato: this.avviato,
@@ -1454,8 +2229,60 @@ class TourService {
     };
   }
 
+  /**
+   * LE TAPPE DA CONSEGNARE AL NAVIGATORE IN AUTO (01/09/2026, committente:
+   * «in auto deve comprendere tutte le tappe/POI del giro, come quando si
+   * attiva dall'itinerario»). Il tasto del radar consegnava una meta sola: in
+   * macchina non serve a niente, si ricomincia da capo a ogni tappa.
+   *
+   * Giro in corso: quelle che RESTANO, dalla corrente in poi e nell'ordine di
+   * cammino — le fatte, le saltate e le escluse non si ripassano. Nessun giro
+   * ancora creato: la bozza scelta nel radar, nel suo ordine. Meno di due
+   * tappe torna null: e` navigazione singola e la fa NavChoiceSheet com'era.
+   *
+   * Il punto di arrivo e` la PORTA (`ingresso`) quando la si conosce, come nel
+   * resto dell'app; altrimenti il centroide.
+   */
+  sequenzaPerNavigatore(): { id: string | number; name: string; lat: number; lon: number }[] | null {
+    const punto = (t: TappaGiro) => ({
+      id: t.id,
+      name: t.nome,
+      lat: t.ingresso?.lat ?? t.lat,
+      lon: t.ingresso?.lon ?? t.lon,
+    });
+    const giro = this.giro;
+    if (giro && !this.eSospeso()) {
+      const restanti = giro.ordine
+        .slice(this.stato.tappaCorrente)
+        .map(i => giro.tappe[i])
+        .filter(t => t && !t.esclusa && !t.fatta && !t.saltata);
+      return restanti.length > 1 ? restanti.map(punto) : null;
+    }
+    const bozza = this.bozzaSequenza();
+    return bozza.length > 1 ? bozza.map(punto) : null;
+  }
+
+  /**
+   * IL NUMERO ASSOLUTO DI OGNI TAPPA (03/09/2026, collaudo: alla tappa 3/4
+   * il pin sulla mappa diceva «1»). Dopo un ricalcolo `ordine` contiene solo
+   * le tappe da fare e la posizione riparte da zero; il cruscotto invece
+   * conta in assoluto (fatte + 1). Qui si numera come il cruscotto: prima le
+   * fatte uscite da `ordine`, poi quelle in `ordine`, nell'ordine di
+   * cammino. Per la tappa corrente viene esattamente tappeFatte + 1.
+   */
+  numeriTappe(): Map<string, number> {
+    const m = new Map<string, number>();
+    const g = this.giro;
+    if (!g) return m;
+    const inOrdine = new Set(g.ordine);
+    let n = 0;
+    g.tappe.forEach((t, i) => { if (!inOrdine.has(i) && (t.fatta || t.saltata) && !t.esclusa) m.set(String(t.id), ++n); });
+    for (const i of g.ordine) { const t = g.tappe[i]; if (t && !t.esclusa) m.set(String(t.id), ++n); }
+    return m;
+  }
+
   /** Un giro sospeso non e` "in corso": il driver non deve toccarlo. */
-  inCorso() { return !!this.giro && !this.sospeso; }
+  inCorso() { return !!this.giro && !this.eSospeso(); }
   /** C'e` un giro in memoria, anche se sospeso (per la ripresa e i salvataggi). */
   giroInMemoria() { return !!this.giro; }
   datiGiro() { return this.giro; }
@@ -1726,18 +2553,53 @@ class TourService {
     return i == null ? null : this.giro.tappe[i];
   }
 
-  /** Distanza dal percorso: il minimo sui punti della geometria. */
+  /**
+   * Indice del segmento su cui si e` stati agganciati per ultimo: la ricerca
+   * riparte da poco prima. Si azzera quando cambia la geometria.
+   */
+  private ultimoIndiceSnap = 0;
+  /** Prossimo istante in cui un ricalcolo automatico da deviazione e` ammesso. */
+  private prossimoTentativoDeviazione = 0;
+
+  /**
+   * DISTANZA DAL PERCORSO, PER PROIEZIONE SUL TRATTO DAVANTI (03/09/2026).
+   * Prima era il minimo dai VERTICI campionati uno ogni cinque dell'intera
+   * geometria: su un anello la strada gia` fatta (o il ritorno) contava come
+   * «sul percorso» anche stando su un'altra tratta, e su un rettilineo lungo
+   * cinque vertici saltati coprivano 300 m — «fuori percorso» stando
+   * esattamente sulla linea. Ora si proietta sul segmento (come
+   * useWalkingNavigation.nearestOnRoute) in una finestra IN AVANTI
+   * dall'ultimo punto agganciato: la strada alle spalle non rientra.
+   */
   private scostamentoDalPercorso(pos: { lat: number; lon: number }): number {
-    if (!this.giro?.geometria?.length) return 0;
-    let min = Infinity;
-    // Un campione ogni cinque punti: su una geometria da 400 punti la
-    // differenza e` di pochi metri e il costo scende di cinque volte.
-    for (let i = 0; i < this.giro.geometria.length; i += 5) {
-      const g = this.giro.geometria[i];
-      const d = metri(pos, { lat: g[0], lon: g[1] });
-      if (d < min) min = d;
+    const g = this.giro?.geometria;
+    if (!g || g.length < 2) return 0;
+    const cos = Math.cos((pos.lat * Math.PI) / 180) || 1;
+    const px = pos.lon * cos, py = pos.lat;
+    // (22/09/2026) Mai prima dell'inizio della tratta corrente: la finestra
+    // tornava indietro di 15 vertici a ogni fix, dentro la tratta gia` fatta, e
+    // chi ripartiva da una tappa tornando sui propri passi restava «sul
+    // percorso» (lo stesso inizio della linea consegnata al follower).
+    const da = Math.max(this.inizioTrattaInGeometria(), Math.max(0, Math.min(this.ultimoIndiceSnap, g.length - 2) - 15));
+    let min = Infinity, idx = this.ultimoIndiceSnap;
+    for (let i = da; i + 1 < g.length; i++) {
+      const ax = g[i][1] * cos, ay = g[i][0], bx = g[i + 1][1] * cos, by = g[i + 1][0];
+      const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+      const t = l2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0;
+      const d = metri(pos, { lat: ay + t * dy, lon: (ax + t * dx) / cos });
+      if (d < min) { min = d; idx = i; }
     }
+    if (min <= SOGLIE.deviazione_rientro_m) this.ultimoIndiceSnap = idx;
     return min === Infinity ? 0 : min;
+  }
+
+  /** L'ultimo fix del watch condiviso, se e` recente (15 s) e credibile (≤ 100 m). */
+  private posizioneFresca(): { lat: number; lon: number } | null {
+    try {
+      const l = locationService.getLastLocation();
+      if (!l || Date.now() - Number(l.timestamp) > 15_000 || !(Number(l.accuracy) <= 100)) return null;
+      return { lat: l.latitude, lon: l.longitude };
+    } catch { return null; }
   }
 
   private salva() {
@@ -1763,7 +2625,7 @@ class TourService {
       const b = this.bozzaStato;
       if (b.tappe.length === 0) { localStorage.removeItem(CHIAVE_BOZZA); return; }
       localStorage.setItem(CHIAVE_BOZZA, JSON.stringify({
-        tappe: b.tappe, minutiDisponibili: b.minutiDisponibili, ordineManuale: b.ordineManuale, quando: Date.now(),
+        modo: b.modo, tappe: b.tappe, minutiDisponibili: b.minutiDisponibili, ordineManuale: b.ordineManuale, senzaLimite: !!b.senzaLimite, quando: Date.now(),
       }));
     } catch { /* niente spazio: la bozza resta comunque in memoria */ }
   }
@@ -1786,5 +2648,15 @@ export function metri(a: { lat: number; lon: number }, b: { lat: number; lon: nu
 
 export { primaFrase };
 export const tourService = new TourService();
+// PASS APPENA ATTIVATO → SI RIPROVA DA SOLI (29/08/2026, collaudo Realme).
+// `passMancante` si accende al primo 402 e si spegneva solo toccando
+// «Riprova» o «Crea il giro»: chi attivava il Day Pass dal pannello stesso
+// (evento DAY_PASS_UPDATED_EVENT di dayPassService) si vedeva ancora
+// chiedere di attivarlo. Stringa letterale, non l'import: e` un solo nome
+// di evento, e tenere i due servizi senza dipendenze reciproche vale piu`
+// della costante condivisa.
+if (typeof window !== 'undefined') {
+  window.addEventListener('wip-daypass-updated', () => tourService.riprovaPass());
+}
 export { raggruppaTappeVicine };
 export type { TappaGiro, LivelloIngresso, PoiLungoStrada };

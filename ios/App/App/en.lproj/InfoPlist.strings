@@ -15,6 +15,8 @@
 
 "NSMicrophoneUsageDescription" = "The microphone is used to dictate your questions to the AI guide while you listen to an audio guide.";
 
+"NSSpeechRecognitionUsageDescription" = "Speech recognition turns what you dictate to the WIP assistant into text, so you can build your itinerary and ask questions by speaking instead of typing.";
+
 /* Purpose key passata a requestTemporaryFullAccuracyAuthorization: iOS cerca
    la traduzione con la chiave del dizionario (se non la trova usa il valore
    italiano dell'Info.plist, quindi la riga e' innocua in ogni caso). */

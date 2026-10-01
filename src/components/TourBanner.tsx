@@ -16,10 +16,12 @@
  *  - il GIRO FINITO: salvare nei propri itinerari e condividere il link.
  *    Un giro camminato una volta diventa contenuto che resta.
  */
-import { useEffect, useState } from 'react';
-import { Pause, Play, RotateCcw, SkipForward, X, Navigation2, Check, Share2, BookmarkPlus, Flag } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Pause, Play, RotateCcw, SkipForward, X, Navigation2, Check, Share2, BookmarkPlus, Flag, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { tourService, type VistaGiro } from '../services/tourService';
 import { Language, getTranslation } from '../lib/i18n';
+import { gestisciErroreGiro } from '../lib/tour/passRichiesto';
+import { locationService } from '../services/locationService';
 
 interface Props {
   language: Language;
@@ -30,22 +32,51 @@ interface Props {
   onChiudi?: () => void;
 }
 
-/** La posizione per il ricalcolo: GPS se risponde in fretta, altrimenti l'ultima nota. */
+/**
+ * La posizione per il ricalcolo: l'ultimo fix del watch se e` fresco e
+ * credibile, altrimenti il GPS ad alta precisione; un fix da centinaia di
+ * metri (rete/cella) non vale — meglio `undefined`, e il servizio si prende
+ * la sua posizione fresca. Prima si chiedeva senza alta precisione e senza
+ * guardare l'accuratezza (03/09/2026).
+ */
 function conPosizione(fn: (p?: { lat: number; lon: number }) => void) {
+  try {
+    const l = locationService.getLastLocation();
+    if (l && Date.now() - Number(l.timestamp) <= 15_000 && Number(l.accuracy) <= 100) return fn({ lat: l.latitude, lon: l.longitude });
+  } catch { /* si passa al GPS */ }
   if (typeof navigator === 'undefined' || !navigator.geolocation) return fn();
   navigator.geolocation.getCurrentPosition(
-    (p) => fn({ lat: p.coords.latitude, lon: p.coords.longitude }),
+    (p) => fn(Number(p.coords.accuracy) <= 150 ? { lat: p.coords.latitude, lon: p.coords.longitude } : undefined),
     () => fn(),
-    { timeout: 4000, maximumAge: 15000 },
+    { enableHighAccuracy: true, timeout: 5000, maximumAge: 5000 },
   );
 }
 
 export default function TourBanner({ language, istruzione, metriAllaSvolta, onRiascolta, onChiudi }: Props) {
   const [v, setV] = useState<VistaGiro | null>(tourService.vista());
-  const [pausaManuale, setPausaManuale] = useState(false);
   const [salvato, setSalvato] = useState<{ id: string; link: string | null } | null>(null);
   const [salvando, setSalvando] = useState(false);
   const [avviso, setAvviso] = useState<string | null>(null);
+  /** «Ricalcola da qui» in corso: il tasto gira e non si ripreme. */
+  const [ricalcolando, setRicalcolando] = useState(false);
+  /** Cruscotto ridotto a una barretta (vedi chiudiGiro): si riapre con un tocco. */
+  const [ridotto, setRidotto] = useState(false);
+  // L'ALTEZZA DEL CRUSCOTTO, DETTA AGLI ALTRI (29/08/2026, collaudo: la card
+  // di avvicinamento «Perticata · Ascolta» si sovrapponeva al cruscotto,
+  // tutte e due ancorate in basso). Si pubblica in una variabile CSS sul
+  // documento; ApproachBanner ci si appoggia sopra. A cruscotto smontato
+  // torna a zero.
+  const contenitoreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = contenitoreRef.current;
+    const radice = document.documentElement;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const aggiorna = () => radice.style.setProperty('--wip-cruscotto-h', `${Math.ceil(el.getBoundingClientRect().height) + 8}px`);
+    aggiorna();
+    const ro = new ResizeObserver(aggiorna);
+    ro.observe(el);
+    return () => { ro.disconnect(); radice.style.setProperty('--wip-cruscotto-h', '0px'); };
+  }, [ridotto, v?.stato, v?.avviato]);
 
   useEffect(() => tourService.ascolta(setV), []);
   useEffect(() => {
@@ -124,9 +155,82 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
 
   const finito = v.stato === 'FINITO';
 
+  /**
+   * Il tasto «Ricalcola da qui»: posizione fresca se il GPS risponde in
+   * fretta, altrimenti l'ultima nota; esito scritto nella riga del cruscotto
+   * e detto a voce (chi cammina non guarda lo schermo).
+   */
+  const ricalcolaDaQui = () => {
+    if (ricalcolando) return;
+    setRicalcolando(true);
+    conPosizione((p) => {
+      tourService.ricalcolaDaQui(p)
+        .then((esito) => {
+          // La voce la mette il driver del giro (evento wip-giro-ricalcolato,
+          // passando dal direttore audio); qui solo la riga scritta.
+          if (esito === 'pass') { setAvviso(gestisciErroreGiro(new Error('PASS_RICHIESTO'), language, { toast: false, city: tourService.datiGiro()?.citta })); return; }
+          setAvviso(t(esito === 'ok' ? 'tour_ricalcolato' : esito === 'posizione' ? 'gr_serve_posizione' : 'tour_ricalcolo_fallito'));
+        })
+        .finally(() => setRicalcolando(false));
+    });
+  };
+
+  // CHIUDERE NON E` NASCONDERE (29/08/2026, collaudo: «se tolgo la finestra
+  // in basso del navigatore, come faccio a riprenderla?»). La X chiude il
+  // giro per davvero, e prima lo faceva senza chiedere: un tocco distratto
+  // buttava via tappe fatte e percorso. Ora chiede conferma. Chi vuole solo
+  // piu` mappa ha il tasto «riduci»: resta una barretta con tappa e svolta,
+  // e un tocco la riapre.
+  const chiudiGiro = () => {
+    const ok = typeof window !== 'undefined' && typeof window.confirm === 'function'
+      ? window.confirm(t('gr_chiudi_giro_conferma'))
+      : true;
+    if (!ok) return;
+    tourService.termina();
+    onChiudi?.();
+  };
+
+  if (ridotto && !finito) {
+    const istr = istruzione ?? v.istruzione;
+    return (
+      <div className="fixed left-0 right-0 z-[9000] px-3 pointer-events-none" style={{ bottom: 'calc(5.75rem + env(safe-area-inset-bottom, 0px))' }}>
+        <button
+          ref={contenitoreRef as any}
+          onClick={() => setRidotto(false)}
+          title={t('gr_espandi_cruscotto')}
+          className="mx-auto max-w-md w-full rounded-full bg-white shadow-2xl pointer-events-auto flex items-center gap-2.5 px-4 py-2.5 text-left active:scale-[0.99]"
+        >
+          <Navigation2 className="w-4 h-4 text-blue-600 flex-shrink-0" />
+          <span className="flex-1 min-w-0 truncate text-[12px] font-bold text-gray-900">
+            {t('tour_tappa')} {Math.min(v.tappeFatte + 1, v.tappeTotali)}/{v.tappeTotali}
+            {v.nomeTappa ? ` · ${v.nomeTappa}` : ''}
+            {istr && !v.inPausa ? <span className="font-normal text-gray-500"> · {istr}</span> : null}
+          </span>
+          {v.metriAllaTappa != null && v.metriAllaTappa > 25 && (
+            <span className="text-[11px] font-bold text-blue-600 tabular-nums flex-shrink-0">{distanza(v.metriAllaTappa)}</span>
+          )}
+          <ChevronUp className="w-4 h-4 text-gray-500 flex-shrink-0" />
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="fixed left-0 right-0 bottom-0 z-[9000] px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pointer-events-none">
-      <div className="mx-auto max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden pointer-events-auto">
+    /* SOPRA LA BARRA DELLE SCHEDE (29/08/2026, collaudo: «il banner
+       inferiore mi copre la barra di navigazione»): prima stava a bottom-0
+       e nascondeva Esplora/Itinerario/Eventi. */
+    <div className="fixed left-0 right-0 z-[9000] px-3 pointer-events-none" style={{ bottom: 'calc(5.75rem + env(safe-area-inset-bottom, 0px))' }}>
+      <div ref={contenitoreRef} className="mx-auto max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden pointer-events-auto relative">
+        {!finito && (
+          <button
+            onClick={() => setRidotto(true)}
+            title={t('gr_riduci_cruscotto')}
+            aria-label={t('gr_riduci_cruscotto')}
+            className="absolute right-2 top-2 w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center active:scale-95 z-10"
+          >
+            <ChevronDown className="w-4 h-4 text-gray-600" />
+          </button>
+        )}
 
         {/* Avanzamento: una riga sola, ma dice tutto a colpo d'occhio */}
         <div className="h-1 bg-gray-100">
@@ -229,7 +333,7 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
                 {t('tour_tappa')} {Math.min(v.tappeFatte + 1, v.tappeTotali)} / {v.tappeTotali}
               </p>
               <p className="text-[14px] font-bold text-gray-900 truncate">
-                {v.inPausa ? t('tour_in_pausa') : (v.nomeTappa || '—')}
+                {!v.avviato ? t('gr_pronto_a_partire') : v.inPausa ? t('tour_in_pausa') : (v.nomeTappa || '—')}
                 {/* Metri alla PORTA della tappa (linea d'aria): il dato che
                     manca all'istruzione, che parla solo della svolta. */}
                 {!v.inPausa && v.metriAllaTappa != null && v.metriAllaTappa > 25 && (
@@ -267,21 +371,55 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
               </p>
             </div>
 
+            {/* PRONTO, NON PARTITO (28/08/2026): un solo tasto grande,
+                «Avvia la navigazione», e la X. Pausa, riascolta e salta
+                appartengono a un giro in cammino. */}
+            {!v.avviato ? (
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                <button
+                  onClick={() => {
+                    // Le svolte si scaricano adesso, col Day Pass: se manca il
+                    // server lo dice, il giro resta «pronto» e si apre la
+                    // cassa con «Acquista ora» (gestisciErroreGiro).
+                    tourService.avvia().catch((e: any) => {
+                      setAvviso(gestisciErroreGiro(e, language, { toast: false, city: tourService.datiGiro()?.citta }));
+                    });
+                  }}
+                  title={t('gr_avvia_navigazione')}
+                  className="h-10 px-4 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-[12px] font-black flex items-center gap-1.5 transition-colors active:scale-95"
+                >
+                  <Play className="w-4 h-4" /> {t('gr_avvia_navigazione')}
+                </button>
+                <button
+                  onClick={chiudiGiro}
+                  title={t('tour_termina')}
+                  className="w-10 h-10 rounded-full bg-red-50 hover:bg-red-100 flex items-center justify-center transition-colors active:scale-95"
+                >
+                  <X className="w-4 h-4 text-red-600" />
+                </button>
+              </div>
+            ) : (
             <div className="flex items-center gap-1.5 flex-shrink-0">
+              {/* Pausa/riprendi dallo STATO del giro, non da uno stato locale
+                  (03/09/2026): il tasto sulla lock screen mette in pausa da
+                  fuori, e il cruscotto deve mostrarlo. */}
               <button
-                onClick={() => { const p = !pausaManuale; setPausaManuale(p); tourService.impostaPausa(p); }}
-                title={pausaManuale ? t('tour_riprendi') : t('tour_pausa')}
+                onClick={() => tourService.impostaPausa(!v.inPausa)}
+                title={v.inPausa ? t('tour_riprendi') : t('tour_pausa')}
                 className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95"
               >
-                {pausaManuale ? <Play className="w-4 h-4 text-gray-700" /> : <Pause className="w-4 h-4 text-gray-700" />}
+                {v.inPausa ? <Play className="w-4 h-4 text-gray-700" /> : <Pause className="w-4 h-4 text-gray-700" />}
               </button>
-              <button
-                onClick={onRiascolta}
-                title={t('tour_riascolta')}
-                className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95"
-              >
-                <RotateCcw className="w-4 h-4 text-gray-700" />
-              </button>
+              {/* Riascolta non ha senso in un percorso su misura: niente parla. */}
+              {v.modo !== 'percorso' && (
+                <button
+                  onClick={onRiascolta}
+                  title={t('tour_riascolta')}
+                  className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95"
+                >
+                  <RotateCcw className="w-4 h-4 text-gray-700" />
+                </button>
+              )}
               <button
                 onClick={() => conPosizione((p) => { tourService.salta(p); })}
                 title={t('tour_salta')}
@@ -289,14 +427,27 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
               >
                 <SkipForward className="w-4 h-4 text-gray-700" />
               </button>
+              {/* RICALCOLA DA QUI (03/09/2026): la strada si rifa` da dove si
+                  e`, tappe intatte. Il ricalcolo automatico ha soglie e
+                  cooldown; questo tasto no. */}
               <button
-                onClick={() => { tourService.termina(); onChiudi?.(); }}
+                onClick={ricalcolaDaQui}
+                disabled={ricalcolando}
+                title={t('tour_ricalcola')}
+                aria-label={t('tour_ricalcola')}
+                className="w-10 h-10 rounded-full bg-blue-50 hover:bg-blue-100 flex items-center justify-center transition-colors active:scale-95 disabled:opacity-60"
+              >
+                <RefreshCw className={`w-4 h-4 text-blue-700 ${ricalcolando ? 'animate-spin' : ''}`} />
+              </button>
+              <button
+                onClick={chiudiGiro}
                 title={t('tour_termina')}
                 className="w-10 h-10 rounded-full bg-red-50 hover:bg-red-100 flex items-center justify-center transition-colors active:scale-95"
               >
                 <X className="w-4 h-4 text-red-600" />
               </button>
             </div>
+            )}
           </div>
         )}
 
@@ -304,7 +455,15 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
             mancante" con un Riprova. Prima l'esito esisteva e non lo
             vedeva nessuno: offline si scopriva a meta' giro che una tappa
             era muta. Sparisce quando e' tutto in tasca. */}
-        {!finito && (v.prescarico.inCorso || (v.prescarico.finitoIl > 0 && v.prescarico.mancanti > 0)) && (
+        {/* PERCORSO SU MISURA: una riga che dice cos'e` e quante modifiche
+            restano — il cruscotto e` lo stesso del giro, e senza questa riga
+            non si capirebbe perche' nessuna tappa parla. */}
+        {!finito && v.modo === 'percorso' && (
+          <p className="px-4 pb-2 -mt-1 text-[10px] text-[#1e3a8a]/70">
+            {t('pc_cruscotto_riga')} · {t('pc_modifiche').replace('{n}', String(v.modifiche)).replace('{m}', String(v.modificheMax))}
+          </p>
+        )}
+        {!finito && v.modo !== 'percorso' && (v.prescarico.inCorso || (v.prescarico.finitoIl > 0 && v.prescarico.mancanti > 0)) && (
           <div className="px-4 pb-2.5 pt-1 flex items-center gap-2 text-[10px] bg-gray-50">
             <span className={`flex-1 ${v.prescarico.mancanti > 0 && !v.prescarico.inCorso ? 'text-amber-700' : 'text-gray-500'}`}>
               {v.prescarico.inCorso

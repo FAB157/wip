@@ -26,6 +26,15 @@ export const TRAD_SCHEDA: Record<string, Partial<Record<Language, string>>> = {
   sk_descrizione_non_disponibile_momento: { IT: "Descrizione non disponibile al momento.", EN: "Description not available at the moment.", FR: "Description non disponible pour le moment.", ES: "Descripción no disponible por el momento.", DE: "Beschreibung im Moment nicht verfügbar.", RU: "Описание сейчас недоступно.", ZH: "描述暂时不可用。" },
   sk_chiesa_luogo_culto: { IT: "Chiesa / Luogo di Culto", EN: "Church / Place of Worship", FR: "Église / Lieu de culte", ES: "Iglesia / Lugar de culto", DE: "Kirche / Gotteshaus", RU: "Церковь / место культа", ZH: "教堂／宗教场所" },
   sk_luogo: { IT: "Luogo", EN: "Place", FR: "Lieu", ES: "Lugar", DE: "Ort", RU: "Место", ZH: "地点" },
+  // Le opere girate o ambientate nel luogo (works_json, 29/08/2026).
+  sk_qui_hanno_girato: { IT: "Qui hanno girato", EN: "Filmed here", FR: "Tourné ici", ES: "Rodado aquí", DE: "Hier gedreht", RU: "Здесь снимали", ZH: "在此取景" },
+  sk_ambientato_qui: { IT: "Ambientato qui", EN: "Set here", FR: "Se déroule ici", ES: "Ambientado aquí", DE: "Spielt hier", RU: "Действие происходит здесь", ZH: "故事发生地" },
+  // La scheda del locale da locali_pois (Overture, 29/08/2026).
+  sk_scheda_locale: { IT: "Il locale", EN: "The venue", FR: "L'établissement", ES: "El local", DE: "Das Lokal", RU: "Заведение", ZH: "店铺信息" },
+  sk_chiama: { IT: "Chiama", EN: "Call", FR: "Appeler", ES: "Llamar", DE: "Anrufen", RU: "Позвонить", ZH: "致电" },
+  sk_sito_web: { IT: "Sito", EN: "Website", FR: "Site", ES: "Sitio web", DE: "Website", RU: "Сайт", ZH: "网站" },
+  sk_catena: { IT: "Catena", EN: "Chain", FR: "Chaîne", ES: "Cadena", DE: "Kette", RU: "Сеть", ZH: "连锁" },
+  sk_chiuso_definitivamente: { IT: "Chiuso definitivamente", EN: "Permanently closed", FR: "Fermé définitivement", ES: "Cerrado permanentemente", DE: "Dauerhaft geschlossen", RU: "Закрыто навсегда", ZH: "已永久关闭" },
 
   // ── Frasi generate localmente per locali/ristoranti ─────────────────────
   sk_locale_posiziona_zona: { IT: "Questo locale si posiziona come {type} nel cuore della zona.", EN: "This venue stands out as a {type} in the heart of the area.", FR: "Cet établissement se présente comme {type} au cœur du quartier.", ES: "Este local se posiciona como {type} en el corazón de la zona.", DE: "Dieses Lokal präsentiert sich als {type} im Herzen der Gegend.", RU: "Это заведение — {type} в самом сердце района.", ZH: "这家店是本区域中心的一家{type}。" },
@@ -115,6 +124,9 @@ export const TRAD_SCHEDA: Record<string, Partial<Record<Language, string>>> = {
   sk_crediti_insufficienti_audio: { IT: "Crediti insufficienti per l'audioguida.", EN: "Not enough credits for the audioguide.", FR: "Crédits insuffisants pour l'audioguide.", ES: "Créditos insuficientes para la audioguía.", DE: "Nicht genug Credits für den Audioguide.", RU: "Недостаточно кредитов для аудиогида.", ZH: "积分不足，无法使用语音导览。" },
   sk_audioguida_non_generata: { IT: "Non è stato possibile generare l'audioguida. I crediti ti sono stati restituiti.", EN: "Could not generate the audioguide. Your credits have been refunded.", FR: "Impossible de générer l'audioguide. Tes crédits t'ont été remboursés.", ES: "No se pudo generar la audioguía. Tus créditos han sido devueltos.", DE: "Der Audioguide konnte nicht erstellt werden. Deine Credits wurden dir zurückerstattet.", RU: "Не удалось создать аудиогид. Кредиты возвращены.", ZH: "无法生成语音导览。积分已退还。" },
   sk_audioguida_non_riprodotta: { IT: "Non è stato possibile riprodurre l'audioguida. I crediti ti sono stati restituiti.", EN: "Could not play the audioguide. Your credits have been refunded.", FR: "Impossible de lire l'audioguide. Tes crédits t'ont été remboursés.", ES: "No se pudo reproducir la audioguía. Tus créditos han sido devueltos.", DE: "Der Audioguide konnte nicht abgespielt werden. Deine Credits wurden dir zurückerstattet.", RU: "Не удалось воспроизвести аудиогид. Кредиты возвращены.", ZH: "无法播放语音导览。积分已退还。" },
+  // (20/09/2026) L'audioguida addebitata dal server resta POSSEDUTA per sempre: se la voce non parte non si
+  // promette un rimborso (il client non può più farselo da sé), si dice la verità — è tua, riprova, non la ripaghi.
+  sk_audioguida_tua_riprova: { IT: "La voce non è partita. L'audioguida è già tua: riprova tra poco, non la paghi di nuovo.", EN: "The voice didn't start. The audioguide is already yours: try again shortly, you won't pay for it again.", FR: "La voix n'a pas démarré. L'audioguide est déjà à toi : réessaie dans un instant, tu ne le paieras pas une deuxième fois.", ES: "La voz no ha arrancado. La audioguía ya es tuya: vuelve a intentarlo en un momento, no la pagas de nuevo.", DE: "Die Stimme ist nicht gestartet. Der Audioguide gehört dir bereits: Versuch es gleich noch einmal, du zahlst nicht erneut.", RU: "Голос не запустился. Аудиогид уже ваш: попробуйте ещё раз чуть позже, платить снова не придётся.", ZH: "语音未能播放。该语音导览已归你所有：请稍后重试，无需再次付费。" },
 
   // ── PoiAudioPlayer ──────────────────────────────────────────────────────
   sk_nicky_intro: { IT: "Ciao! Sono Nicky. Ecco cosa c'è da sapere: {text}", EN: "Hi! I'm Nicky. Here's what you should know: {text}", FR: "Salut ! Je suis Nicky. Voici ce qu'il faut savoir : {text}", ES: "¡Hola! Soy Nicky. Esto es lo que hay que saber: {text}", DE: "Hallo! Ich bin Nicky. Das solltest du wissen: {text}", RU: "Привет! Я Nicky. Вот что нужно знать: {text}", ZH: "你好！我是 Nicky。你需要知道的是：{text}" },
@@ -130,6 +142,16 @@ export const TRAD_SCHEDA: Record<string, Partial<Record<Language, string>>> = {
   sk_chiedi_title: { IT: "Metti in pausa e fai una domanda sul luogo: risponde la guida", EN: "Pause and ask a question about the place: the guide answers", FR: "Mets en pause et pose une question sur le lieu : le guide répond", ES: "Pon en pausa y haz una pregunta sobre el lugar: responde la guía", DE: "Pausiere und stell eine Frage zum Ort: Der Guide antwortet", RU: "Поставьте на паузу и задайте вопрос о месте: гид ответит", ZH: "暂停并就该地点提问：导览员会回答" },
   sk_chiedi: { IT: "CHIEDI", EN: "ASK", FR: "DEMANDER", ES: "PREGUNTA", DE: "FRAGEN", RU: "СПРОСИТЬ", ZH: "提问" },
   sk_megafono: { IT: "MEGAFONO", EN: "MEGAPHONE", FR: "MÉGAPHONE", ES: "MEGÁFONO", DE: "MEGAFON", RU: "МЕГАФОН", ZH: "扩音" },
+  // Il dispositivo non espone gli effetti audio: il tasto si spegne e lo dice.
+  sk_megafono_non_disponibile: {
+    IT: "Il megafono non è disponibile su questo dispositivo",
+    EN: "The megaphone isn't available on this device",
+    FR: "Le mégaphone n'est pas disponible sur cet appareil",
+    ES: "El megáfono no está disponible en este dispositivo",
+    DE: "Das Megafon ist auf diesem Gerät nicht verfügbar",
+    RU: "Мегафон недоступен на этом устройстве",
+    ZH: "此设备不支持扩音功能"
+  },
   sk_feedback_momento: { IT: "Com'era il momento dell'audioguida?", EN: "How was the audio guide's timing?", FR: "Le moment de l'audioguide était-il bien choisi ?", ES: "¿Qué tal el momento de la audioguía?", DE: "Wie war der Zeitpunkt des Audioguides?", RU: "Насколько удачным был момент аудиогида?", ZH: "语音导览的时机如何？" },
   sk_momento_giusto: { IT: "⏱ Momento giusto", EN: "⏱ Right time", FR: "⏱ Bon moment", ES: "⏱ Momento justo", DE: "⏱ Richtiger Moment", RU: "⏱ Вовремя", ZH: "⏱ 时机正好" },
   sk_troppo_presto: { IT: "⏰ Troppo presto", EN: "⏰ Too early", FR: "⏰ Trop tôt", ES: "⏰ Demasiado pronto", DE: "⏰ Zu früh", RU: "⏰ Слишком рано", ZH: "⏰ 太早了" },
@@ -152,6 +174,7 @@ export const TRAD_SCHEDA: Record<string, Partial<Record<Language, string>>> = {
   sk_es_domanda: { IT: "Es. In che anno è stato costruito?", EN: "E.g. What year was it built?", FR: "Ex. En quelle année a-t-il été construit ?", ES: "Ej. ¿En qué año se construyó?", DE: "Z. B. In welchem Jahr wurde es erbaut?", RU: "Например: в каком году это построено?", ZH: "例如：它建于哪一年？" },
   sk_domanda_voce: { IT: "Fai la domanda a voce", EN: "Ask the question by voice", FR: "Pose la question à voix haute", ES: "Haz la pregunta con la voz", DE: "Stell die Frage per Sprache", RU: "Задайте вопрос голосом", ZH: "用语音提问" },
   sk_invia_domanda: { IT: "Invia la domanda", EN: "Send the question", FR: "Envoyer la question", ES: "Enviar la pregunta", DE: "Frage senden", RU: "Отправить вопрос", ZH: "发送问题" },
+  sk_sto_pensando: { IT: "Un attimo…", EN: "One moment…", FR: "Un instant…", ES: "Un momento…", DE: "Einen Moment…", RU: "Секунду…", ZH: "请稍候……" },
   sk_risposta_letta: { IT: "La risposta viene anche letta a voce. L'audioguida resta in pausa: al ritorno trovi il tasto «Riprendi».", EN: "The answer is also read aloud. The audio guide stays paused: when you return you'll find the \"Resume\" button.", FR: "La réponse est aussi lue à voix haute. L'audioguide reste en pause : au retour tu trouveras le bouton « Reprendre ».", ES: "La respuesta también se lee en voz alta. La audioguía queda en pausa: al volver encontrarás el botón «Reanudar».", DE: "Die Antwort wird auch vorgelesen. Der Audioguide bleibt pausiert: Danach findest du die Taste „Fortsetzen“.", RU: "Ответ также читается вслух. Аудиогид остаётся на паузе: вернувшись, вы найдёте кнопку «Продолжить».", ZH: "回答也会朗读出来。语音导览保持暂停：返回后可点击“继续”按钮。" },
 
   // ── PoiExtraDetails / PoiNearbyList ─────────────────────────────────────

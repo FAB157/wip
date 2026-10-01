@@ -26,6 +26,15 @@
 // filtro leggero per l'uso client.
 // =====================================================================
 
+// ESTENSIONE `.js` OBBLIGATORIA in ogni import relativo di questo file
+// (19/09/2026). Il server lo carica a runtime con un import dinamico
+// (server.ts, libLoadDescriptorsModule) e in produzione su Vercel gira in ESM
+// puro, che NON completa le estensioni: con `'./transitCatalog'` il modulo non
+// si caricava («Cannot find module '/var/task/src/lib/transitCatalog' imported
+// from libraryDescriptors.js», dai log di produzione), il catalogo del server
+// restava VUOTO e ogni «Genera» su un itinerario non ancora pronto rispondeva
+// 404 «slug non presente nel catalogo» — mentre quelli già in cache si aprivano
+// e nessuno se ne accorgeva. Vite, tsx e tsc risolvono `.js` → `.ts` da soli.
 import {
   CRUISE_PORTS,
   AIRPORT_LAYOVERS,
@@ -34,27 +43,27 @@ import {
   type AirportLayover,
   type PilgrimRoute,
   type StopOption,
-} from './transitCatalog';
-import { WORLD_ZONES, type WorldZone } from './libraryZonesWorld';
+} from './transitCatalog.js';
+import { WORLD_ZONES, type WorldZone } from './libraryZonesWorld.js';
 // Catalogo aggiuntivo (22/08/2026, ~5.000 descrittori in più su TUTTE le
 // categorie): zone mondiali nuove + luoghi nuovi per i 17 temi editoriali.
 // Solo dati, si fondono qui — vedi il commento in testa al file.
-import { EXTRA_WORLD_ZONES, EXTRA_THEME_PLACES } from './libraryDescriptorsExtra';
+import { EXTRA_WORLD_ZONES, EXTRA_THEME_PLACES } from './libraryDescriptorsExtra.js';
 // Secondo lotto (stesso giorno): stessa forma, altre zone e altri luoghi.
 // I due lotti si fondono insieme, il codice di merge scarta da solo i
 // doppioni fra i due (stesso taken-set/nomiEsistenti) — vedi i due punti
 // di fusione più sotto.
-import { EXTRA_WORLD_ZONES_2, EXTRA_THEME_PLACES_2 } from './libraryDescriptorsExtra2';
+import { EXTRA_WORLD_ZONES_2, EXTRA_THEME_PLACES_2 } from './libraryDescriptorsExtra2.js';
 // Le 20 città più visitate al mondo (23/08/2026): quartieri reali delle 19
 // coperte, + Pattaya (l'unica delle 20 senza itinerario di livello città).
 // Vedi il commento in testa al file per il conto e per l'esclusione di
 // Mecca. Solo dati, nessun import — stessa regola delle altre "Extra".
-import { MEGACITY_DISTRICTS, MEGACITY_TOP_LEVEL_EXTRA, type MegacityDistrict } from './libraryMostVisitedCities';
-import { TASTE_ROUTES, tasteRouteContext } from './wineRoutesCatalog';
-import { TASTE_ZONES, type TasteZone } from './tasteZonesWorld';
-import { PERCORSI_SACRI, percorsoSacroContext } from './sacredRoutesCatalog';
-import { FOOD_FESTIVALS, festivalContext } from './foodFestivalsCatalog';
-import { THEMATIC_PLACES, type ThematicKey, type ThematicPlaceSummary } from './thematicDescriptors';
+import { MEGACITY_DISTRICTS, MEGACITY_TOP_LEVEL_EXTRA, type MegacityDistrict } from './libraryMostVisitedCities.js';
+import { TASTE_ROUTES, tasteRouteContext } from './wineRoutesCatalog.js';
+import { TASTE_ZONES, type TasteZone } from './tasteZonesWorld.js';
+import { PERCORSI_SACRI, percorsoSacroContext } from './sacredRoutesCatalog.js';
+import { FOOD_FESTIVALS, festivalContext } from './foodFestivalsCatalog.js';
+import { THEMATIC_PLACES, type ThematicKey, type ThematicPlaceSummary } from './thematicDescriptors.js';
 
 // ─────────────────────────────────────────────────────────────────────
 // Tipi (contratto concordato con gli altri moduli della Biblioteca)
@@ -3249,7 +3258,13 @@ export function tasteZoneDescriptors(): LibraryDescriptor[] {
               : 'Tre giorni: una sottozona al giorno, e almeno un pasto lento senza programma. Il terzo giorno è quello in cui si torna dove si è mangiato meglio, non quello in cui si aggiunge la decima cantina.'
           }`,
           `COMBINABILITÀ (vincolante): di ${z.c} esistono in biblioteca anche i tagli ${altri}, da 2 e da 3 giorni. Questo itinerario deve reggersi da solo MA essere sommabile agli altri senza doppioni: chi lo abbina non deve rivedere gli stessi produttori né rimangiare gli stessi piatti.`,
-          'ONESTÀ SUI PREZZI: dì sempre quanto costa davvero una degustazione in questa zona e cosa comprende, perché è la voce che fa saltare il budget di chi non se lo aspetta.',
+          // (20/09/2026) La riga sui prezzi valeva per TUTTI i tagli, anche per
+          // «gratis», dove la verifica in codice boccia ogni tappa che cita
+          // biglietti o costi: 88 scarti in 20 ore per una contraddizione
+          // nostra. Nel taglio gratis la regola e' l'opposto.
+          a.id === FREE_ANGLE.id
+            ? 'TAGLIO GRATIS — NIENTE PREZZI NELLE TAPPE: qui ogni tappa di visita è a costo zero (mercati da girare, vigneti e uliveti da attraversare a piedi, botteghe e spacci dove si entra e si guarda, belvedere, musei a ingresso libero). NON citare prezzi, biglietti, tariffe o degustazioni a pagamento nelle tappe: nemmeno per dire «costa poco». Niente funivie, battelli o navette a pagamento. I pasti restano liberi e fuori dal conto delle attrazioni.'
+            : 'ONESTÀ SUI PREZZI: dì sempre quanto costa davvero una degustazione in questa zona e cosa comprende, perché è la voce che fa saltare il budget di chi non se lo aspetta.',
           // Senza questa riga i due tagli nuovi riempivano la giornata di
           // produttori e ignoravano l'elenco prenotabile: la prima prova
           // (Verona, 20/08/2026) e' stata bocciata tre volte di fila dalla

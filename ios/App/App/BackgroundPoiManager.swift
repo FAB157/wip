@@ -80,6 +80,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     private var isFetching = false
     private var lastFetchFailedAt: Double = 0
     private var isRunning = false
+    /// Ultimo testo di stato spedito al JS (30/08/2026, parità con
+    /// ItaintaBackgroundPoiService.updateNotificationAndStatus). `updateStatus`
+    /// passa a ogni fix con lo stesso «41 luoghi monitorati» e il JS lo
+    /// mostrava come banner sulla mappa ogni volta: si manda solo se cambia.
+    /// Android l'ha chiuso nel nativo il 29/08 — il JS ha già le sue due
+    /// barriere, questa toglie anche il traffico inutile sul ponte.
+    private var ultimoStatoInviatoAlJs: String?
 
     /// Ultima posizione vista dal manager, copia CONFINATA nella workQueue.
     /// Sostituisce le letture di `locationManager.location` fatte fuori dal
@@ -347,6 +354,11 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         arrivalRadiusWalk = min(max(prefs.object(forKey: "arrivalRadiusWalk") as? Double ?? 30, 15), 100)
         alertRadiusCar = min(max(prefs.object(forKey: "alertRadiusCar") as? Double ?? 300, 100), 600)
         arrivalRadiusCar = min(max(prefs.object(forKey: "arrivalRadiusCar") as? Double ?? 50, 20), 150)
+        // (23/09/2026, parità con restoreItineraryFromPrefs di Android) Le tappe
+        // del giro vivevano solo in memoria: se iOS chiudeva l'app a metà giro e
+        // la rilanciava per un evento di posizione, il servizio ripartiva senza
+        // tappe e quelle fuori dalle categorie del radar non scattavano più.
+        ripristinaTappeDaPrefs()
         // Anche il rilancio a freddo passa dal controllo del permesso: se nel
         // frattempo è stato revocato, si avvisa invece di restare ciechi.
         avviaConControlloPermesso()
@@ -387,6 +399,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         }
         impostaPoiCorrenti([])
         itineraryPois = []
+        prefs.removeObject(forKey: Self.chiaveTappeItinerario)
         lastQueryLocation = nil
         ultimaPosizioneNota = nil
     }
@@ -397,6 +410,24 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// e dai trigger. Ora vengono sempre unite al radar (mergedPois) e
     /// svuotate solo quando il JS manda una selezione vuota o allo stop.
     private var itineraryPois: [Poi] = []
+
+    /// Chiave delle tappe salvate (stessa di Android: PREF_ITINERARY_POIS).
+    /// Contiene il JSON ricevuto dal JS, che si ridecodifica al ripristino
+    /// esattamente come in syncManualSelectionConfinato.
+    private static let chiaveTappeItinerario = "itineraryPoisJson"
+
+    /// Rilancio a freddo: rimette le tappe salvate (workQueue). Non tocca le
+    /// tappe già in memoria, come restoreItineraryFromPrefs di Android.
+    private func ripristinaTappeDaPrefs() {
+        guard itineraryPois.isEmpty,
+              let json = prefs.string(forKey: Self.chiaveTappeItinerario), !json.isEmpty,
+              let data = json.data(using: .utf8),
+              var pois = try? JSONDecoder().decode([Poi].self, from: data),
+              !pois.isEmpty else { return }
+        for i in pois.indices { pois[i].isFromItinerary = true }
+        itineraryPois = pois
+        impostaPoiCorrenti(mergedPois(currentPois.filter { !$0.isFromItinerary }))
+    }
 
     /// UNICO punto di scrittura del radar attivo (workQueue, come tutto il
     /// resto dello stato). Tiene allineati i punti d'arrivo e pota le distanze
@@ -438,6 +469,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
               var pois = try? JSONDecoder().decode([Poi].self, from: data) else { return }
         for i in pois.indices { pois[i].isFromItinerary = true }
         store.insertPois(pois)
+        // Tappe salvate per il rilancio a freddo (vedi ripristinaTappeDaPrefs).
+        if pois.isEmpty { prefs.removeObject(forKey: Self.chiaveTappeItinerario) }
+        else { prefs.set(poisJson, forKey: Self.chiaveTappeItinerario) }
         // Selezione vuota = clear: le tappe escono e resta il solo radar.
         let radarOnly = currentPois.filter { !$0.isFromItinerary }
         itineraryPois = pois
@@ -449,6 +483,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // initialTrigger: se l'utente parte già dentro il raggio della prima
         // tappa, il teaser parte subito.
         if let loc = ultimaPosizioneNota { evaluateTriggers(at: loc) }
+        // (23/09/2026, R-SOSTA) Tappe nuove = POI non ancora raccontati: se il
+        // GPS era a riposo per sosta torna armato SUBITO, senza aspettare un
+        // fix che col filtro a 80 m arriverebbe tardi.
+        esciDaSostaSubito()
     }
 
     /// Fine del giro (locationService.unsyncTappeGiroFromNative → plugin
@@ -462,6 +500,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     }
 
     private func clearManualSelectionConfinato() {
+        prefs.removeObject(forKey: Self.chiaveTappeItinerario)
         guard !itineraryPois.isEmpty else { return }
         itineraryPois = []
         // Le tappe escono anche dal set monitorato: resta il solo radar.
@@ -493,11 +532,17 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // Anche il gate di bussola dimentica i rinvii pendenti del POI:
             // altrimenti un rinvio scaduto potrebbe farlo riparlare.
             BearingGate.shared.azzera(poiId: id)
+            // (23/09/2026, R-SOSTA) EXITED non è «raccontato»: fra 10 minuti
+            // l'arrivo torna possibile, quindi niente più riposo per sosta.
+            self.esciDaSostaSubito()
         }
     }
 
     private func startActiveMonitoring() {
         isRunning = true
+        // (23/09/2026) Si parte sempre dal profilo pieno: nessun riposo da
+        // fermo ereditato da una sessione precedente.
+        azzeraRiposiDaFermo()
         // Mirror storico ascolti: scarica gli id già ascoltati dal cloud
         // (best-effort). Serve al check "già acquistato = gratis" del trigger,
         // che così funziona anche offline.
@@ -510,18 +555,24 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // guideMode è stato confinato nella workQueue: si fotografa QUI e si
         // passa al main come costante, invece di leggerlo da un'altra coda.
         let isDriving = guideMode == "driving"
+        // (18/09/2026) NAVIGATORE A SCHERMO SPENTO: se il JS ha già consegnato
+        // un percorso al NavFollower PRIMA che il manager partisse (setNavRoute
+        // e startBackgroundPoiService arrivano in ordine libero), il profilo
+        // da navigatore si applica qui, all'avvio. NavFollower è protetto dal
+        // suo lock: si può leggere da qualunque coda.
+        let percorsoNav = NavFollower.shared.richiedeFixFitti
         DispatchQueue.main.async {
             // In auto serve la qualità di fix massima: "Best" in macchina
             // produce spesso 50-100 m di accuratezza (vetri, velocità) e i
             // trigger scattano tardi o vengono scartati dal filtro fail-closed.
             // BestForNavigation è il profilo che Apple riserva ai navigatori.
-            self.locationManager.desiredAccuracy = isDriving
+            self.locationManager.desiredAccuracy = (isDriving || percorsoNav)
                 ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
             // A piedi il cerchio di arrivo è 30 m: con un filtro di 10 m il
             // trigger può arrivare 7 s dopo l'ingresso (1,4 m/s). 5 m dimezza
             // la latenza; il GPS è comunque acceso di continuo, il filtro
             // regola solo la frequenza dei callback.
-            self.locationManager.distanceFilter = isDriving ? 10 : 5
+            self.locationManager.distanceFilter = (isDriving && !percorsoNav) ? 10 : 5
             // activityType: iOS ottimizza il duty-cycle del GPS in base all'attività
             // (in auto tollera pause in coda, a piedi calibra diversamente).
             self.locationManager.activityType = isDriving ? .automotiveNavigation : .fitness
@@ -674,6 +725,12 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // Copia confinata: la usano syncManualSelection/clearManualSelection al
         // posto di locationManager.location (main-only).
         ultimaPosizioneNota = location
+        // (18/09/2026) NAVIGATORE A SCHERMO SPENTO: ogni fix accettato passa
+        // anche al follower delle svolte. Sta DOPO i due filtri qui sopra
+        // (fix simulato, teletrasporto GPS) e PRIMA di tutto il resto: non
+        // dipende dal radar, quindi funziona anche in «modalità navigatore»
+        // (categories=['gemme:off'], nessun POI).
+        consegnaFixAlNavigatore(location)
         if lastQueryLocation == nil && currentPois.isEmpty {
             updateStatus("Audioguida attiva", "Posizione acquisita. Caricamento radar...")
         }
@@ -683,7 +740,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // valuta i trigger sulla posizione snappata sul percorso; senza tile o
         // strada vicina resta il GPS grezzo. Refresh area, tiering e notifica
         // usano la posizione reale.
-        if RoadSnap.shared.shouldRefresh(location) { RoadSnap.shared.refresh(location) }
+        // (23/09/2026, batteria) In «modalità navigatore» nessun POI può
+        // scattare: il tile strade serve solo a evaluateTriggers, non si scarica.
+        if !soloNavigatore && RoadSnap.shared.shouldRefresh(location) { RoadSnap.shared.refresh(location) }
         let evalLoc = RoadSnap.shared.snap(location, isDriving: guideMode == "driving") ?? location
         evaluateTriggers(at: evalLoc)
         // Tiering GPS e distanze in tempo reale: una passata sola, sulla
@@ -734,11 +793,23 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         let alertRad = guideMode == "driving" ? alertRadiusCar : alertRadiusWalk
         let armWindow = alertRad * 3.0 + 150.0 // margine per ri-armare in tempo
 
+        // (23/09/2026, R-BUSSOLA) A ogni fix: bussola giù dopo 120 s senza
+        // richieste del gate. Non tocca nessuna decisione.
+        BearingGate.shared.spegniBussolaSeInattiva()
+        // (23/09/2026, R-FERMO) Da fermi con un percorso attivo: va PRIMA del
+        // guard qui sotto, perché in «modalità navigatore» il radar è vuoto.
+        aggiornaFermoNav(location)
+
         guard !currentPois.isEmpty else {
             // POI non ancora noti → alta precisione (sicuro); radar già
             // interrogato e zona vuota → posizione economica. Nessuna
             // distanza da dichiarare, come prima.
+            // (R-SOSTA) Radar vuoto: nessuna sosta da ricordare.
+            sostaAttiva = false
+            ancoraSosta = nil
             applyLocationTier(armed: lastQueryLocation == nil)
+            // (R-BUSSOLA) GPS a riposo: finestra armata chiusa (Android: disattiva).
+            if lastQueryLocation != nil { BearingGate.shared.chiudiFinestra() }
             return
         }
 
@@ -746,10 +817,36 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         var closestPoi: Poi?
         var closestDist = Double.greatestFiniteMagnitude
         var approaching: [[String: Any]] = []
+        // (23/09/2026, R-SOSTA) Tutti i POI attivi nella finestra di armamento
+        // sono già stati raccontati? Solo `.arrivedFired` entro il TTL di 24 h
+        // conta come «raccontato»: è l'unico stato da cui, restando nei
+        // dintorni, nessun avviso e nessun arrivo può più partire. Un POI in
+        // avvicinamento, superato, uscito o mai visto tiene il GPS armato.
+        let adessoMs = nowMs()
+        var tuttiRaccontati = true
+        var poiConPerimetroDaVerificare: [Poi] = []
 
         for (indice, poi) in currentPois.enumerated() {
             let dist = location.distance(from: puntoArrivo(indice, poi))
             if dist < closestDist { closestDist = dist; closestPoi = poi }
+            if tuttiRaccontati, PoiCategories.isActive(poi: poi, selected: selectedCategories) {
+                let raccontato: Bool
+                if let rec = states[poi.id], rec.state == .arrivedFired,
+                   adessoMs - rec.updatedAt < arrivalRetriggerTtlMs {
+                    raccontato = true
+                } else {
+                    raccontato = false
+                }
+                if !raccontato {
+                    if dist <= armWindow {
+                        tuttiRaccontati = false
+                    } else if poi.footprint?.isEmpty == false {
+                        // Un perimetro può stare molto più vicino del suo
+                        // punto d'arrivo: si controlla dopo, solo se serve.
+                        poiConPerimetroDaVerificare.append(poi)
+                    }
+                }
+            }
             if states[poi.id]?.state == .approachFired && dist <= alertRad * 2 {
                 approaching.append([
                     "poiId": poi.id, "name": poi.nome,
@@ -761,7 +858,23 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
 
         // Nel dubbio (POI non ancora caricati) resta ad alta precisione: il
         // caso peggiore è "risparmia meno", mai "manca un trigger".
-        applyLocationTier(armed: lastQueryLocation == nil || closestDist <= armWindow)
+        let armato = lastQueryLocation == nil || closestDist <= armWindow
+        if armato && tuttiRaccontati {
+            for poi in poiConPerimetroDaVerificare {
+                let dMuro = PoiFootprints.distanzaDalPerimetro(
+                    poiId: poi.id, footprint: poi.footprint,
+                    lat: location.coordinate.latitude, lon: location.coordinate.longitude,
+                    entro: armWindow)
+                if dMuro <= armWindow { tuttiRaccontati = false; break }
+            }
+        }
+        aggiornaSosta(location, armato: armato && lastQueryLocation != nil, tuttiRaccontati: tuttiRaccontati)
+        applyLocationTier(armed: armato && !sostaAttiva)
+        // (23/09/2026, R-BUSSOLA, parità Android applyLocationRate) GPS davvero
+        // a riposo = finestra armata chiusa; riposo per SOSTA = bussola giù ma
+        // finestra ancora «già chiesta» (la pre-riscalda l'arrivo dopo).
+        if !armato { BearingGate.shared.chiudiFinestra() }
+        else if sostaAttiva { BearingGate.shared.spegniBussola() }
 
         if !approaching.isEmpty {
             sendEvent("wip-poi-distance-update", json: ["entries": approaching])
@@ -776,14 +889,181 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    // MARK: - Batteria da fermi (23/09/2026, REVISIONE 3 della spec nav)
+    //
+    // Due regole COMUNI, identiche su Android (vedi docs/nav-nativo-spec.md,
+    // «REVISIONE 3 — batteria»). Nessuna tocca il codice dei trigger: cambiano
+    // solo la frequenza e la precisione dei fix, e solo quando nessun trigger
+    // può essere ritardato.
+    //
+    // R-FERMO — con un percorso di navigazione attivo, se da 120 s lo
+    // spostamento dall'ancora è < 20 m e la velocità < 0,5 m/s, profilo
+    // «fermo» (NearestTenMeters, filtro 10 m). Si torna SUBITO al profilo da
+    // navigatore al primo fix a > 20 m dall'ancora o a > 0,8 m/s. Il follower
+    // non cambia logica: conta e dice le manovre come prima.
+    //
+    // R-FERMO non si applica mai con un POI che tiene armato il GPS.
+    //
+    // R-SOSTA — nello stato ARMATO (con un percorso attivo toglie solo
+    // l'«armato»: resta il profilo da navigatore), se TUTTI i POI attivi nella
+    // finestra di armamento sono già stati raccontati e da 180 s lo
+    // spostamento è < 25 m, profilo di RIPOSO esistente (HundredMeters, filtro
+    // 80 m). Al primo fix a > 25 m dall'ancora si torna alla valutazione
+    // normale. Mai con un POI non ancora raccontato nella finestra.
+    //
+    // Stato confinato nella workQueue, come tutto il resto.
+
+    private static let fermoNavRaggioM: Double = 20
+    private static let fermoNavDurataMs: Double = 120_000
+    private static let fermoNavVelocitaIngressoMs: Double = 0.5
+    private static let fermoNavVelocitaUscitaMs: Double = 0.8
+    private static let sostaRaggioM: Double = 25
+    private static let sostaDurataMs: Double = 180_000
+
+    private var ancoraFermoNav: CLLocation?
+    private var ancoraFermoNavDaMs: Double = 0
+    private var fermoNavAttivo = false
+    private var ancoraSosta: CLLocation?
+    private var ancoraSostaDaMs: Double = 0
+    private var sostaAttiva = false
+
+    /// Dimentica ancore e profili da fermo: il prossimo fix riparte dal
+    /// comportamento normale. Chiamata quando cambia qualcosa che non passa
+    /// dal fix (percorso consegnato/tolto, tappe nuove, banner chiuso, avvio).
+    /// R-SOSTA interrotta da un evento che non è un fix (tappe nuove, banner
+    /// chiuso): se il GPS era a riposo per sosta, torna armato adesso.
+    private func esciDaSostaSubito() {
+        guard sostaAttiva else { return }
+        sostaAttiva = false
+        ancoraSosta = nil
+        ancoraSostaDaMs = 0
+        if isRunning { applyLocationTier(armed: true) }
+    }
+
+    private func azzeraRiposiDaFermo() {
+        let eraInRiposo = fermoNavAttivo || sostaAttiva
+        ancoraFermoNav = nil
+        ancoraFermoNavDaMs = 0
+        fermoNavAttivo = false
+        ancoraSosta = nil
+        ancoraSostaDaMs = 0
+        sostaAttiva = false
+        if eraInRiposo { appliedTierKey = "" }
+    }
+
+    /// R-FERMO. Sulla workQueue, a ogni fix (aggiornaProssimitaEDistanze).
+    /// Velocità negativa = «non disponibile» su iOS: non conta né per entrare
+    /// né per uscire (decide lo spostamento). Fix senza precisione: ignorati.
+    private func aggiornaFermoNav(_ location: CLLocation) {
+        guard NavFollower.shared.richiedeFixFitti else {
+            if ancoraFermoNav != nil || fermoNavAttivo {
+                let era = fermoNavAttivo
+                ancoraFermoNav = nil
+                ancoraFermoNavDaMs = 0
+                fermoNavAttivo = false
+                if era { appliedTierKey = "" }
+            }
+            return
+        }
+        guard location.horizontalAccuracy >= 0 else { return }
+        let adesso = nowMs()
+        // Spec REVISIONE 3 (identica ad Android aggiornaSoste): velocità non
+        // dichiarata (negativa su iOS) vale 0.
+        let v = (location.speed.isFinite && location.speed > 0) ? location.speed : 0
+        guard let ancora = ancoraFermoNav else {
+            ancoraFermoNav = location
+            ancoraFermoNavDaMs = adesso
+            return
+        }
+        let d = location.distance(from: ancora)
+        // Ancora nuova (e sosta da capo) al primo fix oltre 20 m o sopra
+        // 0,8 m/s: se si era nel profilo «fermo», si esce SUBITO (la chiave
+        // cambia e applyLocationTier lo riapplica in questo stesso fix).
+        if d > Self.fermoNavRaggioM || v > Self.fermoNavVelocitaUscitaMs {
+            fermoNavAttivo = false
+            ancoraFermoNav = location
+            ancoraFermoNavDaMs = adesso
+            return
+        }
+        // Isteresi 0,5–0,8 m/s: dentro la fascia si resta nel profilo in cui
+        // si è; si ENTRA solo dopo 120 s entro 20 m e con il fix < 0,5 m/s.
+        if !fermoNavAttivo, adesso - ancoraFermoNavDaMs >= Self.fermoNavDurataMs,
+           v < Self.fermoNavVelocitaIngressoMs {
+            fermoNavAttivo = true
+        }
+    }
+
+    /// R-SOSTA. `armato` = il tier sarebbe armato per prossimità (radar già
+    /// interrogato); `tuttiRaccontati` come calcolato in
+    /// aggiornaProssimitaEDistanze. Con un percorso attivo vale lo stesso, come
+    /// su Android: la sosta toglie solo l'«armato», il profilo resta quello da
+    /// navigatore e R-FERMO decide se abbassarlo.
+    private func aggiornaSosta(_ location: CLLocation, armato: Bool, tuttiRaccontati: Bool) {
+        guard armato, tuttiRaccontati,
+              location.horizontalAccuracy >= 0 else {
+            ancoraSosta = nil
+            ancoraSostaDaMs = 0
+            sostaAttiva = false
+            return
+        }
+        let adesso = nowMs()
+        guard let ancora = ancoraSosta else {
+            ancoraSosta = location
+            ancoraSostaDaMs = adesso
+            return
+        }
+        let d = location.distance(from: ancora)
+        if sostaAttiva {
+            if d > Self.sostaRaggioM {
+                // Ripartito: valutazione normale (tier armato) da questo fix.
+                sostaAttiva = false
+                ancoraSosta = location
+                ancoraSostaDaMs = adesso
+            }
+            return
+        }
+        if d > Self.sostaRaggioM {
+            ancoraSosta = location
+            ancoraSostaDaMs = adesso
+            return
+        }
+        if adesso - ancoraSostaDaMs >= Self.sostaDurataMs {
+            sostaAttiva = true
+        }
+    }
+
     private func applyLocationTier(armed: Bool) {
         let isDriving = guideMode == "driving"
-        let key = "\(armed)-\(isDriving)"
+        // (18/09/2026) NAVIGATORE A SCHERMO SPENTO. Con un percorso attivo il
+        // follower delle svolte vuole un fix ogni ~5 m: il profilo «economico»
+        // qui sotto (100 m di precisione, filtro a 80 m) è proprio quello che
+        // scatta in «modalità navigatore» — radar interrogato e vuoto perché
+        // le categorie sono ['gemme:off'] — e lo lascerebbe cieco fra una
+        // svolta e l'altra. Finché c'è il percorso vince il profilo da
+        // navigatore; la chiave cambia quando il percorso arriva, finisce o
+        // viene tolto, quindi il tier di prima si RIPRISTINA da solo al primo
+        // passaggio di qui (e subito a clearNavRoute, vedi
+        // aggiornaProfiloNavigatore). Senza percorso: tutto identico a prima.
+        let percorsoNav = NavFollower.shared.richiedeFixFitti
+        // (23/09/2026, R-FERMO) Percorso attivo ma utente fermo da 120 s:
+        // profilo «fermo» (10 m / filtro 10 m) fino al primo movimento. MAI
+        // con un POI che tiene armato il GPS (spec REVISIONE 3, come Android):
+        // lì resta il profilo da navigatore, che è anche quello dei trigger.
+        let fermoNav = percorsoNav && fermoNavAttivo && !armed
+        let key = percorsoNav
+            ? (fermoNav ? "navfermo-\(isDriving)" : "nav-\(isDriving)")
+            : "\(armed)-\(isDriving)"
         guard key != appliedTierKey else { return }
         appliedTierKey = key
         DispatchQueue.main.async {
             self.locationManager.activityType = isDriving ? .automotiveNavigation : .fitness
-            if armed {
+            if fermoNav {
+                self.locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+                self.locationManager.distanceFilter = 10
+            } else if percorsoNav {
+                self.locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+                self.locationManager.distanceFilter = 5
+            } else if armed {
                 self.locationManager.desiredAccuracy = isDriving
                     ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
                 self.locationManager.distanceFilter = isDriving ? 10 : 5
@@ -794,7 +1074,203 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    // MARK: - Navigatore a schermo spento (18/09/2026)
+    //
+    // Ordine del committente: «il navigatore, sia nell'audioguida che nei
+    // percorsi, deve funzionare anche a schermo spento». Le svolte le calcola
+    // e le dice il JS, ma a schermo spento la WebView è congelata; questo
+    // manager invece resta vivo e riceve i fix. Il JS consegna il percorso al
+    // NavFollower (in fondo al file) e finché è vivo manda un battito: quando
+    // il battito manca da più di 12 s le frasi le dice il nativo, da qui.
+
+    /// Durata di una frase del navigatore in coda. Una svolta detta in ritardo
+    /// è un'indicazione SBAGLIATA: se davanti c'è un teaser o una guida che
+    /// sta parlando, dopo 20 s la frase si butta invece di dirla fuori tempo.
+    private static let scadenzaFraseNavMs: Double = 20_000
+    /// Un fix più vecchio di così non va al follower: all'avvio degli update e
+    /// nei callback delle region CoreLocation consegna anche l'ultima
+    /// posizione in cache, che per una svolta a 30 m è già un'altra strada.
+    private static let etaMassimaFixNavMs: Double = 15_000
+
+    /// Il fix al follower; se lui risponde con una frase (battito del JS
+    /// scaduto) la si dice per la STESSA strada interna di `speakText` con
+    /// kind "nav" a servizio acceso: la coda unica SpeechQueue — stesso
+    /// sintetizzatore dei teaser, stessa sessione audio da navigatore
+    /// (.voicePrompt + duckOthers), stessa pausa del player JS. Nessun secondo
+    /// motore TTS. Sulla workQueue (chiamata da handleLocation).
+    private func consegnaFixAlNavigatore(_ location: CLLocation) {
+        // Due orologi, di proposito: l'età del fix e la scadenza in coda si
+        // misurano sulla data (è quella di `location.timestamp` e di
+        // SpeechQueue); il follower ragiona sul suo orologio monotono.
+        let adesso = nowMs()
+        guard adesso - location.timestamp.timeIntervalSince1970 * 1000 <= Self.etaMassimaFixNavMs else { return }
+        if let frase = NavFollower.shared.onFix(
+            lat: location.coordinate.latitude,
+            lon: location.coordinate.longitude,
+            accuracy: location.horizontalAccuracy,
+            nowMs: NavFollower.orologioMs()
+        ) {
+            // Stessi campi che speakText passa per il JS (priority 0, kind
+            // "nav", nessun POI) e la stessa scadenza di 20 s che il JS ora
+            // dà alle sue svolte (`ttlMs`, 21/09/2026).
+            SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
+                text: frase,
+                isGem: false,
+                isItinerary: false,
+                poiId: nil,
+                priority: 0,
+                kind: "nav",
+                scadenzaMs: adesso + Self.scadenzaFraseNavMs
+            ))
+        }
+        // (18/09/2026 notte) DOPO la logica delle svolte, il cruscotto: stesso
+        // fix, indice già aggiornato (e `finito` già deciso, se è l'arrivo).
+        ridisegnaCruscottoNav(location, forza: false)
+    }
+
+    /// (18/09/2026 notte) «Anche il monitor, il banner deve funzionare sul
+    /// display spento». Se il nativo è al comando il follower rifà i numeri
+    /// del cruscotto e qui si ridisegna la Live Activity per la STESSA strada
+    /// interna di `updateNavBanner`: `LiveActivityNav` (stesso dizionario,
+    /// stesso `statoDaDizionario`), sul main come fa il plugin. Due differenze
+    /// volute rispetto al JS: solo UPDATE/END di un'attività GIÀ in corso —
+    /// una `Activity.request` dal background fallirebbe, e un cruscotto il
+    /// nativo non lo apre mai da sé — e niente ripiego su notifica locale.
+    /// Throttling (3 s + firma) dentro `NavFollower.cruscotto`. Sulla workQueue.
+    private func ridisegnaCruscottoNav(_ location: CLLocation?, forza: Bool) {
+        guard let location = location else { return }
+        guard let stato = NavFollower.shared.cruscotto(
+            lat: location.coordinate.latitude,
+            lon: location.coordinate.longitude,
+            accuracy: location.horizontalAccuracy,
+            forza: forza
+        ) else { return }
+        let spegni = (stato["spegni"] as? Bool) ?? false
+        DispatchQueue.main.async {
+            if spegni {
+                // Arrivo finale detto dal nativo: come updateNavBanner con
+                // `attivo: false`.
+                LiveActivityNav.shared.termina()
+            } else {
+                _ = LiveActivityNav.shared.aggiornaSeInCorso(stato: stato)
+            }
+        }
+    }
+
+    /// Chiamata dal plugin dopo setNavRoute / clearNavRoute: allinea SUBITO la
+    /// frequenza dei fix al percorso (o alla sua assenza), senza aspettare il
+    /// prossimo fix — che col filtro a 80 m del profilo economico potrebbe
+    /// arrivare dopo la prima svolta. Ingresso pubblico: consegna alla
+    /// workQueue, come tutti gli altri.
+    func aggiornaProfiloNavigatore() {
+        workQueue.async { self.aggiornaProfiloNavigatoreConfinato() }
+    }
+
+    /// (18/09/2026) Un tasto della Live Activity premuto a SCHERMO SPENTO: il
+    /// JS è sospeso e l'evento navBannerAction lo vedrà solo al risveglio, ma
+    /// chi sta parlando è il follower nativo — che quindi obbedisce subito.
+    /// Col JS vivo è innocuo (vedi NavFollower.impostaPausa). Stesse azioni e
+    /// stessa logica di `applicaAzioneNavAlFollower` nel servizio Android.
+    /// «salta» e «ricalcola» il nativo non li sa fare: quei tasti APRONO
+    /// L'APP (Link, WipNavLiveActivity) e arrivano al JS freschi.
+    func azioneNavDalBanner(_ azione: String) {
+        workQueue.async {
+            switch azione {
+            case "pausa", "riprendi":
+                // (21/09/2026, REVISIONE 2) Azioni ESPLICITE, mai un'alternanza.
+                NavFollower.shared.impostaPausa(azione == "pausa")
+                // In pausa il GPS torna a riposo, alla ripresa da navigatore.
+                self.aggiornaProfiloNavigatoreConfinato()
+                // (18/09/2026 notte) Il tasto deve RISPONDERE: ridisegno
+                // subito con `inPausa` aggiornato, senza aspettare il fix
+                // dopo (da fermi non arriva). Col JS vivo `cruscotto` dà nil
+                // e il banner lo ridisegna lui. (21/09/2026, REVISIONE 2)
+                // Con l'ultimo fix BUONO visto dal follower (≤ 60 m), come
+                // Android: `ultimaPosizioneNota` può essere un fix da 100 m o
+                // non valido, e `forza` salta il controllo di precisione.
+                if let buono = NavFollower.shared.ultimoFixBuono() {
+                    self.ridisegnaCruscottoNav(
+                        CLLocation(
+                            coordinate: CLLocationCoordinate2D(latitude: buono.lat, longitude: buono.lon),
+                            altitude: 0, horizontalAccuracy: 10, verticalAccuracy: -1, timestamp: Date()
+                        ),
+                        forza: true
+                    )
+                }
+            case "termina":
+                // (21/09/2026, REVISIONE 2) Fotografia del progresso prima di
+                // svuotare: al «no» della conferma il JS la riprende.
+                NavFollower.shared.terminaDalBanner()
+                self.aggiornaProfiloNavigatoreConfinato()
+                // (18/09/2026 notte) Il cruscotto si SPEGNE, come
+                // updateNavBanner con `attivo: false`. Col JS vivo lo farà
+                // anche lui all'evento navBannerAction: `termina` due volte è
+                // innocuo (la seconda non trova l'attività).
+                DispatchQueue.main.async { LiveActivityNav.shared.termina() }
+            case "riascolta":
+                // (21/09/2026, REVISIONE 2) Nel GIRO «Riascolta» per il JS vuol
+                // dire rifare la guida della tappa, non la svolta: il nativo
+                // ridice la manovra solo nella navigazione a tappa singola
+                // (come Android, dove nel giro il tasto non c'è).
+                guard NavFollower.shared.modoCruscotto() == "singola",
+                      let frase = NavFollower.shared.ripeti() else { return }
+                SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
+                    text: frase,
+                    isGem: false,
+                    isItinerary: false,
+                    poiId: nil,
+                    priority: 0,
+                    kind: "nav",
+                    // `nowMs()` è una funzione GLOBALE (PoiModels.swift), non
+                    // un metodo del manager: con `self.` non compila.
+                    scadenzaMs: nowMs() + Self.scadenzaFraseNavMs
+                ))
+            default:
+                break
+            }
+        }
+    }
+
+    private func aggiornaProfiloNavigatoreConfinato() {
+        // (23/09/2026, REVISIONE 3) Percorso consegnato, tolto, in pausa o
+        // ripreso: le ancore da fermo (R-FERMO, R-SOSTA) ripartono da zero,
+        // si riparte dal profilo pieno.
+        azzeraRiposiDaFermo()
+        // Chiave azzerata: il prossimo applyLocationTier riscrive comunque.
+        appliedTierKey = ""
+        // Manager non ancora avviato (o fermo per permesso): il profilo lo
+        // applica startActiveMonitoring quando parte, leggendo il follower.
+        guard isRunning else { return }
+        if NavFollower.shared.richiedeFixFitti {
+            applyLocationTier(armed: true)
+            // Aggiornamenti continui GARANTITI: startActiveMonitoring li ha già
+            // accesi in ogni modalità (anche con categories=['gemme:off']) e
+            // nessuno li spegne finché il servizio è attivo; richiamarlo è
+            // idempotente e copre il caso in cui il sistema li avesse fermati.
+            DispatchQueue.main.async { self.locationManager.startUpdatingLocation() }
+        } else if let loc = ultimaPosizioneNota {
+            // Percorso tolto: si ripristina il tier di PRIMA rifacendo lo
+            // stesso conto che si fa a ogni fix (POI nella finestra → alta
+            // precisione, altrimenti economica). Nessun valore salvato a
+            // parte: il tier dipende dal radar di adesso, non da quello di
+            // quando il percorso è arrivato.
+            aggiornaProssimitaEDistanze(loc)
+        } else {
+            applyLocationTier(armed: true) // nessuna posizione: profilo d'avvio
+        }
+    }
+
     // MARK: - Refresh POI (port di checkRefreshGeofences)
+
+    /// «Modalità navigatore» (percorso su misura senza audioguida): il JS
+    /// avvia il servizio con la sola sentinella "gemme:off" e promette che il
+    /// servizio non monitora nessun POI. Vero solo senza tappe dell'itinerario
+    /// (che sono sempre attive). Stato confinato: si legge sulla workQueue.
+    private var soloNavigatore: Bool {
+        !selectedCategories.isEmpty
+            && selectedCategories.allSatisfy { $0 == "gemme:off" }
+            && itineraryPois.isEmpty
+    }
 
     private func checkRefreshPois(at location: CLLocation) {
         let isDriving = guideMode == "driving"
@@ -802,6 +1278,20 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         let radiusKm: Double = isDriving ? 10 : 5
 
         if let last = lastQueryLocation, last.distance(from: location) <= refreshThreshold { return }
+        // (23/09/2026, batteria, parità Android) «Modalità navigatore»
+        // (categories = ['gemme:off'], nessuna tappa): nessun POI può parlare
+        // né notificare, quindi niente RPC, niente file, niente region, niente
+        // batch-teaser. Si segna la posizione come interrogata (radar vuoto):
+        // così il tier del GPS non resta «POI non ancora noti = alta precisione»
+        // e il refresh si riprova solo dopo i soliti 200 m / 1 km.
+        if soloNavigatore {
+            lastQueryLocation = location
+            if !currentPois.isEmpty {
+                impostaPoiCorrenti(mergedPois([]))
+                refreshMonitoredRegions(around: location)
+            }
+            return
+        }
         if nowMs() - lastFetchFailedAt < fetchRetryBackoffMs { return }
         guard !isFetching else { return }
         isFetching = true
@@ -815,11 +1305,31 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             return
         }
 
+        // (29/08/2026) RAGGIO A SCALARE, come su Android: a 5 km la RPC
+        // nearby_pois supera i 3 s di statement_timeout del ruolo anonimo
+        // dove i POI sono decine di migliaia (HTTP 500, 57014); a 2 km
+        // risponde. Prima un fallimento lasciava il radar vuoto per tutto il
+        // backoff e ritentava lo stesso raggio. Ora si ripiega subito.
+        let raggi = [radiusKm, radiusKm / 2.5, 1.0]
+        fetchPoisConRipiego(at: location, raggi: raggi, indice: 0)
+    }
+
+    private func fetchPoisConRipiego(at location: CLLocation, raggi: [Double], indice: Int) {
         supabase.fetchPoisNearby(
             lat: location.coordinate.latitude, lon: location.coordinate.longitude,
-            radiusKm: radiusKm, uiCategories: selectedCategories, lang: appLanguage
+            radiusKm: raggi[indice], uiCategories: selectedCategories, lang: appLanguage
         ) { [weak self] result in
             guard let self = self else { return }
+            // Fallito e c'e' ancora un raggio piu' stretto da provare: si
+            // riprova SUBITO, senza toccare isFetching ne' il backoff.
+            if case .failure(let e) = result, indice + 1 < raggi.count {
+                NSLog("[BackgroundPoiManager] fetch a %.1f km fallito (%@), provo piu' stretto", raggi[indice], e.localizedDescription)
+                self.fetchPoisConRipiego(at: location, raggi: raggi, indice: indice + 1)
+                return
+            }
+            if indice > 0, case .success = result {
+                NSLog("[BackgroundPoiManager] radar caricato con raggio ridotto a %.1f km", raggi[indice])
+            }
             self.workQueue.async {
                 defer { self.isFetching = false }
                 switch result {
@@ -866,15 +1376,31 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     // Al server solo i 10 POI più vicini ANCORA senza teaser:
                     // prima partiva tutto il radar (fino a 1.000 id) a ogni
                     // refresh, quasi tutti già con teaser o mai raggiunti.
+                    // (23/09/2026, batteria) Mai due volte lo stesso id (per
+                    // lingua) entro `teaserRichiestaPausaMs`: dove il server
+                    // rifiuta il teaser (niente fonti) ogni refresh rimandava
+                    // gli stessi 10 id e rifaceva 10 chiamate AI a vuoto.
+                    let adessoTeaser = nowMs()
                     let missingTeaser = pois
                         .filter { $0.teaserText?.isEmpty != false }
+                        .filter { p in
+                            guard let ultimo = self.teaserChiestiMs["\(p.id)|\(self.appLanguage)"] else { return true }
+                            return adessoTeaser - ultimo >= Self.teaserRichiestaPausaMs
+                        }
                         .sorted { location.distance(from: $0.coordinate) < location.distance(from: $1.coordinate) }
                         .prefix(10)
                         .map { $0.id }
                     if !missingTeaser.isEmpty {
+                        self.segnaTeaserChiesti(Array(missingTeaser), adesso: adessoTeaser)
                         self.generateTeasersInBackground(poiIds: Array(missingTeaser))
                     }
-                    self.showRadarTeaserNotifications(pois: pois, location: location)
+                    // DISATTIVATO (03/09/2026, committente: notifiche a
+                    // 248/396/499 m — "troppo distante", "max e' 300 in auto e
+                    // 150 a piedi"). Stesso motivo di Android
+                    // (ItaintaBackgroundPoiService.kt): l'orizzonte di
+                    // 1200/5000 m era indipendente dal raggio impostato
+                    // dall'utente. Funzione lasciata sotto, solo non chiamata.
+                    // self.showRadarTeaserNotifications(pois: pois, location: location)
 
                     if isFirstRegistration {
                         self.evaluateTriggers(at: location)
@@ -1197,6 +1723,12 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
 
         approachSpokenInBatch = false
         arrivalSpokenInBatch = false
+        // (23/09/2026, R-BUSSOLA, parità Android `bussolaServe`) Candidati
+        // (i 5 vicini, non tappe, non raccontati) che potrebbero chiedere il
+        // gate ai prossimi fix, meno quelli per cui il gate ha appena deciso.
+        // Misura sola: nessuna decisione qui sotto la legge.
+        var candidatiGate: [String] = []
+        var decisiGate = Set<String>()
 
         for c in candidates {
             // Raggi calibrati sul perimetro (footprint OSM) del singolo POI,
@@ -1207,6 +1739,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             let exitRad = alertRad * 1.5
             let record = store.getTriggerState(c.poi.id)
             let state = record?.state ?? .pending
+            if keptIds.contains(c.poi.id), !c.poi.isFromItinerary, state != .arrivedFired {
+                candidatiGate.append(c.poi.id)
+            }
 
             // A 30 METRI DAL PERIMETRO dell'edificio (poi_footprints, poligono
             // OSM; 0 m = dentro). Decisione del 22/08/2026: la guida parte a
@@ -1352,6 +1887,8 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                             dentroPerimetro: dentroPerimetro, distanzaM: c.dist
                         )
                     if esitoGate != .rimanda {
+                        // (23/09/2026, R-BUSSOLA) Deciso: niente pre-riscaldamento per lui.
+                        decisiGate.insert(c.poi.id)
                         // (28/08/2026, AUD-04) UNA guida completa per fix. I
                         // candidati sono ordinati (itinerario > gemma > più
                         // vicino): il primo che arriva riceve teaser, pass e
@@ -1392,6 +1929,14 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     approachSpokenInBatch = true
                 }
             }
+        }
+
+        // (23/09/2026, R-BUSSOLA, parità Android) Resta un candidato in gioco:
+        // bussola pronta, ma solo se il gate l'aveva già chiesta in questa
+        // finestra armata (mai la prima accensione). Senza candidati la spegne
+        // spegniBussolaSeInattiva dopo 120 s (aggiornaProssimitaEDistanze).
+        if candidatiGate.contains(where: { !decisiGate.contains($0) }) {
+            BearingGate.shared.preRiscalda()
         }
     }
 
@@ -1545,6 +2090,68 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             supabase.fetchAudioguideText(poiId: poi.id, lang: lang, character: voice, accessToken: audioguideToken) { text in
                 AudioPrefetchManager.prefetch(poiId: poi.id, lang: lang, character: voice, text: text)
             }
+        }
+    }
+
+    /// PRE-SCARICO DI UN GIRO INTERO (18/09/2026, committente: «fai che sia
+    /// scaricato sempre in nativo anche»). All'avvio di un giro il JS
+    /// pre-scarica testi e MP3 di tutte le tappe — ma nell'IndexedDB della
+    /// WebView, che a schermo spento dorme: il nativo non li vedeva e restava
+    /// col solo prefetch all'avvicinamento, cioè proprio dove nel centro
+    /// storico la rete manca (teaser sì, audioguida completa no, finché non si
+    /// riapriva l'app). Qui le stesse tappe finiscono ANCHE nella cache di
+    /// AudioPrefetchManager, con la stessa catena di `prefetchAudio` (testo
+    /// offline se c'è, altrimenti get-or-create per lingua → MP3). Il server è
+    /// caldo: il JS ha appena generato lo stesso testo con la stessa voce.
+    /// UNA ALLA VOLTA, a distanza di un secondo e mezzo. Il prefetch
+    /// all'avvicinamento resta com'è (se il file c'è già esce subito).
+    /// Port di AudioPrefetchManager.prefetchMolti (Android). Ritorna quante
+    /// tappe sono state messe in lista; mai errori verso il chiamante.
+    func prescaricaGuide(poiIds: [String], lang: String, character: String?) -> Int {
+        var visti = Set<String>()
+        let ids = poiIds
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && visti.insert($0).inserted }
+        guard !ids.isEmpty else { return 0 }
+        workQueue.async {
+            // PRIMA la voce delle preferenze, come fa l'arrivo (resolveGuideVoice)
+            // e come fa Android: la voce è nel NOME del file in cache, e un file
+            // scaricato con un'altra voce all'arrivo non verrebbe trovato. Quella
+            // passata dal JS vale solo come ripiego.
+            let ripiego = (character == "nicky" || character == "dante") ? (character ?? "nicky") : "nicky"
+            let voce = self.resolveGuideVoice(fallback: ripiego)
+            self.prescaricaProssimaGuida(ids, 0, lang: lang, voce: voce)
+        }
+        return ids.count
+    }
+
+    private func prescaricaProssimaGuida(_ ids: [String], _ i: Int, lang: String, voce: String) {
+        // Senza rete non si insiste: ci riprova il prefetch all'avvicinamento.
+        guard i < ids.count, isOnline else { return }
+        let poiId = ids[i]
+        let avanti: () -> Void = { [weak self] in
+            self?.workQueue.asyncAfter(deadline: .now() + 1.5) {
+                self?.prescaricaProssimaGuida(ids, i + 1, lang: lang, voce: voce)
+            }
+        }
+        if AudioPrefetchManager.cachedFile(poiId: poiId, lang: lang, character: voce) != nil {
+            avanti()
+            return
+        }
+        // soloCache su TUTTE E DUE le chiamate (come Android): il blocco prende
+        // solo testi già scritti e voci già sintetizzate — il JS le ha appena
+        // prodotte. Ciò che manca NON si genera qui (niente AI, niente sintesi,
+        // niente quota giornaliera mangiata da N tappe): lo farà l'arrivo, col
+        // cancello di sempre.
+        if let localText = store.getOfflineAudioText(poiId, lang: lang) {
+            AudioPrefetchManager.prefetch(poiId: poiId, lang: lang, character: voce, text: localText, soloCache: true)
+            avanti()
+            return
+        }
+        let audioguideToken = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken)
+        supabase.fetchAudioguideText(poiId: poiId, lang: lang, character: voce, accessToken: audioguideToken, soloCache: true) { text in
+            AudioPrefetchManager.prefetch(poiId: poiId, lang: lang, character: voce, text: text, soloCache: true)
+            avanti()
         }
     }
 
@@ -2212,6 +2819,19 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Teaser batch (stesso endpoint del server Vercel)
 
+    /// (23/09/2026, batteria) Ultimo invio a batch-teaser per "id|lingua"
+    /// (workQueue, solo in memoria: un riavvio può al più rimandarli una
+    /// volta). Il server a sua volta ricorda i rifiuti di contenuto per giorni.
+    private var teaserChiestiMs: [String: Double] = [:]
+    private static let teaserRichiestaPausaMs: Double = 45 * 60 * 1000
+
+    private func segnaTeaserChiesti(_ ids: [String], adesso: Double) {
+        if teaserChiestiMs.count > 500 {
+            teaserChiestiMs = teaserChiestiMs.filter { adesso - $0.value < Self.teaserRichiestaPausaMs }
+        }
+        for id in ids { teaserChiestiMs["\(id)|\(appLanguage)"] = adesso }
+    }
+
     private func generateTeasersInBackground(poiIds: [String]) {
         guard let url = URL(string: "\(WipApi.base)/api/poi/batch-teaser") else { return }
         var req = URLRequest(url: url)
@@ -2225,6 +2845,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             req.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["poiIds": poiIds, "lang": appLanguage])
+        // (30/08/2026, parità con Android) I 60 s di default non bastano: il
+        // server genera fino a 20 teaser con l'AI in parallelo e, quando Groq
+        // rallenta, risponde in 30-40 s — ma con l'app in background la sveglia
+        // è breve e la richiesta parte tardi. Qui nessuno aspetta (nessuno
+        // legge la risposta) e chiudere prima non ferma il server: si buttava
+        // via un lavoro già pagato e si loggava un errore per niente.
+        req.timeoutInterval = 90
         URLSession.shared.dataTask(with: req) { _, response, error in
             if let error = error {
                 NSLog("[WIP] batch-teaser: errore di rete \(error.localizedDescription)")
@@ -2236,8 +2863,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Eventi verso il plugin
 
+    /// Confinato nella workQueue come tutto lo stato mutabile: `updateStatus`
+    /// si chiama solo da lì (vedi il blocco CONFINAMENTO DI THREAD in cima).
     private func updateStatus(_ title: String, _ text: String) {
-        sendEvent("statusUpdate", data1: text + dayPassSuffix())
+        let testo = text + dayPassSuffix()
+        guard testo != ultimoStatoInviatoAlJs else { return }
+        ultimoStatoInviatoAlJs = testo
+        sendEvent("statusUpdate", data1: testo)
     }
 
     /// Con Day Pass attivo mostra le guide rimaste, come la notifica Android.
@@ -2294,5 +2926,1254 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         foregroundLock.lock()
         defer { foregroundLock.unlock() }
         return appInForegroundFlag
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// NAVIGATORE A SCHERMO SPENTO — il «follower» delle svolte (18/09/2026)
+//
+// Ordine del committente: «il navigatore, sia nell'audioguida che nei
+// percorsi, deve funzionare anche a schermo spento. È fondamentale».
+// Specifica unica JS · Android · iOS: docs/nav-nativo-spec.md. L'algoritmo
+// qui sotto è lo STESSO di NavFollower.kt, costante per costante: chi tocca
+// uno tocca anche l'altro.
+//
+// Perché esiste: le svolte le calcola e le dice il JS nella WebView, che a
+// schermo spento viene congelata. Questo processo invece resta vivo (background
+// location) e riceve i fix. Il JS CONSEGNA il percorso già pronto — manovre
+// col testo GIÀ tradotto e tracciato: il nativo non traduce e non calcola
+// percorsi — e finché è vivo manda un BATTITO e parla lui (ha la regia audio
+// completa). Se il battito manca da più di 12 s, parla il nativo. Il conto
+// delle manovre si tiene SEMPRE, anche tacendo: è quello che al passaggio di
+// consegne evita di ripetere o saltare una svolta.
+//
+// Perché sta in fondo a questo file e non in uno suo: un file Swift nuovo va
+// aggiunto a mano al project.pbxproj, che è fragile; qui è già nel target.
+//
+// Thread: il plugin Capacitor chiama da una sua coda, i fix arrivano dalla
+// workQueue del manager, il tier del GPS legge `richiedeFixFitti`. Tutto lo
+// stato sta dietro UN lock; nessun metodo ne chiama un altro pubblico a lock
+// preso (NSLock non è rientrante) e niente di lento gira sotto lock — la frase
+// da dire viene RESTITUITA al chiamante, che la accoda fuori.
+// Lo stato vive solo in memoria: se il processo muore il percorso si perde, e
+// va bene così (specifica).
+// ─────────────────────────────────────────────────────────────────────────
+final class NavFollower {
+    static let shared = NavFollower()
+    private init() {}
+
+    // Costanti della specifica (identiche su Kotlin e Swift).
+    // 8 s e non 12 (dalla revisione): nei secondi fra la sospensione della
+    // pagina e la scadenza del battito le svolte non le dice nessuno. Il JS
+    // batte ogni 2-4 s: due battiti mancati bastano. Uguale in NavFollower.kt.
+    private static let heartbeatStaleMs: Double = 8_000
+    private static let nearM: Double = 30
+    private static let farMinM: Double = 50
+    private static let farMaxM: Double = 150
+    private static let arriveM: Double = 25
+    private static let leaveStopM: Double = 45
+    private static let passedMarginM: Double = 15
+    private static let missedMarginM: Double = 40
+    private static let skipNextM: Double = 40
+    private static let maxAccM: Double = 60
+    private static let offrouteM: Double = 70
+    private static let offrouteMs: Double = 20_000
+    private static let backOnRouteM: Double = 40
+    private static let dedupeMs: Double = 20_000
+    /// Il «60» letterale del ramo "manovra mancata" della specifica.
+    private static let missedMinDistM: Double = 60
+    /// (21/09/2026, REVISIONE 2) ARRIVO FINALE «NEI PARAGGI»: entro 60 m
+    /// ininterrottamente da 45 s — la regola 3 del JS (useWalkingNavigation).
+    /// Uguale in NavFollower.kt.
+    private static let nearbyM: Double = 60
+    private static let nearbyMs: Double = 45_000
+    /// (21/09/2026, REVISIONE 2) «Fuori percorso» ridetto se si è ancora
+    /// fuori 60 s dopo l'ultima volta, al massimo 2 ripetizioni per uscita.
+    /// Uguale in NavFollower.kt.
+    private static let offrouteRipetiMs: Double = 60_000
+    private static let offrouteRipetizioniMax = 2
+    /// (21/09/2026, REVISIONE 2) «Nei paraggi» vale solo se ininterrotto: un
+    /// buco di fix più lungo di così ricomincia il conto dei 45 s.
+    private static let nearbyBucoMs: Double = 15_000
+    /// (21/09/2026, REVISIONE 2) PROGRESSIONE SUL TRACCIATO (la regola del JS,
+    /// «salto per progressione»): se chi cammina, sulla linea, è già oltre il
+    /// passo corrente di più di 40 m lungo il tracciato, i passi alle spalle
+    /// si contano in silenzio. Senza, dopo una pausa (GPS a riposo) o un buco
+    /// di fix il follower restava indietro e muto. Uguale in NavFollower.kt.
+    private static let progressM: Double = 40
+    private static let progressPassatoM: Double = 25
+    private static let progressCrossM: Double = 25
+    private static let progressFinestraM: Double = 2_000
+    /// (21/09/2026, REVISIONE 2) Partenza da un indirizzo lontano: il «fuori
+    /// percorso» vale solo arrivati entro 60 m dal tracciato (regola del JS).
+    private static let aggancioM: Double = 60
+    /// (22/09/2026) Il preavviso «lontano» si dice solo AVVICINANDOSI alla
+    /// svolta: la distanza deve essere calata di almeno 3 m rispetto al fix
+    /// precedente sullo stesso passo. Uguale in NavFollower.kt.
+    private static let avvicinamentoM: Double = 3
+
+    /// OROLOGIO MONOTONO (ms da un istante fisso) per battito, doppioni e
+    /// «fuori percorso». La data di sistema può saltare (cambio di fuso,
+    /// sincronizzazione dell'ora in roaming): un salto in avanti farebbe
+    /// sembrare morto un JS vivo, uno all'indietro terrebbe muto il nativo.
+    /// (21/09/2026, REVISIONE 2) CLOCK_MONOTONIC e non `systemUptime`: su
+    /// Darwin CLOCK_MONOTONIC CONTA ANCHE IL SONNO del sistema, come
+    /// `elapsedRealtime` su Android; `systemUptime` («tempo da sveglio») si
+    /// ferma quando il telefono in tasca dorme fra un fix e l'altro, e gli
+    /// 8 s del battito potevano diventare minuti di cammino senza voce.
+    /// È l'UNICO orologio del follower: chi chiama onFix passa questo.
+    static func orologioMs() -> Double {
+        Double(clock_gettime_nsec_np(CLOCK_MONOTONIC)) / 1_000_000
+    }
+
+    private struct Passo {
+        let lat: Double
+        let lon: Double
+        let testo: String
+        let tipo: String // depart | turn | arrive
+        // (18/09/2026 notte) Campi del CRUSCOTTO, tutti opzionali ("" se il
+        // JS non li manda): la meta della tratta a cui il passo appartiene e
+        // la manovra OSRM grezza, da cui la Live Activity ricava la freccia.
+        let tappa: String
+        let manovraTipo: String
+        let manovraVerso: String
+        /// (22/09/2026) `metriDopo` facoltativo: metri LUNGO IL PERCORSO fino
+        /// al passo seguente (numero finito > 0), per resto/restoTappa del
+        /// cruscotto al posto della linea d'aria fra i due passi, che su un
+        /// tratto curvo sottostimava metri e minuti. nil = linea d'aria.
+        let metriDopo: Double?
+    }
+
+    private struct Punto {
+        let lat: Double
+        let lon: Double
+    }
+
+    private let lock = NSLock()
+
+    // Percorso consegnato dal JS
+    private var routeId = ""
+    private var passi: [Passo] = []
+    private var linea: [Punto] = []
+    private var modelloLontano = ""
+    private var fraseFuoriPercorso = ""
+    private var finale = true
+
+    // Stato del follower
+    private var idx = 0
+    private var minDist = Double.infinity
+    private var dettiVicino = Set<Int>()
+    private var dettiLontano = Set<Int>()
+    // (18/09/2026 notte, dalla revisione) CONTATO ≠ DETTO. I due insiemi qui
+    // sopra sono la CONTABILITÀ: si riempiono anche quando il nativo tace (JS
+    // vivo) e servono ad avanzare. Questi due dicono cosa è stato detto
+    // DAVVERO — riferito dal battito del JS o pronunciato dal nativo. Senza:
+    // (a) una svolta raggiunta negli 8 s fra la sospensione della pagina e la
+    // scadenza del battito risultava «detta» e non la diceva nessuno; (b) le
+    // marche silenziose tornavano al JS con getNavProgress e gli facevano
+    // saltare un annuncio a schermo ACCESO. Uguale in NavFollower.kt.
+    private var dettiVicinoDavvero = Set<Int>()
+    private var dettiLontanoDavvero = Set<Int>()
+    private var finito = false
+    private var fuoriDa: Double = 0
+    private var fuoriDetto = false
+    private var lastHeartbeat: Double = 0
+    private var ultimoDetto = ""
+    private var ultimoDettoTs: Double = 0
+    private var ultimoTestoVicino = ""
+    private var ultimoTestoLontano = ""
+    // (21/09/2026, REVISIONE 2) Campi nuovi, tutti azzerati da azzeraSottoLock.
+    /// `spegniCruscotto` del routeJson (assente = true): all'arrivo finale col
+    /// nativo al comando la Live Activity si chiude SOLO se è true. La tappa
+    /// singola manda false quando c'è un giro in corso: il cruscotto dopo è
+    /// del giro, e una Live Activity chiusa dal background non si riapre più.
+    private var spegniCruscotto = true
+    /// Il passo che il JS stava MOSTRANDO: impostato da setRoute e da ogni
+    /// battito. Il cruscotto usa l'istruzione e il nome del JS solo finché il
+    /// follower non l'ha superato (a pagina congelata sono di una tratta prima).
+    private var idxJs = 0
+    /// Da quando (orologio del follower) si è entro 60 m dall'arrivo finale;
+    /// 0 = non lo si è.
+    private var vicinoFinaleDa: Double = 0
+    /// Ultima volta che il «fuori percorso» è nato, e quante volte è stato
+    /// RIPETUTO in questa uscita dal tracciato.
+    private var fuoriDettoTs: Double = 0
+    private var fuoriRipetizioni = 0
+    /// Ultimo fix valutato sull'arrivo: un buco più lungo di `nearbyBucoMs`
+    /// ricomincia il conto dei 45 s «nei paraggi».
+    private var ultimoFixFinaleTs: Double = 0
+    /// Metri progressivi lungo il tracciato: dei suoi vertici, e di ogni passo
+    /// proiettato sulla linea (nan se il passo è a più di 50 m dalla linea).
+    private var lineaCum: [Double] = []
+    private var alongPasso: [Double] = []
+    /// `fuoriSoloDopoAggancio` del routeJson: il «fuori percorso» tace finché
+    /// chi è partito da un indirizzo lontano non arriva sul tracciato.
+    private var fuoriDopoAggancio = false
+    private var agganciato = true
+    /// Ultimo fix buono (≤ 60 m) visto da onFix: per il ridisegno immediato
+    /// dei tasti pausa/riprendi, come Android.
+    private var ultimaLatBuona = Double.nan
+    private var ultimaLonBuona = Double.nan
+    /// (22/09/2026) Distanza del fix buono precedente dal passo `dPrecIdx`:
+    /// serve a dire il preavviso «lontano» solo in avvicinamento. nan / -1 =
+    /// nessun valore per il passo corrente (non si dice ancora).
+    private var dPrec = Double.nan
+    private var dPrecIdx = -1
+
+    /// (21/09/2026, REVISIONE 2) FOTOGRAFIA scattata dal tasto «Termina» del
+    /// cruscotto prima di svuotare il follower: al «Termina» in ritardo
+    /// seguito da «no» il JS deve riprendere prima il progresso fatto a
+    /// schermo spento, poi riconsegnare. Vive finché non arriva setNavRoute,
+    /// clearNavRoute o il load() del plugin (clear).
+    private struct Fotografia {
+        let id: String
+        let indice: Int
+        let dettiVicino: [Int]
+        let dettiLontano: [Int]
+        let ultimoTestoVicino: String
+        let ultimoTestoLontano: String
+        let finito: Bool
+    }
+    private var fotografiaTermina: Fotografia?
+
+    /// C'è un percorso ancora da seguire: il manager tiene il GPS sul profilo
+    /// da navigatore (BestForNavigation, filtro 5 m) finché è vero. Torna
+    /// falso a clearNavRoute ma anche ad arrivo detto (`finito`), così il GPS
+    /// non resta al massimo se il JS, congelato, non può togliere il percorso.
+    /// (21/09/2026, REVISIONE 2) Falso anche IN PAUSA: il percorso ora resta
+    /// al follower durante una pausa (pranzo, bar) e il GPS al massimo per
+    /// tutta la sosta era batteria buttata. Dopo ogni cambio di pausa chi
+    /// l'ha cambiata richiama aggiornaProfiloNavigatore.
+    var richiedeFixFitti: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !passi.isEmpty && !finito && !inPausa
+    }
+
+    // MARK: - Contratto del plugin
+
+    /// setNavRoute. Sostituisce il percorso e azzera lo stato del follower; il
+    /// battito si considera FRESCO adesso (chi chiama è il JS, quindi è vivo).
+    /// JSON non valido, `passi` vuoto o un passo senza coordinate → false, e
+    /// il percorso di prima viene comunque TOLTO: il JS ne voleva un altro, e
+    /// continuare a dettare le svolte di quello vecchio sarebbe peggio del
+    /// silenzio (con ok=false il JS lo sa e può riprovare).
+    func setRoute(json: String) -> Bool {
+        let letto = Self.leggiPercorso(json)
+        lock.lock()
+        defer { lock.unlock() }
+        azzeraSottoLock()
+        inPausa = false
+        // Un percorso nuovo (anche malformato) chiude la storia del «Termina».
+        fotografiaTermina = nil
+        guard let percorso = letto else { return false }
+        routeId = percorso.id
+        passi = percorso.passi
+        linea = percorso.linea
+        modelloLontano = percorso.modelloLontano
+        fraseFuoriPercorso = percorso.fraseFuoriPercorso
+        finale = percorso.finale
+        // (21/09/2026, REVISIONE 2) Campi opzionali nuovi del routeJson:
+        // il follower può NASCERE in pausa (percorso consegnato durante una
+        // pausa manuale del giro: il percorso non si ritira più in pausa, o
+        // «Riprendi» dalla lock screen trovava il follower vuoto).
+        inPausa = percorso.inPausa
+        spegniCruscotto = percorso.spegniCruscotto
+        fuoriDopoAggancio = percorso.fuoriSoloDopoAggancio
+        agganciato = !fuoriDopoAggancio
+        idx = min(max(percorso.indice, 0), percorso.passi.count - 1)
+        idxJs = idx
+        lastHeartbeat = Self.orologioMs()
+        calcolaRestiSottoLock()
+        calcolaProgressiviSottoLock()
+        return true
+    }
+
+    /// (21/09/2026, REVISIONE 2) L'ultimo fix buono visto da onFix, per il
+    /// ridisegno immediato dei tasti. nil se non ce n'è ancora uno.
+    func ultimoFixBuono() -> (lat: Double, lon: Double)? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !ultimaLatBuona.isNaN, !ultimaLonBuona.isNaN else { return nil }
+        return (lat: ultimaLatBuona, lon: ultimaLonBuona)
+    }
+
+    /// (21/09/2026, REVISIONE 2) Il `modo` dell'ultimo stato del cruscotto
+    /// mandato dal JS ("giro", "percorso", "singola"; "" se non c'è).
+    func modoCruscotto() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return ultimoJs["modo"] as? String ?? ""
+    }
+
+    /// (21/09/2026, REVISIONE 2) updateNavBanner con `attivo: false`: il JS ha
+    /// spento il cruscotto, il suo ultimo stato non vale più (come Android).
+    func dimenticaCruscottoJs() {
+        lock.lock()
+        defer { lock.unlock() }
+        ultimoJs = [:]
+    }
+
+    /// clearNavRoute (e il load() del plugin).
+    func clear() {
+        lock.lock()
+        defer { lock.unlock() }
+        azzeraSottoLock()
+        inPausa = false
+        fotografiaTermina = nil
+    }
+
+    /// (21/09/2026, REVISIONE 2) Il tasto «Termina» del cruscotto: prima di
+    /// svuotare si FOTOGRAFA il progresso (id, indice, detti davvero), che
+    /// getNavProgress restituisce con `attivo:false, terminato:true` finché
+    /// non arriva setNavRoute, clearNavRoute o il load() del plugin. Senza,
+    /// un «Termina» toccato a schermo spento e poi annullato («no» alla
+    /// conferma) faceva ripartire il giro dalla tappa di prima.
+    /// Un secondo «Termina» a follower già vuoto tiene la fotografia di prima.
+    /// Uguale in NavFollower.kt.
+    func terminaDalBanner() {
+        lock.lock()
+        defer { lock.unlock() }
+        if !passi.isEmpty {
+            fotografiaTermina = Fotografia(
+                id: routeId,
+                indice: idx,
+                dettiVicino: dettiVicinoDavvero.sorted(),
+                dettiLontano: dettiLontanoDavvero.sorted(),
+                ultimoTestoVicino: ultimoTestoVicino,
+                ultimoTestoLontano: ultimoTestoLontano,
+                finito: finito
+            )
+        }
+        azzeraSottoLock()
+        inPausa = false
+    }
+
+    // MARK: - I tasti della Live Activity a schermo spento (18/09/2026)
+    //
+    // «Pausa», «Riprendi», «Termina» e «Riascolta» diventano l'evento JS
+    // navBannerAction, ma a schermo spento il JS è sospeso e li vedrà solo al
+    // risveglio. Nel frattempo chi parla è questo follower, quindi deve
+    // obbedire da solo. (21/09/2026, REVISIONE 2) In pausa manuale il JS NON
+    // ritira più il percorso: lo consegna con `inPausa` e i suoi battiti
+    // portano la sua pausa. Stessa logica di NavFollower.kt (impostaPausa /
+    // ripeti).
+    private var inPausa = false
+
+    /// (21/09/2026, REVISIONE 2) «Pausa» mette in pausa, «Riprendi» toglie la
+    /// pausa: azioni ESPLICITE e idempotenti. Prima era un interruttore sullo
+    /// stato del FOLLOWER, non su quello mostrato: durante la pausa
+    /// AUTOMATICA del giro (ferma da 3 min, percorso non ritirato, follower
+    /// non in pausa) «Riprendi» a schermo spento METTEVA in pausa il follower,
+    /// che smetteva di parlare mentre si camminava.
+    func impostaPausa(_ v: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        if !passi.isEmpty { inPausa = v }
+    }
+
+    /// «Riascolta»: la manovra corrente, solo se il nativo è al comando
+    /// (col JS vivo risponde lui).
+    func ripeti() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !passi.isEmpty, !finito, !inPausa else { return nil }
+        guard (Self.orologioMs() - lastHeartbeat) >= Self.heartbeatStaleMs else { return nil }
+        let p = passi[idx]
+        // (21/09/2026, REVISIONE 2) Un arrivo non ancora raggiunto NON si
+        // riascolta: il suo testo è «Sei arrivato a X», e detto a 300 m dalla
+        // meta inganna chi cammina. Uguale in NavFollower.kt.
+        if p.tipo == "arrive" && !dettiVicino.contains(idx) { return nil }
+        return p.testo.isEmpty ? nil : p.testo
+    }
+
+    /// navHeartbeat: il JS è vivo e dice a che punto è LUI. Gli insiemi si
+    /// uniscono (mai tolti), l'indice può solo avanzare. Senza percorso: no-op.
+    /// Restituisce true se la pausa è CAMBIATA: il plugin allora riallinea
+    /// subito il profilo del GPS (in pausa a riposo, alla ripresa da navigatore).
+    @discardableResult
+    func heartbeat(indice: Int, dettiVicino vicino: [Int], dettiLontano lontano: [Int], inPausa pausaJs: Bool = false) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let n = passi.count
+        guard n > 0 else { return false }
+        lastHeartbeat = Self.orologioMs()
+        // (21/09/2026, REVISIONE 2) IL BATTITO PORTA LA PAUSA DEL JS (assente
+        // = false, come le build di prima). Sostituisce «il battito toglie la
+        // pausa» del 18/09: in pausa manuale il percorso ora resta qui, e il
+        // JS vivo continua a battere dicendo che è in pausa. Una pausa presa
+        // dal tasto a schermo spento il JS la vede al risveglio (le «pausa»
+        // tardive non si scartano), quindi il suo battito resta la verità.
+        // Firma azzerata: al prossimo congelamento il primo ridisegno del
+        // cruscotto non va saltato perché «uguale a prima».
+        let pausaCambiata = inPausa != pausaJs
+        inPausa = pausaJs
+        cruscottoFirma = ""
+        // (21/09/2026, REVISIONE 2) Col JS vivo il fuori percorso è compito
+        // suo: il conto del nativo riparte da zero al prossimo congelamento
+        // (una nuova uscita ereditava le ripetizioni di quella vecchia).
+        fuoriDa = 0
+        fuoriDetto = false
+        fuoriDettoTs = 0
+        fuoriRipetizioni = 0
+        // Quello che riferisce il JS è stato detto DAVVERO (da lui).
+        for i in vicino where i >= 0 && i < n {
+            dettiVicino.insert(i)
+            dettiVicinoDavvero.insert(i)
+        }
+        for i in lontano where i >= 0 && i < n {
+            dettiLontano.insert(i)
+            dettiLontanoDavvero.insert(i)
+        }
+        let nuovo = min(indice, n - 1)
+        if nuovo > idx {
+            idx = nuovo
+            minDist = Double.infinity
+        }
+        // (21/09/2026, REVISIONE 2) Il passo che il JS sta mostrando, a OGNI
+        // battito (anche se non avanza l'indice del follower): è il confine
+        // oltre il quale il cruscotto non usa più istruzione e nome del JS.
+        idxJs = min(max(indice, 0), n - 1)
+        return pausaCambiata
+    }
+
+    /// getNavProgress: quello che il JS rilegge al risveglio per riprendere
+    /// dal punto giusto senza ripetere ciò che il nativo ha già detto.
+    /// `finito` dice che l'arrivo finale è già stato annunciato. (21/09/2026,
+    /// REVISIONE 2) `terminato`: il follower è stato svuotato dal tasto
+    /// «Termina» del cruscotto — allora si restituisce la FOTOGRAFIA di quel
+    /// momento, con `attivo:false` (vedi terminaDalBanner).
+    func progress() -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        let attivo = !passi.isEmpty
+        if !attivo, let f = fotografiaTermina {
+            return [
+                "attivo": false,
+                "terminato": true,
+                "id": f.id,
+                "indice": f.indice,
+                "dettiVicino": f.dettiVicino,
+                "dettiLontano": f.dettiLontano,
+                "nativoAlComando": false,
+                "ultimoTestoVicino": f.ultimoTestoVicino,
+                "ultimoTestoLontano": f.ultimoTestoLontano,
+                "finito": f.finito
+            ]
+        }
+        return [
+            "terminato": false,
+            "attivo": attivo,
+            "id": routeId,
+            "indice": idx,
+            // Al JS si riferisce solo il DETTO DAVVERO, mai la contabilità muta.
+            "dettiVicino": dettiVicinoDavvero.sorted(),
+            "dettiLontano": dettiLontanoDavvero.sorted(),
+            "nativoAlComando": attivo && (Self.orologioMs() - lastHeartbeat) >= Self.heartbeatStaleMs,
+            "ultimoTestoVicino": ultimoTestoVicino,
+            "ultimoTestoLontano": ultimoTestoLontano,
+            "finito": finito
+        ]
+    }
+
+    // MARK: - Il cruscotto a schermo spento (18/09/2026 notte)
+    //
+    // Committente: «anche il monitor, il banner deve funzionare sul display
+    // spento». La Live Activity la aggiorna il JS con updateNavBanner: a
+    // schermo spento restava ferma all'ultimo stato. Quando il nativo è al
+    // comando i numeri li rifà il follower (specifica, «IL CRUSCOTTO A SCHERMO
+    // SPENTO»), partendo dall'ULTIMO stato ricevuto dal JS per tutto ciò che
+    // il nativo non sa (indiceTappa, tappeTotali, foto, modo, metriTotali,
+    // nomeProssima, e il passo al minuto). Col JS vivo non tocca nulla.
+
+    private var resto: [Double] = []
+    private var restoTappa: [Double] = []
+    /// L'ultimo dizionario di updateNavBanner arrivato dal JS.
+    private var ultimoJs: [String: Any] = [:]
+    private var cruscottoUltimoMs: Double = 0
+    private var cruscottoFirma = ""
+    /// `finito` appena diventato vero col nativo al comando: il prossimo
+    /// `cruscotto` risponde UNA volta `spegni: true`.
+    private var spegnimentoCruscottoPendente = false
+
+    /// Un aggiornamento di Live Activity dal background ha un budget di
+    /// sistema: mai più di uno ogni 3 s, e solo se la firma cambia.
+    private static let cruscottoIntervalloMinMs: Double = 3_000
+    /// Minuti per metro a piedi (75 m/min) quando il JS non ha dato i suoi.
+    private static let minutiPerMetroDefault: Double = 1.0 / 75.0
+
+    /// "HH:mm" in ora LOCALE. en_US_POSIX: senza, chi ha l'orologio a 12 ore
+    /// otterrebbe «3:40 PM» a dispetto del formato.
+    private static let formatoEta: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    /// Chiamata dal plugin a ogni updateNavBanner con `attivo: true`.
+    /// (21/09/2026, REVISIONE 2) In pausa il JS manda come istruzione la
+    /// scritta «In pausa»: non è una manovra, quindi l'ultima istruzione vera
+    /// resta (come fa già NavFollower.kt). Senza, dopo una pausa automatica
+    /// il cruscotto a schermo spento scriveva «In pausa» mentre si camminava.
+    func ricordaCruscottoJs(_ stato: [String: Any]) {
+        lock.lock()
+        defer { lock.unlock() }
+        var s = stato
+        if (stato["inPausa"] as? Bool) == true {
+            s["istruzione"] = (ultimoJs["istruzione"] as? String) ?? ""
+        }
+        ultimoJs = s
+    }
+
+    /// Lo stato del cruscotto da ridisegnare, con gli STESSI campi di
+    /// updateNavBanner (più `titolo`/`corpo` della specifica, che su iOS
+    /// nessuno legge, e `spegni`). nil = non toccare nulla: JS vivo, nessun
+    /// percorso, fix impreciso, meno di 3 s dall'ultimo ridisegno o firma
+    /// invariata. `spegni: true` (una volta sola) = arrivo finale detto dal
+    /// nativo: la Live Activity va chiusa.
+    /// `forza` (tasto pausa): salta precisione, 3 s e firma — il tasto deve
+    /// rispondere subito — ma MAI il controllo del JS vivo.
+    func cruscotto(lat: Double, lon: Double, accuracy: Double, forza: Bool = false) -> [String: Any]? {
+        lock.lock()
+        defer { lock.unlock() }
+        if spegnimentoCruscottoPendente {
+            spegnimentoCruscottoPendente = false
+            return ["spegni": true]
+        }
+        // (21/09/2026, REVISIONE 2) In pausa il cruscotto non si riscrive a
+        // ogni fix: resta quello «In pausa» del JS. Solo il tasto (forza) lo
+        // ridisegna subito, perché deve rispondere al tocco.
+        if inPausa && !forza { return nil }
+        let n = passi.count
+        guard n > 0, !finito, idx < n, resto.count == n, restoTappa.count == n else { return nil }
+        let adesso = Self.orologioMs()
+        guard (adesso - lastHeartbeat) >= Self.heartbeatStaleMs else { return nil }
+        if !forza {
+            guard accuracy >= 0, accuracy <= Self.maxAccM else { return nil }
+            guard adesso - cruscottoUltimoMs >= Self.cruscottoIntervalloMinMs else { return nil }
+        }
+
+        let p = passi[idx]
+        let d = Self.metri(lat, lon, p.lat, p.lon)
+        let rimTappa = d + restoTappa[idx]
+        let rimTotale = d + resto[idx]
+
+        // (21/09/2026, REVISIONE 2) Dove il follower è rispetto al passo che
+        // il JS stava mostrando: gli arrivi superati da allora. A pagina
+        // congelata lo stato JS ricordato è di una tratta PRIMA: la sua svolta
+        // è già fatta, il suo nome e la sua foto sono di una tappa già
+        // visitata. Uguale in NavFollower.kt.
+        var arriviSuperati = 0
+        if idxJs < idx {
+            for j in idxJs..<idx where passi[j].tipo == "arrive" {
+                arriviSuperati += 1
+            }
+        }
+        let arrivoSuperato = arriviSuperati > 0
+
+        var nomeTappa = ""
+        var k = idx
+        while k < n {
+            if passi[k].tipo == "arrive" {
+                nomeTappa = passi[k].tappa
+                break
+            }
+            k += 1
+        }
+        // Il nome del PASSO, prima del ripiego: è lui a dire se la tappa è
+        // cambiata rispetto all'ultimo stato JS.
+        let nomePasso = nomeTappa.trimmingCharacters(in: .whitespaces)
+        // Ripiego sul nome del JS solo se nel frattempo non si è superato un
+        // arrivo (serve ai percorsi consegnati senza `tappa`).
+        if nomeTappa.isEmpty && !arrivoSuperato { nomeTappa = ultimoJs["nomeTappa"] as? String ?? "" }
+        // L'istruzione del passo; se il passo non ne ha (un arrivo muto), quella
+        // del JS SOLO se il follower non è andato oltre il passo che il JS
+        // mostrava; altrimenti niente — mai una svolta di una tratta prima.
+        let istruzione: String
+        if !p.testo.isEmpty {
+            istruzione = p.testo
+        } else if idx <= idxJs {
+            istruzione = ultimoJs["istruzione"] as? String ?? ""
+        } else {
+            istruzione = ""
+        }
+
+        let firma = "\(nomeTappa)|\(istruzione)|\(Self.scatto(d))|\(Int((rimTotale / 100).rounded()))|\(inPausa)"
+        if !forza && firma == cruscottoFirma { return nil }
+        cruscottoFirma = firma
+        cruscottoUltimoMs = adesso
+
+        var minutiPerMetro = Self.minutiPerMetroDefault
+        if let minutiJs = Self.numero(ultimoJs["minutiRimanenti"]),
+           let metriJs = Self.numero(ultimoJs["metriRimanenti"]),
+           minutiJs > 0, metriJs > 0 {
+            minutiPerMetro = minutiJs / metriJs
+        }
+        let minuti = rimTotale * minutiPerMetro
+        let eta = Self.formatoEta.string(from: Date().addingTimeInterval(minuti * 60))
+
+        var progresso: Double = -1
+        if let metriTotali = Self.numero(ultimoJs["metriTotali"]), metriTotali > 1 {
+            progresso = min(1, max(0, 1 - rimTotale / metriTotali))
+        }
+
+        // Base = ultimo stato JS (indiceTappa, tappeTotali, foto, modo,
+        // metriTotali, nomeProssima restano i suoi); sopra, i campi rifatti.
+        var stato = ultimoJs
+        // (18/09/2026 notte, dalla revisione) NESSUNA FOTO È MEGLIO DELLA FOTO
+        // SBAGLIATA (regola di CLAUDE.md). Dopo un cambio tappa a schermo
+        // spento la foto e «prossima» dell'ultimo stato JS sono quelle della
+        // tappa PRECEDENTE: sotto il nome nuovo sarebbero una bugia. Via.
+        // (21/09/2026, REVISIONE 2) La tappa è cambiata anche quando si è
+        // superato un arrivo (il rientro dell'anello, o due tappe con lo
+        // stesso nome), e il confronto si fa sul nome del PASSO, prima del
+        // ripiego: dopo il ripiego i due nomi erano sempre uguali.
+        let nomeJs = ((ultimoJs["nomeTappa"] as? String) ?? "").trimmingCharacters(in: .whitespaces)
+        let tappaCambiata = arrivoSuperato ||
+            (!nomePasso.isEmpty && !nomeJs.isEmpty && nomePasso != nomeJs)
+        if tappaCambiata {
+            stato["foto"] = ""
+            stato["nomeProssima"] = ""
+        }
+        // (21/09/2026, REVISIONE 2) Il numero «n/N» della tappa: quello del JS
+        // più gli arrivi superati da allora (mai oltre il totale). Prima
+        // restava il suo: «1/3 · <nome della tappa 2>».
+        if arriviSuperati > 0, let indiceJs = Self.numero(ultimoJs["indiceTappa"]) {
+            var indice = Int(min(max(indiceJs, 0), 100_000)) + arriviSuperati
+            if let totali = Self.numero(ultimoJs["tappeTotali"]), totali >= 1 {
+                indice = min(indice, Int(min(totali, 100_000)))
+            }
+            stato["indiceTappa"] = indice
+        }
+        stato["nomeTappa"] = nomeTappa
+        stato["metriAllaTappa"] = rimTappa
+        stato["istruzione"] = istruzione
+        stato["metriAllaSvolta"] = d
+        stato["metriRimanenti"] = rimTotale
+        stato["eta"] = eta
+        stato["minutiRimanenti"] = minuti
+        stato["progresso"] = progresso
+        stato["manovraTipo"] = p.manovraTipo
+        stato["manovraVerso"] = p.manovraVerso
+        stato["inPausa"] = inPausa
+        stato["titolo"] = nomeTappa.isEmpty ? Self.distanza(rimTappa) : "\(nomeTappa) · \(Self.distanza(rimTappa))"
+        // Senza istruzione (arrivo muto) niente « · » orfano in testa, come Kotlin.
+        stato["corpo"] = istruzione.isEmpty
+            ? "\(Self.distanza(d))\n~\(eta)"
+            : "\(istruzione) · \(Self.distanza(d))\n~\(eta)"
+        stato["spegni"] = false
+        return stato
+    }
+
+    /// scatto(d) della firma, lo stesso del JS: passi da 10 m sotto i 100,
+    /// da 50 m sopra.
+    private static func scatto(_ d: Double) -> Int {
+        d < 100 ? Int((d / 10).rounded()) : 100 + Int((d / 50).rounded())
+    }
+
+    /// dist(x) della specifica.
+    private static func distanza(_ x: Double) -> String {
+        x < 1000 ? "\(Int((x / 10).rounded()) * 10) m" : String(format: "%.1f km", x / 1000)
+    }
+
+    // MARK: - Il fix
+
+    /// Un fix GPS. Aggiorna SEMPRE indice e insiemi; restituisce la frase da
+    /// dire solo se tocca al nativo (battito scaduto) e non è un doppione.
+    /// Al massimo UNA frase per fix. `nowMs` DEVE essere lo stesso orologio
+    /// del battito: `NavFollower.orologioMs()` (monotono), non la data.
+    func onFix(lat: Double, lon: Double, accuracy: Double, nowMs: Double) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        let n = passi.count
+        // (21/09/2026, REVISIONE 2) Qui c'era anche `!inPausa`: in pausa il
+        // follower non teneva il conto, e chi metteva in pausa dal cruscotto
+        // e intanto camminava ritrovava alla ripresa l'indice su una svolta
+        // alle spalle («Tra 150 metri…» per una svolta già fatta, poi muto).
+        guard n > 0, !finito else { return nil }
+        // Su iOS un'accuratezza negativa vuol dire «fix non valido»: si scarta
+        // come uno troppo impreciso.
+        guard accuracy >= 0, accuracy <= Self.maxAccM else { return nil }
+
+        // In PAUSA si fa come col JS vivo: si TACE MA SI TIENE IL CONTO —
+        // niente frasi, niente «davvero», niente `finito`, niente fuori
+        // percorso. Uguale in NavFollower.kt.
+        let jsVivo = (nowMs - lastHeartbeat) < Self.heartbeatStaleMs || inPausa
+        // L'ultimo fix buono, per il ridisegno immediato dei tasti.
+        ultimaLatBuona = lat
+        ultimaLonBuona = lon
+
+        // (21/09/2026, REVISIONE 2) PROGRESSIONE SUL TRACCIATO. Già oltre il
+        // passo corrente di più di 40 m lungo la linea (e sulla linea): i
+        // passi alle spalle si contano in silenzio. Si prende la PRIMA
+        // corrispondenza cominciando 300 m PRIMA del passo, mai la più
+        // vicina: su un anello l'arrivo coincide con la partenza, e su un
+        // «andata e ritorno» il ritorno passa di fianco a chi sta ancora
+        // andando — la corrispondenza più indietro vince e non si salta nulla.
+        // Mai oltre un arrivo finché si è alla tappa, mai oltre l'ultimo passo.
+        // Uguale in NavFollower.kt.
+        if linea.count >= 2, idx < n - 1, idx < alongPasso.count {
+            let aIdx = alongPasso[idx]
+            if !aIdx.isNaN {
+                let u = alongUtente(lat: lat, lon: lon, da: aIdx - 300,
+                                    a: aIdx + Self.progressFinestraM,
+                                    maxCross: Self.progressCrossM + accuracy / 2)
+                if !u.isNaN && u > aIdx + Self.progressM {
+                    while idx < n - 1 {
+                        let a = alongPasso[idx]
+                        if a.isNaN || a + Self.progressPassatoM >= u { break }
+                        let pp = passi[idx]
+                        if pp.tipo == "arrive" && Self.metri(lat, lon, pp.lat, pp.lon) <= Self.leaveStopM { break }
+                        dettiVicino.insert(idx)
+                        dettiLontano.insert(idx)
+                        avanzaSottoLock()
+                    }
+                }
+            }
+        }
+
+        var out: String?
+        var tipoOut = ""
+        var testoPasso = ""
+
+        var giri = 0
+        while giri < n {
+            giri += 1
+            let p = passi[idx]
+            // (18/09/2026 sera) La PARTENZA si salta SEMPRE, come fa
+            // tourService.aggiornaPasso col passo 0: tenerla come «prossima
+            // manovra» bloccava l'indice quando si parte lontani dall'inizio
+            // del tracciato, e le prime svolte non venivano preannunciate.
+            if p.tipo == "depart" && idx + 1 < n {
+                dettiVicino.insert(idx)
+                dettiLontano.insert(idx)
+                avanzaSottoLock()
+                continue
+            }
+            let d = Self.metri(lat, lon, p.lat, p.lon)
+            // La manovra DOPO è più vicina di questa, ed è qui: questa è
+            // andata (scorciatoia, fix persi in galleria).
+            // (22/09/2026) «Dopo» = il primo passo successivo che NON sia una
+            // partenza: dopo un arrivo del giro viene la partenza della tratta
+            // nuova, nello stesso punto dell'arrivo, e il confronto con lei
+            // non scattava mai — lasciando la tappa verso una svolta a meno
+            // di 40 m l'indice restava sull'arrivo. Si avanza di uno come
+            // prima: la partenza la salta il giro dopo. Solo lasciando una
+            // tappa GIÀ RAGGIUNTA: se la tratta dopo riparte per la stessa
+            // strada dell'andata, la sua prima svolta è l'angolo appena girato
+            // per arrivarci, e guardandola prima dell'arrivo si saltava la
+            // tappa. Uguale in NavFollower.kt.
+            var kDopo = idx + 1
+            if p.tipo == "arrive" && dettiVicino.contains(idx) {
+                while kDopo < n && passi[kDopo].tipo == "depart" { kDopo += 1 }
+            }
+            if kDopo < n {
+                let dn = Self.metri(lat, lon, passi[kDopo].lat, passi[kDopo].lon)
+                if dn < d && dn < Self.skipNextM {
+                    avanzaSottoLock()
+                    continue
+                }
+            }
+            minDist = min(minDist, d)
+            // (22/09/2026) AVVICINAMENTO: la distanza da QUESTO passo al fix
+            // buono precedente (solo se era lo stesso passo). Letta prima di
+            // sovrascriverla; i fix scartati più su non la toccano.
+            // Il riferimento si sposta solo a scatti di almeno 3 m (in giù o in
+            // su): a piedi con un fix ogni 2 s si fanno ~2,8 m, e il confronto
+            // col SOLO fix precedente non avrebbe quasi mai visto
+            // l'avvicinamento. Uguale in NavFollower.kt.
+            let inAvvicinamento = dPrecIdx == idx && d < dPrec - Self.avvicinamentoM
+            if dPrecIdx != idx || d < dPrec - Self.avvicinamentoM || d > dPrec + Self.avvicinamentoM {
+                dPrec = d
+                dPrecIdx = idx
+            }
+
+            if p.tipo == "arrive" {
+                // (21/09/2026, REVISIONE 2) L'ARRIVO FINALE (solo l'ultimo
+                // 'arrive', e solo con `finale`) ha due vie in più oltre ai
+                // 25 m, come il JS: chi non entrava in quel raggio (ingresso da
+                // un altro lato, GPS in tasca a 30-50 m) teneva il GPS al
+                // massimo e il cruscotto acceso fino all'apertura dell'app, e
+                // poi sentiva «Sei fuori percorso». Uguale in NavFollower.kt.
+                let eFinale = idx == n - 1 && finale
+                // NEI PARAGGI: entro 60 m ininterrottamente da 45 s. Davvero
+                // ininterrotto: un buco di fix (pausa, galleria) ricomincia il
+                // conto, due fix a minuti di distanza non bastano.
+                if vicinoFinaleDa > 0 && nowMs - ultimoFixFinaleTs > Self.nearbyBucoMs { vicinoFinaleDa = 0 }
+                ultimoFixFinaleTs = nowMs
+                // (22/09/2026) E vicini anche LUNGO IL TRACCIATO (≤ 60 m dalla
+                // meta), come il JS: una via sul retro dell'isolato a 40 m dalla
+                // porta non è «nei paraggi». Senza tracciato utile si resta alla
+                // sola linea d'aria, come prima. Uguale in NavFollower.kt.
+                var lungoOk = true
+                if eFinale && d <= Self.nearbyM && idx < alongPasso.count && !alongPasso[idx].isNaN {
+                    let aFin = alongPasso[idx]
+                    let u = alongUtente(lat: lat, lon: lon, da: aFin - 300, a: aFin + 10, maxCross: Self.nearbyM)
+                    lungoOk = !u.isNaN && aFin - u <= Self.nearbyM
+                }
+                if eFinale && d <= Self.nearbyM && lungoOk {
+                    if vicinoFinaleDa == 0 { vicinoFinaleDa = nowMs }
+                } else {
+                    vicinoFinaleDa = 0
+                }
+                let neiParaggi = eFinale && vicinoFinaleDa > 0 && nowMs - vicinoFinaleDa >= Self.nearbyMs
+                // Da dire se mai contato, OPPURE contato in silenzio (JS creduto
+                // vivo) e ora il nativo è al comando senza che nessuno l'abbia
+                // detto (vedi dettiVicinoDavvero).
+                if (d <= Self.arriveM || neiParaggi) &&
+                    (!dettiVicino.contains(idx) || (!jsVivo && !dettiVicinoDavvero.contains(idx))) {
+                    dettiVicino.insert(idx)
+                    if !jsVivo {
+                        dettiVicinoDavvero.insert(idx)
+                        if !p.testo.isEmpty {
+                            out = p.testo
+                            tipoOut = "vicino"
+                            testoPasso = p.testo
+                        }
+                    }
+                } else if eFinale && !dettiVicino.contains(idx) && minDist < Self.missedMinDistM &&
+                            d > minDist + max(Self.missedMarginM, accuracy) {
+                    // ARRIVO FINALE SFIORATO: ci si è avvicinati e ora ci si
+                    // allontana → contato SENZA dirlo (non va nei «davvero»).
+                    // Margine mai sotto l'accuratezza: un salto del GPS non
+                    // deve chiudere la navigazione prima dell'arrivo.
+                    dettiVicino.insert(idx)
+                }
+                if dettiVicino.contains(idx) && idx == n - 1 && finale {
+                    // Arrivo finale: si CHIUDE solo col nativo al comando
+                    // (cruscotto spento una volta sola, vedi cruscotto). Col JS
+                    // vivo non si chiude qui: arriva lui e ritira il percorso;
+                    // se si è appena sospeso, al primo fix col battito scaduto
+                    // l'arrivo lo dice e lo chiude il nativo. Uguale in Kotlin.
+                    if !jsVivo {
+                        finito = true
+                        // (21/09/2026, REVISIONE 2) Il cruscotto si spegne solo
+                        // se il JS l'ha chiesto (`spegniCruscotto`, assente =
+                        // true): la tappa singola con un giro in corso manda
+                        // false, perché il cruscotto dopo è del giro.
+                        if spegniCruscotto { spegnimentoCruscottoPendente = true }
+                    }
+                } else if dettiVicino.contains(idx) && d > Self.leaveStopM && idx + 1 < n {
+                    // Tappa intermedia salutata e lasciata: si passa al
+                    // tratto successivo.
+                    avanzaSottoLock()
+                    continue
+                } else if !dettiVicino.contains(idx) && idx + 1 < n &&
+                            minDist < Self.missedMinDistM && d > minDist + Self.missedMarginM {
+                    // (18/09/2026 notte, dalla revisione) TAPPA SFIORATA. La
+                    // guida parte dal geofence a 30-50 m dal perimetro: chi
+                    // ascolta da lì e riparte non entra mai nei 25 m del punto
+                    // OSRM, e l'indice restava sull'arrivo per tutto il resto
+                    // del giro (svolte mute, cruscotto fermo). Stessa regola
+                    // della manovra mancata: ci si è avvicinati e ora ci si
+                    // allontana → tappa fatta, senza dirla. Uguale in NavFollower.kt.
+                    dettiVicino.insert(idx)
+                    avanzaSottoLock()
+                    continue
+                }
+                break
+            }
+
+            if d <= Self.nearM &&
+                (!dettiVicino.contains(idx) || (!jsVivo && !dettiVicinoDavvero.contains(idx))) {
+                dettiVicino.insert(idx)
+                dettiLontano.insert(idx) // a 30 m il «tra 100 metri» non ha più senso
+                if !jsVivo {
+                    dettiVicinoDavvero.insert(idx)
+                    dettiLontanoDavvero.insert(idx)
+                    if !p.testo.isEmpty {
+                        out = p.testo
+                        tipoOut = "vicino"
+                        testoPasso = p.testo
+                    }
+                }
+            } else if dettiVicino.contains(idx) && d > minDist + max(Self.passedMarginM, accuracy) {
+                // detta e superata. Margine non sotto l'accuratezza del fix: da
+                // fermi a 25 m dalla svolta il rumore GPS bastava a «superarla».
+                avanzaSottoLock()
+                continue
+            } else if !dettiVicino.contains(idx) && minDist < Self.missedMinDistM &&
+                        d > minDist + Self.missedMarginM {
+                avanzaSottoLock() // sfiorata senza entrare nei 30 m, e ora ci si allontana
+                continue
+            } else if p.tipo == "turn" && !inPausa && inAvvicinamento &&
+                        (!dettiLontano.contains(idx) || (!jsVivo && !dettiLontanoDavvero.contains(idx))) &&
+                        d >= Self.farMinM && d <= Self.farMaxM && !p.testo.isEmpty {
+                // (21/09/2026, REVISIONE 2) In pausa il preavviso NON si segna.
+                // E CONTATO ≠ DETTO anche qui: un preavviso contato in silenzio
+                // negli 8 s dopo il congelamento (JS creduto vivo, ma non l'ha
+                // detto) lo dice il nativo, se si è ancora fra 50 e 150 m.
+                // (22/09/2026) Solo in AVVICINAMENTO (`inAvvicinamento`): fermi
+                // o allontanandosi (appena lasciata una tappa, svolta alle
+                // spalle) «Tra 100 metri, gira…» era un'indicazione sbagliata.
+                // Un fix di ritardo: senza il valore precedente non si dice.
+                dettiLontano.insert(idx)
+                if !jsVivo {
+                    dettiLontanoDavvero.insert(idx)
+                    let frase = fraseLontana(metri: d, istruzione: p.testo)
+                    if !frase.isEmpty {
+                        out = frase
+                        tipoOut = "lontano"
+                        testoPasso = p.testo
+                    }
+                }
+            }
+            break
+        }
+
+        // (21/09/2026, REVISIONE 2) Partenza da un indirizzo lontano: si è
+        // «agganciati» (e il fuori percorso vale) solo arrivati sul tracciato.
+        // Conta anche col JS vivo e in pausa. Uguale in NavFollower.kt.
+        if !agganciato && linea.count >= 2 && distanzaDalTracciato(lat: lat, lon: lon) <= Self.aggancioM {
+            agganciato = true
+        }
+
+        // FUORI PERCORSO: solo se tocca al nativo, non c'è già una frase in
+        // questo fix e il JS ha mandato un tracciato.
+        if !jsVivo && agganciato && out == nil && linea.count >= 2 {
+            let dl = distanzaDalTracciato(lat: lat, lon: lon)
+            if dl > Self.offrouteM + accuracy / 2 {
+                if fuoriDa == 0 {
+                    fuoriDa = nowMs
+                } else if nowMs - fuoriDa > Self.offrouteMs && !fuoriDetto {
+                    fuoriDetto = true
+                    fuoriDettoTs = nowMs
+                    if !fraseFuoriPercorso.isEmpty {
+                        out = fraseFuoriPercorso
+                        tipoOut = ""
+                    }
+                } else if fuoriDetto && fuoriRipetizioni < Self.offrouteRipetizioniMax &&
+                            nowMs - fuoriDettoTs > Self.offrouteRipetiMs {
+                    // (21/09/2026, REVISIONE 2) ANCORA FUORI dopo 60 s: si
+                    // ridice, al massimo 2 volte per uscita. Detta una volta
+                    // sola, la frase poteva scadere in coda dietro una guida e
+                    // chi continuava a sbagliare strada non sentiva più nulla.
+                    fuoriRipetizioni += 1
+                    fuoriDettoTs = nowMs
+                    if !fraseFuoriPercorso.isEmpty {
+                        out = fraseFuoriPercorso
+                        tipoOut = ""
+                    }
+                }
+            } else if dl < Self.backOnRouteM {
+                // Rientrati: la prossima uscita riparte da capo (conto compreso).
+                fuoriDa = 0
+                fuoriDetto = false
+                fuoriDettoTs = 0
+                fuoriRipetizioni = 0
+            }
+        }
+
+        guard let frase = out, !jsVivo else { return nil }
+        // Doppione = stessa frase PER LA STESSA manovra: due svolte diverse con
+        // lo stesso testo («Gira a destra», poi di nuovo) vanno dette entrambe.
+        let chiaveDetto = "\(idx)|\(frase)"
+        if chiaveDetto == ultimoDetto && nowMs - ultimoDettoTs <= Self.dedupeMs { return nil }
+        ultimoDetto = chiaveDetto
+        ultimoDettoTs = nowMs
+        if tipoOut == "vicino" {
+            ultimoTestoVicino = testoPasso
+        } else if tipoOut == "lontano" {
+            ultimoTestoLontano = testoPasso
+        }
+        return frase
+    }
+
+    // MARK: - Interni (sempre a lock preso)
+
+    /// Toglie il percorso e riporta il follower allo stato iniziale.
+    /// `ultimoDetto`/`ultimoDettoTs` restano di proposito: non sono nell'elenco
+    /// della specifica, e dopo un ricalcolo (nuovo setNavRoute con la stessa
+    /// svolta davanti) sono loro a impedire la stessa frase due volte in 20 s.
+    private func azzeraSottoLock() {
+        routeId = ""
+        passi = []
+        linea = []
+        modelloLontano = ""
+        fraseFuoriPercorso = ""
+        finale = true
+        idx = 0
+        minDist = Double.infinity
+        dettiVicino = []
+        dettiLontano = []
+        dettiVicinoDavvero = []
+        dettiLontanoDavvero = []
+        finito = false
+        fuoriDa = 0
+        fuoriDetto = false
+        lastHeartbeat = 0
+        ultimoTestoVicino = ""
+        ultimoTestoLontano = ""
+        // (21/09/2026, REVISIONE 2) I campi nuovi. `inPausa` e la fotografia
+        // del «Termina» li gestisce chi chiama (setRoute, clear, terminaDalBanner).
+        spegniCruscotto = true
+        idxJs = 0
+        vicinoFinaleDa = 0
+        ultimoFixFinaleTs = 0
+        fuoriDettoTs = 0
+        fuoriRipetizioni = 0
+        lineaCum = []
+        alongPasso = []
+        fuoriDopoAggancio = false
+        agganciato = true
+        dPrec = Double.nan
+        dPrecIdx = -1
+        // Cruscotto: via i resti e la firma del percorso tolto. `ultimoJs`
+        // resta: è lo stato del BANNER, non del percorso (in muto il JS toglie
+        // e riconsegna il percorso senza rimandare il banner).
+        resto = []
+        restoTappa = []
+        cruscottoFirma = ""
+        cruscottoUltimoMs = 0
+        spegnimentoCruscottoPendente = false
+    }
+
+    /// `resto[i]` = metri lungo i passi da `i` alla fine; `restoTappa[i]` = la
+    /// stessa somma fermandosi al primo 'arrive' con indice ≥ i (0 se `i` è
+    /// lui stesso un arrivo; uguale a `resto[i]` se davanti non ce ne sono).
+    /// Una passata sola all'indietro, fatta a setRoute: a ogni fix restano
+    /// due letture d'array.
+    /// (22/09/2026) Il tratto fra i e i+1 è `metriDopo` del passo i quando il
+    /// JS lo manda (metri lungo il percorso), altrimenti la linea d'aria come
+    /// prima. Uguale in NavFollower.kt.
+    private func calcolaRestiSottoLock() {
+        let n = passi.count
+        resto = Array(repeating: 0, count: n)
+        restoTappa = Array(repeating: 0, count: n)
+        guard n > 1 else { return }
+        for i in stride(from: n - 2, through: 0, by: -1) {
+            let tratto: Double = passi[i].metriDopo
+                ?? Self.metri(passi[i].lat, passi[i].lon, passi[i + 1].lat, passi[i + 1].lon)
+            resto[i] = resto[i + 1] + tratto
+            restoTappa[i] = passi[i].tipo == "arrive" ? 0 : restoTappa[i + 1] + tratto
+        }
+    }
+
+    /// (21/09/2026, REVISIONE 2) Metri progressivi per la regola di
+    /// progressione: dei vertici del tracciato e di ogni passo proiettato
+    /// sulla linea (nan se il passo è a più di 50 m dalla linea). A setRoute.
+    private func calcolaProgressiviSottoLock() {
+        lineaCum = Array(repeating: 0, count: linea.count)
+        if linea.count >= 2 {
+            for k in 1..<linea.count {
+                lineaCum[k] = lineaCum[k - 1] + Self.metri(linea[k - 1].lat, linea[k - 1].lon, linea[k].lat, linea[k].lon)
+            }
+        }
+        alongPasso = passi.map { alongDelPunto(lat: $0.lat, lon: $0.lon) }
+    }
+
+    /// Proiezione del punto sul segmento k-1→k in un piano locale centrato
+    /// sul punto: (distanza dalla linea, frazione t del segmento).
+    private func proiettaSulSegmento(_ k: Int, lat: Double, lon: Double) -> (dist: Double, t: Double) {
+        let metriPerGradoLat = 111_320.0
+        let metriPerGradoLon = 111_320.0 * cos(lat * .pi / 180)
+        let ax: Double = (linea[k - 1].lon - lon) * metriPerGradoLon
+        let ay: Double = (linea[k - 1].lat - lat) * metriPerGradoLat
+        let dx: Double = (linea[k].lon - lon) * metriPerGradoLon - ax
+        let dy: Double = (linea[k].lat - lat) * metriPerGradoLat - ay
+        let lung2: Double = dx * dx + dy * dy
+        var t = 0.0
+        if lung2 > 0 {
+            t = min(1, max(0, -(ax * dx + ay * dy) / lung2))
+        }
+        let px: Double = ax + t * dx
+        let py: Double = ay + t * dy
+        return (dist: (px * px + py * py).squareRoot(), t: t)
+    }
+
+    /// Metri progressivi del punto proiettato sul segmento PIÙ VICINO; nan se
+    /// il punto sta a più di 50 m dalla linea. Uguale in NavFollower.kt.
+    private func alongDelPunto(lat: Double, lon: Double) -> Double {
+        guard linea.count >= 2, lineaCum.count == linea.count else { return .nan }
+        var migliore = Double.infinity
+        var along = Double.nan
+        for k in 1..<linea.count {
+            let pr = proiettaSulSegmento(k, lat: lat, lon: lon)
+            if pr.dist < migliore {
+                migliore = pr.dist
+                along = lineaCum[k - 1] + pr.t * (lineaCum[k] - lineaCum[k - 1])
+            }
+        }
+        return migliore <= 50 ? along : .nan
+    }
+
+    /// Metri progressivi di chi cammina fra `da` e `a` lungo il tracciato: la
+    /// PRIMA corrispondenza entro `maxCross` metri dalla linea (non la più
+    /// vicina: vedi onFix). nan se non si è sulla linea in quella finestra.
+    /// Uguale in NavFollower.kt.
+    private func alongUtente(lat: Double, lon: Double, da: Double, a: Double, maxCross: Double) -> Double {
+        guard linea.count >= 2, lineaCum.count == linea.count else { return .nan }
+        for k in 1..<linea.count {
+            if lineaCum[k] < da { continue }
+            if lineaCum[k - 1] > a { break }
+            let pr = proiettaSulSegmento(k, lat: lat, lon: lon)
+            if pr.dist <= maxCross {
+                let along = lineaCum[k - 1] + pr.t * (lineaCum[k] - lineaCum[k - 1])
+                if along >= da { return along }
+            }
+        }
+        return .nan
+    }
+
+    /// avanza() della specifica: mai oltre l'ultimo passo.
+    private func avanzaSottoLock() {
+        if idx < passi.count - 1 { idx += 1 }
+        minDist = Double.infinity
+    }
+
+    /// «Tra {m} metri, {i}»: {m} arrotondato alla decina (minimo 10), {i} è il
+    /// testo della manovra con la PRIMA lettera minuscola.
+    /// Modello vuoto → il testo NUDO della manovra (scelta comune con
+    /// NavFollower.kt): meglio la svolta senza i metri che il silenzio.
+    private func fraseLontana(metri d: Double, istruzione: String) -> String {
+        guard !modelloLontano.isEmpty else { return istruzione }
+        let m = max(10, Int((d / 10).rounded()) * 10)
+        let minuscola = istruzione.prefix(1).lowercased() + String(istruzione.dropFirst())
+        return modelloLontano
+            .replacingOccurrences(of: "{m}", with: String(m))
+            .replacingOccurrences(of: "{i}", with: minuscola)
+    }
+
+    /// Distanza minima dal tracciato, per proiezione sui SEGMENTI (non sui
+    /// vertici: su un rettilineo con due soli punti a 400 m l'uno dall'altro
+    /// chi cammina a metà strada risulterebbe «fuori» di 200 m). Piano locale
+    /// centrato sul fix: alle distanze che contano qui (decine di metri)
+    /// l'errore rispetto alla sfera è di centimetri.
+    private func distanzaDalTracciato(lat: Double, lon: Double) -> Double {
+        let metriPerGradoLat = 111_320.0
+        let metriPerGradoLon = 111_320.0 * cos(lat * .pi / 180)
+        func x(_ p: Punto) -> Double {
+            var dLon = p.lon - lon
+            if dLon > 180 { dLon -= 360 } else if dLon < -180 { dLon += 360 }
+            return dLon * metriPerGradoLon
+        }
+        func y(_ p: Punto) -> Double { (p.lat - lat) * metriPerGradoLat }
+
+        var migliore = Double.infinity
+        var ax = x(linea[0])
+        var ay = y(linea[0])
+        for i in 1..<linea.count {
+            let bx = x(linea[i])
+            let by = y(linea[i])
+            let dx = bx - ax
+            let dy = by - ay
+            let lung2 = dx * dx + dy * dy
+            var t = 0.0
+            if lung2 > 0 {
+                // Il fix è l'origine: proiezione di (0,0) sul segmento A→B.
+                t = min(1, max(0, -(ax * dx + ay * dy) / lung2))
+            }
+            let px = ax + t * dx
+            let py = ay + t * dy
+            let dist2 = px * px + py * py
+            if dist2 < migliore { migliore = dist2 }
+            ax = bx
+            ay = by
+        }
+        return migliore.squareRoot()
+    }
+
+    // MARK: - Funzioni pure
+
+    /// Haversine, in metri.
+    private static func metri(_ lat1: Double, _ lon1: Double, _ lat2: Double, _ lon2: Double) -> Double {
+        let r = 6_371_000.0
+        let f1 = lat1 * .pi / 180
+        let f2 = lat2 * .pi / 180
+        let dF = (lat2 - lat1) * .pi / 180
+        let dL = (lon2 - lon1) * .pi / 180
+        // Tenuto in [0, 1]: un `a` a 1,0000000002 per arrotondamento darebbe
+        // NaN, e più avanti un Int(NaN) manda l'app in crash.
+        // Spezzata e tipizzata a mano: in una riga sola (sei funzioni
+        // sovraccaricate + min/max generici) il compilatore Swift può
+        // arrendersi con «unable to type-check this expression in reasonable
+        // time», e qui la build si vede solo in CI.
+        let sF: Double = sin(dF / 2)
+        let sL: Double = sin(dL / 2)
+        let grezzo: Double = sF * sF + cos(f1) * cos(f2) * sL * sL
+        let a: Double = min(1.0, max(0.0, grezzo))
+        return 2 * r * atan2(a.squareRoot(), (1 - a).squareRoot())
+    }
+
+    private struct PercorsoLetto {
+        let id: String
+        let passi: [Passo]
+        let indice: Int
+        let linea: [Punto]
+        let modelloLontano: String
+        let fraseFuoriPercorso: String
+        let finale: Bool
+        /// (21/09/2026, REVISIONE 2) Opzionali: assenti = false / true / false.
+        let inPausa: Bool
+        let spegniCruscotto: Bool
+        let fuoriSoloDopoAggancio: Bool
+    }
+
+    /// I numeri del JSON arrivano come NSNumber (interi o decimali): si
+    /// leggono da lì. I booleani NON sono coordinate: `true` è un NSNumber
+    /// anche lui e diventerebbe 1.0.
+    private static func numero(_ valore: Any?) -> Double? {
+        guard let n = valore as? NSNumber, CFGetTypeID(n as CFTypeRef) != CFBooleanGetTypeID() else { return nil }
+        let d = n.doubleValue
+        return d.isFinite ? d : nil
+    }
+
+    /// Lettura del `routeJson` della specifica. Severa sui PASSI — indice e
+    /// insiemi «detti» sono posizioni in quell'array, condivise col JS:
+    /// scartarne uno malformato sposterebbe tutti gli altri, quindi un passo
+    /// senza coordinate invalida l'intero percorso. Indulgente sul TRACCIATO,
+    /// che nessuno indicizza: un punto malformato si salta.
+    private static func leggiPercorso(_ json: String) -> PercorsoLetto? {
+        guard let data = json.data(using: .utf8),
+              let radice = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let passiGrezzi = radice["passi"] as? [[String: Any]],
+              !passiGrezzi.isEmpty else { return nil }
+
+        var passi: [Passo] = []
+        passi.reserveCapacity(passiGrezzi.count)
+        for grezzo in passiGrezzi {
+            guard let lat = numero(grezzo["lat"]), let lon = numero(grezzo["lon"]),
+                  abs(lat) <= 90, abs(lon) <= 180 else { return nil }
+            // (22/09/2026) `metriDopo`: solo un numero finito > 0, altrimenti
+            // nil (linea d'aria). `numero` scarta già booleani e non finiti.
+            let metriDopoGrezzo: Double = numero(grezzo["metriDopo"]) ?? 0
+            // Il testo resta COM'È (niente trim): `ultimoTesto*` di
+            // getNavProgress lo restituisce al JS, che lo confronta col suo.
+            passi.append(Passo(
+                lat: lat, lon: lon,
+                testo: grezzo["testo"] as? String ?? "",
+                tipo: grezzo["tipo"] as? String ?? "turn",
+                tappa: grezzo["tappa"] as? String ?? "",
+                manovraTipo: grezzo["manovraTipo"] as? String ?? "",
+                manovraVerso: grezzo["manovraVerso"] as? String ?? "",
+                metriDopo: metriDopoGrezzo > 0 ? metriDopoGrezzo : nil
+            ))
+        }
+
+        var linea: [Punto] = []
+        if let lineaGrezza = radice["linea"] as? [[Any]] {
+            linea.reserveCapacity(lineaGrezza.count)
+            for coppia in lineaGrezza where coppia.count >= 2 {
+                if let lat = numero(coppia[0]), let lon = numero(coppia[1]),
+                   abs(lat) <= 90, abs(lon) <= 180 {
+                    linea.append(Punto(lat: lat, lon: lon))
+                }
+            }
+        }
+
+        return PercorsoLetto(
+            id: radice["id"] as? String ?? "",
+            passi: passi,
+            // Limitato PRIMA della conversione: Int(1e300) manda in crash.
+            indice: numero(radice["indice"]).map { Int(min(max($0, 0), 100_000)) } ?? 0,
+            linea: linea,
+            modelloLontano: radice["modelloLontano"] as? String ?? "",
+            fraseFuoriPercorso: radice["fraseFuoriPercorso"] as? String ?? "",
+            finale: radice["finale"] as? Bool ?? true,
+            inPausa: radice["inPausa"] as? Bool ?? false,
+            spegniCruscotto: radice["spegniCruscotto"] as? Bool ?? true,
+            fuoriSoloDopoAggancio: radice["fuoriSoloDopoAggancio"] as? Bool ?? false
+        )
     }
 }

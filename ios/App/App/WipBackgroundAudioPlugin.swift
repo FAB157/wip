@@ -26,8 +26,19 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "setMegaphone", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "seek", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getStatus", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "setupMediaSession", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "setupMediaSession", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setTrackCommands", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "updateNowPlaying", returnType: CAPPluginReturnPromise),
+        // (13/09/2026) Il cruscotto della visita museo (Live Activity):
+        // ascoltata/in ascolto/prossima, vedi LiveActivityMuseum.swift.
+        CAPPluginMethod(name: "updateMuseumBanner", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "endMuseumBanner", returnType: CAPPluginReturnPromise)
     ]
+
+    /// (12/09/2026, visita museo) Tasti «successiva/precedente» accesi dal
+    /// JS: il banner resta anche a fine traccia (rate 0) così dalla schermata
+    /// di blocco si passa all'opera dopo, e il play a player fermo va al JS.
+    private var trackCommandsEnabled = false
 
     /// (28/08/2026, AUD-01) Istanza viva del plugin, per SpeechQueue: la voce
     /// nativa (teaser, annunci) deve sapere se la guida JS sta suonando e
@@ -51,7 +62,11 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     /// L'utente (o il JS) vuole la riproduzione in corso: serve allo stacco
     /// delle cuffie, quando iOS mette in pausa l'AVPlayer da solo e noi
     /// dobbiamo farlo ripartire dall'altoparlante (decisione 28/08/2026).
-    private var riproduzioneVoluta = false
+    /// `private(set)` (13/09/2026): la legge SpeechQueue.deactivateAudioSessionIfIdle,
+    /// perche' `isPlaying` (rate > 0) e' ancora falso nei primi istanti dopo
+    /// play() — e in quel varco la voce di sistema che si chiude spegneva la
+    /// sessione audio appena attivata (niente lettore sulla schermata di blocco).
+    private(set) var riproduzioneVoluta = false
     private var progressTimer: Timer?
     /// Velocità scelta dall'utente: va riapplicata a ogni resume perché
     /// AVPlayer riparte sempre a rate 1.0 con play().
@@ -60,6 +75,16 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     // storico e compariva nel Now Playing / schermata di blocco.
     private var currentTitle = "WIP"
     private var currentSubtitle = "Audioguida"
+    /// (31/08/2026) Copertina per il Now Playing — la stessa schermata che
+    /// CarPlay mostra di sistema per qualunque audio in corso, senza bisogno
+    /// di un'app CarPlay dedicata (che WIP non ha). L'URL arriva dal JS
+    /// (foto del POI); l'immagine si scarica una volta e si mette in cache
+    /// per quell'URL, cosi' un ascolto ripetuto dello stesso POI non la
+    /// riscarica. nil = nessuna foto per questo POI: il titolo resta comunque
+    /// il nome del POI, come prima di questa modifica.
+    private var currentArtworkUrl: String?
+    private var currentArtwork: MPMediaItemArtwork?
+    private var artworkDownloadTask: URLSessionDataTask?
     private var remoteCommandsConfigured = false
     /// Spegnimento differito della sessione audio quando si resta in pausa
     /// (vedi `programmaSpegnimentoSessione`).
@@ -104,6 +129,70 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             name: UIApplication.didBecomeActiveNotification,
             object: nil
         )
+        // (13/09/2026) IL TASTO "PROSSIMA" DELLA LIVE ACTIVITY VISITA MUSEO
+        // (WipMuseumIntents.swift, perform()): arriva qui come notifica
+        // in-process, esattamente come i tasti del navigatore arrivano a
+        // ItaintaBackgroundPoiPlugin. Si traduce nello STESSO evento
+        // 'remoteNext' gia' usato dal tasto della schermata di blocco:
+        // MuseumVisitSheet.tsx ascolta gia' quell'evento, nessun listener
+        // JS nuovo da aggiungere. La chiave nell'App Group copre il tocco
+        // arrivato PRIMA che il plugin fosse in ascolto (app appena
+        // rilanciata dal sistema).
+        NotificationCenter.default.addObserver(forName: WipMuseumAzione.notifica, object: nil, queue: .main) { [weak self] n in
+            let azione = (n.userInfo?["azione"] as? String) ?? ""
+            UserDefaults(suiteName: WipNavAppGroup.id)?.removeObject(forKey: WipMuseumAzione.chiavePendente)
+            self?.eseguiAzioneCruscotto(azione)
+        }
+        if let pendente = UserDefaults(suiteName: WipNavAppGroup.id)?.string(forKey: WipMuseumAzione.chiavePendente), !pendente.isEmpty {
+            UserDefaults(suiteName: WipNavAppGroup.id)?.removeObject(forKey: WipMuseumAzione.chiavePendente)
+            eseguiAzioneCruscotto(pendente)
+        }
+    }
+
+    /// Le azioni del cruscotto della visita museo (Live Activity): «prossima»
+    /// e' lo stesso evento 'remoteNext' del tasto della schermata di blocco;
+    /// «play/pausa» (14/09/2026) e' lo stesso gesto del tasto cuffie.
+    private func eseguiAzioneCruscotto(_ azione: String) {
+        switch azione {
+        case WipMuseumAzione.prossima:
+            notifyListeners("remoteNext", data: [:])
+        case WipMuseumAzione.playPausa:
+            DispatchQueue.main.async { _ = self.alternaPlayPausa() }
+        default:
+            break
+        }
+    }
+
+    /// Un solo tasto play/pausa (AirPods, tasto cuffie, cruscotto museo): col
+    /// player carico alterna; a player fermo con i tasti traccia accesi fa
+    /// partire la prossima (decide il JS); altrimenti agisce sulla voce nativa.
+    /// - returns: `false` se non c'era nulla su cui agire.
+    private func alternaPlayPausa() -> Bool {
+        if let player = self.player {
+            self.isPausedForSpeech = false
+            if player.rate > 0 {
+                player.pause()
+                self.programmaSpegnimentoSessione()
+                self.notifyPlaybackState(isPlaying: false)
+            } else {
+                self.activateAudioSession()
+                player.playImmediately(atRate: self.desiredRate)
+                self.notifyPlaybackState(isPlaying: true)
+            }
+            self.updateNowPlayingInfo()
+            return true
+        }
+        if self.trackCommandsEnabled {
+            self.notifyListeners("remotePlay", data: [:])
+            return true
+        }
+        guard SpeechQueue.shared.hasActiveMp3 else { return false }
+        if SpeechQueue.shared.isMp3Playing {
+            SpeechQueue.shared.pauseSpeaking()
+        } else {
+            SpeechQueue.shared.continueSpeaking()
+        }
+        return true
     }
 
     deinit {
@@ -158,6 +247,7 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         currentTitle = call.getString("title") ?? "WIP"
         currentSubtitle = call.getString("subtitle") ?? "Audioguida"
+        loadArtwork(urlString: call.getString("imageUri"))
 
         // Filesystem.getUri restituisce file:///…; le tracce remote sono https.
         let url: URL?
@@ -220,6 +310,21 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             self.updateNowPlayingInfo()
             self.notifyPlaybackState(isPlaying: true)
             call.resolve(["playing": true])
+
+            // SCHERMATA DI BLOCCO (13/09/2026, committente: «faccio play ma il
+            // banner a display spento non c'e'» sulle opere del museo). Lo
+            // stopSpeaking() qui sopra chiude la voce di sistema in un blocco
+            // main.async che gira DOPO questo: se decideva che nessuno stava
+            // suonando (rate ancora 0 durante il caricamento) spegneva la
+            // sessione audio e iOS toglieva l'app dalla schermata di blocco.
+            // Un giro di main dopo — quindi dopo quel blocco — si riattiva la
+            // sessione e si ripubblica il Now Playing: idempotente se era tutto
+            // a posto, risolutivo se non lo era.
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, self.player === player, self.riproduzioneVoluta else { return }
+                self.activateAudioSession()
+                self.updateNowPlayingInfo()
+            }
         }
     }
 
@@ -273,6 +378,13 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         // (LoudnessEnhancer/EQ) e sul web (grafo WebAudio). Con AVPlayer non
         // c'è un EQ applicabile senza riscrivere il playback su AVAudioEngine:
         // qui è un no-op deliberato, il JS non deve fallire.
+        //
+        // Ma il tasto non deve mentire (01/09/2026): se qualcuno lo accende,
+        // si dichiara subito indisponibile e il JS lo rispegne — meglio un
+        // tasto che si rifiuta di uno acceso su un effetto che non c'è.
+        if call.getBool("enabled") == true {
+            notifyListeners("megaphoneUnavailable", data: [:])
+        }
         call.resolve()
     }
 
@@ -317,6 +429,99 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             self.configureRemoteCommandsIfNeeded()
             call.resolve()
         }
+    }
+
+    /// Visita museo: «successiva/precedente» al posto dei salti di 15 s
+    /// (iOS mostra una coppia sola di tasti laterali).
+    @objc func setTrackCommands(_ call: CAPPluginCall) {
+        let next = call.getBool("next") ?? false
+        let previous = call.getBool("previous") ?? false
+        DispatchQueue.main.async {
+            self.configureRemoteCommandsIfNeeded()
+            self.trackCommandsEnabled = next || previous
+            let center = MPRemoteCommandCenter.shared()
+            center.nextTrackCommand.isEnabled = next
+            center.previousTrackCommand.isEnabled = previous
+            center.skipForwardCommand.isEnabled = !next
+            center.skipBackwardCommand.isEnabled = !previous
+            if !self.trackCommandsEnabled && self.player == nil {
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            }
+            call.resolve()
+        }
+    }
+
+    /// Titolo/sottotitolo/copertina del banner, anche a player fermo (a fine
+    /// opera il banner dice qual è la prossima e il play la fa partire).
+    @objc func updateNowPlaying(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            if let t = call.getString("title"), !t.isEmpty { self.currentTitle = t }
+            if let s = call.getString("subtitle") { self.currentSubtitle = s }
+            let imageUri = call.getString("imageUri")
+            if self.player != nil {
+                if imageUri != nil { self.loadArtwork(urlString: imageUri) } else { self.updateNowPlayingInfo() }
+            } else {
+                // Nessun player: si scrive il banner a mano, fermo (rate 0).
+                var info: [String: Any] = [
+                    MPMediaItemPropertyTitle: self.currentTitle,
+                    MPMediaItemPropertyArtist: self.currentSubtitle,
+                    MPNowPlayingInfoPropertyPlaybackRate: 0.0
+                ]
+                if let artwork = self.currentArtwork { info[MPMediaItemPropertyArtwork] = artwork }
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+            }
+            call.resolve()
+        }
+    }
+
+    /**
+     * IL CRUSCOTTO DELLA VISITA MUSEO (13/09/2026): avvia o aggiorna la Live
+     * Activity con l'opera ascoltata, quella in ascolto e la prossima.
+     * MuseumVisitSheet.tsx la chiama a inizio e fine di ogni opera — stesso
+     * schema di ItaintaBackgroundPoiPlugin.updateNavBanner.
+     *
+     * `ok: false` quando le Live Activities non ci sono o sono disattivate:
+     * il banner Now Playing (updateNowPlaying, gia' in uso) resta comunque
+     * il ripiego, quindi il JS non deve fare nulla di diverso in quel caso.
+     */
+    @objc func updateMuseumBanner(_ call: CAPPluginCall) {
+        let attivo = call.getBool("attivo") ?? false
+        if !attivo {
+            LiveActivityMuseum.shared.termina()
+            call.resolve(["ok": true])
+            return
+        }
+        guard LiveActivityMuseum.shared.disponibili else {
+            call.resolve(["ok": false, "reason": "live_activities_unavailable"])
+            return
+        }
+        let nomeMuseo = call.getString("nomeMuseo") ?? ""
+        let stato: [String: Any] = [
+            "ascoltataTitolo": call.getString("ascoltataTitolo") ?? "",
+            "ascoltataSala": call.getString("ascoltataSala") ?? "",
+            "inAscoltoTitolo": call.getString("inAscoltoTitolo") ?? "",
+            "inAscoltoSala": call.getString("inAscoltoSala") ?? "",
+            "inAscoltoFotoUrl": call.getString("inAscoltoFotoUrl") ?? "",
+            "inAscoltoProgresso": call.getDouble("inAscoltoProgresso") ?? -1,
+            "inPausa": call.getBool("inPausa") ?? false,
+            "prossimaTitolo": call.getString("prossimaTitolo") ?? "",
+            "prossimaSala": call.getString("prossimaSala") ?? "",
+            "prossimaFotoUrl": call.getString("prossimaFotoUrl") ?? "",
+            "indiceTappa": call.getDouble("indiceTappa") ?? 1,
+            "tappeTotali": call.getDouble("tappeTotali") ?? 1
+        ]
+        // Le API di ActivityKit vogliono il main thread.
+        DispatchQueue.main.async {
+            let ok = LiveActivityMuseum.shared.avviaOAggiorna(nomeMuseo: nomeMuseo, stato: stato)
+            call.resolve(ok ? ["ok": true] : ["ok": false, "reason": "live_activity_request_failed"])
+        }
+    }
+
+    /// Chiude il cruscotto della visita museo: fine visita, o "esci dalla
+    /// visita" prima che l'ultima opera sia finita.
+    @objc func endMuseumBanner(_ call: CAPPluginCall) {
+        LiveActivityMuseum.shared.termina()
+        call.resolve()
     }
 
     // MARK: - Audio session
@@ -464,6 +669,9 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     private func notifyPlaybackState(isPlaying: Bool) {
         ultimoStatoNotificato = isPlaying
         notifyListeners("playbackStatus", data: ["isPlaying": isPlaying])
+        // Il cruscotto della visita museo cambia faccia al tasto play/pausa,
+        // da qualunque parte arrivi la pausa (cruscotto, cuffie, sistema).
+        LiveActivityMuseum.shared.segnaPausa(!isPlaying)
     }
 
     private func teardownPlayer(deactivateSession: Bool) {
@@ -482,7 +690,17 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         player?.pause()
         player = nil
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        if trackCommandsEnabled, var info = MPNowPlayingInfoCenter.default().nowPlayingInfo {
+            // Visita museo: a fine opera il banner resta, fermo, con i tasti
+            // «successiva/precedente»: si cambia opera senza aprire l'app.
+            info[MPNowPlayingInfoPropertyPlaybackRate] = 0.0
+            if let durata = info[MPMediaItemPropertyPlaybackDuration] as? Double {
+                info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = durata
+            }
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        } else {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        }
         if deactivateSession {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
@@ -502,7 +720,41 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         if duration.isFinite && duration > 0 {
             info[MPMediaItemPropertyPlaybackDuration] = duration
         }
+        if let artwork = currentArtwork {
+            info[MPMediaItemPropertyArtwork] = artwork
+        }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    /// Scarica la foto del POI e la mette nel Now Playing appena pronta —
+    /// mai a costo di ritardare l'avvio della riproduzione (che parte subito
+    /// in `play()`, senza aspettare questo metodo). Un URL diverso dal
+    /// precedente annulla il download in corso: se l'utente passa da un POI
+    /// all'altro rapidamente, non deve arrivare la foto sbagliata in ritardo.
+    private func loadArtwork(urlString: String?) {
+        artworkDownloadTask?.cancel()
+        artworkDownloadTask = nil
+        guard currentArtworkUrl != urlString else {
+            // Stesso POI di prima (o entrambi nil): l'artwork già in cache
+            // (o l'assenza di foto) resta valida, si aggiorna solo il testo.
+            updateNowPlayingInfo()
+            return
+        }
+        currentArtworkUrl = urlString
+        currentArtwork = nil
+        updateNowPlayingInfo() // il titolo non deve aspettare la foto
+        guard let urlString = urlString, let url = URL(string: urlString) else { return }
+        let richiesta = urlString
+        artworkDownloadTask = URLSession.shared.dataTask(with: url) { [weak self] data, _, error in
+            guard let self = self, let data = data, error == nil, let image = UIImage(data: data) else { return }
+            DispatchQueue.main.async {
+                // La foto è di un POI che nel frattempo è stato superato da un altro.
+                guard self.currentArtworkUrl == richiesta else { return }
+                self.currentArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                self.updateNowPlayingInfo()
+            }
+        }
+        artworkDownloadTask?.resume()
     }
 
     /// Non più `private` (AUD-14): SpeechQueue la chiama quando fa partire
@@ -519,9 +771,29 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         // (AUD-14) Player JS nil ma MP3 della guida in SpeechQueue: play e
         // pausa agiscono lì. Prima rispondevano .noSuchContent e dalla Lock
         // Screen non si poteva fermare la guida del Day Pass.
+        // (12/09/2026) Visita museo: «successiva/precedente» vanno al JS, che
+        // sa qual è l'opera dopo. Spenti finché il JS non li accende.
+        center.nextTrackCommand.isEnabled = false
+        center.nextTrackCommand.addTarget { [weak self] _ in
+            guard let self = self, self.trackCommandsEnabled else { return .noSuchContent }
+            self.notifyListeners("remoteNext", data: [:])
+            return .success
+        }
+        center.previousTrackCommand.isEnabled = false
+        center.previousTrackCommand.addTarget { [weak self] _ in
+            guard let self = self, self.trackCommandsEnabled else { return .noSuchContent }
+            self.notifyListeners("remotePrevious", data: [:])
+            return .success
+        }
+
         center.playCommand.addTarget { [weak self] _ in
             guard let self = self else { return .noSuchContent }
             guard self.player != nil else {
+                if self.trackCommandsEnabled {
+                    // Fine opera, banner fermo: il play fa partire la prossima (decide il JS).
+                    self.notifyListeners("remotePlay", data: [:])
+                    return .success
+                }
                 guard SpeechQueue.shared.hasActiveMp3 else { return .noSuchContent }
                 SpeechQueue.shared.continueSpeaking()
                 return .success
@@ -550,27 +822,7 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         // Un solo tasto play/pausa (AirPods, tasto cuffie): stessa logica.
         center.togglePlayPauseCommand.addTarget { [weak self] _ in
             guard let self = self else { return .noSuchContent }
-            if let player = self.player {
-                self.isPausedForSpeech = false
-                if player.rate > 0 {
-                    player.pause()
-                    self.programmaSpegnimentoSessione()
-                    self.notifyPlaybackState(isPlaying: false)
-                } else {
-                    self.activateAudioSession()
-                    player.playImmediately(atRate: self.desiredRate)
-                    self.notifyPlaybackState(isPlaying: true)
-                }
-                self.updateNowPlayingInfo()
-                return .success
-            }
-            guard SpeechQueue.shared.hasActiveMp3 else { return .noSuchContent }
-            if SpeechQueue.shared.isMp3Playing {
-                SpeechQueue.shared.pauseSpeaking()
-            } else {
-                SpeechQueue.shared.continueSpeaking()
-            }
-            return .success
+            return self.alternaPlayPausa() ? .success : .noSuchContent
         }
         center.skipForwardCommand.preferredIntervals = [15]
         center.skipForwardCommand.addTarget { [weak self] _ in

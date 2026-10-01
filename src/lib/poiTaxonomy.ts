@@ -244,10 +244,13 @@ export const PANORAMI_TYPES = [
   "viewpoint", "panorami", "panorama", "lighthouse", "faro", "scenic_road", "aerialway",
   "sentiero", "sentieri", "hiking", "trail", "cammino", "via_ferrata",
 ];
-export const MONUMENTI_TYPES = ["monument", "monumenti", "monumento", "artwork", "attraction", "attrazioni", "castle", "castelli", "ruins", "archaeological_site", "archeo", "memorial", "fort", "tower"];
+export const MONUMENTI_TYPES = ["monument", "monumenti", "monumento", "artwork", "attraction", "attrazioni", "castle", "castelli", "ruins", "archaeological_site", "archeo", "memorial", "fort", "tower", "square", "piazza", "piazze"];
 export const LOCALI_TYPES = ["locali", "restaurant", "ristorante", "ristoranti", "cafe", "bar", "fast_food", "pub", "ice_cream", "gelateria", "bakery", "nightclub", "biergarten", "food_court"];
 export const FAMIGLIE_TYPES = ["famiglie", "playground", "parco_giochi", "theme_park", "parco_divertimenti", "aquarium", "acquario", "zoo", "water_park", "roller_coaster"];
-export const UTILITA_TYPES = ["utilita", "pharmacy", "farmacia", "hospital", "ospedale", "clinic", "doctors", "police", "polizia", "taxi", "drinking_water", "fontanelle", "marketplace", "mercato", "station", "stazione_ferroviaria", "subway_entrance", "metropolitana", "toll_booth", "casello_autostradale", "post_office", "parking", "ev_charging", "charging_station"];
+// I mercati (marketplace/mercato) NON stanno più in Utilità (29/08/2026,
+// decisione del committente): sono il verticale Mercatini, vedi resolvePoiTaxonomy.
+export const UTILITA_TYPES = ["utilita", "pharmacy", "farmacia", "hospital", "ospedale", "clinic", "doctors", "police", "polizia", "taxi", "drinking_water", "fontanelle", "station", "stazione_ferroviaria", "subway_entrance", "metropolitana", "toll_booth", "casello_autostradale", "post_office", "parking", "ev_charging", "charging_station"];
+export const MERCATI_TYPES = ["marketplace", "mercato", "mercati", "market", "market_hall", "farmers_market", "flea_market"];
 
 /**
  * ENOGASTRONOMIA — dal `poi_type` importato da OSM al sub-chip.
@@ -376,6 +379,9 @@ export function resolvePoiTaxonomy(p: any): { macro: string | null; subId: strin
   if ((TEMATICI_KEYS as readonly string[]).includes(raw)) {
     return { macro: "tematiche", subId: raw };
   }
+  // MERCATI (29/08/2026): un mercato OSM (`marketplace`) è il verticale
+  // Mercatini, non un servizio. Prima stava in Utilità con farmacie e taxi.
+  if (MERCATI_TYPES.includes(raw)) return { macro: "tematiche", subId: "mercati" };
   if (raw === "tematiche") {
     const chiave = String(p.category || "").toLowerCase();
     return { macro: "tematiche", subId: (TEMATICI_KEYS as readonly string[]).includes(chiave) ? chiave : "" };
@@ -407,7 +413,27 @@ export function resolvePoiTaxonomy(p: any): { macro: string | null; subId: strin
 
   // Le gemme sono una macro a sé: restano gemme anche se sono chiese o musei,
   // ma conservano la sotto-categoria culturale per i sub-chip.
-  const isGem = p.is_gem === true || raw === "gemme";
+  //
+  // CHI DECIDE SE UN POI E' UNA GEMMA: **solo `is_gem`** (03/09/2026).
+  //
+  // Fino a oggi questa riga era `p.is_gem === true || raw === "gemme"`, e
+  // quell'`||` mandava all'aria il declassamento. `gemme` non e' soltanto il
+  // nome della macro: e' anche la `category` con cui e' stato importato il
+  // CSV da Wikipedia, dove faceva da contenitore e non da giudizio di valore.
+  // Risultato misurato oggi: **9.093 righe con `category='gemme'`, di cui
+  // 9.062 con `is_gem=false`** (8.609 visibili). Il modello le aveva giudicate
+  // non-gemme, la chip continuava a mostrarle. E' cosi' che Avenza e Marina di
+  // Carrara restavano gemme benche' il processo di declassamento avesse fatto
+  // il suo lavoro: aveva spento il flag, ma nessuno guardava il flag.
+  //
+  // Quelle righe NON hanno una categoria vera da recuperare: tutte e 9.062
+  // hanno `poi_type='isolated'` e `source='csv'`, solo 174 un wikidata. La
+  // loro categoria d'origine non e' mai stata registrata. Ricadono quindi
+  // sotto "monumenti", che e' il contenitore culturale generico dell'app e
+  // che il campione conferma (chiese, piazze, gallerie, cappelle): meglio
+  // approssimate che spacciate per gemme. Chi volesse la categoria esatta
+  // deve farci passare una ricategorizzazione, non un `||`.
+  const isGem = p.is_gem === true;
 
   const culturalSub = (value: string): string | null => {
     if (CHIESE_TYPES.includes(value)) return "chiese";
@@ -435,6 +461,12 @@ export function resolvePoiTaxonomy(p: any): { macro: string | null; subId: strin
   // restano "panorami" dentro Monumenti: non hanno una famiglia precisa.
   if (cultural && (NATURA_FAMIGLIE as readonly string[]).includes(cultural)) return { macro: "natura", subId: cultural };
   if (cultural) return { macro: "monumenti", subId: cultural };
+
+  // Import CSV di Wikipedia con `category='gemme'` ma `is_gem=false`: senza
+  // questa riga uscirebbero con `macro: null` e sparirebbero dalla mappa,
+  // perche' le chip filtrano per macro. Sono 8.609 luoghi visibili e veri —
+  // vanno mostrati, solo non fra le gemme. Vedi il commento su `isGem`.
+  if (raw === "gemme") return { macro: "monumenti", subId: "monumenti_sub" };
 
   if (LOCALI_TYPES.includes(raw)) return { macro: "locali", subId: subCanonical };
   if (FAMIGLIE_TYPES.includes(raw)) return { macro: "famiglie", subId: subCanonical || subCategoryToFilterId(raw) };
@@ -579,14 +611,28 @@ function passesCategoryRuleBase(p: any, selectedCategories: string[], subFilter?
   }
 
   if (!macro) return false;
-  if (!selectedCategories.includes(macro)) return false;
 
-  const subsOfMacro = SUBS_BY_MACRO[macro] || [];
+  // DOPPIA APPARTENENZA DELLE GEMME (19/09/2026, committente: «Scultura Dunchi
+  // deve apparire sia come gemma che come monumento»). `resolvePoiTaxonomy`
+  // da` una macro sola, e a una gemma da` "gemme": con la chip Gemme spenta e
+  // Monumenti accesa il luogo spariva dalla mappa, proprio lui che e` il
+  // migliore dei monumenti. Una gemma E` un monumento (o una chiesa, un
+  // museo, un panorama): passa con la chip Gemme OPPURE con la chip Monumenti,
+  // e i sotto-chip si valutano su quella accesa — sono gli stessi quattro.
+  // Il pin resta quello della gemma: qui si decide solo se mostrarla.
+  let macroFiltro = macro;
+  if (macro === "gemme" && !selectedCategories.includes("gemme") && selectedCategories.includes("monumenti")) macroFiltro = "monumenti";
+  if (!selectedCategories.includes(macroFiltro)) return false;
+
+  const subsOfMacro = SUBS_BY_MACRO[macroFiltro] || [];
   const activeSubs = (subFilter || []).filter(s => subsOfMacro.includes(s));
   // Nessun sub-chip di questa macro selezionato ⇒ il chip "Tutti" è attivo.
   if (activeSubs.length === 0) return true;
 
   if (subId && activeSubs.includes(subId)) return true;
+  // Una gemma senza famiglia riconosciuta (import CSV, `category='gemme'`) vale
+  // come «monumenti_sub», esattamente come la sua gemella non-gemma qui sopra.
+  if (macro === "gemme" && !subId && activeSubs.includes("monumenti_sub")) return true;
   // Senza glutine: due chip distinti. "Solo senza glutine" (gluten_free_only,
   // cucina interamente gluten free) mostra SOLO quei locali; "Con opzioni"
   // (gluten_free_options) mostra anche i 100%, perche' offrono di certo

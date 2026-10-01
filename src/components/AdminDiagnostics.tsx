@@ -101,6 +101,199 @@ function CanarySection() {
   );
 }
 
+// ── ROUTING: quale fonte serve le rotte (09/09/2026) ─────────────────────
+// Il navigatore dipende da 5 servizi esterni in catena (FOSSGIS OSRM e
+// Valhalla gratuiti senza garanzia, poi ORS, Geoapify, Mapbox a pagamento).
+// Se le gratuite calano e le riserve salgono, e' il momento di passare a un
+// router nostro — PRIMA che gli utenti restino a piedi. Dati da
+// /api/admin/routing-stats (contatore per giorno e fonte).
+function RoutingSection() {
+  const [dati, setDati] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(getApiUrl('/api/admin/routing-stats?giorni=7'), { headers: await adminAuthHeaders() });
+        if (res.ok) setDati(await res.json());
+      } catch { /* resta null */ }
+      setLoading(false);
+    })();
+  }, []);
+
+  const totali: Record<string, number> = dati?.totali || {};
+  const fonti = Object.entries(totali).sort((a, b) => b[1] - a[1]);
+  const totale = fonti.reduce((s, [, n]) => s + n, 0);
+  const quota = dati?.quotaGratuita;
+  const allarme = quota != null && quota < 80 && totale >= 20;
+
+  return (
+    <div className="bg-white rounded-2xl p-4 border border-outline-variant/40 space-y-3">
+      <div className="flex items-center gap-2">
+        <Globe2 className="w-5 h-5 text-primary" />
+        <div>
+          <h3 className="font-black text-primary text-sm">Routing — chi serve le rotte (7 giorni)</h3>
+          <p className="text-[11px] text-on-surface-variant">Le prime due fonti sono gratuite ma senza garanzia: se la quota scende sotto l'80% le riserve stanno lavorando troppo.</p>
+        </div>
+      </div>
+      {loading ? (
+        <div className="text-xs text-on-surface-variant italic">Caricamento...</div>
+      ) : !dati ? (
+        <div className="text-xs text-red-600">Statistiche non disponibili.</div>
+      ) : (
+        <div className="space-y-2">
+          <div className={`text-xs font-bold ${allarme ? 'text-red-600' : 'text-green-700'}`}>
+            {totale} rotte · quota fonti gratuite/cache: {quota == null ? '—' : `${quota}%`}
+            {allarme && ' — ATTENZIONE: le riserve stanno servendo troppe rotte'}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {fonti.map(([f, n]) => (
+              <div key={f} className="bg-surface-variant/40 rounded-lg px-2.5 py-1.5 border border-outline-variant/40">
+                <div className="text-[10px] font-black uppercase tracking-wider text-primary/60 truncate">{f}</div>
+                <div className="text-sm font-black tabular-nums">{n} <span className="text-[10px] font-semibold text-on-surface-variant">({totale ? Math.round((n / totale) * 100) : 0}%)</span></div>
+              </div>
+            ))}
+            {fonti.length === 0 && <div className="text-xs text-on-surface-variant italic col-span-full">Nessuna rotta negli ultimi 7 giorni.</div>}
+          </div>
+          {dati.mapbox && (
+            <div className="text-[11px] text-on-surface-variant">
+              Mapbox {dati.mapbox.mese}: <span className="font-bold tabular-nums">{dati.mapbox.usate}</span> / {dati.mapbox.tetto} richieste (tetto mensile)
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── MONITORAGGIO ESTERNO: Sentry / Checkly / UptimeRobot / PostHog ──────
+// (30/08/2026) Un colpo d'occhio sui quattro servizi invece di aprire
+// quattro dashboard diverse. Ogni fornitore senza la sua chiave di lettura
+// (diversa da quella di scrittura, vedi server.ts) mostra "non configurato"
+// invece di un errore — coerente con come il resto dell'app tratta le chiavi
+// assenti.
+function MonitoringSection() {
+  const [dati, setDati] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(getApiUrl('/api/admin/monitoring-status'), { headers: await adminAuthHeaders() });
+        if (res.ok) setDati(await res.json());
+      } catch { /* resta null: la card lo dice */ }
+      setLoading(false);
+    })();
+  }, []);
+
+  const Card = ({ titolo, children }: { titolo: string; children: React.ReactNode }) => (
+    <div className="bg-surface-variant/40 rounded-xl p-3 border border-outline-variant/60 space-y-2 min-w-0">
+      <h4 className="text-[11px] font-black uppercase tracking-wider text-primary/60">{titolo}</h4>
+      {children}
+    </div>
+  );
+  const NonConfigurato = ({ nota }: { nota: string }) => (
+    <p className="text-[11px] text-on-surface-variant italic">Non configurato — {nota}</p>
+  );
+
+  const checkly = dati?.checkly;
+  const sentry = dati?.sentry;
+  const uptimerobot = dati?.uptimerobot;
+  const posthog = dati?.posthog;
+
+  return (
+    <div className="bg-surface rounded-2xl p-4 border border-outline-variant space-y-3">
+      <div className="flex items-center gap-2">
+        <Globe2 className="w-5 h-5 text-primary" />
+        <div>
+          <h3 className="font-black text-primary text-sm">Monitoraggio esterno</h3>
+          <p className="text-[11px] text-on-surface-variant">Sentry (errori), Checkly (controlli sintetici), UptimeRobot (uptime), PostHog (eventi di prodotto).</p>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-on-surface-variant italic">Caricamento...</div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Card titolo="🐞 Sentry — errori (24h)">
+            {!sentry?.configured ? (
+              <NonConfigurato nota="manca SENTRY_AUTH_TOKEN / SENTRY_ORG_SLUG" />
+            ) : sentry.error ? (
+              <p className="text-[11px] text-red-600 font-bold">{sentry.error}</p>
+            ) : (
+              <>
+                <p className={`text-lg font-black ${sentry.issuesLast24h > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                  {sentry.issuesLast24h} {sentry.issuesLast24h === 1 ? 'errore' : 'errori'}
+                </p>
+                {(sentry.topIssues || []).slice(0, 3).map((i: any, idx: number) => (
+                  <a key={idx} href={i.permalink} target="_blank" rel="noreferrer"
+                    className="block text-[11px] text-primary underline truncate">
+                    {i.title} ({i.count}×)
+                  </a>
+                ))}
+              </>
+            )}
+          </Card>
+
+          <Card titolo="🩺 Checkly — controlli sintetici">
+            {!checkly?.configured ? (
+              <NonConfigurato nota="manca CHECKLY_API_KEY / CHECKLY_ACCOUNT_ID" />
+            ) : checkly.error ? (
+              <p className="text-[11px] text-red-600 font-bold">{checkly.error}</p>
+            ) : (
+              <div className="space-y-1">
+                {(checkly.checks || []).map((c: any, idx: number) => (
+                  <div key={idx} className="flex items-center gap-1.5 text-[11px] font-bold">
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${c.ok ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                    <span className="truncate">{c.name}</span>
+                  </div>
+                ))}
+                {(checkly.checks || []).length === 0 && <p className="text-[11px] text-on-surface-variant italic">Nessun check pubblicato ancora.</p>}
+              </div>
+            )}
+          </Card>
+
+          <Card titolo="⏱ UptimeRobot — disponibilità">
+            {!uptimerobot?.configured ? (
+              <NonConfigurato nota="manca UPTIMEROBOT_API_KEY" />
+            ) : uptimerobot.error ? (
+              <p className="text-[11px] text-red-600 font-bold">{uptimerobot.error}</p>
+            ) : (
+              <div className="space-y-1">
+                {(uptimerobot.monitors || []).map((m: any, idx: number) => (
+                  <div key={idx} className="flex items-center gap-1.5 text-[11px] font-bold">
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${m.up ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                    <span className="truncate flex-1">{m.name}</span>
+                    {m.uptime30gg != null && <span className="text-on-surface-variant font-medium">{Number(m.uptime30gg).toFixed(2)}%</span>}
+                  </div>
+                ))}
+                {(uptimerobot.monitors || []).length === 0 && <p className="text-[11px] text-on-surface-variant italic">Nessun monitor creato ancora.</p>}
+              </div>
+            )}
+          </Card>
+
+          <Card titolo="📈 PostHog — eventi di prodotto (24h)">
+            {!posthog?.configured ? (
+              <NonConfigurato nota="manca POSTHOG_PERSONAL_API_KEY / POSTHOG_PROJECT_ID" />
+            ) : posthog.error ? (
+              <p className="text-[11px] text-red-600 font-bold">{posthog.error}</p>
+            ) : (
+              <div className="space-y-1">
+                {(posthog.eventi || []).map((e: any, idx: number) => (
+                  <div key={idx} className="flex items-center justify-between text-[11px] font-bold">
+                    <span className="truncate">{e.event}</span>
+                    <span className="text-primary">{e.count24h == null ? '—' : `${e.count24h}${e.approssimato ? '+' : ''}`}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── FEATURE FLAG: kill switch senza deploy ──────────────────────────────
 // Ogni interruttore salva subito: spegnere una feature guasta deve costare
 // un tap, non un rilascio. Propagazione: client al riavvio, server ≤60s.
@@ -1330,6 +1523,8 @@ export default function AdminDiagnostics() {
       {/* Canarino schedulato + kill switch: la parte "sempre accesa" della
           diagnostica, visibile prima ancora di lanciare i test manuali */}
       <CanarySection />
+      <MonitoringSection />
+      <RoutingSection />
       <FlagsSection />
       <TriggerTelemetrySection />
       <GpsReplaySection />

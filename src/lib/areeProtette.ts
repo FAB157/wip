@@ -24,7 +24,15 @@
 //
 // Copertura: solo Europa (UE + paesi che riportano all'EEA). Fuori arrivano
 // 0 feature, in silenzio.
+//
+// CACHE NOSTRA (27/09/2026, committente: «le aree sono troppo lente»): prima
+// di chiamare l'EEA dal vivo si prova `aree_protette_vicine` (migration
+// 20260927090000, tabella `aree_protette_cache`) — una copia locale con
+// indice GIST, ~50 ms invece del round-trip europeo. Finché lo script di
+// riempimento non ha coperto una zona la RPC torna vuota e si ripiega sul
+// fetch live com'era prima: nessuna rottura durante il riempimento.
 // =====================================================================
+import { supabase } from './supabase';
 
 export type TipoArea = 'n2k_habitat' | 'n2k_uccelli' | 'nazionale';
 
@@ -127,6 +135,28 @@ export async function fetchAreeProtette(bounds: MapBounds, fine: boolean): Promi
   if (m && Date.now() - m.ts < CACHE_TTL_MS) return m.aree;
   const ls = daLocalStorage(chiave);
   if (ls) { memoria.set(chiave, { ts: Date.now(), aree: ls }); return ls; }
+
+  // ── Nostra cache prima di tutto: se lo script l'ha già riempita per
+  // questa zona, niente chiamata all'EEA. `p_semplifica_m` rispecchia i
+  // due livelli di dettaglio del fetch live (±10/±50 m).
+  try {
+    const { data: dallaCache, error } = await supabase.rpc('aree_protette_vicine', {
+      p_south: bounds.south, p_west: bounds.west, p_north: bounds.north, p_east: bounds.east,
+      p_semplifica_m: fine ? 10 : 50,
+      p_limit: MAX_PER_LAYER * 2,
+    });
+    if (!error && Array.isArray(dallaCache) && dallaCache.length > 0) {
+      const aree: AreaProtetta[] = dallaCache.map((r: any) => ({
+        id: r.id, nome: r.nome || r.codice, tipo: r.tipo as TipoArea, codice: r.codice,
+        kmq: r.kmq != null ? Number(r.kmq) : null, iucn: r.iucn ?? null,
+        designazione: r.designazione ?? null, paese: r.paese ?? null,
+        geometry: JSON.parse(r.geometria),
+      }));
+      memoria.set(chiave, { ts: Date.now(), aree });
+      inLocalStorage(chiave, aree);
+      return aree;
+    }
+  } catch { /* cache non ancora riempita per questa zona, o RPC non presente: si ripiega sul vivo */ }
 
   const envelope = [
     (centerLon - BOX_HALF_LON).toFixed(4), (centerLat - BOX_HALF_LAT).toFixed(4),

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget selector and app shortcuts in English (23/09/2026). The texts
+     INSIDE the widgets come from the app snapshot, already translated. -->
+<resources>
+    <string name="wip_widget_name">WIP — Pocket radar</string>
+    <string name="wip_widget_description">Credit balance, next itinerary stop and nearest POI at a glance.</string>
+
+    <string name="wip_w_itinerario_nome">WIP · Itinerary</string>
+    <string name="wip_w_itinerario_desc">Today\'s next stop, with time and walking minutes.</string>
+    <string name="wip_w_visita_nome">WIP · Museum visit</string>
+    <string name="wip_w_visita_desc">The museum in progress: artworks listened to and the next one to hear.</string>
+    <string name="wip_w_crediti_nome">WIP · Credits and Pass</string>
+    <string name="wip_w_crediti_desc">Your credit balance and the active Day Pass with its expiry.</string>
+    <string name="wip_w_vicini_nome">WIP · Near you</string>
+    <string name="wip_w_vicini_desc">Gems and places with an audio guide near you: one tap and the voice starts.</string>
+
+    <string name="wip_w_ultimo_nome">WIP · Last audio guide</string>
+    <string name="wip_w_ultimo_desc">Listen again to or resume your last audio guide</string>
+    <string name="wip_w_luogo_nome">WIP · Place of the day</string>
+    <string name="wip_w_luogo_desc">A nearby gem, different every day</string>
+    <string name="wip_w_vision_nome">WIP · What am I seeing?</string>
+    <string name="wip_w_vision_desc">Open the camera and recognize what\'s in front of you</string>
+    <string name="wip_w_vision_breve">What am I seeing?</string>
+    <string name="wip_w_meteo_nome">WIP · Weather</string>
+    <string name="wip_w_meteo_desc">Weather at today\'s stop, best time, rain guarantee</string>
+    <string name="wip_w_ascolta_nome">WIP · Listen now</string>
+    <string name="wip_w_ascolta_desc">One tap: the audio guide of the nearest place</string>
+    <string name="wip_w_ascolta_breve">Listen now</string>
+    <string name="wip_w_eventi_nome">WIP · Events near you</string>
+    <string name="wip_w_eventi_desc">Events and exhibitions in the coming days</string>
+    <string name="wip_w_regione_nome">WIP · Gem of the region</string>
+    <string name="wip_w_regione_desc">A gem of the region you\'re in</string>
+    <string name="wip_w_confronto_nome">WIP · Compare artworks</string>
+    <string name="wip_w_confronto_desc">Two artworks you listened to today: which do you prefer?</string>
+    <string name="wip_w_lingua_nome">WIP · Repeat in another language</string>
+    <string name="wip_w_lingua_desc">Your last audio guide in another language</string>
+    <string name="wip_w_pdf_nome">WIP · Printed guide</string>
+    <string name="wip_w_pdf_desc">Your latest PDF guide, to reopen or share</string>
+    <string name="wip_w_community_nome">WIP · Community photo</string>
+    <string name="wip_w_community_desc">The latest verified photo taken near you</string>
+</resources>

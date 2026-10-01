@@ -10,7 +10,7 @@
 // nome ripetuto viene scartato in automatico, non duplicato.
 // ─────────────────────────────────────────────────────────────────────────
 
-import type { ExtraZone, ExtraThemePlace } from './libraryDescriptorsExtra';
+import type { ExtraZone, ExtraThemePlace } from './libraryDescriptorsExtra.js';
 
 export const EXTRA_WORLD_ZONES_2: ExtraZone[] = [
   // ── ITALIA ──────────────────────────────────────────────────────────

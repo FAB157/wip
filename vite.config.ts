@@ -12,7 +12,14 @@ export default defineConfig(({mode}) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        injectRegister: 'auto',
+        // (29/08/2026, collaudo sul Realme) La registrazione la fa main.tsx
+        // con `virtual:pwa-register`, non lo script iniettato: quello si
+        // limitava a register() e, dopo un aggiornamento dell'APK, il primo
+        // avvio girava ancora con il bundle VECCHIO precachato dal service
+        // worker (la WebView Android e' http://localhost, il SW ci gira).
+        // Col modulo virtuale, quando il SW nuovo prende il controllo la
+        // pagina si ricarica e il codice e' quello dell'APK installato.
+        injectRegister: null,
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg', 'icon.png'],
         manifest: {
           name: 'WIP - World in pocket',
@@ -53,7 +60,21 @@ export default defineConfig(({mode}) => {
           // Le pagine legali statiche (compliance store) vivono FUORI dalla SPA:
           // senza denylist il service worker rispondeva a /privacy &co. con
           // index.html (navigation fallback) per chi aveva già il SW attivo.
-          navigateFallbackDenylist: [/^\/privacy/, /^\/terms/, /^\/support/, /^\/delete-account/, /^\/api\//],
+          // `/luogo/…` (12/09/2026): le pagine SEO dei luoghi sono servite dal
+          // server, non dalla SPA. Senza questa riga il service worker
+          // rispondeva con index.html a chi aveva già visitato il sito: chi
+          // arrivava da Google su una pagina luogo finiva sulla HOME, e il
+          // difetto era invisibile da riga di comando (curl non ha il SW) e
+          // per Googlebot (che il SW non ce l'ha). Stesso motivo per
+          // sitemap/robots, serviti dal server.
+          // /scopri/ e /llms.txt (12/09/2026): stesso motivo — sono serviti
+          // dal server (route in server.ts + rewrite in vercel.json), non
+          // dalla SPA. Trovato aprendo /scopri/en da un profilo che aveva già
+          // il service worker installato: tornava la mappa invece della
+          // pagina, perché il navigateFallback intercetta ogni navigazione
+          // non nella denylist. Nota: /scopri (senza lingua, l'italiano) è un
+          // file statico vero e non ha questo problema — resta fuori apposta.
+          navigateFallbackDenylist: [/^\/privacy/, /^\/terms/, /^\/support/, /^\/delete-account/, /^\/api\//, /^\/luogo\//, /^\/sitemap/, /^\/robots\.txt/, /^\/llms\.txt/, /^\/scopri\//],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -157,7 +178,18 @@ export default defineConfig(({mode}) => {
       },
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: {
-        ignored: ['**/tts_usage.json', '**/tts_cache/**']
+        // (05/09/2026) Vite ricaricava la pagina intera per QUALSIASI file
+        // toccato nel repo — build_log.txt, store/promo/*.md, server.ts,
+        // gli script in scratch/ — e ogni reload uccideva l'itinerario o la
+        // guida in generazione (stream abortito, crediti gia' addebitati).
+        // Nel watch restano solo i sorgenti del client.
+        ignored: [
+          '**/tts_usage.json', '**/tts_cache/**',
+          '**/scratch/**', '**/store/**', '**/android/**', '**/ios/**',
+          '**/itainta-native/**', '**/supabase/**', '**/scripts/**',
+          '**/*.log', '**/*.txt', '**/*.md', '**/*.cjs', '**/*.mjs',
+          '**/server.ts', '**/api/**', '**/dist/**',
+        ]
       }
     },
     build: {
