@@ -119,16 +119,16 @@
             android:exported="false"
         />
 
-        <!-- Android Auto (sperimentale): app template-based, categoria POI.
-             L'host dell'auto si collega a WipCarAppService e renderizza il radar. -->
-        <meta-data android:name="com.google.android.gms.car.application" android:resource="@xml/automotive_app_desc" />
-        <meta-data android:name="androidx.car.app.minCarApiLevel" android:value="1" />
-        <service android:name=".car.WipCarAppService" android:exported="true">
-            <intent-filter>
-                <action android:name="androidx.car.app.CarAppService" />
-                <category android:name="androidx.car.app.category.POI" />
-            </intent-filter>
-        </service>
+        <!-- Android Auto RIMOSSO (29/09/2026): Google Play ha segnalato «Visual
+             info on phone» — l'app non disattiva le funzioni che richiedono
+             interazione col telefono in modalità guida (Android for Cars
+             Quality Guidelines). Regola del committente: MAI Android Auto.
+             Si esclude l'app da Android Auto rimuovendo la dichiarazione dal
+             manifest (rimedio indicato dalla stessa email di Google), invece
+             di rincorrere la conformità alle linee guida auto. WipCarAppService
+             e automotive_app_desc.xml restano nel codice ma non più collegati:
+             senza questi meta-data e questo <service>, l'host auto non trova
+             l'app e Google Play non la valuta più per Android Auto. -->
 
         <receiver android:name=".geofence.GeofenceBroadcastReceiver" android:exported="false" />
 

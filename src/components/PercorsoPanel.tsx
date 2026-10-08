@@ -389,7 +389,10 @@ export default function PercorsoPanel({ language, onClose, avvioRapido }: Props)
                   </p>
                 )}
                 {/* Ad anello o aperto: le due opzioni chieste dal committente. */}
-                <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto touch-pan-x no-scrollbar -mx-1 px-1 py-0.5">
+                {/* Col mouse la riga va a capo e NON scorre (come in PoiRadarPanel):
+                    in Firefox desktop, dentro la riga a scorrimento, i tasti non
+                    prendevano il clic e il terzo restava tagliato (04/10/2026). */}
+                <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto touch-pan-x no-scrollbar -mx-1 px-1 py-0.5 [@media(pointer:fine)]:flex-wrap [@media(pointer:fine)]:overflow-x-visible">
                   <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-900/50 mr-1 shrink-0 whitespace-nowrap">{tr('gr_arrivo')}</span>
                   {([
                     { k: 'anello', anello: true, label: tr('gr_torno_da_dove_parto') },
@@ -480,7 +483,7 @@ export default function PercorsoPanel({ language, onClose, avvioRapido }: Props)
       {!isCollapsed && inCorsoPercorso && giro && vista && (
         <div className="p-4 pt-3 border-t border-black/5 bg-white/90 backdrop-blur space-y-2 pb-[calc(1rem+env(safe-area-inset-bottom,0px))]">
           <p className="text-[11px] text-emerald-900/60 tabular-nums">
-            {distanza(vista.metriRimanenti)} {tr('tour_mancanti')} <span className="text-black/20">·</span> {distanza(vista.metriTotali)} {tr('tour_totali')}
+            {vista.stato !== 'FINITO' && (<>{distanza(vista.metriRimanenti)} {tr('tour_mancanti')} <span className="text-black/20">·</span> </>)}{distanza(vista.metriTotali)} {tr('tour_totali')}
           </p>
           <div className="flex items-center gap-2">
             <button

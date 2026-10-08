@@ -17,6 +17,7 @@ import { migliorFoto } from '../lib/fotoHttps';
 import type { PoiCategory } from '../types/poi';
 import { getTranslation, Language } from '../lib/i18n';
 import { puntoArrivo } from '../lib/puntoArrivo';
+import { metriDiStradaDaMostrare } from '../lib/roadSnap';
 import { vibra } from './hapticsHelper';
 import { useAudioState } from '../hooks/useAudioState';
 import { PRICING_LIST } from '../lib/pricing';
@@ -166,6 +167,7 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
   //   nativi (ogni ~5 m) non devono resuscitarli: era il banner della pineta
   //   che ricompariva a ogni fix GPS.
   const entriesRef = useRef<ApproachEntry[]>([]);
+  const ultimaPosRef = useRef<{ lat: number; lon: number } | null>(null);
   useEffect(() => { entriesRef.current = entries; }, [entries]);
   const announcedAtRef = useRef<Map<string, number>>(new Map());
   const dismissedRef = useRef<Map<string, number>>(new Map());
@@ -322,13 +324,21 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
      */
     const onLocationUpdate = (e: Event) => {
       const loc = (e as CustomEvent).detail as { lat: number; lon: number; heading?: number | null };
+      if (loc.lat == null || loc.lon == null) { setUserLocation(loc); return; }
+      // BATTERIA (03/10/2026): un fix al secondo ridisegnava il banner anche
+      // con la lista vuota e da fermi. Lo stato cambia solo oltre 3 m, e senza
+      // voci non c'è nulla da ricalcolare.
+      // (Con voci a schermo si aggiorna sempre: la freccia segue la direzione.)
+      const ult = ultimaPosRef.current;
+      if (entriesRef.current.length === 0 && ult && Math.hypot((loc.lat - ult.lat) * 111_320, (loc.lon - ult.lon) * 111_320 * Math.cos((loc.lat * Math.PI) / 180)) < 3) return;
+      ultimaPosRef.current = { lat: loc.lat, lon: loc.lon };
       setUserLocation(loc);
-      if (loc.lat == null || loc.lon == null) return;
       setEntries(prev =>
-        prev
+        prev.length === 0 ? prev : prev
           .map(entry =>
             entry.lat != null && entry.lon != null
-              ? { ...entry, distance: haversineMeters(loc.lat, loc.lon, entry.lat, entry.lon) }
+              // (03/10/2026) metri di STRADA quando la rete attorno è nota.
+              ? { ...entry, distance: metriDiStradaDaMostrare(loc.lat, loc.lon, entry.lat, entry.lon) }
               : entry
           )
           // AUTO-PULIZIA per distanza e per età.

@@ -7,6 +7,9 @@
 
 import { supabase } from '../lib/supabase';
 import { haversineMeters } from '../lib/geo';
+// (03/10/2026, «tutto in strada reale») La distanza mostrata negli elenchi è in
+// metri di strada quando la rete attorno è nota (entro 450 m), diretta altrimenti.
+import { metriDiStradaDaMostrare } from '../lib/roadSnap';
 import { db } from '../lib/db';
 import { Network } from '@capacitor/network';
 import { supabaseCircuitBreaker } from '../lib/circuitBreaker';
@@ -170,7 +173,7 @@ export async function getGemmeVicine(
         premium: true,
         photo_url: p.photo_url || p.image_url,
         image_url: p.image_url || p.photo_url,
-        distance_meters: haversineMeters(lat, lon, Number(p.lat), Number(p.lon)),
+        distance_meters: metriDiStradaDaMostrare(lat, lon, Number(p.lat), Number(p.lon)),
       }))
       .filter((p: any) => p.distance_meters <= raggioMetri)
       .sort((a: any, b: any) => (punteggio(b) - punteggio(a)) || (a.distance_meters - b.distance_meters))
@@ -197,7 +200,7 @@ export async function getNearbyPois(
         .filter(p => haversineMeters(lat, lon, p.lat, p.lon) <= radiusMeters)
         .map(p => ({
           ...p,
-          distance_meters: haversineMeters(lat, lon, p.lat, p.lon),
+          distance_meters: metriDiStradaDaMostrare(lat, lon, p.lat, p.lon),
           id: p.id,
         }));
       return filtered as any[];
@@ -247,7 +250,7 @@ export async function getNearbyPois(
         return localPois
           .filter(isVisiblePoiStatus)
           .filter(p => haversineMeters(lat, lon, p.lat, p.lon) <= radiusMeters)
-          .map(p => ({ ...p, distance_meters: haversineMeters(lat, lon, p.lat, p.lon), id: p.id })) as any[];
+          .map(p => ({ ...p, distance_meters: metriDiStradaDaMostrare(lat, lon, p.lat, p.lon), id: p.id })) as any[];
       } catch {
         return [];
       }
@@ -368,7 +371,7 @@ export async function getNearbyPois(
           category: p.category || 'monumenti',
           is_gem: p.is_gem ?? false,
           premium: p.is_gem ?? false,
-          distance_meters: haversineMeters(lat, lon, p.lat, p.lon),
+          distance_meters: metriDiStradaDaMostrare(lat, lon, p.lat, p.lon),
           status: p.status,
           description_ai: p.description_ai,
           photo_url: p.photo_url || p.image_url,
@@ -389,7 +392,7 @@ export async function getNearbyPois(
       .filter(p => haversineMeters(lat, lon, p.lat, p.lon) <= radiusMeters)
       .map(p => ({
         ...p,
-        distance_meters: haversineMeters(lat, lon, p.lat, p.lon),
+        distance_meters: metriDiStradaDaMostrare(lat, lon, p.lat, p.lon),
       }));
     if (filtered.length > 0) {
       console.log(`[poiRepository] Fallback offline finale: ${filtered.length} POI da Dexie`);
@@ -506,7 +509,7 @@ async function getGeofencePoisFromDexie(
         address_source: p.address_source ?? null,
         alert_enabled: true,
         audio_enabled: true,
-        distance_meters: haversineMeters(lat, lon, p.lat, p.lon),
+        distance_meters: metriDiStradaDaMostrare(lat, lon, p.lat, p.lon),
       })) as GeofencePoi[];
     if (result.length > 0) {
       console.log(`[poiRepository] getGeofencePois fallback Dexie: ${result.length} POI offline`);
@@ -538,16 +541,28 @@ export async function getGeofencePois(
 
   if (!hasRpc()) return getGeofencePoisFromDexie(lat, lon, radiusMeters);
   try {
-    const data = await supabaseCircuitBreaker.execute(async () => {
+    const chiedi = (raggio: number) => supabaseCircuitBreaker.execute(async () => {
       const { data, error } = await supabase.rpc('get_geofence_pois', {
         user_lat: lat,
         user_lon: lon,
         p_user_id: userId,
-        radius_meters: radiusMeters,
+        radius_meters: raggio,
       });
       if (error) throw new Error(error.message);
       return data;
     });
+    let data = await chiedi(radiusMeters);
+    // IL TETTO DELLE 1.000 RIGHE (05/10/2026, prova a New York: il Chrysler Building,
+    // riga buona a 22 m, è rimasto muto). La risposta è troncata a 1.000 righe senza
+    // un ordine: a Midtown entro 1 km ce ne sono di più e i luoghi vicini potevano
+    // restare fuori. Se la risposta è al tetto si richiede con metà raggio (fino a
+    // 400 m: chi chiama ricarica ogni 300 m di spostamento) — meglio tutti i vicini
+    // che un campione a caso dei lontani.
+    let raggioUsato = radiusMeters;
+    while (Array.isArray(data) && data.length >= 1000 && raggioUsato > 400) {
+      raggioUsato = Math.max(400, Math.round(raggioUsato / 2));
+      data = await chiedi(raggioUsato);
+    }
     // NORMALIZZAZIONE DELLE COLONNE NUOVE (migration 20260823140000).
     // Finche' quella migration non e' applicata la RPC non le restituisce
     // affatto: qui diventano esplicitamente `null`, cosi' i consumatori
@@ -836,6 +851,9 @@ export function mapItineraryCategoryToMapCategory(aiType: string = ""): Poi['cat
   // (36), «colazione», «aperitivo», «enoteca», «catering»… Prima finivano
   // tutti nel fallback 'monumenti', cioe' una cena diventava un monumento.
   if (t.match(/ristorante|osteria|trattoria|pizzeria|cena|pranzo|colazione|brunch|merenda|aperitivo|degustazione|enogastronom|gastronom|enoteca|pub|caff|bar|food|cibo|catering|agriturismo/)) return 'locali';
+  // Esperienze e attività commerciali (VR, laboratori, shopping, terme, crociere…) sono locali: visibili sotta la
+  // chip Locali e muti, non monumenti (Lione 06/10/2026: «ECLIPSO – Esperienza VR» era un monumento che parla).
+  if (t.match(/esperienz|experience|attivit|activity|realt. virtuale|\bvr\b|laboratorio|workshop|spettacolo|show|shopping|negozio|shop|mercato|market|boutique|terme|spa\b|crociera|cruise|escursione|intrattenimento|entertainment|divertimento|parco giochi|svago/)) return 'locali';
   if (t.match(/monumento|statua|storico|castello|castle|rovina|rocca|fortezza|torre|palazzo|monument|archeolog|nuraghe/)) return 'monumenti';
   if (t.match(/chiesa|basilica|cattedrale|duomo|abbazia|santuario|cappella|church|monastero/)) return 'chiese';
   // «panoram» e non «panoramic»: l'AI scrive «panorama», che con la vecchia
@@ -871,9 +889,18 @@ export function mapItineraryCategoryToMapCategory(aiType: string = ""): Poi['cat
  *  • 'pausa' — non ha un luogo per definizione.
  */
 const TAPPE_NON_LUOGO = /pausa|spostamento|trasferimento/;
+/**
+ * Un PRODOTTO non è un luogo (07/10/2026, Los Angeles): la tappa «Tour privato in autobus di Hollywood» (tipo
+ * esperienze) era diventata un POI `monumenti`, arricchito con la voce Wikipedia di Hollywood, la foto della scritta
+ * e un'audioguida — e il navigatore ci «arrivava» come a un monumento. Tour, escursioni, biglietti, noleggi,
+ * crociere, lezioni sono cose che si comprano, con un punto di ritrovo dell'operatore: niente pin, niente scheda.
+ */
+export const NOME_PRODOTTO_NON_LUOGO = /^(tour|visita guidata|escursione|gita|crociera|bigliett[oi]|ticket|noleggio|degustazione|lezione|corso|workshop|laboratorio|esperienza|experience|day trip|walking tour|food tour|bike tour|private tour)\b|\btour (privato|guidato|in autobus|in bici|a piedi|gastronomico|panoramico|hop-on)\b|\bhop-on hop-off\b/i;
 
-export function tappaDiventaPoi(aiType: string = ""): boolean {
-  return !TAPPE_NON_LUOGO.test(String(aiType).toLowerCase());
+export function tappaDiventaPoi(aiType: string = "", nome: string = ""): boolean {
+  if (TAPPE_NON_LUOGO.test(String(aiType).toLowerCase())) return false;
+  if (nome && NOME_PRODOTTO_NON_LUOGO.test(String(nome).trim())) return false;
+  return true;
 }
 
 /** Inserisce POI auto-popolati (source=overpass_auto/foursquare, status=auto). */

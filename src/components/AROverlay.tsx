@@ -126,13 +126,38 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
   // punto di partenza anche dopo chilometri.
   const loadPois = useCallback(async (lat: number, lon: number) => {
     // Categorie importanti da mostrare in AR (evitiamo ristoranti, utilità, ecc)
-    const importantCategories = ['castle', 'museum', 'musei', 'monument', 'monumenti', 'church', 'chiese', 'viewpoint', 'panorami', 'attraction', 'gemme'];
+    // (06/10/2026, verifica del Radar AR) La RPC dà i 50 più VICINI di qualunque categoria: in piazza della Signoria
+    // ne restavano 16 dopo il filtro, e fuori restavano le statue della Loggia (`sculpture`, `artwork`), la fontana
+    // del Nettuno (`fountain`), i palazzi (`palace`), le gemme con un'altra categoria. Davanti al Pantheon il primo
+    // era «Passeggiata al Pantheon e degustazione di gelato» (una tappa d'itinerario) e il Pantheon c'era tre volte.
+    // Ora: se ne chiedono 150, le gemme passano sempre, la lista delle categorie copre ciò che si guarda, le
+    // attività degli itinerari escono, lo stesso nome compare una volta (prima la gemma), e se ne mostrano 50.
+    const importantCategories = ['castle', 'museum', 'musei', 'art_museum', 'house_museum', 'monument', 'monumenti', 'memorial', 'church', 'chiese', 'cathedral', 'abbey', 'viewpoint', 'panorami', 'attraction', 'gemme', 'palace', 'fountain', 'square', 'sculpture', 'artwork', 'statue', 'tower', 'bridge', 'archaeological_site', 'ruins', 'fort', 'theatre'];
+    const nomeNudo = (n: unknown) => String(n || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\([^)]*\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+    const ATTIVITA = /\b(passeggiata|degustazione|aperitivo|pranzo|cena|colazione|ritorno|rientro|shopping|tour|walk|tasting|lunch|dinner|breakfast)\b/i;
+    const scegli = (righe: any[]): any[] => {
+      const buone = righe
+        .map((p: any) => ({ ...p, name: p.name ?? p.nome }))
+        .filter((p: any) => p.name && (p.is_gem === true || !p.category || importantCategories.includes(String(p.category).toLowerCase())))
+        .filter((p: any) => !(String(p.id || '').startsWith('iti-') && ATTIVITA.test(String(p.name))))
+        // Targhe e righe della città intera non sono cose da inquadrare («plaque № 50214», «Carrara»).
+        .filter((p: any) => !/^(plaque-|loc-)/.test(String(p.id || '')) && String(p.category || '').toLowerCase() !== 'localita' && !/\b(plaque|targa|lapide|stolperstein)\b/i.test(String(p.name)));
+      // La RPC arriva già per distanza: fra due righe con lo stesso nome resta la gemma, altrimenti la più vicina.
+      const perNome = new Map<string, any>();
+      for (const p of buone) {
+        const k = nomeNudo(p.name);
+        if (!k) continue;
+        const prima = perNome.get(k);
+        if (!prima || (p.is_gem === true && prima.is_gem !== true)) perNome.set(k, p);
+      }
+      return [...perNome.values()].slice(0, 50);
+    };
     try {
       const { data, error } = await supabase.rpc('nearby_pois', {
         p_lat: lat,
         p_lon: lon,
         radius_m: 5000,
-        limit_num: 50
+        limit_num: 150
       });
 
       if (error) {
@@ -160,10 +185,7 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
       } else if (data && data.length > 0) {
         // La RPC nearby_pois restituisce solo id/nome/lat/lon/distanza: NON
         // espone `category`. Si filtra solo dove la categoria è presente.
-        const mapped = data.map((p: any) => ({ ...p, name: p.name ?? p.nome }));
-        const filtered = mapped.filter((p: any) =>
-          !p.category || importantCategories.includes(String(p.category).toLowerCase())
-        );
+        const filtered = scegli(data);
         console.log(`[AROverlay] RPC: ${filtered.length} POI caricati`);
         setPois(filtered);
       } else {
@@ -194,8 +216,23 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
           }
         };
 
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        // SENZA RISPOSTA NON SI ASPETTA PER SEMPRE (06/10/2026, verifica dal PC: con la richiesta del permesso
+        // rimasta aperta — o un browser che non risponde — restava «Inizializzazione radar…» all'infinito). Dopo
+        // 10 s si passa all'elenco con il radar 2D; se poi il permesso arriva, la fotocamera si accende lo stesso.
+        let scaduta = false;
+        const timer = setTimeout(() => {
+          scaduta = true;
+          if (!vivo) return;
+          setCameraError(t('vr_a_ar_camera_denied'));
+          setIsLoading(false);
+          setStreamActive(false);
+        }, 10000);
+        let stream: MediaStream;
+        try { stream = await navigator.mediaDevices.getUserMedia(constraints); } finally { clearTimeout(timer); }
         if (!vivo) { stream.getTracks().forEach(track => track.stop()); return; }
+        // Arrivata dopo la scadenza e il video non è più a schermo: non si lascia la fotocamera accesa a vuoto.
+        if (scaduta && !videoRef.current) { stream.getTracks().forEach(track => track.stop()); return; }
+        if (scaduta) setCameraError(null);
         activeStream = stream;
 
         if (videoRef.current) {

@@ -44,7 +44,7 @@ interface PoiDao {
         OfflinePackagePoiRef::class,
         OfflineSpendEntity::class
     ],
-    version = 12
+    version = 13
 )
 @TypeConverters(Converters::class)
 abstract class PoiDatabase : RoomDatabase() {
@@ -227,6 +227,21 @@ abstract class PoiDatabase : RoomDatabase() {
             }
         }
 
+        // 12→13 (05/10/2026): la FONTE della scheda sul radar cache
+        // (`poi_cache.source`), per l'arbitrato fra luoghi vicini: chi ha una
+        // voce di Wikipedia/Wikidata alle spalle pesa di piu' di una targa o di
+        // un locale (Arbitrato.pesa, GeofenceManager.kt). Migration REALE (mai
+        // distruttiva, come tutte le altre): un bump distruttivo cancellerebbe
+        // i pacchetti offline scaricati. Colonna nullable senza default → le
+        // righe gia' in cache restano NULL, cioe' «senza peso» come prima,
+        // finche' il prossimo fetch del radar non la porta.
+        // ⚠️ DA VERIFICARE SU DISPOSITIVO: upgrade reale da un'installazione v12.
+        private val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `poi_cache` ADD COLUMN `source` TEXT")
+            }
+        }
+
         // L'R-tree non è un'entità Room: va (ri)creato anche sulle installazioni
         // fresche e dopo un'eventuale migration distruttiva pre-4.
         // (29/08/2026) MAI un'eccezione da qui: onCreate gira dentro l'apertura
@@ -252,7 +267,7 @@ abstract class PoiDatabase : RoomDatabase() {
         fun getInstance(context: Context): PoiDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(context, PoiDatabase::class.java, "itainta_poi.db")
-                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
                     // Distruttivo SOLO dalle versioni volatili pre-4 (cache): un
                     // domani una migration mancante (es. 6→7 dimenticata) o un
                     // downgrade NON deve azzerare offline_packages/pois/ledger.

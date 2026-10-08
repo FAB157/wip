@@ -3242,9 +3242,10 @@ export function tasteZoneDescriptors(): LibraryDescriptor[] {
     const key = slugify(z.c);
     if (!key || taken.has(key)) continue;
     taken.add(key);
-    // Il tier 3 esce solo da 2 giorni: sono zone vere ma meno dense, e tre
-    // giorni si reggerebbero solo allungando il brodo.
-    const durate = z.t === 3 ? [2] : TASTE_ZONE_DAYS;
+    // Il tier 3 esce solo da UN giorno (07/10/2026, committente: «quelle minori fare solo 1 giorno di gusto»):
+    // sono zone vere ma meno dense, e a 2 giorni il revisore ne bocciava 6 su 7 (Busselton, Tachtamukajskij
+    // rajon: tappe senza nome proprio, produttori a 49 km). Prima del 07/10 uscivano da 2 giorni.
+    const durate = z.t === 3 ? [1] : TASTE_ZONE_DAYS;
     for (const d of durate) {
       for (const a of TASTE_ZONE_ANGLES) {
         const altri = TASTE_ZONE_ANGLES.filter(x => x.id !== a.id).map(x => x.label).join(', ');
@@ -3252,12 +3253,16 @@ export function tasteZoneDescriptors(): LibraryDescriptor[] {
           a.brief,
           `CONTESTO ZONA DEL GUSTO: ${z.c}, ${z.k}. Qui il nostro database conta ${z.n} luoghi del gusto mappati, soprattutto ${z.p}: è questo che rende la zona un itinerario e non una tappa.`,
           tasteZoneRules(z),
-          `Durata: ${d} giorni. ${
-            d === 2
-              ? 'Due giorni: il primo dà il quadro del territorio e del suo prodotto simbolo, il secondo scende in profondità su una sola valle, un solo quartiere o una sola lavorazione. Niente tappe-riempitivo.'
-              : 'Tre giorni: una sottozona al giorno, e almeno un pasto lento senza programma. Il terzo giorno è quello in cui si torna dove si è mangiato meglio, non quello in cui si aggiunge la decima cantina.'
-          }`,
-          `COMBINABILITÀ (vincolante): di ${z.c} esistono in biblioteca anche i tagli ${altri}, da 2 e da 3 giorni. Questo itinerario deve reggersi da solo MA essere sommabile agli altri senza doppioni: chi lo abbina non deve rivedere gli stessi produttori né rimangiare gli stessi piatti.`,
+          d === 1
+            ? 'Durata: 1 giorno pieno. Una zona piccola: un mercato o una bottega la mattina, UN produttore o un pasto che racconta il prodotto simbolo, una passeggiata fra i luoghi dove nasce. Poche tappe vere, tutte con nome proprio preso dal materiale: se il materiale dà tre posti, l\'itinerario ha tre tappe. Nessuna tappa-riempitivo, niente giri di 50 km.'
+            : `Durata: ${d} giorni. ${
+              d === 2
+                ? 'Due giorni: il primo dà il quadro del territorio e del suo prodotto simbolo, il secondo scende in profondità su una sola valle, un solo quartiere o una sola lavorazione. Niente tappe-riempitivo.'
+                : 'Tre giorni: una sottozona al giorno, e almeno un pasto lento senza programma. Il terzo giorno è quello in cui si torna dove si è mangiato meglio, non quello in cui si aggiunge la decima cantina.'
+            }`,
+          d === 1
+            ? `COMBINABILITÀ (vincolante): di ${z.c} esistono in biblioteca anche i tagli ${altri}, da 1 giorno. Questo itinerario deve reggersi da solo MA essere sommabile agli altri senza doppioni: chi lo abbina non deve rivedere gli stessi produttori né rimangiare gli stessi piatti.`
+            : `COMBINABILITÀ (vincolante): di ${z.c} esistono in biblioteca anche i tagli ${altri}, da 2 e da 3 giorni. Questo itinerario deve reggersi da solo MA essere sommabile agli altri senza doppioni: chi lo abbina non deve rivedere gli stessi produttori né rimangiare gli stessi piatti.`,
           // (20/09/2026) La riga sui prezzi valeva per TUTTI i tagli, anche per
           // «gratis», dove la verifica in codice boccia ogni tappa che cita
           // biglietti o costi: 88 scarti in 20 ore per una contraddizione
@@ -3279,7 +3284,7 @@ export function tasteZoneDescriptors(): LibraryDescriptor[] {
           // toccare la validazione lato server senza guadagnarci nulla.
           kind: 'theme',
           theme: 'zone-del-gusto',
-          title: `${z.u ? '🍽' : '🍇'} ${z.c} del gusto in ${d} giorni — ${a.label}`,
+          title: `${z.u ? '🍽' : '🍇'} ${z.c} del gusto in ${d} ${d === 1 ? 'giorno' : 'giorni'} — ${a.label}`,
           city: z.c,
           country: z.k,
           coords: { lat: z.lat, lon: z.lon },
@@ -3684,11 +3689,11 @@ export function getPriorityDescriptors(): LibraryDescriptor[] {
         if (z.t !== tier || MERCATI_CASA.includes(z.k) !== casa) continue;
         const key = slugify(z.c);
         // Le zone dense escono subito complete; quelle di terzo livello
-        // portano solo il 2 giorni con la coppia obbligatoria, altrimenti
+        // portano solo UN giorno con la coppia obbligatoria (07/10/2026, committente), altrimenti
         // da sole occuperebbero giorni di semina prima che il resto del
         // catalogo veda un turno.
         const combos = z.t === 3
-          ? ['2g-gusto-territorio', `2g-${FREE_ANGLE.id}`, `2g-${BOOKABLE_ANGLE.id}`]
+          ? ['1g-gusto-territorio', `1g-${FREE_ANGLE.id}`, `1g-${BOOKABLE_ANGLE.id}`]
           : ['2g-gusto-territorio', `2g-${FREE_ANGLE.id}`, `2g-${BOOKABLE_ANGLE.id}`,
              '2g-gusto-produttori', '3g-gusto-territorio'];
         for (const combo of combos) push(`gustozona-${key}-${combo}`);

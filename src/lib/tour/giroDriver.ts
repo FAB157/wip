@@ -40,6 +40,7 @@ function guidaSuona(): boolean {
 }
 import { getTranslation, linguaCorrente, type Language } from '../i18n';
 import { sogliaArrivo } from './tourState';
+import { metriDiStrada, tieniStradeAggiornate } from '../roadSnap';
 
 const ACCURACY_MAX_M = 50;
 /** Entro questi metri da te (e dal percorso) un POI e` un incontro. */
@@ -357,6 +358,10 @@ function onFix(e: Event): void {
     if (giro.id !== giroId) { giroId = giro.id; tappaAnnunciata = null; arrivatoA = null; svoltaDettaLontano = null; svoltaDettaVicino = null; riferimentoSvolta = null; minimaTappa = null; }
 
     const pos = { lat, lon };
+    // Durante un giro foregroundTriggers è fermo, e con lui lo scarico delle
+    // strade attorno: lo si tiene vivo da qui (serve agli incontri e alle
+    // distanze di strada).
+    tieniStradeAggiornate(lat, lon);
     const lingua = linguaUi();
     tourService.impostaLingua(lingua);
     const parlando = guidaSuona();
@@ -466,10 +471,19 @@ function onFix(e: Event): void {
       const inAvvicinamento = rifSvolta != null && v.metriAllaSvolta < rifSvolta - AVVICINAMENTO_M;
       riferimentoSvolta = { chiave, metri: rifSvolta == null ? v.metriAllaSvolta : Math.max(rifSvolta, v.metriAllaSvolta) };
       let testo: string | null = null;
-      if (v.metriAllaSvolta <= SVOLTA_VICINO_M && svoltaDettaVicino !== chiave) { svoltaDettaVicino = chiave; svoltaDettaLontano = chiave; testo = v.istruzione; }
+      // (03/10/2026) TEMPI SULLA VELOCITÀ, metri LUNGO LA STRADA (tourService
+      // .aggiornaPasso): «gira» a 12 s dalla svolta (18-35 m), il preavviso entro
+      // 70 s (70-150 m) e mai a ridosso del «gira». Senza aggancio al tracciato
+      // restano le soglie di prima (35 m, e il preavviso oltre gli 80).
+      const vicinoM = Math.min(SVOLTA_VICINO_M, tourService.sogliaSvoltaVicina());
+      const lontanoMax = tourService.sogliaSvoltaLontana();
+      const inFinestraLontana = lontanoMax != null
+        ? v.metriAllaSvolta <= lontanoMax && v.metriAllaSvolta > vicinoM + 20
+        : v.metriAllaSvolta > SVOLTA_LONTANO_M;
+      if (v.metriAllaSvolta <= vicinoM && svoltaDettaVicino !== chiave) { svoltaDettaVicino = chiave; svoltaDettaLontano = chiave; testo = v.istruzione; }
       // Il preavviso «fra N metri» solo per le svolte, mai per un arrivo (come
       // il follower, che lo fa solo sui passi 'turn').
-      else if (v.metriAllaSvolta > SVOLTA_LONTANO_M && inAvvicinamento && v.manovra?.type !== 'arrive' && svoltaDettaLontano !== chiave) { svoltaDettaLontano = chiave; testo = `${fraMetri(v.metriAllaSvolta, lingua)} ${v.istruzione}`; }
+      else if (inFinestraLontana && inAvvicinamento && v.manovra?.type !== 'arrive' && svoltaDettaLontano !== chiave) { svoltaDettaLontano = chiave; testo = `${fraMetri(v.metriAllaSvolta, lingua)} ${String(v.istruzione).charAt(0).toLowerCase()}${String(v.istruzione).slice(1)}`; }
       if (testo) {
         const decisione = tourService.chiPuoParlare('navigatore', { guidaInCorso: parlando, metriAllaSvolta: v.metriAllaSvolta, suAttraversamento: v.suAttraversamento });
         if (decisione.azione === 'parla' || decisione.azione === 'abbassa_e_parla') { parla(testo, lingua, decisione.azione === 'abbassa_e_parla', TTL_SVOLTA_MS); dettoQualcosa = true; }
@@ -586,7 +600,9 @@ function onFix(e: Event): void {
       for (const { poi, id } of tourService.candidatiLungoIlPercorso(INCONTRO_M)) {
         if (tourService.incontroGiaFatto(id)) continue;
         const pLat = Number(poi.lat), pLon = Number(poi.lon);
-        if (metri(pos, { lat: pLat, lon: pLon }) > INCONTRO_M) continue;
+        // (03/10/2026, «tutto in strada reale») A 40 m DI STRADA, non in linea
+        // d'aria: il luogo dietro l'isolato non è un incontro.
+        if (metriDiStrada(pos.lat, pos.lon, pLat, pLon) > INCONTRO_M) continue;
         const testo = testoIncontro(poi);
         const decisione = tourService.chiPuoParlare('teaser', { guidaInCorso: parlando || dettoQualcosa, metriAllaSvolta: v.metriAllaSvolta, suAttraversamento: v.suAttraversamento });
         if ((decisione.azione === 'parla' || decisione.azione === 'abbassa_e_parla') && !dettoQualcosa) {

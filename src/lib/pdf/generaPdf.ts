@@ -57,11 +57,11 @@ export const ET_GUIDA: Record<Lang, import('./GuidaPremiumPdf').GuidaPdfEtichett
 };
 
 export const ET_ITINERARIO: Record<Lang, import('./ItinerarioPdf').ItinerarioPdfEtichette> = {
-  IT: { pagina: 'Pagina', giorno: 'Giorno', giorni: 'giorni', giornoSingolo: 'giorno', curatoDa: 'di viaggio curato da World in Pocket', intro: 'Benvenuto nella tua guida di viaggio curata da World in Pocket. Questo itinerario ti condurrà attraverso una selezione speciale di tappe e punti di interesse. Usa l’app «World in Pocket» durante la visita per sbloccare le audioguide interattive e ascoltare la storia di questi luoghi dal vivo.', consiglioGuida: 'Consiglio della guida', tempoVisita: 'Tempo di visita', spostamento: 'Spostamento', budgetGiorno: 'Budget della giornata', totaleGiorno: 'Totale giorno', consigli: 'Consigli', suggerimenti: 'Suggerimenti extra', precauzioni: 'Precauzioni', zoneDaEvitare: 'Zone da evitare', totaleViaggio: 'Totale stimato viaggio', mappa: 'Mappa del percorso' },
-  EN: { pagina: 'Page', giorno: 'Day', giorni: 'days', giornoSingolo: 'day', curatoDa: 'trip curated by World in Pocket', intro: 'Welcome to your travel guide curated by World in Pocket. This itinerary leads you through a special selection of stops and points of interest. Use the “World in Pocket” app during your visit to unlock interactive audio guides and hear the story of these places live.', consiglioGuida: 'Guide’s advice', tempoVisita: 'Visit time', spostamento: 'Transfer', budgetGiorno: 'Budget of the day', totaleGiorno: 'Day total', consigli: 'Tips', suggerimenti: 'Extra suggestions', precauzioni: 'Precautions', zoneDaEvitare: 'Areas to avoid', totaleViaggio: 'Estimated trip total', mappa: 'Route map' },
-  FR: { pagina: 'Page', giorno: 'Jour', giorni: 'jours', giornoSingolo: 'jour', curatoDa: 'de voyage organisé par World in Pocket', intro: 'Bienvenue dans votre guide de voyage conçu par World in Pocket. Cet itinéraire vous mène à travers une sélection spéciale d’étapes et de points d’intérêt. Utilisez l’application « World in Pocket » pendant votre visite pour débloquer les audioguides interactifs.', consiglioGuida: 'Conseil du guide', tempoVisita: 'Durée de visite', spostamento: 'Déplacement', budgetGiorno: 'Budget de la journée', totaleGiorno: 'Total du jour', consigli: 'Conseils', suggerimenti: 'Suggestions', precauzioni: 'Précautions', zoneDaEvitare: 'Zones à éviter', totaleViaggio: 'Total estimé du voyage', mappa: 'Carte du parcours' },
-  ES: { pagina: 'Página', giorno: 'Día', giorni: 'días', giornoSingolo: 'día', curatoDa: 'de viaje seleccionado por World in Pocket', intro: 'Bienvenido a tu guía de viaje seleccionada por World in Pocket. Este itinerario te lleva por una selección especial de paradas y puntos de interés. Usa la aplicación «World in Pocket» durante tu visita para desbloquear las audioguías interactivas.', consiglioGuida: 'Consejo de la guía', tempoVisita: 'Tiempo de visita', spostamento: 'Traslado', budgetGiorno: 'Presupuesto del día', totaleGiorno: 'Total del día', consigli: 'Consejos', suggerimenti: 'Sugerencias', precauzioni: 'Precauciones', zoneDaEvitare: 'Zonas a evitar', totaleViaggio: 'Total estimado del viaje', mappa: 'Mapa del recorrido' },
-  DE: { pagina: 'Seite', giorno: 'Tag', giorni: 'Tage', giornoSingolo: 'Tag', curatoDa: 'Reise, kuratiert von World in Pocket', intro: 'Willkommen zu deinem Reiseführer, kuratiert von World in Pocket. Diese Route führt dich zu einer besonderen Auswahl von Stationen und Sehenswürdigkeiten. Nutze die App „World in Pocket“ während des Besuchs, um interaktive Audioguides freizuschalten.', consiglioGuida: 'Tipp des Guides', tempoVisita: 'Besuchsdauer', spostamento: 'Transfer', budgetGiorno: 'Tagesbudget', totaleGiorno: 'Tagessumme', consigli: 'Tipps', suggerimenti: 'Weitere Hinweise', precauzioni: 'Vorsichtsmaßnahmen', zoneDaEvitare: 'Zu meidende Gegenden', totaleViaggio: 'Geschätzte Reisekosten', mappa: 'Routenkarte' },
+  IT: { pagina: 'Pagina', giorno: 'Giorno', giorni: 'giorni', giornoSingolo: 'giorno', curatoDa: 'di viaggio curato da World in Pocket', intro: 'Benvenuto nella tua guida di viaggio curata da World in Pocket. Questo itinerario ti condurrà attraverso una selezione speciale di tappe e punti di interesse. Usa l’app «World in Pocket» durante la visita per sbloccare le audioguide interattive e ascoltare la storia di questi luoghi dal vivo.', consiglioGuida: 'Consiglio della guida', tempoVisita: 'Tempo di visita', spostamento: 'Spostamento', budgetGiorno: 'Budget della giornata', totaleGiorno: 'Totale giorno', consigli: 'Consigli', suggerimenti: 'Suggerimenti extra', precauzioni: 'Precauzioni', zoneDaEvitare: 'Zone da evitare', totaleViaggio: 'Totale stimato viaggio', mappa: 'Mappa del percorso', mezzi: 'Mezzi pubblici' },
+  EN: { pagina: 'Page', giorno: 'Day', giorni: 'days', giornoSingolo: 'day', curatoDa: 'trip curated by World in Pocket', intro: 'Welcome to your travel guide curated by World in Pocket. This itinerary leads you through a special selection of stops and points of interest. Use the “World in Pocket” app during your visit to unlock interactive audio guides and hear the story of these places live.', consiglioGuida: 'Guide’s advice', tempoVisita: 'Visit time', spostamento: 'Transfer', budgetGiorno: 'Budget of the day', totaleGiorno: 'Day total', consigli: 'Tips', suggerimenti: 'Extra suggestions', precauzioni: 'Precautions', zoneDaEvitare: 'Areas to avoid', totaleViaggio: 'Estimated trip total', mappa: 'Route map', mezzi: 'Public transport' },
+  FR: { pagina: 'Page', giorno: 'Jour', giorni: 'jours', giornoSingolo: 'jour', curatoDa: 'de voyage organisé par World in Pocket', intro: 'Bienvenue dans votre guide de voyage conçu par World in Pocket. Cet itinéraire vous mène à travers une sélection spéciale d’étapes et de points d’intérêt. Utilisez l’application « World in Pocket » pendant votre visite pour débloquer les audioguides interactifs.', consiglioGuida: 'Conseil du guide', tempoVisita: 'Durée de visite', spostamento: 'Déplacement', budgetGiorno: 'Budget de la journée', totaleGiorno: 'Total du jour', consigli: 'Conseils', suggerimenti: 'Suggestions', precauzioni: 'Précautions', zoneDaEvitare: 'Zones à éviter', totaleViaggio: 'Total estimé du voyage', mappa: 'Carte du parcours', mezzi: 'Transports en commun' },
+  ES: { pagina: 'Página', giorno: 'Día', giorni: 'días', giornoSingolo: 'día', curatoDa: 'de viaje seleccionado por World in Pocket', intro: 'Bienvenido a tu guía de viaje seleccionada por World in Pocket. Este itinerario te lleva por una selección especial de paradas y puntos de interés. Usa la aplicación «World in Pocket» durante tu visita para desbloquear las audioguías interactivas.', consiglioGuida: 'Consejo de la guía', tempoVisita: 'Tiempo de visita', spostamento: 'Traslado', budgetGiorno: 'Presupuesto del día', totaleGiorno: 'Total del día', consigli: 'Consejos', suggerimenti: 'Sugerencias', precauzioni: 'Precauciones', zoneDaEvitare: 'Zonas a evitar', totaleViaggio: 'Total estimado del viaje', mappa: 'Mapa del recorrido', mezzi: 'Transporte público' },
+  DE: { pagina: 'Seite', giorno: 'Tag', giorni: 'Tage', giornoSingolo: 'Tag', curatoDa: 'Reise, kuratiert von World in Pocket', intro: 'Willkommen zu deinem Reiseführer, kuratiert von World in Pocket. Diese Route führt dich zu einer besonderen Auswahl von Stationen und Sehenswürdigkeiten. Nutze die App „World in Pocket“ während des Besuchs, um interaktive Audioguides freizuschalten.', consiglioGuida: 'Tipp des Guides', tempoVisita: 'Besuchsdauer', spostamento: 'Transfer', budgetGiorno: 'Tagesbudget', totaleGiorno: 'Tagessumme', consigli: 'Tipps', suggerimenti: 'Weitere Hinweise', precauzioni: 'Vorsichtsmaßnahmen', zoneDaEvitare: 'Zu meidende Gegenden', totaleViaggio: 'Geschätzte Reisekosten', mappa: 'Routenkarte', mezzi: 'Öffentliche Verkehrsmittel' },
 };
 
 /**
@@ -75,7 +75,7 @@ export const ET_ITINERARIO: Record<Lang, import('./ItinerarioPdf').ItinerarioPdf
  * PDF no. L'API di Commons (con `origin=*`) restituisce la miniatura vera su
  * upload.wikimedia.org, che il CORS lo concede. Gratis, nessuna chiave.
  */
-async function risolviCommons(u: string): Promise<string> {
+async function risolviCommons(u: string, lato: number = LATO_MASSIMO): Promise<string> {
   try {
     const url = new URL(u);
     if (!/(^|\.)wikimedia\.org$|(^|\.)wikipedia\.org$/i.test(url.host) || /^upload\./i.test(url.host)) return u;
@@ -83,7 +83,7 @@ async function risolviCommons(u: string): Promise<string> {
     const m = titolo.match(/Special:(?:FilePath|Redirect\/file)\/(.+)$/i);
     if (!m) return u;
     const api = `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent('File:' + m[1].replace(/_/g, ' '))}`
-      + `&prop=imageinfo&iiprop=url&iiurlwidth=${LATO_MASSIMO}&format=json&origin=*`;
+      + `&prop=imageinfo&iiprop=url&iiurlwidth=${lato}&format=json&origin=*`;
     const r = await fetch(api, { signal: AbortSignal.timeout(8000) });
     if (!r.ok) return u;
     const pagine = (await r.json())?.query?.pages || {};
@@ -119,12 +119,12 @@ async function scaricaImmagine(url?: string | null): Promise<string | undefined>
  *   1600 px di lato si ridisegna in JPEG: in stampa non si vede differenza.
  */
 const LATO_MASSIMO = 1600;
-async function scaricaFoto(url?: string | null): Promise<{ src: string; w: number; h: number } | undefined> {
+async function scaricaFoto(url?: string | null, lato: number = LATO_MASSIMO): Promise<{ src: string; w: number; h: number } | undefined> {
   let u = String(url || '').trim();
   if (!/^https?:\/\//i.test(u) && !u.startsWith('data:image/')) return undefined;
-  if (!u.startsWith('data:')) u = await risolviCommons(u);
+  if (!u.startsWith('data:')) u = await risolviCommons(u, lato);
   try {
-    const r = await fetch(u, u.startsWith('data:') ? {} : { signal: AbortSignal.timeout(12000), mode: 'cors' });
+    const r = await fetch(u, u.startsWith('data:') ? {} : { signal: AbortSignal.timeout(20000), mode: 'cors' });
     if (!r.ok) return undefined;
     const b = await r.blob();
     if (!/^image\/(jpeg|png|webp|gif)/i.test(b.type) || b.size > 12 * 1024 * 1024) return undefined;
@@ -246,17 +246,27 @@ export async function generaPdfMuseo(
   const immaginiTappe: Record<number, string> = {};
   const misureTappe: Record<number, { w: number; h: number }> = {};
   let copertina: string | undefined;
+  // LE FOTO DELLE OPERE, POCHE ALLA VOLTA (06/10/2026, British Museum: 60 opere, PDF di 18 pagine con UNA foto).
+  // Partivano tutte insieme a 1600 px (1,3 MB l'una, ~80 MB): Wikimedia e la rete ne lasciavano passare una e le
+  // altre scadevano a 12 s. Ora quattro alla volta, a 960 px (in pagina una foto è larga al massimo 120 mm: non si
+  // vede differenza), con un secondo tentativo. La copertina resta a 1600 px.
+  const LATO_FOTO_OPERA = 960;
+  const indiciConFoto = tappe.map((t, i) => (t.foto ? i : -1)).filter((i) => i >= 0);
+  const prendiFotoTappa = async (i: number) => {
+    let d = await scaricaFoto(tappe[i].foto, LATO_FOTO_OPERA);
+    if (!d) { await new Promise((r) => setTimeout(r, 800)); d = await scaricaFoto(tappe[i].foto, LATO_FOTO_OPERA); }
+    if (!d) return;
+    immaginiTappe[i] = d.src;
+    if (d.w > 0 && d.h > 0) misureTappe[i] = { w: d.w, h: d.h };
+  };
+  const codaFoto = indiciConFoto.slice();
+  const operaioFoto = async () => { for (let i = codaFoto.shift(); i !== undefined; i = codaFoto.shift()) await prendiFotoTappa(i); };
   await Promise.all([
     ...mappeConImmagine.map(async (m) => {
       const d = await scaricaImmagine(m.url);
       if (d) immaginiMappe[m.indice] = d;
     }),
-    ...tappe.map(async (t, i) => {
-      const d = await scaricaFoto(t.foto);
-      if (!d) return;
-      immaginiTappe[i] = d.src;
-      if (d.w > 0 && d.h > 0) misureTappe[i] = { w: d.w, h: d.h };
-    }),
+    ...[0, 1, 2, 3].map(operaioFoto),
     (async () => { copertina = (await scaricaFoto(visit.venuePhoto))?.src; })(),
   ]);
   // LA GUIDA ESCE SEMPRE DA QUI (20/09/2026, committente: le guide dei musei

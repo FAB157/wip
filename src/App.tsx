@@ -61,6 +61,8 @@ import PercorsoPanel, { type AvvioRapido } from "./components/PercorsoPanel";
 import AudioPlayerBanner from "./components/AudioPlayerBanner";
 import LiveTourAudioGate from "./components/LiveTourAudioGate";
 import ApproachBanner from "./components/ApproachBanner";
+import TastoCollaudo from "./components/TastoCollaudo";
+import TestVirtuale from "./components/TestVirtuale";
 import { OnboardingCarousel } from "./components/OnboardingCarousel";
 import RoutePoisModal from "./components/RoutePoisModal";
 import ZeroCreditsBanner from "./components/ZeroCreditsBanner";
@@ -958,7 +960,24 @@ export default function App() {
       const now = Date.now();
       const last = (window as any).__wipLastPoiTrigger || { id: '', ts: 0 };
       if (String(last.id) === String(poiId) && now - last.ts < 60_000) return;
-      (window as any).__wipLastPoiTrigger = { id: String(poiId), ts: now };
+      // (05/10/2026) La meta è già stata raccontata poco fa con un'altra riga dello
+      // stesso luogo (lungo il percorso c'era «Piazza Navona», e la meta era
+      // «Piazza Navona»): non la si racconta due volte.
+      const nudo = (n: unknown) => String(n || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+      if (last.nome && e?.detail?.poiName && nudo(last.nome) === nudo(e.detail.poiName) && now - last.ts < 10 * 60_000) return;
+      // LA GUIDA DELLA META ASPETTA IL SUO TURNO (05/10/2026, prova a Roma: un luogo
+      // lungo la via scatta a 30 m dalla meta, sei secondi dopo arriva «Sei
+      // arrivato» e la guida della meta gli parla sopra). Se una guida è appena
+      // partita o sta suonando, si riprova fra cinque secondi, per due minuti al più.
+      const tentativi = Number(e?.detail?.__tentativi) || 0;
+      let occupato = now - last.ts < 20_000;
+      try { occupato = occupato || locationService.getAudioState().isPlaying; } catch { /* si prosegue */ }
+      try { occupato = occupato || (window as any).__wipVoceInCorso?.() === true; } catch { /* si prosegue */ }
+      if (occupato && tentativi < 24) {
+        setTimeout(() => handleNavArrived({ detail: { ...(e?.detail || {}), __tentativi: tentativi + 1 } }), 5000);
+        return;
+      }
+      (window as any).__wipLastPoiTrigger = { id: String(poiId), ts: now, nome: String(e?.detail?.poiName || '') };
       import('./lib/geofencing/foregroundTriggers').then(m => m.segnaScattato(String(poiId))).catch(() => {});
       window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
         detail: { poiId: String(poiId), poi: e?.detail?.poi || undefined, autoPlay: true, manual: false, fromNav: true, ts: now },
@@ -2534,6 +2553,10 @@ export default function App() {
         )}
 
         <ApproachBanner language={language} />
+        {/* (04/10/2026) Solo con la modalità collaudo accesa dall'admin. */}
+        <TastoCollaudo />
+        {/* (04/10/2026) Test virtuale: si apre dall'admin, un telefono finto cammina dentro l'app vera. */}
+        <TestVirtuale />
 
         {/* Canale unico delle notifiche in-app (lib/toast.ts): sostituisce
             gli alert() bloccanti sparsi nelle schermate. */}

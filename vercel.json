@@ -114,6 +114,10 @@
     {
       "path": "/api/cron/generazioni",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/collaudo/campioni/verifica",
+      "schedule": "20 5 * * *"
     }
   ]
 }

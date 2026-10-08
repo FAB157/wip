@@ -25,7 +25,7 @@ import MuseumVisitSheet from './MuseumVisitSheet';
 import LoadingQuiz from './LoadingQuiz';
 import { chiediConsensoAi } from '../lib/aiConsent';
 import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, fetchMuseumSuggest, MuseumSuggestion, OPEN_MUSEUM_GUIDE_EVENT, prendiRichiestaGuidaMuseo, riapriVisitaConservata, whereAmI, DoveSono, markWorkSeen, visitaAttivaKey, fetchPrezziBiglietti } from '../lib/museumVisit';
-import { visiteConservate, opereInArchivio, ArchivioMuseo, museoScaricato } from '../lib/pacchettoMuseo';
+import { visiteConservate, opereInArchivio, ArchivioMuseo, museoScaricato, conservaVisita } from '../lib/pacchettoMuseo';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
 import { Landmark } from 'lucide-react';
@@ -385,6 +385,26 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   const riapriConservata = (a: ArchivioMuseo) => {
     const v = riapriVisitaConservata(a);
     if (v) { setVisit(v); setVisitOpen(true); }
+    // LA COPIA SUL TELEFONO NON RESTA INDIETRO (06/10/2026: il Duomo di Milano si riapriva con le 16 tappe
+    // scaricate a settembre mentre in libreria ne aveva 25, con le correzioni fatte dopo). Con la rete, e solo
+    // per le sedi con un POI, si chiede la guida di oggi: se è cambiata (più tappe, o un'altra introduzione)
+    // prende il posto di quella aperta — le opere già viste restano viste — e aggiorna l'archivio. Senza rete,
+    // o se il server non la dà (pass mancante), resta la copia scaricata: mai peggio di prima.
+    const poiId = /^poi_/.test(String(a?.venueKey || '')) ? String(a.venueKey).slice(4) : '';
+    if (!v || !poiId || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+    void (async () => {
+      try {
+        const out = await startVisitByPoi(poiId, language, { lat: null, lon: null });
+        const nuova = out.ok ? out.visit : null;
+        if (!nuova || nuova.venueKey !== v.venueKey) return;
+        const prima = v.guide?.tappe || [], dopo = nuova.guide?.tappe || [];
+        const cambiata = dopo.length !== prima.length || String(nuova.guide?.intro || '') !== String(v.guide?.intro || '')
+          || dopo.some((t, i) => String(t?.perche || '') !== String(prima[i]?.perche || ''));
+        if (!cambiata || dopo.length < Math.min(3, prima.length)) return;
+        conservaVisita(nuova, language);
+        setVisit(nuova);
+      } catch { /* resta la copia scaricata */ }
+    })();
   };
 
   /** Apre la visita di un museo scelto dall'elenco (o cercato per nome). */
@@ -2185,7 +2205,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                         </p>
                         {prezziBiglietti[m.venue_name] && (
                           <span className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-[10px] font-black text-emerald-800">
-                            <Ticket className="w-3 h-3" />{tr('mv_biglietto_da').replace('{p}', prezziBiglietti[m.venue_name])}
+                            <Ticket className="w-3 h-3" />{tr('mv_biglietto_da').replace('{p}', String(prezziBiglietti[m.venue_name]).replace(/^\s*(da|from|ab|desde|dès|от)\s+/i, ''))}
                           </span>
                         )}
                       </div>

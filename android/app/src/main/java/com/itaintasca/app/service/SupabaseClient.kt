@@ -595,7 +595,17 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
                 // comportamento è quello di prima (centroide).
                 addressPointLat = (map["address_point_lat"] as? Number)?.toDouble(),
                 addressPointLon = (map["address_point_lon"] as? Number)?.toDouble(),
-                addressPointSource = map["address_point_source"]?.toString()
+                addressPointSource = map["address_point_source"]?.toString(),
+                // LA FONTE della scheda (05/10/2026), per l'arbitrato fra luoghi
+                // vicini (Arbitrato.pesa). nearby_pois la restituisce come
+                // `source` = coalesce(enrichment_source, 'official'): lo stesso
+                // valore che il web riceve da get_geofence_pois. Con `select=*`
+                // (fetchPoiById) la riga porta invece la colonna grezza
+                // `enrichment_source`: si legge quella, per dare lo stesso
+                // significato nei due casi (null = nessuna fonte = non pesa).
+                // Stessa regola in WipSupabaseClient.swift.
+                source = if (map.containsKey("enrichment_source")) map["enrichment_source"]?.toString()
+                    else map["source"]?.toString()
             )
         }
 

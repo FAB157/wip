@@ -30,6 +30,8 @@ import { fotoDaWikidata } from '../lib/wikidataFoto';
 import { fotoSicura, migliorFoto } from '../lib/fotoHttps';
 import { tourService } from '../services/tourService';
 import { useBozzaGiro } from '../lib/tour/useGiro';
+import SchedaMichelin from './SchedaMichelin';
+import SchedaSenzaGlutine from './SchedaSenzaGlutine';
 
 interface PoiPopupContentProps {
   poi: any;
@@ -375,6 +377,35 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
           tags: ["servizi"],
         };
         if (isMounted) { setData(utilData); setLoading(false); setCachedPoiDetails(chiavePopup(poi.id), utilData); }
+        // (04/10/2026, committente: «si può mettere una foto?») LA FOTO DEL
+        // LOCALE. I locali di locali_pois (id `ov-…`) non hanno una colonna
+        // per l'immagine: si chiede alla stessa rotta dei fumetti dei livelli,
+        // in versione veloce (`fast`, nessun modello). Per un id `ov-…` il
+        // server prende il ramo «commerciali di Overture» (server.ts,
+        // eCommercialeOverture): nessuna prosa, e la foto la sceglie SOLO lui
+        // con le regole di sempre — prima l'immagine del sito ufficiale del
+        // locale, poi quella dalla strada. Mai una foto della Guida o di
+        // un'altra fonte. NON si manda `salva:false`: quel ramo lo salterebbe
+        // e partirebbe la ricerca su Wikipedia, sbagliata per un ristorante.
+        // Se la foto non arriva, la card resta senza.
+        if (!utilData.imageUrl && String(poi.id).startsWith('ov-')) {
+          try {
+            const r = await fetch(getApiUrl('/api/poi/enrich'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...(await bearerHeaders()) },
+              body: JSON.stringify({ id: poi.id, name: poi.name, lat: poi.lat, lon: poi.lon, category: poi.category, subCategory: (poi as any).subCategory, lang: linguaUi, fast: true, mode: 'short' }),
+            });
+            if (r.ok) {
+              const j = await r.json();
+              const foto = String(j?.thumbnail || '').trim();
+              if (foto) {
+                const conFoto = { ...utilData, imageUrl: foto, image_attribution: j?.image_attribution || null };
+                if (isMounted) setData(conFoto);
+                setCachedPoiDetails(chiavePopup(poi.id), conFoto);
+              }
+            }
+          } catch { /* senza rete la card resta senza foto */ }
+        }
         return;
       }
 
@@ -918,28 +949,52 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
             `loading="lazy"` il browser ne rimandava il caricamento, perche' al
             momento del montaggio il popup non risulta ancora in viewport. Era
             attesa pura, prima ancora della rete. */}
-        <div className="relative h-36 w-full flex-shrink-0 overflow-hidden bg-gray-100">
-          {data?.imageUrl && !imgError ? (
+        {/* (04/10/2026, segnalazione del committente da iPhone: «il tasto
+            naviga viene coperto o tagliato. Riduci l'intestazione?») Senza
+            foto l'intestazione era un riquadro colorato alto 144 px con una
+            sola emoji: su un telefono mangiava un terzo della card e il tasto
+            «Naviga» finiva sotto il bordo. Ora: con la foto resta alta; senza
+            foto e' una fascia sottile. E «Naviga» non sta piu' in fondo al
+            contenuto ma in un piede FISSO: il contenuto scorre, il tasto si
+            vede sempre. */}
+        {data?.imageUrl && !imgError ? (
+          <div className="relative h-32 w-full flex-shrink-0 overflow-hidden bg-gray-100">
             <img src={fotoPrincipale(data.imageUrl) || undefined} alt={poi.name} loading="eager" fetchPriority="high" decoding="async" className="w-full h-full object-cover" onError={() => setImgError(true)} />
-          ) : (
-            <div className={`w-full h-full bg-gradient-to-br ${catGrad} flex items-center justify-center`}>
-              <span className="text-4xl opacity-80">{catEmoji}</span>
-            </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className={`relative h-11 w-full flex-shrink-0 bg-gradient-to-br ${catGrad}`} />
+        )}
 
-        <div className="p-4 flex-1 flex flex-col">
+        <div className="px-4 pt-3 pb-1 flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">
           <div className="flex items-start gap-2 mb-2">
             <div className="mt-1.5 w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: catHex }} />
             <h3 className="font-bold text-[15px] text-gray-900 leading-tight">{displayName(poi, language)}</h3>
           </div>
-          <p className="text-[12px] text-gray-600 line-clamp-3 mb-4">
-            {data?.description || poi.description || `${getTranslation(poi.category, language)}`}
-          </p>
+          {/* (02/10/2026) Ristorante della Guida MICHELIN: al posto della
+              frase generica («… disponibile a …») la sua scheda — distinzione,
+              cucina, fascia di prezzo, via, orario di oggi, telefono, sito. */}
+          {/* (03/10/2026) Locale senza glutine (tabella locali_gf): livello,
+              tipo di locale e avviso «verifica sul posto». Se e' anche nella
+              Guida si vedono tutti e due i riquadri. */}
+          {(poi as any).michelin_url || (poi as any).gf_livello ? (
+            <>
+              {(poi as any).michelin_url && <SchedaMichelin poi={poi} language={language} />}
+              {(poi as any).gf_livello && (
+                <SchedaSenzaGlutine poi={(poi as any).michelin_url ? { ...poi, contact_phone: null, contact_website: null } : poi} language={language} />
+              )}
+            </>
+          ) : (
+            <p className="text-[12px] text-gray-600 line-clamp-3 mb-4">
+              {data?.description || poi.description || `${getTranslation(poi.category, language)}`}
+            </p>
+          )}
+        </div>
+        {/* Piede fisso: non scorre e non si restringe, quindi non puo' essere tagliato. */}
+        <div className="px-4 pt-2 pb-3 flex-shrink-0 bg-white border-t border-gray-100">
           {modalitaGiro && <BottoneGiro poi={poi} language={language} />}
           <button
             onClick={handleNavigate}
-            className="mt-auto w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-white font-bold text-sm shadow-md transition-all active:scale-95"
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-white font-bold text-sm shadow-md transition-all active:scale-95"
             style={{ background: `linear-gradient(135deg, ${catHex}, #000)` }}
           >
             <Navigation className="w-4 h-4" /> {getTranslation('navigate', language)}

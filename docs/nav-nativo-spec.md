@@ -223,6 +223,54 @@ con `scatto(d)` = d<100 ? round(d/10) : 100+round(d/50) (la stessa del JS).
   SPEGNE (come `updateNavBanner` con `attivo:false`).
 - Col JS vivo il follower NON tocca il cruscotto.
 
+## AGGANCIO AL TRACCIATO E TEMPI DELLE SVOLTE (03/10/2026, collaudo a Montecatini: «non andava bene, né come svolte né come matching map») — PREVALE sulle soglie fisse qui sopra
+Identico in `NavFollower.kt`, `NavFollower` (Swift) e, per la parte JS, `src/lib/nav/aggancio.ts`
+(usato da `tourService.aggiornaPasso`, `giroDriver`, `useWalkingNavigation`).
+Costanti: `MATCH_INDIETRO_M=15, MATCH_AVANTI_MIN_M=60, MATCH_CROSS_MIN_M=25, MATCH_CROSS_MAX_M=60,
+MATCH_PERSI_MAX=3, VEL_DEFAULT=1.3, VEL_MIN=0.5, VEL_MAX=2.5, VEL_SALTO=4.0 (m/s), NEAR_SEC=12,
+NEAR_MIN_M=18, NEAR_MAX_M=35, FAR_SEC=70, FAR_DYN_MIN_M=70, FAR_STACCO_M=20, PASSATO_STRADA_M=12`.
+```
+aggancia(fix, velGps):                 // a ogni fix buono, prima del ciclo dei passi
+  cross = clamp(accuratezza, MATCH_CROSS_MIN_M, MATCH_CROSS_MAX_M)
+  se uMatch valido: trovato = punto del tracciato fra uMatch-15 e uMatch+max(60, vel*dt*3+40), entro cross, col
+                    PUNTEGGIO minimo = distanza + 0.5 * (metri all'indietro rispetto a uMatch)   // MATCH_PENALITA_INDIETRO
+                    se nessuno: persi++ ; se persi < 3 → u = NaN (uMatch resta)
+  se ancora nessuno: trovato = PRIMA corrispondenza da max(0, alongPasso[idx]-300) in avanti, entro cross
+  se nessuno → uMatch = NaN ; altrimenti persi = 0, uMatch = trovato
+  VELOCITÀ (mai fra due fix grezzi: il rumore GPS «cammina» da solo):
+    velGps valida (>= 0)  → se <= VEL_SALTO: vel = clamp(0.8*vel + 0.2*velGps, VEL_MIN, VEL_MAX)
+    altrimenti            → ogni VEL_FINESTRA_MS=10000: v = (u - uRif)/(t - tRif); se 0 <= v <= VEL_SALTO: vel = clamp(0.5*vel + 0.5*v)
+  (`onFix` ha un parametro in più, opzionale: la velocità del fix; assente = NaN)
+per un passo NON 'arrive', con u e alongPasso[idx] validi (suStrada):
+  se u > alongPasso[idx] + PASSATO_STRADA_M e idx+1 < n → contato (mai «davvero»), avanza
+  dS = max(0, alongPasso[idx] - u)
+  vicino  : dS <= clamp(vel*NEAR_SEC, NEAR_MIN_M, NEAR_MAX_M)
+  lontano : vicino + FAR_STACCO_M <= dS <= clamp(vel*FAR_SEC, FAR_DYN_MIN_M, FAR_MAX_M), frase con dS
+senza aggancio (suStrada falso): d a linea d'aria, NEAR_M / FAR_MIN_M / FAR_MAX_M come prima.
+cruscotto: metriAllaSvolta = dS dell'ultimo fix agganciato sullo stesso passo, altrimenti linea d'aria.
+```
+Le regole sugli ARRIVI, sulla progressione e sul fuori percorso NON cambiano.
+JS: nel giro i metri alla svolta sono `alongPassi[i] - u`, si passa alla manovra dopo a meno di 8 m,
+«gira» a `sogliaVicina(vel)`, preavviso fra vicino+20 e `sogliaLontanaMax(vel)`.
+
+REGISTRO DI COLLAUDO: il follower tiene in memoria una riga per fix col percorso attivo
+(`FIX lat,lon acc idx aria strada u v vicino JS|NATIVO|PAUSA [DICE…]`, più `PERCORSO …` a ogni
+consegna, su Android), al massimo 4000 righe; metodo del plugin `getNavLog()` → `{ righe: string[] }`,
+scaricabile dal pannello admin › Diagnostica › «Registro del navigatore».
+
+## NOTIFICHE DI AVVICINAMENTO E ARRIVO (03/10/2026, committente: «vengono troppe notifiche»)
+Non è parte del contratto JS↔nativo, ma usa `NavFollower.haPercorso` (vero con un giro
+consegnato e non finito, ANCHE in pausa — diverso da `haPercorsoAttivo`/`richiedeFixFitti`).
+Vale identico in `GeofenceBroadcastReceiver.kt` e `BackgroundPoiManager.swift`:
+1. UNA sola notifica di avvicinamento alla volta (id fisso: Android `NOTIF_ID_AVVICINAMENTO`
+   4101, iOS `approach`): il primo luogo del fix dà titolo e testo, i successivi dello stesso
+   fix entrano nel testo come «Vicino anche: …»; il tocco apre il primo. La voce NON cambia.
+2. Sparisce da sola: al superamento (PASSED) o all'uscita (EXITED da APPROACH_FIRED) di QUEL
+   luogo, a un arrivo qualsiasi, dopo 10 minuti (controllo a ogni fix), a servizio spento.
+3. Con `haPercorso` vero si notifica solo chi ha `isFromItinerary`.
+4. Gli arrivi restano uno per luogo (id `poi_<id>` / `poiId.hashCode()`), ma al massimo 3: al
+   quarto si toglie il più vecchio. Check-in, teaser radar e gemme non sono toccati.
+
 ## Frequenza dei fix mentre c'è un percorso attivo
 Il follower ha bisogno di un fix ogni ~2 s / ~5 m, anche in "modalità
 navigatore" (servizio avviato con `categories=['gemme:off']`, nessun POI).

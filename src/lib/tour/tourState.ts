@@ -14,6 +14,7 @@
  *   DEVIATO a 120 m per 30 s — sotto, e` un marciapiede sbagliato; il tempo
  *                        serve a non ricalcolare per un rimbalzo del GPS
  */
+import { radiiForTransport } from '../guideSettings';
 
 export type StatoGiro =
   | 'IN_CAMMINO'
@@ -102,13 +103,34 @@ export type LivelloIngresso = 'dichiarato' | 'civico' | 'indirizzo' | 'centroide
 
 /** Soglia d'arrivo adattata alla fiducia che abbiamo nel punto. */
 export function sogliaArrivo(livello: LivelloIngresso | undefined, raggioEdificio?: number | null): number {
-  if (livello === 'dichiarato') return SOGLIE.ingresso_m;
-  if (livello === 'civico') return SOGLIE.ingresso_m + 10;
-  if (livello === 'indirizzo') return SOGLIE.ingresso_m + 25;
-  // Centroide: senza sapere quanto e` grande l'edificio si tira a indovinare.
-  // Col perimetro invece la soglia diventa "quando sei addosso all'edificio",
-  // che e` il massimo ottenibile senza conoscere la porta.
-  return raggioEdificio ? Math.max(SOGLIE.ingresso_m, raggioEdificio + 15) : 70;
+  // (05/10/2026, committente: «le distanze del GeoControl si devono poter
+  // modificare, e devono essere sempre distanze in strada») Quando il punto è
+  // una porta o un punto sulla via (dichiarato, civico, indirizzo) la soglia è
+  // QUELLA SCELTA DALL'UTENTE nel GeoControl — 30 m se non l'ha mai toccata —
+  // e non si allarga più di 10 o 25 m «per prudenza». La distanza che le si
+  // confronta è già in metri di strada (tourService.metriStradaAllaTappa + coda).
+  let utente: number = SOGLIE.ingresso_m;
+  try { utente = radiiForTransport('walk', null, null).trigger || SOGLIE.ingresso_m; } catch { /* fuori dal browser: predefinito */ }
+  if (livello === 'dichiarato' || livello === 'civico' || livello === 'indirizzo') return utente;
+  // Centroide: il punto è il centro dell'edificio, e la strada finisce prima.
+  // Qui la soglia stretta fermerebbe il giro per sempre davanti a un palazzo
+  // grande: resta "quando sei addosso all'edificio" (perimetro) o 70 m, mai
+  // sotto la scelta dell'utente.
+  return raggioEdificio ? Math.max(utente, raggioEdificio + 15) : Math.max(utente, 70);
+}
+
+/**
+ * A quanti metri dalla tappa parte il teaser breve (stato IN_ARRIVO).
+ * (05/10/2026, committente: sì a «anche il teaser del percorso segua il
+ * GeoControl») È l'AVVISO A PIEDI scelto dall'utente — 150 m se non l'ha mai
+ * toccato — al posto degli 80 m fissi. Mai sotto la soglia d'arrivo più 20 m:
+ * il teaser deve restare PRIMA dell'arrivo, altrimenti non partirebbe mai.
+ * La distanza che gli si confronta è in metri di strada, come l'arrivo.
+ */
+export function sogliaAvviso(sogliaDArrivo: number): number {
+  let utente: number = SOGLIE.arrivo_m;
+  try { utente = radiiForTransport('walk', null, null).alert || SOGLIE.arrivo_m; } catch { /* fuori dal browser: predefinito */ }
+  return Math.max(utente, sogliaDArrivo + 20);
 }
 
 export interface StatoCorrente {
@@ -183,7 +205,7 @@ export function prossimoStato(
 
   const soglia = sogliaArrivo(tappa.ingresso?.livello, raggioEdificio);
   if (o.distanzaTappa <= soglia) return cambia('ALL_INGRESSO', { fermoDa, fuoriPercorsoDa: null });
-  if (o.distanzaTappa <= SOGLIE.arrivo_m) return cambia('IN_ARRIVO', { fermoDa, fuoriPercorsoDa: null });
+  if (o.distanzaTappa <= sogliaAvviso(soglia)) return cambia('IN_ARRIVO', { fermoDa, fuoriPercorsoDa: null });
   return cambia('IN_CAMMINO', { fermoDa, fuoriPercorsoDa: fuoriDa });
 }
 

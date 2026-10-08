@@ -166,7 +166,7 @@ export const SUBS_BY_MACRO: Record<string, string[]> = {
   // (Elenco letterale e non NATURA_FAMIGLIE: quella e' dichiarata piu' sotto
   // e un `const` letto prima della sua riga fa esplodere il modulo.)
   natura: ["spiagge", "vette", "acque", "grotte", "parchi"],
-  locali: ["ristorante", "pizzeria", "pesce", "carne", "sushi", "vegetariano", "glutenfree", "gluten_free_only", "gluten_free_options", "bar", "gelateria"],
+  locali: ["gf_dedicato", "gf_menu", "gf_pizzeria", "gf_gelateria", "gf_forno", "michelin", "ristorante", "pizzeria", "pesce", "carne", "sushi", "vegetariano", "glutenfree", "gluten_free_only", "gluten_free_options", "bar", "gelateria"],
   // ev_charging (27/08/2026): colonnine di ricarica EV da OpenChargeMap
   // (CC BY 4.0). Stesso schema delle altre utilita': `category` sul DB e'
   // gia' il valore specifico ('ev_charging'), non un bucket generico.
@@ -570,6 +570,9 @@ export function datiBeneCulturale(p: any): { registro?: string; tutela?: string 
   return { registro: b.registro || undefined, tutela: b.tutela || undefined };
 }
 
+/** I tre id equivalenti della chip «Gluten-Free» tra chip e dati. */
+const GLUTEN_IDS = ["glutenfree", "gluten_free_only", "gluten_free_options"];
+
 export function passesCategoryRule(p: any, selectedCategories: string[], subFilter?: string[] | null): boolean {
   const { macro, subId } = resolvePoiTaxonomy(p);
 
@@ -605,11 +608,34 @@ export function passesCategoryRule(p: any, selectedCategories: string[], subFilt
   if (!selectedCategories.includes(macroFiltro)) return false;
 
   const subsOfMacro = SUBS_BY_MACRO[macroFiltro] || [];
-  const activeSubs = (subFilter || []).filter(s => subsOfMacro.includes(s));
+  let activeSubs = (subFilter || []).filter(s => subsOfMacro.includes(s));
+  // (03/10/2026) LA FILA DEL SENZA GLUTINE (gf_*): non sono altre chip da
+  // sommare ma un modo di STRINGERE «Gluten-Free». Valgono solo se quella e'
+  // accesa; livelli fra loro in OR, tipi fra loro in OR, livello E tipo in
+  // AND. Passa solo chi ha il livello nella tabella locali_gf.
+  if (macro === "locali") {
+    const stretti = activeSubs.filter(s => s.startsWith("gf_"));
+    activeSubs = activeSubs.filter(s => !s.startsWith("gf_"));
+    if (stretti.length > 0 && activeSubs.some(s => GLUTEN_IDS.includes(s))) {
+      const livelli = stretti.filter(s => s === "gf_dedicato" || s === "gf_menu").map(s => s.slice(3));
+      const tipi = stretti.filter(s => s !== "gf_dedicato" && s !== "gf_menu").map(s => s.slice(3));
+      const liv = String((p as any).gf_livello || "");
+      const passaGf = !!liv && (livelli.length === 0 || livelli.includes(liv)) && (tipi.length === 0 || tipi.includes(String((p as any).gf_tipo || "")));
+      if (passaGf) return true;
+      // Non passa il senza glutine stretto: puo' ancora passare per un'ALTRA chip accesa (Stellati, Pizza…).
+      activeSubs = activeSubs.filter(s => !GLUTEN_IDS.includes(s));
+      if (activeSubs.length === 0) return false;
+    }
+  }
   // Nessun sub-chip di questa macro selezionato ⇒ il chip "Tutti" è attivo.
   if (activeSubs.length === 0) return true;
 
   if (subId && activeSubs.includes(subId)) return true;
+  // (02/10/2026) La chip «Stellati» (id `michelin`) non e' una
+  // sotto-categoria ma un riconoscimento: passa chi ha 1, 2 o 3 stelle nelle
+  // colonne michelin_* di locali_pois, qualunque cucina faccia. Mai dal nome,
+  // e non Bib Gourmand o «selezionati»: la chip dice «stellati».
+  if (macro === "locali" && activeSubs.includes("michelin") && ["1_stella", "2_stelle", "3_stelle"].includes(String((p as any).michelin_distinzione || ""))) return true;
   // Una gemma senza famiglia riconosciuta (import CSV, `category='gemme'`) vale
   // come «monumenti_sub», esattamente come la sua gemella non-gemma qui sopra.
   if (macro === "gemme" && !subId && activeSubs.includes("monumenti_sub")) return true;
@@ -620,8 +646,10 @@ export function passesCategoryRule(p: any, selectedCategories: string[], subFilt
   const BARCAFE = ["bar", "caffe", "cafe", "bar_caffe"];
   if (BARCAFE.includes(subId) && activeSubs.includes("bar")) return true;
   // glutenfree ha tre id equivalenti tra chip e dati.
-  const GF = ["glutenfree", "gluten_free_only", "gluten_free_options"];
+  const GF = GLUTEN_IDS;
   if (GF.includes(subId) && activeSubs.some(s => GF.includes(s))) return true;
+  // Il livello della tabella locali_gf e' il dato piu' forte che abbiamo.
+  if (macro === "locali" && (p as any).gf_livello && activeSubs.some(s => GF.includes(s))) return true;
 
   // Molti POI da Overpass/Google non hanno subCategory (un ristorante con solo
   // amenity=restaurant). L'ultima parola spetta alle euristiche su nome e tag,

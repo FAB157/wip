@@ -422,6 +422,25 @@ export async function fetchMuseumMap(poiId: string | null | undefined, venueKey?
 /** «Sala 10», «Room 10», «Salle 10» → «10»: la stessa sala scritta in due lingue. */
 export const normSalaMappa = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\b(sala|room|salle|saal|galleria|gallery|galerie|hall|zaal)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
 
+/**
+ * IL PIN DELLA PIANTA E LA SALA DELLA TAPPA (06/10/2026). I pin portano il codice letto sulla pianta («9», «6B»,
+ * «Hall of Mirrors»); la guida scrive la sala a parole («sale 7, 8 e 9», «Sala di Tutankhamon»). Con la sola
+ * uguaglianza il Grande museo egizio aveva 31 pin salvati e NESSUNO a schermo («le posizioni delle sale
+ * arriveranno a breve»). Oltre all'uguaglianza vale il codice corto con una cifra che compare come parola intera
+ * fra i codici della sala — solo se il testo parla davvero di sale («area dedicata, 5.000 m²» non è la sala 5).
+ */
+export function salaCombaciaConPin(pinSala: unknown, tappa: { salaCodice?: string | null; dove?: string | null }): boolean {
+  const ns = normSalaMappa(pinSala);
+  if (!ns) return false;
+  const candidati = [normSalaMappa(tappa?.salaCodice), normSalaMappa(tappa?.dove)].filter(Boolean);
+  if (candidati.includes(ns)) return true;
+  const codice = ns.replace(/\s+/g, '');
+  if (!/^[a-z]?\d{1,3}[a-z]?$/.test(codice)) return false;
+  const grezzo = `${tappa?.salaCodice || ''} ${tappa?.dove || ''}`;
+  if (!/\b(sala|sale|room|rooms|salle|salles|saal|raum|galleria|gallerie|gallery|galleries|hall|halls|zaal)\b/i.test(grezzo)) return false;
+  return candidati.some((c) => c.split(' ').includes(codice));
+}
+
 const venueKeyOf = (venue: VenueInfo) => venue.id ? `poi_${venue.id}` : `nome_${normalize(venue.name).replace(/ /g, '_')}`;
 
 /**
@@ -1048,6 +1067,9 @@ const PASSI_MINIATURE_COMMONS = [120, 250, 330, 500, 960, 1280];
 export function fotoCommonsStandard(url?: string | null): string {
   if (!url) return '';
   if (!/commons\.wikimedia\.org/i.test(url) || !/Special:FilePath/i.test(url)) return url;
+  // (06/10/2026) Il tracciamento di Wikimedia finito dentro il nome del file («Marmoteca.JPG%3Futm_source%3D…»):
+  // quelle foto non si caricano. Si toglie qui, così tornano anche nelle guide già archiviate nel telefono.
+  url = url.replace(/%3Futm_[^?#]*/i, '');
   try {
     const u = new URL(url);
     const w = Number(u.searchParams.get('width'));

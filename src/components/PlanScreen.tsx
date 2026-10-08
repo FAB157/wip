@@ -475,12 +475,35 @@ async function processItineraryStream(
  * della tappa: così eventuali modifiche fatte nel frattempo dall'utente
  * (spostamenti, cancellazioni) non vengono sovrascritte.
  */
+/**
+ * Riporta i marchi di verifica nella RIGA SALVATA (07/10/2026): prima restavano solo a schermo e un
+ * itinerario riaperto mostrava ancora gli allarmi vecchi («a 2.000 km dalla destinazione»). Si rilegge
+ * la riga e si fonde per titolo, senza toccare il resto (podcast, modifiche fatte nel frattempo).
+ */
+async function salvaMarchiVerifica(planId: string, verified: any): Promise<void> {
+  try {
+    if (!planId || !verified?.giorni) return;
+    const { data: sess } = await supabase.auth.getSession();
+    const uid = sess?.session?.user?.id;
+    if (!uid) return;
+    const { data: riga } = await supabase.from('user_itineraries').select('dati_itinerario').eq('id', planId).eq('user_id', uid).maybeSingle();
+    const dati = (riga as any)?.dati_itinerario;
+    if (!dati?.giorni) return;
+    const fuso = mergeVerificationMarks(dati, verified);
+    if (fuso === dati) return;
+    await supabase.from('user_itineraries').update({ dati_itinerario: fuso, updated_at: new Date().toISOString() }).eq('id', planId).eq('user_id', uid);
+  } catch { /* fail-open: i marchi restano a schermo */ }
+}
+
 function mergeVerificationMarks(current: any, verified: any): any {
   if (!current?.giorni || !verified?.giorni) return current;
   const marks = new Map<string, any>();
   verified.giorni.forEach((g: any) => (g?.tappe || []).forEach((t: any) => {
     const k = (t?.titolo_tappa || '').trim().toLowerCase();
-    if (k && (t.verifica || t.nota_verifica)) marks.set(k, t);
+    // Anche una tappa SENZA marchio entra nella mappa (07/10/2026): il server riceve i marchi correnti e
+    // li toglie quando una riverifica li smentisce (l'allarme «a 2.000 km» del riferimento omonimo); se si
+    // copiassero solo quelli presenti, un allarme vecchio non sparirebbe mai.
+    if (k) marks.set(k, t);
   }));
   if (marks.size === 0) return current;
   return {
@@ -557,6 +580,7 @@ interface ItineraryDay {
     consiglio_guida: string;
     tempo_necessario?: string;
     spostamento_precedente?: string | null;
+    mezzi_precedente?: string | null;
     tipo: string;
     coordinate: { lat: number; lng: number };
   }>;
@@ -891,10 +915,16 @@ export default function PlanScreen({
         await apiFetch(getApiUrl('/api/poi/enrich'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          // 75 s, non 30 (Lione 06/10/2026): il modo `full` di un POI nuovo (Wikipedia + sito + web + foto
+          // + modello) arriva a 50 s; a 30 s il client interrompeva e richiedeva lo stesso POI al giro dopo.
           body: JSON.stringify({ id: String(p.id), name: p.name, lat: p.lat, lon: p.lon, category: p.category, city: p.city, lang: language, mode: 'full' }),
-        }, 30000);
+        }, 75000);
         enrichedPoiIdsRef.current.add(String(p.id));
-      } catch { /* la scheda si arricchira` all'apertura: non blocca il giro */ }
+      } catch (e: any) {
+        // Scaduto il tempo il server sta comunque finendo e salvando: non si richiede.
+        if (String(e?.name || '') === 'TimeoutError' || /interrotta/i.test(String(e?.message || ''))) enrichedPoiIdsRef.current.add(String(p.id));
+        /* la scheda si arricchira` all'apertura: non blocca il giro */
+      }
       await new Promise((r) => setTimeout(r, 600));
     }
   }, [language]);
@@ -1100,6 +1130,8 @@ export default function PlanScreen({
       const verified = e?.detail;
       if (!verified?.giorni) return;
       setGeneratedPlanState((prev: any) => mergeVerificationMarks(prev, verified));
+      // Anche nella riga salvata, se il piano verificato è quello salvato (stesso id).
+      if (verified?.id) salvaMarchiVerifica(String(verified.id), verified);
     };
     window.addEventListener('wip-itinerary-verified', handler);
     return () => window.removeEventListener('wip-itinerary-verified', handler);
@@ -1133,7 +1165,7 @@ export default function PlanScreen({
   // ── Trasporti per tratta (ondata 6): durate REALI dalla rete stradale ──
   // Una chiamata OSRM multi-waypoint per giorno; a piedi = distanza/4,5 km/h,
   // taxi ≈ 3,50€ + 1,35€/km. Se OSRM non risponde l'itinerario resta intatto.
-  const [dayLegs, setDayLegs] = useState<Record<number, Record<number, { walkMin: number; carMin: number; km: number; taxiEur: number }>>>({});
+  const [dayLegs, setDayLegs] = useState<Record<number, Record<number, { walkMin: number; carMin: number; km: number; taxiEur: number; da?: { lat: number; lon: number }; a?: { lat: number; lon: number } }>>>({});
   const legsSigRef = useRef('');
   useEffect(() => {
     const plan = generatedPlan;
@@ -1151,6 +1183,7 @@ export default function PlanScreen({
     if (sig === legsSigRef.current) return;
     legsSigRef.current = sig;
     let cancelled = false;
+    let fatto = false;
     (async () => {
       const out: Record<number, Record<number, any>> = {};
       for (let g = 0; g < plan.giorni.length; g++) {
@@ -1210,14 +1243,21 @@ export default function PlanScreen({
                 : Math.max(1, Math.round((leg.distance || 0) / 1.25 / 60)),
               km,
               taxiEur: km >= 0.8 ? Math.round(3.5 + km * 1.35) : 0,
+              // Estremi della tratta: servono al tasto «Mezzi» (Google Maps in
+              // modalità trasporto pubblico) sulle tratte lunghe (06/10/2026).
+              da: pts[validIdx[j]]!,
+              a: pts[validIdx[j + 1]]!,
             };
           }
         } catch { /* OSRM giù: niente tratte per questo giorno */ }
         if (cancelled) return;
       }
-      if (!cancelled) setDayLegs(out);
+      if (!cancelled) { fatto = true; setDayLegs(out); }
     })();
-    return () => { cancelled = true; };
+    // Il piano cambia identità (marchi di verifica, arricchimento) mentre il
+    // calcolo è in corso: se la firma restasse, il nuovo giro uscirebbe subito
+    // e le tratte non comparirebbero mai.
+    return () => { cancelled = true; if (!fatto && legsSigRef.current === sig) legsSigRef.current = ''; };
   }, [generatedPlan, loading]);
 
   // ── Piano B pioggia (ondata 6) ─────────────────────────────────────────
@@ -2231,6 +2271,13 @@ export default function PlanScreen({
   useEffect(() => {
     // Durante lo streaming il piano cambia a ogni chunk: aspettiamo la fine della generazione
     if (loading) return;
+    // SOLO UN PIANO DEFINITIVO DIVENTA POI (06/10/2026, prova Madrid): quando lo stream
+    // cadeva in timeout nella fase silenziosa del server (aggancio + revisore), il
+    // catch metteva `form_a` e questo effetto partiva lo stesso sul piano PARZIALE
+    // non verificato — 15 POI con i nomi dell'AI (un «Museo Reina Sofía» doppione
+    // della riga Wikidata, una «Plaza de la Villa» che nel piano finale non c'è).
+    // Il piano verificato ha l'id del server e si vede in `view`: solo lì si scrive.
+    if (plannerMode !== 'view' || !generatedPlan?.id) return;
     if (generatedPlan && generatedPlan.giorni) {
       const allPoisToUpsert: any[] = [];
       generatedPlan.giorni.forEach(giorno => {
@@ -2254,7 +2301,7 @@ export default function PlanScreen({
           // Non si riscrive con la prosa AI. I locali (`ov-…`) stanno in
           // locali_pois e diventano POI come prima.
           const agganciata = !!tappa.poi_id && !String(tappa.poi_id).startsWith('ov-');
-          if (lat !== 0 && lon !== 0 && !agganciata && tappaDiventaPoi(tappa.tipo || '')) {
+          if (lat !== 0 && lon !== 0 && !agganciata && tappaDiventaPoi(tappa.tipo || '', tappa.titolo_tappa || '')) {
             // L'id porta anche le coordinate (22/08/2026): con il solo slug
             // del titolo, «iti-duomo» era UNA riga condivisa da tutte le
             // città con un Duomo, e teneva la foto e il testo della prima.
@@ -2267,7 +2314,7 @@ export default function PlanScreen({
               category: mapItineraryCategoryToMapCategory(tappa.tipo || 'monumenti'),
               lat: lat,
               lon: lon,
-              description_ai: tappa.attivita || '',
+              // Niente prosa dell'itinerario come descrizione (06/10/2026): il server la scarta comunque.
               source: 'itinerary',
               // Lo status lo decide il SERVER (30/08/2026): serve comunque —
               // isDownloadablePoiStatus scarta i record senza status, e queste
@@ -4166,7 +4213,13 @@ export default function PlanScreen({
       }
     }
 
-    if (destCoords && destCoords.label === dest) return destCoords;
+    // (07/10/2026, Los Angeles) Il suggerimento scelto porta l'etichetta lunga («Los Angeles, California, Stati
+    // Uniti d'America») mentre nel campo resta quello che si è scritto («Los Angeles»): il confronto esatto
+    // falliva, si ri-geocodificava il nome nudo e il primo risultato era Los Angeles in TEXAS — tutte le undici
+    // tappe «a 2.000 km dalla destinazione, da verificare». Le coordinate scelte dalla persona valgono se il
+    // testo del campo è l'inizio dell'etichetta (o l'etichetta inizia col testo).
+    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (destCoords && (destCoords.label === dest || norm(destCoords.label).startsWith(norm(dest)) || norm(dest).startsWith(norm(destCoords.label)))) return destCoords;
     try {
       // Geocoding rigoroso via proxy server (solo località amministrative).
       const res = await fetch(getApiUrl(
@@ -4853,6 +4906,8 @@ export default function PlanScreen({
           // del centro della città di arrivo: non sono luoghi visitabili e non
           // devono diventare POI in shared_pois.
           .filter(t => String((t as any).tipo || '').toLowerCase() !== 'trasferimento')
+          // Un prodotto (tour, biglietto, noleggio…) non è un luogo: stessa regola di tappaDiventaPoi (07/10/2026).
+          .filter(t => tappaDiventaPoi(String((t as any).tipo || ''), String(t.titolo_tappa || '')))
           .filter(t => t.coordinate && t.coordinate.lat !== 0)
           // Tappa già agganciata dal server a un POI VERO di shared_pois
           // (05/09/2026, agganciaTappeAlDatabase): il POI esiste, con la sua
@@ -4892,9 +4947,9 @@ export default function PlanScreen({
               // decidere se il POI è "già arricchito" (existing.description_short,
               // server.ts) — riempirli subito con la prosa AI non verificata
               // faceva SALTARE per sempre la vera messa a terra su Wikipedia,
-              // anche quando esiste. description_ai resta per la UI (che fa
-              // fallback su di lei finché description_long non arriva).
-              description_ai: descLong + (tappa.consiglio_guida ? "\n\n💡 " + tappa.consiglio_guida : ""),
+              // anche quando esiste. (06/10/2026) NEMMENO description_ai: è prosa di
+              // DeepSeek a memoria e, essendo il testo salvato più lungo, diventava il
+              // materiale dell'audioguida (Lione, Anversa). La scheda la riempie l'enrich.
               status: 'auto', // generati dall'AI: non marcarli come verificati
               created_at: new Date().toISOString()
             };
@@ -5450,7 +5505,7 @@ export default function PlanScreen({
         category: category,
         lat: lat,
         lon: lon,
-        description_ai: desc,
+        // (06/10/2026) niente description_ai: prosa a memoria, finiva nell'audioguida.
         source: 'itinerary',
         status: 'auto',
         created_at: new Date().toISOString()
@@ -5532,6 +5587,10 @@ export default function PlanScreen({
             </button>
           )}
         </div>
+      )}
+      {/* Invito (06/10/2026, committente): chi lascia «Indifferente» non sa che esiste il clima del mese. */}
+      {!climaAvviso && destCoords && (
+        <p className="mt-2 text-[11px] leading-snug text-slate-500 px-1">📅 {getTranslation('mp_clima_invito', language)}</p>
       )}
     </div>
   );

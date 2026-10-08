@@ -599,7 +599,18 @@ final class WipSupabaseClient {
                 // identico a prima.
                 addressPointLat: (map["address_point_lat"] as? NSNumber)?.doubleValue,
                 addressPointLon: (map["address_point_lon"] as? NSNumber)?.doubleValue,
-                addressPointSource: map["address_point_source"] as? String
+                addressPointSource: map["address_point_source"] as? String,
+                // LA FONTE della scheda (05/10/2026), per l'arbitrato fra luoghi
+                // vicini (Arbitrato.pesa). nearby_pois la restituisce come
+                // `source` = coalesce(enrichment_source, 'official'): lo stesso
+                // valore che il web riceve da get_geofence_pois. Con `select=*`
+                // (fetchPoiById) la riga porta invece la colonna grezza
+                // `enrichment_source`: si legge quella, per dare lo stesso
+                // significato nei due casi (nil = nessuna fonte = non pesa).
+                // Stessa regola di SupabaseClient.kt.
+                source: map.keys.contains("enrichment_source")
+                    ? (map["enrichment_source"] as? String)
+                    : (map["source"] as? String)
             )
         }
 
@@ -614,7 +625,8 @@ final class WipSupabaseClient {
         // ma costavano file, region, batch-teaser e notifiche di scoperta.
         let gemmeAttive = PoiCategories.areGemsActive(selected: uiCategories)
         return pois.filter { poi in
-            if poi.isGem { return gemmeAttive }
+            // (05/10/2026) gemme spente: decide la categoria della gemma (vedi PoiCategories.isActive).
+            if poi.isGem && gemmeAttive { return true }
             let cat = (poi.poiType ?? "").lowercased()
             return targetDbCategories.contains(cat) || uiCategories.contains(cat)
         }

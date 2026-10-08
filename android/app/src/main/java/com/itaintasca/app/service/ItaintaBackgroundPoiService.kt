@@ -19,6 +19,7 @@ import com.itaintasca.app.db.TriggerState
 import com.itaintasca.app.db.TriggerStateEntity
 import com.itaintasca.app.db.toPoiEntity
 import com.itaintasca.app.geofence.ActivityMonitor
+import com.itaintasca.app.geofence.Arbitrato
 import com.itaintasca.app.geofence.ArrivalWorker
 import com.itaintasca.app.geofence.BearingGate
 import com.itaintasca.app.geofence.CategoryMap
@@ -28,6 +29,7 @@ import com.itaintasca.app.geofence.GeofenceManager
 import com.itaintasca.app.geofence.NotificationStrings
 import com.itaintasca.app.geofence.PredictiveTrigger
 import com.itaintasca.app.geofence.RaggiFiducia
+import com.itaintasca.app.geofence.RoadGraph
 import com.itaintasca.app.geofence.RoadSnap
 import com.itaintasca.app.geofence.TriggerTelemetry
 import com.itaintasca.app.widget.WipWidgetProvider
@@ -286,6 +288,50 @@ class ItaintaBackgroundPoiService : Service() {
     // Guard: un solo giro di valutazione alla volta (i fix possono
     // sovrapporsi alle query su Room).
     private val predictiveBusy = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    // ── (05/10/2026) ARBITRATO fra i luoghi pronti (vedi runPredictiveEvaluation) ──
+    /** Un arrivo pronto a scattare, in attesa della scelta di fine giro. */
+    private class ArrivoPronto(
+        val poi: PoiEntity,
+        /** "arrivo" (cerchio attorno al punto d'arrivo) o "arrivo-muro" (30 m dal perimetro). */
+        val tipo: String,
+        /** I metri che ordinano l'arbitrato (strada, o muro se piu' vicino). */
+        val ordineM: Float,
+        /** Per il registro di collaudo: strada, linea d'aria, raggio. */
+        val stradaM: Float,
+        val ariaM: Double,
+        val raggioM: Float,
+        /** La distanza che va nell'evento `poiArrived`, come prima. */
+        val eventoM: Float,
+        /** Dentro il perimetro (0 m dal muro): non cede il passo a nessuno. */
+        val dentro: Boolean,
+        val pred: PredictiveTrigger.Result,
+        val raggioTelemetria: Float,
+        val extra: String = ""
+    )
+    // DA FERMI IL GPS PUO' TACERE (web 05/10/2026, collaudo a Firenze: fermo a
+    // 29 m dal Battistero, messo in attesa dal silenzio fra due guide, e poi
+    // muto per oltre due minuti). Chi aspetta il suo turno viene rivalutato da
+    // solo ogni 5 s sull'ULTIMO fix valutato, se nel frattempo non ne e'
+    // arrivato uno nuovo. Negli «ultimi metri» i fix arrivano anche da fermi
+    // (setMinUpdateDistanceMeters(0)): questa e' la rete di sicurezza, e la
+    // parita' con iOS dove il filtro di spostamento e' di 5 m.
+    private val manoArbitrato = Handler(Looper.getMainLooper())
+    @Volatile private var inAttesaArbitrato = false
+    @Volatile private var ultimaValLoc: Location? = null
+    @Volatile private var ultimaValGrezza: Location? = null
+    @Volatile private var ultimaValAt = 0L
+    private val battitoArbitrato = Runnable {
+        val loc = ultimaValLoc
+        if (inAttesaArbitrato && loc != null &&
+            System.currentTimeMillis() - ultimaValAt >= Arbitrato.BATTITO_ATTESA_MS - 500L
+        ) {
+            runPredictiveEvaluation(loc, ultimaValGrezza, daFermi = true)
+        }
+    }
+    // Registro di collaudo: una riga per attesa / per aggancio dubbio, non una per fix.
+    @Volatile private var ultimaAttesaAnnotata = ""
+    @Volatile private var ultimoAggancioDubbio = ""
 
     // (23/08/2026) Ultima lettura di getAllTriggerStates(), col suo istante.
     // Il valutatore predittivo la legge a ogni fix e la notifica di distanza
@@ -879,6 +925,8 @@ class ItaintaBackgroundPoiService : Service() {
         // Snap-to-path: ripristina il tile strade persistito (offline) e imposta
         // la cartella cache. Best-effort, mai bloccante per l'avvio.
         RoadSnap.cacheDir = filesDir
+        RegistroCollaudo.dir = filesDir
+        RegistroCollaudo.contesto = applicationContext
         RoadSnap.loadCached()
         // (21/09/2026, REVISIONE 2) SERVIZIO GIA' VIVO = MAI UN SECONDO
         // CALLBACK. Qui si arriva a ogni onStartCommand «completo» (sync delle
@@ -983,6 +1031,9 @@ class ItaintaBackgroundPoiService : Service() {
                         RoadSnap.refresh(location.latitude, location.longitude)
                     }
                 }
+                // (04/10/2026) Traccia della passeggiata nel registro di collaudo:
+                // solo con la modalita' collaudo accesa, una riga ogni 4 secondi.
+                RegistroCollaudo.posizione(location.latitude, location.longitude, location.accuracy)
                 val evalLoc = RoadSnap.snap(location.latitude, location.longitude, location.accuracy, guideMode == "driving")
                     ?.let { Location(location).apply { latitude = it.first; longitude = it.second } }
                     ?: location
@@ -991,7 +1042,9 @@ class ItaintaBackgroundPoiService : Service() {
                 // valuta il CPA a ogni fix, senza attendere che l'OS
                 // consegni la transizione ENTER. La valutazione usa la posizione
                 // snappata; il refresh area e la notifica usano il GPS grezzo.
-                runPredictiveEvaluation(evalLoc)
+                // (05/10/2026, ARBITRATO) Anche il fix NON agganciato: l'aggancio
+                // alla strada non e' creduto da solo (vedi runPredictiveEvaluation).
+                runPredictiveEvaluation(evalLoc, grezza = location)
                 checkRefreshGeofences(location)
                 updateDistanceNotification(location)
             }
@@ -1301,7 +1354,9 @@ class ItaintaBackgroundPoiService : Service() {
             // passa un valore oltre MAX_ACC_M cosi' il follower lo scarta.
             val acc = if (location.hasAccuracy()) location.accuracy.toDouble() else 9999.0
             val frase = NavFollower.onFix(
-                location.latitude, location.longitude, acc, SystemClock.elapsedRealtime()
+                location.latitude, location.longitude, acc, SystemClock.elapsedRealtime(),
+                // (03/10/2026) La velocità del GPS, se c'è: i tempi delle svolte la seguono.
+                if (location.hasSpeed()) location.speed.toDouble() else Double.NaN
             )
             if (!frase.isNullOrBlank()) {
                 Log.d(TAG, "NavFollower al comando (JS muto): \"$frase\"")
@@ -1428,7 +1483,7 @@ class ItaintaBackgroundPoiService : Service() {
      *      continuava a raccontare un monumento già alle spalle;
      *   3. REGOLA IL DUTY CYCLE in base a quanto è vicino il prossimo POI.
      */
-    private fun runPredictiveEvaluation(location: Location) {
+    private fun runPredictiveEvaluation(location: Location, grezza: Location? = null, daFermi: Boolean = false) {
         if (currentPois.isEmpty()) { disarmIfArmed(); return }
         // GATE ACCURATEZZA (fail-closed): senza un fix RECENTE e PRECISO ogni
         // trigger è sospetto. Indoor/seminterrato la posizione di RETE ha
@@ -1450,12 +1505,18 @@ class ItaintaBackgroundPoiService : Service() {
         // spegnerebbe anche l'armamento, cioè proprio il meccanismo che serve a
         // ottenere il fix preciso. Il filtro a 50 m sta più in basso, davanti
         // alle sole chiamate che fanno partire la voce.
-        val maxFixAgeMs = 2 * 60_000L
+        // (05/10/2026, ARBITRATO) `daFermi` = rivalutazione dell'ULTIMO fix
+        // perche' qualcuno aspetta il suo turno (vedi battitoArbitrato): come
+        // sul web vale finche' quel fix non ha piu' di 10 minuti.
+        val maxFixAgeMs = if (daFermi) Arbitrato.FERMI_MAX_ETA_MS else 2 * 60_000L
         if (!location.hasAccuracy() || location.accuracy <= 0f || location.accuracy > ACCURACY_NEARBY_M ||
             System.currentTimeMillis() - location.time > maxFixAgeMs) {
             disarmIfArmed()
             return
         }
+        ultimaValLoc = location
+        ultimaValGrezza = grezza
+        ultimaValAt = System.currentTimeMillis()
         // Fix abbastanza preciso per far PARLARE l'app. Se è false si continua a
         // valutare tutto (stati, superamenti, duty cycle): si tace e basta, e al
         // fix successivo — che nel frattempo la finestra armata sta rendendo più
@@ -1481,10 +1542,18 @@ class ItaintaBackgroundPoiService : Service() {
                 var shouldFine = false
                 // Anti-spam: in una piazza densa parla solo il primo.
                 var spokenInBatch = false
+                // (03/10/2026) Notifica unica di avvicinamento: nuovo fix, nuovo batch; e scadenza a 10 min.
+                GeofenceBroadcastReceiver.nuovoBatchAvvicinamenti()
+                GeofenceBroadcastReceiver.scadenzaAvvicinamento(this@ItaintaBackgroundPoiService)
                 // (AUD-04) Stessa regola per gli arrivi decisi qui: nello
                 // stesso fix una sola guida completa (pass consumato una
                 // volta); gli altri POI scrivono lo stato e notificano.
-                var arrivalSpokenInBatch = false
+                // (05/10/2026, ARBITRATO) Gli altri non scrivono piu' lo stato:
+                // chi e' pronto entra in `pronti`, in fondo al giro parla UNO
+                // e gli altri restano in attesa (vedi «ARBITRATO» piu' sotto).
+                val pronti = ArrayList<ArrivoPronto>()
+                // I luoghi che pesano e stanno arrivando entro 100 m di strada.
+                val importanti = HashSet<String>()
                 // (23/09/2026, REVISIONE 3, R-SOSTA) true se almeno UN POI
                 // che arma non e' ancora stato raccontato (stato diverso da
                 // ARRIVED_FIRED all'inizio di questo giro): allora la sosta
@@ -1523,10 +1592,13 @@ class ItaintaBackgroundPoiService : Service() {
                         distBuf
                     )
                     val dIngresso = distBuf[0]
-                    val dMuro = Footprints.distanzaDalPerimetro(
+                    // (03/10/2026) I 30 m dal muro valgono solo per i luoghi
+                    // senza porta (piazze, parchi, ponti, panorami): per gli
+                    // edifici conta il punto d'arrivo. Vedi Footprints.senzaPorta.
+                    val dMuro = if (Footprints.senzaPorta(poi.poiType, poi.nome)) Footprints.distanzaDalPerimetro(
                         poi.id, poi.footprint, location.latitude, location.longitude,
                         entro = Footprints.TRIGGER_CAR_M
-                    )
+                    ) else Double.POSITIVE_INFINITY
                     // La distanza che ordina e' la MINORE fra ingresso e
                     // bordo del perimetro: in un centro storico a 30 m dal
                     // muro di tre chiese vince quella di cui si sfiora il
@@ -1545,6 +1617,35 @@ class ItaintaBackgroundPoiService : Service() {
                 )
                 val candidates = if (candidati.size > MAX_PREDICTIVE_CANDIDATES)
                     candidati.subList(0, MAX_PREDICTIVE_CANDIDATES) else candidati
+
+                // (03/10/2026) Le distanze di strada da QUI, calcolate una
+                // volta per fix e poi lette per ogni candidato. null = utente
+                // fuori rete o tile non ancora scaricata (→ linea d'aria).
+                val sorgenteStrada: RoadGraph.Sorgente? = if (candidates.isEmpty()) null else try {
+                    RoadSnap.grafo(isDriving)?.da(
+                        location.latitude, location.longitude, RoadGraph.ricercaM(isDriving)
+                    )
+                } catch (e: Exception) { null }
+
+                // (05/10/2026, ARBITRATO) L'AGGANCIO ALLA STRADA NON E' CREDUTO DA
+                // SOLO (web 04/10/2026, test a Roma: Palazzo Doria-Pamphili
+                // scattato a 99 m di strada). Accanto a un incrocio l'aggancio
+                // puo' posare il telefono sulla via parallela, e da li' il luogo
+                // risulta «a 30 m». Se ha spostato il fix di piu' di 5 m si
+                // misura ANCHE dal punto non agganciato e per l'ARRIVO vale la
+                // distanza PIU' LUNGA delle due: la guida parte solo se
+                // entrambe la danno nel raggio. Davanti alla porta coincidono.
+                // Serve solo a confermare un arrivo: la ricerca sul grafo si
+                // ferma poco oltre il raggio d'arrivo (100 m a piedi, 150 in auto).
+                val sorgenteLibera: RoadGraph.Sorgente? =
+                    if (grezza == null || candidates.isEmpty()) null else try {
+                        Location.distanceBetween(
+                            grezza.latitude, grezza.longitude, location.latitude, location.longitude, distBuf
+                        )
+                        if (distBuf[0] > Arbitrato.SNAP_DUBBIO_M) RoadSnap.grafo(isDriving)?.da(
+                            grezza.latitude, grezza.longitude, Arbitrato.ricercaLiberaM(isDriving)
+                        ) else null
+                    } catch (e: Exception) { null }
 
                 for ((poi, _, distPerimetro) in candidates) {
                     // RAGGIO IN BASE ALLA FIDUCIA DEL PUNTO (23/08/2026):
@@ -1567,13 +1668,53 @@ class ItaintaBackgroundPoiService : Service() {
                     val stateEntity = stateMap[poi.id]
                     val state = stateEntity?.state ?: TriggerState.PENDING
                     val prevDist = lastDistances[poi.id]
-                    val distNow = pred.distanceNowMeters.toFloat()
+                    // (03/10/2026, «tutto in strada reale, mai linea d'aria»)
+                    // METRI DI STRADA fino al punto d'arrivo: dalla via
+                    // parallela o dal retro dell'isolato il luogo e' «a 20 m»
+                    // solo sulla carta. Linea d'aria solo dove una strada da
+                    // misurare non c'e' (fuori rete, tile assente): vedi
+                    // RoadGraph.cheDecide.
+                    val distNow = RoadGraph.cheDecide(
+                        pred.distanceNowMeters,
+                        try {
+                            sorgenteStrada?.verso(poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon)
+                        } catch (e: Exception) { null }
+                    ).toFloat()
 
                     // A 30 M DAL PERIMETRO (22/08/2026): la misura che governa
                     // la guida quando il POI ha il poligono. 0 = dentro.
                     // (23/08/2026) Arriva dal candidato: e' esattamente la
                     // stessa chiamata che si faceva qui, fatta una volta sola.
                     val alPerimetro = distPerimetro <= sogliaPerimetro
+
+                    // (05/10/2026, ARBITRATO) La distanza che decide l'ARRIVO:
+                    // la piu' lunga fra quella dal fix agganciato e quella dal
+                    // fix libero (vedi sorgenteLibera). Solo per l'arrivo: stati,
+                    // superamento e duty cycle continuano a leggere `distNow`.
+                    var distArrivo = distNow
+                    if (sorgenteLibera != null && grezza != null && distNow <= arrivoPoi) {
+                        val pLat = poi.entranceLat ?: poi.lat
+                        val pLon = poi.entranceLon ?: poi.lon
+                        Location.distanceBetween(grezza.latitude, grezza.longitude, pLat, pLon, distBuf)
+                        val libera = RoadGraph.cheDecide(
+                            distBuf[0].toDouble(),
+                            try { sorgenteLibera.verso(pLat, pLon) } catch (e: Exception) { null }
+                        ).toFloat()
+                        if (libera > distArrivo) distArrivo = libera
+                    }
+
+                    // (05/10/2026, ARBITRATO) UN LUOGO CHE PESA STA ARRIVANDO: non
+                    // ancora nel raggio, in avvicinamento, entro 100 m di strada
+                    // e libero di parlare. Chi non pesa gli cedera' il passo.
+                    val etaStatoArb = stateEntity?.let { System.currentTimeMillis() - it.updatedAt } ?: Long.MAX_VALUE
+                    if (!alPerimetro && distNow > arrivoPoi && distNow <= Arbitrato.ATTESA_IMPORTANTE_M &&
+                        prevDist != null && distNow < prevDist - Arbitrato.AVVICINA_EPS_M &&
+                        state != TriggerState.PASSED && state != TriggerState.ARRIVED_FIRED &&
+                        !(state == TriggerState.EXITED && etaStatoArb < GeofenceBroadcastReceiver.ARRIVAL_AFTER_EXIT_COOLDOWN_MS) &&
+                        Arbitrato.pesa(poi)
+                    ) {
+                        importanti.add(poi.id)
+                    }
 
                     // Finestra di attenzione: se un POI è a meno di 90 s, si alza il rate.
                     if (!pred.tCpaSeconds.isNaN() && pred.tCpaSeconds > 0 && pred.tCpaSeconds <= ARM_WINDOW_S) {
@@ -1631,16 +1772,17 @@ class ItaintaBackgroundPoiService : Service() {
                             lastDistances[poi.id] = distNow
                             continue
                         }
-                        // (23/09/2026, R-BUSSOLA) Il gate ha deciso per questo
-                        // candidato: la bussola si spegne subito (si riaccende
-                        // alla prossima richiesta, o prima se resta un altro
-                        // candidato in attesa — vedi in fondo al giro).
-                        BearingGate.decisa()
-                        val fired = GeofenceBroadcastReceiver.firePerimeterArrival(
-                            this@ItaintaBackgroundPoiService, poi, isAutomaticMode, db,
-                            distanceM = distPerimetro.toFloat(), fullGuide = !arrivalSpokenInBatch
-                        )
-                        if (fired) arrivalSpokenInBatch = true
+                        // (05/10/2026, ARBITRATO) Pronto: non scatta qui, entra
+                        // in lista e si decide in fondo al giro (uno solo).
+                        // Bussola, registro e arrivo sono la' col vincitore.
+                        pronti.add(ArrivoPronto(
+                            poi = poi, tipo = "arrivo-muro",
+                            ordineM = minOf(distNow, distPerimetro.toFloat()),
+                            stradaM = distNow, ariaM = pred.distanceNowMeters,
+                            raggioM = sogliaPerimetro.toFloat(), eventoM = distPerimetro.toFloat(),
+                            dentro = distPerimetro <= 0.0, pred = pred, raggioTelemetria = arrivoPoi,
+                            extra = "muro=${distPerimetro.toInt()}"
+                        ))
                         lastDistances[poi.id] = distNow
                         continue
                     }
@@ -1664,8 +1806,27 @@ class ItaintaBackgroundPoiService : Service() {
                         state == TriggerState.ARRIVED_FIRED ||
                             (state == TriggerState.PASSED && distNow > arrivoPoi) ||
                             (state == TriggerState.EXITED && ageStato < GeofenceBroadcastReceiver.ARRIVAL_AFTER_EXIT_COOLDOWN_MS)
-                    if (poi.footprint.isNullOrBlank() && fixDaTrigger &&
-                        distNow <= arrivoPoi && !arrivoRadialeBloccato
+                    // (03/10/2026) Anche gli edifici COL perimetro arrivano da
+                    // qui: per loro la regola del muro non vale piu'.
+                    // (05/10/2026, ARBITRATO) `distArrivo`, non `distNow`: se
+                    // l'aggancio alla strada ha spostato il fix, l'arrivo deve
+                    // risultare anche dal punto non agganciato.
+                    if (!alPerimetro && distNow <= arrivoPoi && distArrivo > arrivoPoi) {
+                        // L'aggancio dava l'arrivo, il punto libero no: non si
+                        // arriva. Nessuno stato, nessun cooldown, nemmeno
+                        // l'avviso (come su iOS, dove dentro il raggio d'arrivo
+                        // l'avviso non si valuta): si riprova al fix dopo. Nel
+                        // registro di collaudo una volta per luogo.
+                        if (fixDaTrigger && ultimoAggancioDubbio != poi.id) {
+                            ultimoAggancioDubbio = poi.id
+                            annotaGuida("aggancio-dubbio", poi, distNow, pred.distanceNowMeters, arrivoPoi, location)
+                        }
+                        if (!poi.isFromItinerary && state != TriggerState.ARRIVED_FIRED) bussolaServe = true
+                        lastDistances[poi.id] = distNow
+                        continue
+                    }
+                    if ((poi.footprint.isNullOrBlank() || !Footprints.senzaPorta(poi.poiType, poi.nome)) && fixDaTrigger &&
+                        distArrivo <= arrivoPoi && !arrivoRadialeBloccato
                     ) {
                         val gate = if (poi.isFromItinerary) BearingGate.Esito.IGNORA_GATE
                             else BearingGate.valuta(
@@ -1679,17 +1840,14 @@ class ItaintaBackgroundPoiService : Service() {
                             lastDistances[poi.id] = distNow
                             continue
                         }
-                        // (23/09/2026, R-BUSSOLA) Deciso: bussola spenta subito.
-                        BearingGate.decisa()
-                        TriggerTelemetry.log(
-                            this@ItaintaBackgroundPoiService, poi.id, poi.nome,
-                            "arrival-radial", pred, location, isDriving, arrivoPoi
-                        )
-                        val fired = GeofenceBroadcastReceiver.firePerimeterArrival(
-                            this@ItaintaBackgroundPoiService, poi, isAutomaticMode, db,
-                            distanceM = distNow, fullGuide = !arrivalSpokenInBatch
-                        )
-                        if (fired) arrivalSpokenInBatch = true
+                        // (05/10/2026, ARBITRATO) Pronto: in lista, si decide in
+                        // fondo al giro. Bussola, telemetria e registro la'.
+                        pronti.add(ArrivoPronto(
+                            poi = poi, tipo = "arrivo",
+                            ordineM = distArrivo, stradaM = distArrivo, ariaM = pred.distanceNowMeters,
+                            raggioM = arrivoPoi, eventoM = distNow,
+                            dentro = false, pred = pred, raggioTelemetria = arrivoPoi
+                        ))
                         lastDistances[poi.id] = distNow
                         continue
                     }
@@ -1723,11 +1881,13 @@ class ItaintaBackgroundPoiService : Service() {
                             // massimo un fix (1-2 s nella finestra armata),
                             // perché l'approach nasce comunque con ~90 s di
                             // anticipo sul punto di massimo avvicinamento.
-                            if (fixDaTrigger && pred.decision == PredictiveTrigger.Decision.FIRE) {
+                            // `distNow <= alertPoi`: l'avviso scatta a 150/300 m DI STRADA.
+                            if (fixDaTrigger && pred.decision == PredictiveTrigger.Decision.FIRE && distNow <= alertPoi) {
                                 TriggerTelemetry.log(
                                     this@ItaintaBackgroundPoiService, poi.id, poi.nome,
                                     "approach-predictive", pred, location, isDriving, alertPoi
                                 )
+                                annotaGuida("avviso", poi, distNow, pred.distanceNowMeters, alertPoi, location)
                                 GeofenceBroadcastReceiver.firePredictedApproach(
                                     this@ItaintaBackgroundPoiService, poi.id, poi.nome,
                                     poi.guideDefault, poi.isGem, poi.isFromItinerary, db,
@@ -1745,11 +1905,12 @@ class ItaintaBackgroundPoiService : Service() {
                             // Stesso gate a 50 m del ramo PENDING: qui il rinvio
                             // è ancora più innocuo, il cooldown è già passato.
                             if (exitedAge > GeofenceBroadcastReceiver.APPROACH_RETRIGGER_COOLDOWN_MS &&
-                                fixDaTrigger && pred.decision == PredictiveTrigger.Decision.FIRE) {
+                                fixDaTrigger && pred.decision == PredictiveTrigger.Decision.FIRE && distNow <= alertPoi) {
                                 TriggerTelemetry.log(
                                     this@ItaintaBackgroundPoiService, poi.id, poi.nome,
                                     "approach-predictive", pred, location, isDriving, alertPoi
                                 )
+                                annotaGuida("avviso", poi, distNow, pred.distanceNowMeters, alertPoi, location)
                                 GeofenceBroadcastReceiver.firePredictedApproach(
                                     this@ItaintaBackgroundPoiService, poi.id, poi.nome,
                                     poi.guideDefault, poi.isGem, poi.isFromItinerary, db,
@@ -1768,6 +1929,81 @@ class ItaintaBackgroundPoiService : Service() {
                     if (!poi.isFromItinerary && state != TriggerState.ARRIVED_FIRED) bussolaServe = true
 
                     lastDistances[poi.id] = distNow
+                }
+
+                // ── ARBITRATO: QUALE LUOGO PARLA (05/10/2026) ───────────────
+                // Port delle regole del motore web del 04–05/10/2026
+                // (foregroundTriggers.ts), identiche in BackgroundPoiManager
+                // .swift. Fin qui chi era pronto scattava nell'ordine dei
+                // candidati: il primo con la guida, gli altri con stato scritto
+                // e sola notifica (muti per 24 ore), e la coda li metteva in
+                // fila dietro la guida in corso. Ora:
+                //  1. MAI SOPRA UNA GUIDA: se una voce parla, sta per partire o
+                //     e' finita da meno di 20 s, nessuno scatta;
+                //  2. vince il piu' vicino in metri di strada, dove una gemma
+                //     vale 50 m e una fonte Wikipedia/Wikidata 25 (le tappe di
+                //     un giro restano davanti a tutti: le ha scelte l'utente);
+                //  3. un vincitore che non pesa cede il passo se un luogo che
+                //     pesa sta arrivando entro 100 m di strada;
+                //  4. parla UNO per giro. Gli altri — e chiunque sia stato
+                //     fermato qui — NON scrivono stato ne' cooldown: sono
+                //     ancora nel raggio, restano in attesa e si riprovano a
+                //     ogni fix (da fermi ci pensa battitoArbitrato). Uscendo
+                //     dal raggio non sono piu' fra i pronti: l'attesa cade.
+                // Doppioni e «stesso nome appena raccontato» stanno in
+                // GeofenceBroadcastReceiver.handleArrival, unico punto da cui
+                // passano sia questo giro sia i recinti di sistema.
+                Arbitrato.pubblicaImportanti(importanti)
+                // (08/10/2026) TARGHE E LAPIDI IN SILENZIO SE C'E' UN MONUMENTO
+                // VICINO: escono dai pronti senza scrivere stato ne' cooldown.
+                val targheMute = Arbitrato.targheConMonumentoVicino(candidati.map { it.first })
+                Arbitrato.pubblicaTargheMute(targheMute)
+                if (targheMute.isNotEmpty()) pronti.removeAll { it.poi.id in targheMute && !it.poi.isFromItinerary }
+                var qualcunoAspetta = false
+                val vincitore = pronti.minWithOrNull(
+                    compareByDescending<ArrivoPronto> { it.poi.isFromItinerary }
+                        .thenBy { Arbitrato.punteggio(it.poi, it.ordineM) }
+                )
+                if (vincitore != null) {
+                    val motivo = GeofenceBroadcastReceiver.motivoAttesaVoce(this@ItaintaBackgroundPoiService)
+                    val cede = motivo == null && !Arbitrato.pesa(vincitore.poi) && !vincitore.dentro &&
+                        !vincitore.poi.isFromItinerary && importanti.any { it != vincitore.poi.id }
+                    if (motivo != null || cede) {
+                        qualcunoAspetta = true
+                        val perche = motivo ?: "cede il passo a un luogo che pesa"
+                        Log.d(TAG, "Arrivo in attesa per ${vincitore.poi.nome}: $perche")
+                        // Nel registro una riga sola per attesa, non una per fix.
+                        val chiave = "${vincitore.poi.id}|$perche"
+                        if (chiave != ultimaAttesaAnnotata) {
+                            ultimaAttesaAnnotata = chiave
+                            annotaGuida("attesa", vincitore.poi, vincitore.stradaM, vincitore.ariaM, vincitore.raggioM, location, "motivo=\"$perche\"")
+                        }
+                    } else {
+                        ultimaAttesaAnnotata = ""
+                        // (23/09/2026, R-BUSSOLA) Il gate ha deciso per questo
+                        // candidato: la bussola si spegne subito (si riaccende
+                        // qui sotto se resta un altro candidato in attesa).
+                        BearingGate.decisa()
+                        if (vincitore.tipo == "arrivo") {
+                            TriggerTelemetry.log(
+                                this@ItaintaBackgroundPoiService, vincitore.poi.id, vincitore.poi.nome,
+                                "arrival-radial", vincitore.pred, location, isDriving, vincitore.raggioTelemetria
+                            )
+                        }
+                        annotaGuida(vincitore.tipo, vincitore.poi, vincitore.stradaM, vincitore.ariaM, vincitore.raggioM, location, vincitore.extra)
+                        GeofenceBroadcastReceiver.firePerimeterArrival(
+                            this@ItaintaBackgroundPoiService, vincitore.poi, isAutomaticMode, db,
+                            distanceM = vincitore.eventoM, fullGuide = true
+                        )
+                        if (pronti.size > 1) qualcunoAspetta = true
+                    }
+                    // Chi aspetta puo' chiedere ancora la bussola ai prossimi fix.
+                    if (qualcunoAspetta) bussolaServe = true
+                }
+                inAttesaArbitrato = qualcunoAspetta
+                if (qualcunoAspetta) {
+                    manoArbitrato.removeCallbacks(battitoArbitrato)
+                    manoArbitrato.postDelayed(battitoArbitrato, Arbitrato.BATTITO_ATTESA_MS)
                 }
 
                 // (23/09/2026, R-BUSSOLA) Accesa solo se era gia' stata chiesta
@@ -1832,6 +2068,8 @@ class ItaintaBackgroundPoiService : Service() {
         // Silenzio chirurgico: si spegne solo la voce di QUESTO POI —
         // superare A mentre suona la guida di B non deve uccidere B.
         GeofenceBroadcastReceiver.stopSpeakingForPoi(this, poi.id)
+        // (03/10/2026, regola 2) Superato: la riga «ti stai avvicinando» non vale più.
+        GeofenceBroadcastReceiver.cancellaNotificaAvvicinamento(this, poi.id)
 
         val intent = Intent("com.itaintasca.POI_EVENT")
         // (22/08/2026) Broadcast implicito senza setPackage: id e nome del POI
@@ -1850,6 +2088,30 @@ class ItaintaBackgroundPoiService : Service() {
      * la copia unica CategoryMap.MAP: una seconda copia della mappa qui si
      * sarebbe disallineata al primo cambio di categorie nella UI.
      */
+    /**
+     * (04/10/2026) Una riga nel registro di collaudo per ogni avviso o arrivo
+     * dell'audioguida: a quanti metri DI STRADA e in linea d'aria e' scattato,
+     * con quale raggio, con che precisione del GPS e dove si era. E' il dato
+     * che serve a verificare camminando i 30/50 e i 150/300 m.
+     * Formato: GUIDA <tipo> "<nome>" id=… strada=… aria=… raggio=… acc=… lat,lon [extra]
+     */
+    private fun annotaGuida(
+        tipo: String, poi: PoiEntity, stradaM: Float, ariaM: Double, raggioM: Float,
+        location: Location, extra: String = ""
+    ) {
+        try {
+            val strada = if (stradaM.isInfinite() || stradaM.isNaN()) "inf" else stradaM.toInt().toString()
+            val acc = if (location.hasAccuracy()) location.accuracy.toInt().toString() else "-"
+            RegistroCollaudo.scrivi(
+                "GUIDA $tipo \"${poi.nome}\" id=${poi.id} strada=$strada aria=${ariaM.toInt()} raggio=${raggioM.toInt()} acc=$acc " +
+                    String.format(java.util.Locale.US, "%.5f,%.5f", location.latitude, location.longitude) +
+                    // le coordinate del punto d'arrivo da cui si misura
+                    String.format(java.util.Locale.US, " punto=%.5f,%.5f", poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon) +
+                    (if (extra.isNotEmpty()) " $extra" else "")
+            )
+        } catch (_: Exception) { /* il registro non deve mai fermare un trigger */ }
+    }
+
     private fun isPoiCategorySelected(poi: PoiEntity): Boolean =
         GeofenceBroadcastReceiver.isCategoryActive(poi, selectedCategories)
 
@@ -2851,11 +3113,16 @@ class ItaintaBackgroundPoiService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        // (03/10/2026) Servizio spento: nessun «ti stai avvicinando» resta appeso.
+        try { GeofenceBroadcastReceiver.cancellaNotificaAvvicinamento(this, null) } catch (_: Exception) { }
         // Pulizia rigorosa per evitare memory leaks
         onVoiceStateChanged = null
         onNavRouteChanged = null
         onPaginaNuova = null
         ActivityMonitor.onMovimento = null
+        // (05/10/2026) Servizio spento: nessuno aspetta piu' il suo turno.
+        inAttesaArbitrato = false
+        manoArbitrato.removeCallbacks(battitoArbitrato)
         serviceScope.cancel()
         locationCallback?.let {
             try {

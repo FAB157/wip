@@ -1423,6 +1423,60 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         call.resolve()
     }
 
+    /**
+     * (03/10/2026) REGISTRO DI COLLAUDO del navigatore: una riga per fix col
+     * percorso attivo (posizione, precisione, passo, metri in linea d'aria e lungo
+     * la strada, aggancio, velocità, chi è al comando, frase detta). Lo scarica il
+     * pannello admin dopo un giro di prova. In memoria: si perde alla morte del processo.
+     */
+    @PluginMethod
+    fun getNavLog(call: PluginCall) {
+        // (04/10/2026) Il registro sta su disco (RegistroCollaudo): si legge anche
+        // se il servizio non e' partito in questa sessione.
+        if (com.itaintasca.app.service.RegistroCollaudo.dir == null) {
+            com.itaintasca.app.service.RegistroCollaudo.dir = context.filesDir
+        }
+        val righe = JSArray()
+        com.itaintasca.app.service.RegistroCollaudo.tutte().forEach { righe.put(it) }
+        val ret = JSObject()
+        ret.put("righe", righe)
+        call.resolve(ret)
+    }
+
+    /**
+     * (04/10/2026) Modalita' collaudo: accesa, il registro tiene anche la
+     * traccia della passeggiata (una posizione ogni 4 secondi). Senza `attivo`
+     * risponde soltanto lo stato.
+     */
+    @PluginMethod
+    fun setCollaudo(call: PluginCall) {
+        val reg = com.itaintasca.app.service.RegistroCollaudo
+        if (reg.dir == null) reg.dir = context.filesDir
+        call.getBoolean("attivo")?.let { reg.imposta(it) }
+        val ret = JSObject()
+        ret.put("attivo", reg.attivo())
+        call.resolve(ret)
+    }
+
+    /** (04/10/2026) Il segno di chi collauda: «qui ha sbagliato», con una nota e la posizione. */
+    @PluginMethod
+    fun addNavLogNote(call: PluginCall) {
+        val reg = com.itaintasca.app.service.RegistroCollaudo
+        if (reg.dir == null) reg.dir = context.filesDir
+        reg.segno(call.getString("text") ?: "", call.getDouble("lat"), call.getDouble("lon"))
+        call.resolve()
+    }
+
+    /** (04/10/2026) Svuota il registro di collaudo (dopo un invio riuscito, o a mano). */
+    @PluginMethod
+    fun clearNavLog(call: PluginCall) {
+        if (com.itaintasca.app.service.RegistroCollaudo.dir == null) {
+            com.itaintasca.app.service.RegistroCollaudo.dir = context.filesDir
+        }
+        com.itaintasca.app.service.RegistroCollaudo.svuota()
+        call.resolve()
+    }
+
     @PluginMethod
     fun getNavProgress(call: PluginCall) {
         val p = NavFollower.progress(android.os.SystemClock.elapsedRealtime())
@@ -1474,6 +1528,47 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
             val ret = JSObject()
             ret.put("ok", true)
             ret.put("accodati", n)
+            call.resolve(ret)
+        } catch (e: Exception) {
+            val ret = JSObject()
+            ret.put("ok", false)
+            call.resolve(ret)
+        }
+    }
+
+    /**
+     * (03/10/2026, committente: «le tiles devono essere scaricate quando si
+     * crea un percorso, con o senza audioguida, e nelle funzioni offline»)
+     * PRE-SCARICO DELLE STRADE lungo un percorso, nella cache del servizio
+     * nativo: a schermo spento e senza rete le distanze di strada e l'aggancio
+     * alla via devono avere i loro dati. `points` = [[lat, lon], ...] lungo il
+     * tracciato. Risponde subito: lo scarico è in background, mai un reject.
+     * Vedi RoadSnap.prescarica.
+     */
+    @PluginMethod
+    fun prefetchRoads(call: PluginCall) {
+        try {
+            val arr = call.getArray("points")
+            val punti = ArrayList<DoubleArray>()
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val p = arr.optJSONArray(i) ?: continue
+                    val la = p.optDouble(0); val lo = p.optDouble(1)
+                    if (!la.isNaN() && !lo.isNaN()) punti.add(doubleArrayOf(la, lo))
+                }
+            }
+            val raggio = if (call.getBoolean("car", false) == true) 1500 else 700
+            if (com.itaintasca.app.geofence.RoadSnap.cacheDir == null) {
+                com.itaintasca.app.geofence.RoadSnap.cacheDir = context.filesDir
+            }
+            if (punti.isNotEmpty()) {
+                Thread {
+                    try { com.itaintasca.app.geofence.RoadSnap.prescarica(punti, raggio) } catch (_: Exception) { }
+                }.start()
+            }
+            val ret = JSObject()
+            ret.put("ok", true)
+            ret.put("punti", punti.size)
             call.resolve(ret)
         } catch (e: Exception) {
             val ret = JSObject()

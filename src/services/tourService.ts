@@ -32,12 +32,15 @@ import {
   type TappaGiro, type StatoCorrente, type StatoGiro, type LivelloIngresso,
 } from '../lib/tour/tourState';
 import { decidi, CodaVoci, VOLUME_ABBASSATO } from '../lib/tour/audioDirector';
-import { istruzionePerStep, getEvitaScale } from './osrmService';
+import { istruzionePerStep, getEvitaScale, accorpaPassiGrezzi } from './osrmService';
 import { prescaricaGuideNativo } from '../plugins/ItaintaBackgroundPoi';
 import { poiLungoIlCorridoio, type PoiLungoStrada } from '../lib/tour/corridoio';
 import { getOrCreateAudioguideText } from './audioguideService';
 import { azureVoiceName } from './ttsService';
 import { locationService } from './locationService';
+import { Aggancio, sogliaVicina, sogliaLontanaMax } from '../lib/nav/aggancio';
+import { distanzaCheDecide } from '../lib/geofencing/distanzaStrada';
+import { prescaricaStrade } from '../lib/roadSnap';
 
 /** Il tetto delle tappe: decisione di prodotto, non tecnica. */
 export const MAX_TAPPE = 10;
@@ -58,6 +61,8 @@ const CAMMINO_STIMATO_S = 450 / 1.35;
 const RAGGIO_SOSTITUTA_M = 250;
 /** Una proposta di sostituzione non resta in piedi per sempre. */
 const PROPOSTA_VALIDA_MS = 120_000;
+/** Nomi di una parola che non dicono niente di un luogo: non valgono un «Sulla tua strada» (06/10/2026). */
+const NOME_INCONTRO_GENERICO = /^(immeuble|maison|hotel|hotel particulier|eglise|chapelle|villa|palais|casa|palazzo|edificio|building|house|church|chapel|tower|torre|fontaine|fontana|fountain|monument|monumento|statue|statua|pont|ponte|bridge|porte|porta|gate|place|piazza|square|parc|parco|park|jardin|giardino|garden|rue|via|street|lione|lyon|citta|city)$/;
 
 /**
  * Dove si chiude l'anello: al punto di partenza ORIGINALE (predefinito) o a
@@ -520,6 +525,26 @@ class TourService {
   private lingua = 'it';
   private passoCorrente = 0;
   private tappaDelPasso = -1;
+  // (03/10/2026) Aggancio al tracciato: vedi aggiornaPasso e lib/nav/aggancio.
+  private aggancio: Aggancio | null = null;
+  private aggancioLinea: unknown = null;
+  private alongPassi: (number | null)[] | null = null;
+  /** Metri di strada fino alla tappa corrente (null = non agganciati al tracciato). */
+  private metriStradaAllaTappa: number | null = null;
+  private navSuStrada = false;
+  private velocitaGps: number | null = null;
+
+  /**
+   * (03/10/2026) Quando dire «gira adesso»: sulla strada, a 12 secondi dalla
+   * svolta alla velocità di chi cammina (18-35 m); senza aggancio i 35 m di prima.
+   */
+  sogliaSvoltaVicina(): number {
+    return this.navSuStrada && this.aggancio ? sogliaVicina(this.aggancio.velocita) : 35;
+  }
+  /** Il preavviso «fra N metri» sulla strada: entro 70 secondi (70-150 m). null = regola di prima. */
+  sogliaSvoltaLontana(): number | null {
+    return this.navSuStrada && this.aggancio ? sogliaLontanaMax(this.aggancio.velocita) : null;
+  }
   private navAttuale: { istruzione: string | null; metri: number | null; attraversamento: boolean; manovra: { type: string; modifier: string } | null } = { istruzione: null, metri: null, attraversamento: false, manovra: null };
   private ultimoRicalcoloDeviazione = 0;
   private posizioneCache: { p: { lat: number; lon: number }; ts: number } | null = null;
@@ -1098,6 +1123,13 @@ class TourService {
     giro.minutiAscolto = d.ascolto_min;
 
     this.giro = giro;
+    this.nomiIncontrati.clear();
+    // (03/10/2026, committente: «le tiles devono essere scaricate quando si
+    // crea un percorso, con o senza audioguida») Le strade lungo il tracciato,
+    // subito e per intero: nel centro storico la rete manca proprio dove
+    // servono le distanze di strada. Vale per il giro e per il percorso su
+    // misura; in background, senza bloccare nulla; anche nella cache nativa.
+    void prescaricaStrade(giro.geometria as number[][]);
     this.ultimoIndiceSnap = 0;
     this.proposta = null;
     this.pausaManuale = false;
@@ -1303,6 +1335,13 @@ class TourService {
     }
     const dati = await r.json();
     if (!dati?.wip_giro) throw new Error('giro non calcolabile: risposta senza wip_giro');
+    // SVOLTE A RAFFICA (04/10/2026, percorso di prova a Milano: tre-quattro frasi in
+    // 10-15 secondi su tratti di pochi metri). Le svolte a meno di 15 m l'una
+    // dall'altra si fondono QUI, appena arrivano dal server, prima che chiunque le
+    // legga: voce, cartello e passi per il follower nativo usano lo stesso elenco.
+    try {
+      for (const leg of (dati.routes?.[0]?.legs || [])) if (Array.isArray(leg?.steps)) accorpaPassiGrezzi(leg.steps, this.lingua);
+    } catch { /* un passo strano non ferma il giro */ }
     return { g: dati.wip_giro, dati };
   }
 
@@ -1407,6 +1446,8 @@ class TourService {
   /** Un campione di posizione: fa avanzare la macchina a stati. */
   aggiorna(pos: { lat: number; lon: number; velocita?: number; accuratezza?: number }, extra?: { guidaInCorso?: boolean; pausaManuale?: boolean; suAttraversamento?: boolean; metriAllaSvolta?: number | null }) {
     this.ultimaPosizione = { lat: pos.lat, lon: pos.lon };
+    // (03/10/2026) La velocità del GPS (Doppler), se il fix la porta: serve ai tempi delle svolte.
+    this.velocitaGps = Number.isFinite(pos.velocita as number) && (pos.velocita as number) >= 0 ? (pos.velocita as number) : null;
     // Guida spenta: la posizione si ricorda (serve alla ripresa) ma la
     // macchina a stati sta ferma — niente arrivi, niente voce, niente ricalcoli.
     // eSospeso(), non sospeso: il percorso su misura cammina a cuffie spente.
@@ -1446,7 +1487,26 @@ class TourService {
     }
 
     const p = tappa.ingresso ?? { lat: tappa.lat, lon: tappa.lon };
-    const distanza = metri(pos, p);
+    // (03/10/2026, «tutto in strada reale, mai linea d'aria») La distanza
+    // dalla tappa è quella LUNGO IL TRACCIATO: i metri che mancano alla fine
+    // della tratta più gli ultimi metri dalla strada alla porta. Per questo il
+    // passo si aggiorna PRIMA della transizione di stato (prima veniva dopo).
+    // Fuori strada o senza tracciato resta la distanza diretta; entro 15 m dal
+    // punto si è arrivati comunque (distanzaCheDecide).
+    this.aggiornaPasso(pos);
+    const aria = metri(pos, p);
+    let distanza = distanzaCheDecide(
+      aria,
+      this.navSuStrada && this.metriStradaAllaTappa != null ? this.metriStradaAllaTappa + this.codaTappa(p) : null,
+    );
+    // IN FONDO ALLA TRATTA SI È ARRIVATI (05/10/2026, collaudo a Firenze: Palazzo
+    // Vecchio ha la porta a 36 m dalla fine della strada, il raggio dell'utente è
+    // 30 — la voce diceva «Sei arrivato» e il giro restava alla tappa 1 per tutto
+    // il percorso). Più vicino di così la strada non porta: la coda non può
+    // tenere fuori dal raggio chi è già dove il navigatore lo ha condotto.
+    if (this.navSuStrada && this.metriStradaAllaTappa != null && this.metriStradaAllaTappa <= 10) {
+      distanza = Math.min(distanza, this.metriStradaAllaTappa);
+    }
     const scostamento = this.scostamentoDalPercorso(pos);
 
     this.stato = prossimoStato(this.stato, tappa, {
@@ -1459,7 +1519,6 @@ class TourService {
       adesso: Date.now(),
     });
     if (this.stato.stato === 'ALL_INGRESSO') this.ultimaTappaArrivata = tappa;
-    this.aggiornaPasso(pos);
     this.salva();
     this.avvisa();
   }
@@ -1710,26 +1769,92 @@ class TourService {
     return p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon)) ? { lat: Number(p.lat), lon: Number(p.lon) } : null;
   }
 
+  /**
+   * Gli «ultimi metri»: dalla fine della tratta (il punto sulla strada dove il
+   * percorso si ferma) alla porta della tappa. Il motore di percorso arriva
+   * alla via, non alla porta.
+   */
+  private codaTappa(porta: { lat: number; lon: number }): number {
+    const leg: any = this.giro?.tratte?.[this.stato.tappaCorrente];
+    const steps: any[] = Array.isArray(leg?.steps) ? leg.steps : [];
+    const l = steps[steps.length - 1]?.maneuver?.location;
+    if (!Array.isArray(l) || l.length < 2) return 0;
+    const d = metri({ lat: Number(l[1]), lon: Number(l[0]) }, porta);
+    return Number.isFinite(d) ? d : 0;
+  }
+
   private aggiornaPasso(pos: { lat: number; lon: number }) {
     const leg: any = this.giro?.tratte?.[this.stato.tappaCorrente];
     const steps: any[] = Array.isArray(leg?.steps) ? leg.steps : [];
-    if (this.tappaDelPasso !== this.stato.tappaCorrente) { this.tappaDelPasso = this.stato.tappaCorrente; this.passoCorrente = 0; }
-    if (steps.length < 2) { this.navAttuale = { istruzione: null, metri: null, attraversamento: false, manovra: null }; return; }
+    if (this.tappaDelPasso !== this.stato.tappaCorrente) { this.tappaDelPasso = this.stato.tappaCorrente; this.passoCorrente = 0; this.alongPassi = null; }
+    if (steps.length < 2) { this.navAttuale = { istruzione: null, metri: null, attraversamento: false, manovra: null }; this.navSuStrada = false; this.metriStradaAllaTappa = null; return; }
     const punto = (s: any) => {
       const l = s?.maneuver?.location;
       return Array.isArray(l) && l.length >= 2 ? { lat: Number(l[1]), lon: Number(l[0]) } : null;
     };
+
+    // AGGANCIO AL TRACCIATO (03/10/2026, collaudo: «non andava bene, né come svolte
+    // né come matching map»). Fino a oggi qui si misurava in LINEA D'ARIA dal punto
+    // della manovra: dietro una curva i metri erano sbagliati e la svolta veniva
+    // detta presto o tardi. Ora la posizione si proietta sul tracciato del giro
+    // (lib/nav/aggancio, stesso algoritmo del follower nativo) e i metri sono
+    // quelli LUNGO LA STRADA. Senza aggancio (tracciato assente, o si è fuori
+    // strada) resta la regola di prima, a linea d'aria.
+    const linea = (this.giro?.geometria || []) as [number, number][];
+    if (this.aggancioLinea !== linea) {
+      this.aggancioLinea = linea;
+      this.aggancio = linea.length >= 2 ? new Aggancio(linea) : null;
+      this.alongPassi = null;
+    }
+    const tratte: any[] = Array.isArray(this.giro?.tratte) ? this.giro!.tratte : [];
+    // Da dove comincia questa tratta lungo il tracciato: la somma delle precedenti.
+    let inizioTratta = 0;
+    for (let k = 0; k < this.stato.tappaCorrente && k < tratte.length; k++) inizioTratta += Number(tratte[k]?.distance) || 0;
+    if (this.aggancio && !this.alongPassi) {
+      // I metri progressivi di OGNI manovra, in ordine: la prima corrispondenza
+      // dopo la manovra precedente (mai la più vicina: su un anello o su
+      // un'andata e ritorno lo stesso punto compare due volte).
+      let prec = Math.max(0, inizioTratta - 30);
+      this.alongPassi = steps.map((s) => {
+        const p = punto(s);
+        const a = p ? this.aggancio!.primaCorrispondenza(p.lat, p.lon, prec, 30) : null;
+        if (a != null) prec = a;
+        return a;
+      });
+    }
+    const along = this.alongPassi || [];
+    const acc = Number((pos as any).accuratezza);
+    const aCorrente = along[Math.max(this.passoCorrente, 0)];
+    const u = this.aggancio
+      ? this.aggancio.aggiorna(pos.lat, pos.lon, Number.isFinite(acc) ? acc : undefined, Date.now(), (aCorrente ?? inizioTratta) - 300, this.velocitaGps)
+      : null;
+
     let i = Math.max(this.passoCorrente, 0);
     while (i < steps.length - 1) {
       const qui = punto(steps[i]), dopo = punto(steps[i + 1]);
       if (!qui || !dopo) { i++; continue; }
+      if (i === 0) { i++; continue; }
+      const a = along[i];
+      if (u != null && a != null) {
+        // Sulla strada: si passa alla manovra dopo quando questa è a meno di 8 m.
+        if (u >= a - 8) i++; else break;
+        continue;
+      }
       const d = metri(pos, qui), dDopo = metri(pos, dopo);
-      if (i === 0 || d < 15 || (dDopo < d && dDopo < 40)) i++; else break;
+      if (d < 15 || (dDopo < d && dDopo < 40)) i++; else break;
     }
     this.passoCorrente = i;
     const s = steps[i];
     const p = punto(s);
-    const m = p ? Math.round(metri(pos, p)) : null;
+    const aI = along[i];
+    this.navSuStrada = u != null && aI != null;
+    // (03/10/2026, «tutto in strada reale») Metri di STRADA fino alla tappa:
+    // fine di questa tratta lungo il tracciato meno il punto in cui si è.
+    // null fuori strada o senza tracciato: lì resta la linea d'aria.
+    const lungTratta = Number(leg?.distance);
+    this.metriStradaAllaTappa = u != null && Number.isFinite(lungTratta) && lungTratta > 0
+      ? Math.max(0, Math.round(inizioTratta + lungTratta - u)) : null;
+    const m = this.navSuStrada ? Math.max(0, Math.round((aI as number) - (u as number))) : (p ? Math.round(metri(pos, p)) : null);
     this.navAttuale = {
       istruzione: istruzionePerStep(s, this.lingua, this.tappaCorrente()?.nome || undefined),
       metri: m,
@@ -2046,8 +2171,12 @@ class TourService {
         // esplicitamente: e` lo stesso che `puntoDiRientro()` dichiara al
         // cruscotto, quindi linea disegnata e meta` non possono divergere.
         const rientro = this.rientroDaMandare(giro, partenza);
+        // ORDINE FERMO (Lione 06/10/2026): il ricalcolo dopo una deviazione chiedeva al server anche di
+        // RIORDINARE le tappe restanti per vicinanza — la «Cena» di Vieux-Lyon è diventata la 3ª tappa alle
+        // 11 del mattino, poi basilica → teatro → piazza → pranzo. L'ordine lo ha deciso chi ha creato il
+        // giro (itinerario con gli orari, o la mano dell'utente): qui si ricalcola SOLO la strada.
         const { g, dati } = await this.chiediRotta(restanti, {
-          partenza, anello: giro.anello, rientro,
+          partenza, anello: giro.anello, rientro, ordina: false,
           percorso: giro.modo === 'percorso' && giro.percorsoId ? { id: giro.percorsoId, modifica } : undefined,
         });
         if (giro.modo === 'percorso' && g?.percorso) {
@@ -2145,6 +2274,9 @@ class TourService {
       // Un giro di ieri non si riprende: si e` andati a dormire, non in pausa.
       if (!giro || Date.now() - giro.creatoIl > 12 * 60 * 60 * 1000) { localStorage.removeItem(CHIAVE_RIPRESA); return null; }
       this.giro = giro;
+      // Giro ripreso: le strade lungo il tracciato, se mancano (quelle già
+      // salvate non si riscaricano).
+      void prescaricaStrade((giro.geometria || []) as number[][]);
       this.ultimoIndiceSnap = 0;
       // I timer "da fermo" e "fuori percorso" di PRIMA della chiusura non
       // valgono piu': riaprendo l'app dopo dieci minuti il giro andava
@@ -2208,11 +2340,15 @@ class TourService {
         return t && this.metaAnello(this.giro!) ? nomeRientro : null;
       })(),
       // Verso la PORTA della tappa (o verso il punto di partenza, in rientro),
-      // dalla posizione nota (linea d'aria).
+      // dalla posizione nota: metri di STRADA lungo il tracciato quando si è
+      // agganciati (mai meno della linea d'aria), linea d'aria solo fuori strada.
       metriAllaTappa: (() => {
         if (!this.ultimaPosizione) return null;
         const p = t ? (t.ingresso ?? { lat: t.lat, lon: t.lon }) : rientro;
-        return p ? Math.round(metri(this.ultimaPosizione, p)) : null;
+        if (!p) return null;
+        const aria = Math.round(metri(this.ultimaPosizione, p));
+        return this.navSuStrada && this.metriStradaAllaTappa != null && this.tappaDelPasso === this.stato.tappaCorrente
+          ? Math.max(aria, Math.round(this.metriStradaAllaTappa + (t ? this.codaTappa(p) : 0))) : aria;
       })(),
       tappaLat: t ? (t.ingresso?.lat ?? t.lat) : (rientro?.lat ?? null),
       tappaLon: t ? (t.ingresso?.lon ?? t.lon) : (rientro?.lon ?? null),
@@ -2323,12 +2459,39 @@ class TourService {
     const chiave = `${entro}|${giro.geometria.length}|${giro.metri}|${this.candidati.length}|${this.corridoio.length}|${giro.tappe.length}`;
     if (this.lungoIlPercorsoCache?.chiave === chiave) return this.lungoIlPercorsoCache.lista;
     const tappe = new Set(giro.tappe.map(t => String(t.id)));
+    // UN INCONTRO DEVE VALERE LA VOCE (06/10/2026, prova Madrid: in 300 m il giro ha
+    // annunciato «100 Montaditos» (una catena di panini schedata come piazza), «Madrid
+    // card» (un prodotto), «マヨール広場» (Plaza Mayor in giapponese), «Catedral de
+    // Oviedo España» e «Puerta del Sol» appena raccontata come tappa). Parla solo chi
+    // pesa — gemma o con fonte Wikipedia/Wikidata —, con un nome in lettere latine e
+    // non già fra le tappe (anche per nome: le righe doppie hanno id diversi).
+    const nudo = (n: unknown) => String(n || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\([^)]*\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+    const nomiTappe = new Set(giro.tappe.map(t => nudo(t.nome)));
     const lista: { poi: any; id: string }[] = [];
     for (const c of this.tuttiICandidati()) {
       const id = c?.id ?? c?.poiId;
       if (id == null || tappe.has(String(id))) continue;
+      // «Con fonte» si legge anche dall'ORIGINE della riga (id): il campo `source` della RPC
+      // è l'enrichment_source, «pending» quasi ovunque fuori dall'Italia — con quello solo,
+      // a Madrid il giro taceva su Neptuno e Cibeles (giorni 2 e 3: zero annunci).
+      const idStr = String(id);
+      const pesa = c?.is_gem === true || c?.premium === true || /wiki/i.test(String(c?.source || ''))
+        || /^(wd-|wiki-|unesco-|pop-|bc-|uk-nhle-|it-mic-|w\d)/.test(idStr);
+      if (!pesa || /^plaque-/.test(idStr)) continue;
+      const nome = String(c?.name || c?.nome || '');
+      const nomeNudo = nudo(nome);
+      if (!/[A-Za-z]/.test(nome) || nomiTappe.has(nomeNudo)) continue;
+      // (Lione 06/10/2026) «Sulla tua strada: Immeuble» cinque volte in 40 s, poi «Maison», «Lione» (la riga della
+      // città) e «Musée des Beaux-Arts (Lione)» — la tappa 1 con un altro nome. Niente nomi generici di una parola,
+      // niente città/quartieri, niente nome già detto in questo giro, niente nome contenuto in quello di una tappa.
+      if (NOME_INCONTRO_GENERICO.test(nomeNudo) || /^(localita|citta|city|town|village|hamlet|suburb|quartiere|neighbourhood)$/i.test(String(c?.category || ''))) continue;
+      if (this.nomiIncontrati.has(nomeNudo) || lista.some(x => nudo(x.poi?.name || x.poi?.nome) === nomeNudo)) continue;
+      if (nomeNudo.length >= 8 && [...nomiTappe].some(t => t.length >= 8 && (t.includes(nomeNudo) || nomeNudo.includes(t)))) continue;
       const lat = Number(c.lat), lon = Number(c.lon);
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      // Entro 60 m da una tappa è la tappa stessa con un altro nome o in un'altra lingua (Anversa 06/10/2026:
+      // «Onze-Lieve-Vrouwekathedraal» annunciata per strada, poi raccontata come «Cattedrale di Nostra Signora»).
+      if (giro.tappe.some(t => !t.esclusa && metri({ lat, lon }, { lat: t.lat, lon: t.lon }) <= 60)) continue;
       let vicino = false;
       for (let i = 0; i < giro.geometria.length; i += 3) {
         const g = giro.geometria[i];
@@ -2344,8 +2507,13 @@ class TourService {
   segnaIncontro(id: string | number) {
     if (!this.giro) return;
     (this.giro.incontri ||= []).push(String(id));
+    // Anche il NOME: le righe doppie dello stesso luogo hanno id diversi («Immeuble» ×5, Lione 06/10/2026).
+    const c = this.tuttiICandidati().find(x => String(x?.id ?? x?.poiId) === String(id));
+    if (c) this.nomiIncontrati.add(String(c?.name || c?.nome || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\([^)]*\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim());
     this.salva();
   }
+  /** Nomi nudi già annunciati come incontro in questo giro (si azzera con un giro nuovo). */
+  private nomiIncontrati = new Set<string>();
 
   // ── SALVARE E CONDIVIDERE ────────────────────────────────────────────────
 

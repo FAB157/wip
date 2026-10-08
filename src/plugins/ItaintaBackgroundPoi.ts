@@ -101,6 +101,12 @@ export interface ItaintaBackgroundPoiPlugin {
    * servizio. Non addebita nulla: vedi `prescaricaGuideNativo` più sotto.
    */
   prefetchGuides(options: { poiIds: string[]; lang: string; character?: string }): Promise<{ ok?: boolean; accodati?: number }>;
+  /**
+   * (03/10/2026) Pre-scarico delle STRADE lungo un percorso nella cache del
+   * servizio nativo (RoadSnap.prescarica): a schermo spento e senza rete le
+   * distanze di strada devono avere i loro dati. `points` = [[lat, lon], ...].
+   */
+  prefetchRoads(options: { points: number[][]; car?: boolean }): Promise<{ ok?: boolean; punti?: number }>;
   setNavRoute(options: { routeJson: string }): Promise<{ ok?: boolean }>;
   clearNavRoute(): Promise<void>;
   /** `inPausa` (21/09/2026): il battito PORTA la pausa del JS; assente = false. */
@@ -110,6 +116,14 @@ export interface ItaintaBackgroundPoiPlugin {
    * `terminato`: il follower è stato svuotato dal «Termina» del cruscotto —
    * `attivo:false` con la fotografia di id, indice e «detti» di quel momento.
    */
+  /** (03/10/2026) Registro di collaudo del follower: una riga per fix col percorso attivo. */
+  getNavLog(): Promise<{ righe?: string[] }>;
+  /** (04/10/2026) Svuota il registro di collaudo (su disco dal 04/10: navigatore + audioguida). */
+  clearNavLog(): Promise<void>;
+  /** (04/10/2026) Modalità collaudo: accesa, il registro tiene anche la traccia (una posizione ogni 4 s). Senza `attivo` risponde lo stato. */
+  setCollaudo(options: { attivo?: boolean }): Promise<{ attivo?: boolean }>;
+  /** (04/10/2026) Il segno di chi collauda («qui ha sbagliato») nel registro, con nota e posizione. */
+  addNavLogNote(options: { text: string; lat?: number; lon?: number }): Promise<void>;
   getNavProgress(): Promise<{
     attivo?: boolean; id?: string; indice?: number;
     dettiVicino?: number[]; dettiLontano?: number[];
@@ -255,6 +269,21 @@ export async function prescaricaGuideNativo(poiIds: string[], lang: string, char
     return Number(r?.accodati) || 0;
   } catch {
     return 0;
+  }
+}
+
+/**
+ * Le strade lungo un percorso, anche nella cache del servizio NATIVO (vedi
+ * `prefetchRoads`). Sul web e sulle build native senza il metodo è un no-op
+ * silenzioso: best-effort, mai un errore verso chi chiama.
+ */
+export async function prescaricaStradeNativo(points: number[][], car = false): Promise<boolean> {
+  if (!isNative() || !points?.length) return false;
+  try {
+    const r = await ItaintaBackgroundPoi.prefetchRoads({ points, car });
+    return !!r?.ok;
+  } catch {
+    return false;
   }
 }
 

@@ -14,6 +14,8 @@ export interface ItinerarioPdfEtichette {
   intro: string; consiglioGuida: string; tempoVisita: string; spostamento: string;
   budgetGiorno: string; totaleGiorno: string; consigli: string; suggerimenti: string;
   precauzioni: string; zoneDaEvitare: string; totaleViaggio: string; mappa: string;
+  /** Etichetta della riga dei mezzi pubblici (Transitous) sulle tratte lunghe. */
+  mezzi?: string;
 }
 
 export interface ItinerarioPdfProps {
@@ -38,6 +40,12 @@ const Tappa: React.FC<{ t: any; et: ItinerarioPdfEtichette }> = ({ t, et }) => {
           <Text style={[S.h3, { marginTop: 0, marginBottom: 1, flex: 1 }]}>{pulisci(t.titolo_tappa)}</Text>
         </View>
         {durata ? <Text style={[S.sans, S.piccolo, { marginLeft: t.ora ? 34 : 0, marginBottom: 3 }]}>{durata}</Text> : null}
+        {/* Mezzi pubblici sulla tratta lunga (Transitous, 06/10/2026): una riga, com'è. */}
+        {t.mezzi_precedente ? (
+          <Text style={[S.sans, S.piccolo, { marginLeft: t.ora ? 34 : 0, marginBottom: 3, color: PDF_C.navy }]}>
+            <Text style={S.sansBold}>{et.mezzi || 'Mezzi'} · </Text>{pulisci(t.mezzi_precedente)}
+          </Text>
+        ) : null}
       </View>
       {t.attivita ? <Text style={[S.paragrafo, { marginLeft: t.ora ? 34 : 0, marginBottom: 3 }]}>{pulisci(t.attivita)}</Text> : null}
       {t.consiglio_guida ? (

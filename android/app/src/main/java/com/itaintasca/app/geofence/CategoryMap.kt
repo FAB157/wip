@@ -41,14 +41,14 @@ object CategoryMap {
         // (17/08/2026). Tenere allineato a guideSettings.isCategoryAllowed
         // (web) e PoiCategories.map (iOS).
         "monumenti" to setOf("monument", "castle", "castelli", "ruins", "archaeological_site", "archeo", "artwork", "attraction", "monumenti",
-            "square", "bridge", "fountain", "theatre", "opera_house", "palace",
-            "tower", "skyscraper", "cemetery", "library", "windmill", "aqueduct",
-            "observatory", "stadium",
+            "square", "bridge", "fountain", "palace",
+            "tower", "skyscraper", "cemetery", "windmill", "aqueduct",
+            "observatory",
             // Fasi 3-5: nessun chip nuovo, tutto confluisce in "monumenti".
             "birthplace", "house_museum", "necropolis", "catacomb", "fortress",
             "city_walls", "villa", "harbour", "mine", "chimney", "funicular",
             "amphitheatre", "roman_baths", "triumphal_arch", "obelisk", "mausoleum",
-            "market_hall", "train_station", "dam", "watermill", "prison", "museum_ship",
+            "market_hall", "dam", "watermill", "prison", "museum_ship",
             "archaeological_park", "memorial", "sculpture", "university", "town_hall",
             "roman_theatre", "roman_circus", "roman_villa", "domus", "city_gate",
             "coastal_tower", "stronghold", "quarry", "saltworks", "racetrack",
@@ -199,7 +199,11 @@ object CategoryMap {
         selected: Collection<String>
     ): Boolean {
         if (isFromItinerary) return true
-        if (isGem) return !selected.contains("gemme:off")
+        // (05/10/2026) Una gemma parla se è acceso il suo interruttore OPPURE quello
+        // della sua categoria: con «Gemme» spenta e «Monumenti» accesa la Fontana di
+        // Trevi (gemma) restava muta. Stessa regola di isCategoryAllowed (guideSettings.ts)
+        // e di PoiCategories.isActive (Swift).
+        if (isGem && !selected.contains("gemme:off")) return true
         val cat = (dbCategory ?: "").lowercase()
         if (selected.isEmpty()) return DEFAULT_CULTURAL_CATEGORIES.contains(cat)
         if (selected.contains(cat)) return true

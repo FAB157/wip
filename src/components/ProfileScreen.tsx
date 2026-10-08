@@ -9,7 +9,7 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 
 import { supabase } from '../lib/supabase';
 import { getApiUrl, apiFetch } from '../lib/api';
-import { resetAllPlayed, getDistances, setDistance } from '../lib/guideSettings';
+import { resetAllPlayed, getDistances, setDistance, sceltaSetup } from '../lib/guideSettings';
 // Pannello admin caricato SOLO su richiesta (React.lazy): è pesante e serve
 // solo agli admin, quindi non deve finire nel bundle di ogni utente.
 const AdminPanel = lazy(() => import('./AdminPanel'));
@@ -317,6 +317,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
   const [distWalk, setDistWalk] = useState<number>(() => getDistances().walkAlert);
   const [distCar, setDistCar] = useState<number>(() => getDistances().carAlert);
   const [distStart, setDistStart] = useState<number>(() => getDistances().walkTrigger);
+  // (05/10/2026) L'arrivo in auto ha il SUO valore: prima un solo controllo scriveva lo stesso
+  // numero per piedi e auto, e al primo tocco i 50 m dell'auto diventavano 30.
+  const [distStartCar, setDistStartCar] = useState<number>(() => getDistances().carTrigger);
 
   // Category Tree checkbox states
   const [activeSubcats, setActiveSubcats] = useState<Record<string, boolean>>(() => {
@@ -340,7 +343,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
 
   const toggleSubcat = (id: string) => {
     setActiveSubcats(prev => {
-      const updated = { ...prev, [id] : !prev[id] };
+      // Si capovolge ciò che l'utente VEDE (il predefinito, se la chiave non c'è).
+      const updated = { ...prev, [id] : !sceltaSetup(prev, id) };
       localStorage.setItem('wip_active_subcategories', JSON.stringify(updated));
       window.dispatchEvent(new CustomEvent('wip-settings-updated'));
       return updated;
@@ -499,14 +503,13 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
   // anche sulle voci di «I miei download».
   const { genera: generateTripStory, inCorsoId: storyLoadingId, modale: modaleRacconto } = useRaccontoViaggio(language);
 
-  // "start" = distanza di arrivo/inizio guida: un solo controllo che scrive
-  // sia walkTrigger che carTrigger (ognuno con il proprio clamp).
-  type DistUiKey = 'walkAlert' | 'carAlert' | 'start';
+  // "start" = distanza di arrivo/inizio guida A PIEDI (walkTrigger); l'auto ha
+  // il suo controllo ('carTrigger'). Ognuno col proprio clamp.
+  type DistUiKey = 'walkAlert' | 'carAlert' | 'start' | 'carTrigger';
 
   const persistDist = (key: DistUiKey, val: number, setter: (v: number) => void) => {
     if (key === 'start') {
       setDistance('walkTrigger', val);
-      setDistance('carTrigger', val);
       setter(getDistances().walkTrigger); // valore effettivo post-clamp
     } else {
       setDistance(key, val);
@@ -534,7 +537,6 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     if (val >= 1) {
       if (key === 'start') {
         setDistance('walkTrigger', val);
-        setDistance('carTrigger', val);
       } else {
         setDistance(key, val);
       }
@@ -2670,7 +2672,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   </div>
 
                   {/* Numerical Distances Controls */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     {/* Walk Alert Distance */}
                     <div className="bg-[#f8f5f0] p-3 rounded-2xl flex flex-col items-center">
                       <span className="text-[9px] font-black text-primary/75 uppercase tracking-wider text-center leading-tight mb-2">
@@ -2736,7 +2738,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     {/* Guide Start Distance */}
                     <div className="bg-[#f8f5f0] p-3 rounded-2xl flex flex-col items-center">
                       <span className="text-[9px] font-black text-primary/75 uppercase tracking-wider text-center leading-tight mb-2">
-                        {getTranslation("dist_start_label", language)}
+                        {getTranslation("dist_start_label", language)} 🚶
                       </span>
                       <div className="flex items-center gap-2">
                         <button
@@ -2757,6 +2759,37 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                         </div>
                         <button
                           onClick={() => handleDistChange('start', distStart + 5, setDistStart)}
+                          className="w-7 h-7 bg-white rounded-full flex items-center justify-center font-black text-sm text-primary hover:bg-primary/5 shadow-sm active:scale-90 transition-all"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Guide Start Distance — in auto (05/10/2026) */}
+                    <div className="bg-[#f8f5f0] p-3 rounded-2xl flex flex-col items-center">
+                      <span className="text-[9px] font-black text-primary/75 uppercase tracking-wider text-center leading-tight mb-2">
+                        {getTranslation("dist_start_label", language)} 🚗
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleDistChange('carTrigger', distStartCar - 5, setDistStartCar)}
+                          className="w-7 h-7 bg-white rounded-full flex items-center justify-center font-black text-sm text-primary hover:bg-primary/5 shadow-sm active:scale-90 transition-all"
+                        >
+                          -
+                        </button>
+                        <div className="flex items-center gap-0.5 font-mono font-black text-xs text-primary">
+                          <input
+                            type="number"
+                            value={distStartCar === 0 ? '' : distStartCar}
+                            onChange={(e) => handleDirectDistChange('carTrigger', e.target.value, setDistStartCar)}
+                            style={{ width: '36px', textAlign: 'center', backgroundColor: 'transparent', border: 'none', borderBottom: '1px solid rgba(30, 58, 138, 0.2)', color: '#1e3a8a', fontWeight: 900, fontFamily: 'monospace', fontSize: '12px', outline: 'none' }}
+                            min="1"
+                          />
+                          <span>m</span>
+                        </div>
+                        <button
+                          onClick={() => handleDistChange('carTrigger', distStartCar + 5, setDistStartCar)}
                           className="w-7 h-7 bg-white rounded-full flex items-center justify-center font-black text-sm text-primary hover:bg-primary/5 shadow-sm active:scale-90 transition-all"
                         >
                           +
@@ -2903,13 +2936,13 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                      </div>
 
                      <div className="space-y-2 bg-[#f8f5f0] p-3 rounded-2xl border border-outline-variant/5">
-                        <SubcatItem label={getTranslation('pf_cat_monumenti', language)} isChecked={!!activeSubcats.monumenti} onToggle={() => toggleSubcat('monumenti')} />
-                        <SubcatItem label={getTranslation('pf_cat_musei', language)} isChecked={!!activeSubcats.musei} onToggle={() => toggleSubcat('musei')} />
-                        <SubcatItem label={getTranslation('pf_cat_panorami', language)} isChecked={!!activeSubcats.panorami} onToggle={() => toggleSubcat('panorami')} />
-                        <SubcatItem label={getTranslation('pf_cat_natura', language)} isChecked={!!activeSubcats.natura} onToggle={() => toggleSubcat('natura')} />
-                        <SubcatItem label={getTranslation('pf_cat_chiese', language)} isChecked={!!activeSubcats.chiese} onToggle={() => toggleSubcat('chiese')} />
+                        <SubcatItem label={getTranslation('pf_cat_monumenti', language)} isChecked={sceltaSetup(activeSubcats, 'monumenti')} onToggle={() => toggleSubcat('monumenti')} />
+                        <SubcatItem label={getTranslation('pf_cat_musei', language)} isChecked={sceltaSetup(activeSubcats, 'musei')} onToggle={() => toggleSubcat('musei')} />
+                        <SubcatItem label={getTranslation('pf_cat_panorami', language)} isChecked={sceltaSetup(activeSubcats, 'panorami')} onToggle={() => toggleSubcat('panorami')} />
+                        <SubcatItem label={getTranslation('pf_cat_natura', language)} isChecked={sceltaSetup(activeSubcats, 'natura')} onToggle={() => toggleSubcat('natura')} />
+                        <SubcatItem label={getTranslation('pf_cat_chiese', language)} isChecked={sceltaSetup(activeSubcats, 'chiese')} onToggle={() => toggleSubcat('chiese')} />
                         <div className="border-t border-primary/10 mt-2 pt-2">
-                           <SubcatItem label={getTranslation('pf_cat_consigli', language)} isChecked={!!activeSubcats.consigli} onToggle={() => toggleSubcat('consigli')} />
+                           <SubcatItem label={getTranslation('pf_cat_consigli', language)} isChecked={sceltaSetup(activeSubcats, 'consigli')} onToggle={() => toggleSubcat('consigli')} />
                            <p className="text-[9px] text-primary/50 leading-tight mt-1 ml-1">{getTranslation('pf_consigli_note', language)}</p>
                         </div>
                         {/* La lista si ferma qui. WIP Community e i verticali

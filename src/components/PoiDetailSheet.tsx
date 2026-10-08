@@ -5,6 +5,8 @@ import { motion, AnimatePresence } from "motion/react";
 import { checkUserQuota, incrementUserQuota } from '../lib/quotaManager';
 import QuotaLimitToast, { useQuotaToast } from './QuotaLimitToast';
 import CreditConfirmationModal from './CreditConfirmationModal';
+import SchedaMichelin from './SchedaMichelin';
+import SchedaSenzaGlutine from './SchedaSenzaGlutine';
 import { notify } from '../lib/toast';
 import { migliorFoto } from '../lib/fotoHttps';
 import ShopScreen from './ShopScreen';
@@ -743,7 +745,13 @@ export default function PoiDetailSheet({
           return;
         }
 
-        if (!ctx.isLoading && !ctx.isRegenerating && textToSpeak) {
+        // UNA RIGA NON È UNA GUIDA (05/10/2026, prova a Parigi: «Île de la Cité» partiva
+        // da sola e diceva «Isola fluviale a Parigi», sei secondi, tre volte su tre). Allo
+        // scatto automatico un testo sotto gli 80 caratteri non si legge: la scheda resta
+        // aperta, chi vuole tocca «Ascolta». Meglio il silenzio di una guida di quattro parole.
+        if (!ctx.isLoading && !ctx.isRegenerating && textToSpeak && String(textToSpeak).trim().length < 80) {
+          console.warn(`[PoiDetailSheet] AutoPlay: testo troppo corto per ${poi?.name}, niente voce automatica.`);
+        } else if (!ctx.isLoading && !ctx.isRegenerating && textToSpeak) {
           console.log(`[PoiDetailSheet] AutoPlay: dettagli pronti, avvio guida per ${poi?.name}`);
           // Belt & braces: se la voce nativa stesse ancora parlando, la fermiamo
           // un attimo prima di partire — mai due voci sovrapposte.
@@ -765,8 +773,11 @@ export default function PoiDetailSheet({
     window.addEventListener('wip-teaser-finished', onTeaserFinished);
 
     if (!Capacitor.isNativePlatform()) {
-      // Su web non esiste il teaser nativo: partire subito, senza attese inutili
-      startPlayback();
+      // Su web non esiste il teaser nativo: partire subito, senza attese inutili.
+      // Solo nel TEST VIRTUALE il teaser lo dice il test (lib/testVirtuale.ts) e
+      // manda 'wip-teaser-finished': si aspetta quello, con un tetto di 25 s.
+      if ((window as any).__wipTestVirtuale === true && !triggerManualePer(poiIdStr)) fallbackTimer = setTimeout(startPlayback, 25000);
+      else startPlayback();
     } else {
       // Chiediamo al nativo lo stato reale del teaser: se ha già finito (o non
       // sta parlando) partiamo subito — es. utente che sblocca il telefono
@@ -1636,7 +1647,9 @@ export default function PoiDetailSheet({
       // Le gemme NON sono gratuite: costano come ogni altra categoria.
       const alreadyUnlocked = history.some(h => String(h.poi_id) === poiIdStr) ||
                               poi?.isFromItinerary === true ||
-                              !!ownedUrl;
+                              !!ownedUrl ||
+                              // TEST VIRTUALE dell'admin: l'ascolto di prova parte senza il modale crediti.
+                              (isAdmin === true && (window as any).__wipTestVirtuale === true);
 
       if (alreadyUnlocked) {
         console.log("[PoiDetailSheet] POI già sbloccato, avvio riproduzione...");
@@ -3231,6 +3244,14 @@ export default function PoiDetailSheet({
                 locali_pois — cucina, catena, indirizzo con civico, telefono,
                 sito, social, stato. Niente API: e' tutto gia' sul pin. Il
                 voto/foto/recensioni arrivano dal fallback TripAdvisor sopra. */}
+            {/* (02/10/2026) Guida MICHELIN: distinzione, cucina, prezzo,
+                orari e servizi, sopra i dati del locale. */}
+            {(poi as any).michelin_url && (
+              <div className="mb-3"><SchedaMichelin poi={poi} language={language} variante="scheda" /></div>
+            )}
+            {(poi as any).gf_livello && (
+              <div className="mb-3"><SchedaSenzaGlutine poi={poi} language={language} variante="scheda" /></div>
+            )}
             {poi.category === "locali" && ((poi as any).address || (poi as any).contact_phone || (poi as any).contact_website || (poi as any).brand || (poi as any).poi_type) && (
               <div className="mb-6 bg-white p-4 rounded-[2rem] border border-rose-100/60 shadow-sm">
                 <div className="flex items-center justify-between mb-2">

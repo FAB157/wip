@@ -22,6 +22,21 @@ import { tourService, type VistaGiro } from '../services/tourService';
 import { Language, getTranslation } from '../lib/i18n';
 import { gestisciErroreGiro } from '../lib/tour/passRichiesto';
 import { locationService } from '../services/locationService';
+import { linkMezzi, trattaLunga } from '../lib/mezziPubblici';
+
+/**
+ * Tratta lunga verso la tappa corrente (≥ 1,5 km di strada): il link a Google
+ * Maps coi mezzi pubblici dalla posizione nota alla porta della tappa
+ * (06/10/2026). Senza posizione o con la tappa vicina non c'e` tasto.
+ */
+function urlMezziVersoTappa(v: VistaGiro): string | null {
+  if (!v.avviato || v.inPausa || !trattaLunga(v.metriAllaTappa) || v.tappaLat == null || v.tappaLon == null) return null;
+  try {
+    const l = locationService.getLastLocation();
+    if (!l) return null;
+    return linkMezzi({ lat: l.latitude, lon: l.longitude }, { lat: v.tappaLat, lon: v.tappaLon });
+  } catch { return null; }
+}
 
 interface Props {
   language: Language;
@@ -115,8 +130,10 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
     ? Math.max(0, Math.min(100, Math.round((1 - v.metriRimanenti / v.metriTotali) * 100)))
     : 0;
 
-  const distanza = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`);
+  // (03/10/2026) Arrotondato: il totale è una somma di tratte e usciva «336.2999999999995 m in tutto».
+  const distanza = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
   const t = (k: string) => getTranslation(k, language);
+  const urlMezzi = urlMezziVersoTappa(v);
 
   const salva = async () => {
     if (salvando) return;
@@ -284,7 +301,7 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
                 <Flag className="w-3 h-3" /> {t('tour_finito')}
               </p>
               <p className="text-[14px] font-bold text-gray-900 truncate">
-                {v.tappeFatte} {t('tour_tappa').toLowerCase()} · {distanza(v.metriTotali)}
+                {v.tappeFatte} {v.tappeFatte === 1 ? t('tour_tappa').toLowerCase() : t('tour_tappe')} · {distanza(v.metriTotali)}
               </p>
               <p className="text-[11px] text-gray-500 truncate">{avviso || (salvato?.link ? salvato.link.replace(/^https?:\/\//, '') : '')}</p>
               {/* PROSEGUIRE (22/08/2026): il giro finito non e` un vicolo
@@ -366,9 +383,23 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
                         {t('gr_arrivo_eta')} ~{new Date(Date.now() + (v.metriRimanenti / 66.7) * 60000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
                       </>
                     )}
+                    {/* Tratta lunga: «Mezzi» apre Google Maps coi mezzi pubblici
+                        fino alla tappa (06/10/2026). */}
+                    {urlMezzi && (
+                      <>
+                        <span className="text-gray-300"> · </span>
+                        <a href={urlMezzi} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                          className="inline-block px-2 py-px rounded-full bg-blue-50 text-blue-700 border border-blue-100 font-bold">
+                          🚇 {t('mezzi_tasto')}
+                        </a>
+                      </>
+                    )}
                   </>
                 )}
               </p>
+              {urlMezzi && !avviso && (
+                <p className="text-[10px] text-gray-400 leading-snug">{t('mezzi_legenda')}</p>
+              )}
             </div>
 
             {/* PRONTO, NON PARTITO (28/08/2026): un solo tasto grande,

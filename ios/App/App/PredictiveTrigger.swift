@@ -156,10 +156,14 @@ enum PredictiveTrigger {
                           distanceNowMeters: distanceNow, usedPrediction: true,
                           reason: "too-early t_cpa=\(Int(tCpa))s")
         }
-        // In rotta e dentro la finestra: è il momento.
-        return Result(decision: .fire, tCpaSeconds: tCpa, dCpaMeters: dCpa,
+        // (03/10/2026, committente: «la previsione la toglierei del tutto»)
+        // In rotta ma FUORI dal raggio: si aspetta. Prima qui si annunciava in
+        // anticipo (entro `tLead` secondi dal passaggio); ora avviso e guida
+        // partono solo alle distanze scelte dall'utente. Parità con
+        // PredictiveTrigger.kt.
+        return Result(decision: .hold, tCpaSeconds: tCpa, dCpaMeters: dCpa,
                       distanceNowMeters: distanceNow, usedPrediction: true,
-                      reason: "predicted t_cpa=\(Int(tCpa))s")
+                      reason: "in-rotta t_cpa=\(Int(tCpa))s")
     }
 
     /// Metri oltre il CPA perché un POI sia "superato". In DISTANZA, non in

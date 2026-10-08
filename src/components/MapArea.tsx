@@ -398,11 +398,6 @@ import {
 // Ri-esportata: altri componenti la importano storicamente da qui.
 export { subCategoryToFilterId };
 
-// Cache di sessione per le coordinate TripAdvisor: la search non le
-// restituisce (servono i /details, che consumano quota API) — ogni locale
-// viene risolto una sola volta per sessione.
-const tripCoordsCache = new Map<string, { lat: number; lon: number } | null>();
-
 export function getSubCategory(tags: any): string {
   let sub = getCategory(tags);
   if (tags.amenity) sub = tags.amenity;
@@ -665,10 +660,13 @@ function MapEventsHandler({
     dragstart: () => {
       onDragStartRef.current?.();
     },
-    click: () => {
+    click: (e) => {
       // Un tap su un marker ferma la propagazione da sé (comportamento
       // Leaflet di default): questo scatta solo per un tap sulla mappa vuota.
       onMapClickRef.current?.();
+      // (04/10/2026) Il punto toccato, per chi lo vuole: il test virtuale
+      // dell'admin lo usa come meta del cammino. Senza ascoltatori non fa nulla.
+      try { window.dispatchEvent(new CustomEvent('wip-map-click', { detail: { lat: e.latlng.lat, lon: e.latlng.lng } })); } catch { /* mai disturbare la mappa */ }
     },
     moveend: () => {
       try {
@@ -906,6 +904,8 @@ function arricchisciFumetto(
 }
 
 import PoiPopupContent from "./PoiPopupContent";
+import { COLORE_STELLATI, ORO_STELLATI, stelleMichelin, targaStellati, etichettaMichelin, tMichelin } from "./SchedaMichelin";
+import { VERDE_GF, livelloGf, emojiTipoGf, targaGf } from "./SchedaSenzaGlutine";
 import { tourService } from "../services/tourService";
 import { useBozzaGiro, useVistaGiro } from "../lib/tour/useGiro";
 import TourRouteLayer from "./TourRouteLayer";
@@ -1084,6 +1084,9 @@ function MapArea({
     window.dispatchEvent(new CustomEvent('wip-poi-card-toggle', { detail: { aperta: !!activePoi } }));
   }, [activePoi]);
   const campoRicercaRef = useRef<HTMLInputElement | null>(null);
+  // Dropdown dei suggerimenti città/POI: serve per il listener "tap fuori"
+  // sotto, che sostituisce l'onBlur dell'input (vedi commento li').
+  const suggerimentiRef = useRef<HTMLDivElement | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [suggestions, setSuggestions] = useState<any[]>([]);
   // Accessibilità ricerca: indice del suggerimento evidenziato (frecce ↑↓)
@@ -1099,6 +1102,30 @@ function MapArea({
   const [nostri, setNostri] = useState<any[]>([]);
   const displayedSuggestions = useMemo(() => [...suggestions, ...nostri].reverse(), [suggestions, nostri]);
   useEffect(() => { setActiveSuggestionIdx(-1); }, [suggestions]);
+  // CHIUSURA SUGGERIMENTI "TAP FUORI", non onBlur (29/09/2026, segnalazione:
+  // sulle app native nascondere la tastiera chiude anche la lista). Un
+  // onBlur sull'input non distingue "l'utente ha toccato un suggerimento"
+  // da "la tastiera si e' nascosta" — sono lo stesso evento di blur. Qui si
+  // chiude SOLO quando il tocco cade fuori sia dall'input sia dal dropdown,
+  // cosi' nascondere la tastiera lascia la lista visibile e selezionabile.
+  useEffect(() => {
+    if (!displayedSuggestions.length && !searchNoResults) return;
+    const chiudiSeFuori = (e: Event) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (campoRicercaRef.current?.contains(target)) return;
+      if (suggerimentiRef.current?.contains(target)) return;
+      setSuggestions([]);
+      setNostri([]);
+      setSearchNoResults(false);
+    };
+    document.addEventListener('touchstart', chiudiSeFuori, true);
+    document.addEventListener('mousedown', chiudiSeFuori, true);
+    return () => {
+      document.removeEventListener('touchstart', chiudiSeFuori, true);
+      document.removeEventListener('mousedown', chiudiSeFuori, true);
+    };
+  }, [displayedSuggestions.length, searchNoResults]);
   const [pois, setPois] = useState<Poi[]>([]);
   // --- LOCAL STORAGE CATEGORIES ---
   // Rimosso activeSubcats perché causava bug di stale state rispetto a selectedCategories
@@ -1492,20 +1519,36 @@ function MapArea({
   // utente a Roma restava su Carrara.
   const flewToGpsRef = useRef(false);
   const userDraggedRef = useRef(false);
+  // L'ultima posizione e direzione davvero applicate allo stato (vedi sotto: batteria).
+  const ultimaPosApplicataRef = useRef<[number, number] | null>(null);
+  const ultimaDirezioneApplicataRef = useRef<number | null>(null);
 
   // Sincronizza la posizione dell'utente con il locationService centrale
   useEffect(() => {
     const unsub = locationService.subscribe((loc) => {
       const acc = Number((loc as any)?.accuracy);
       accuratezzaFixRef.current = Number.isFinite(acc) ? acc : null;
-      setUserLocation([loc.latitude, loc.longitude]);
+      // BATTERIA (03/10/2026: sull'iPhone 17% in 45 minuti, anche da fermi in
+      // casa). Il GPS dà un fix al secondo e ognuno ridisegnava tutta la mappa
+      // (un array nuovo = uno stato nuovo), anche se non ci si era mossi. Ora
+      // lo stato cambia solo oltre 3 m di spostamento, o 5° di direzione. I
+      // trigger e il navigatore non passano da qui: leggono locationService.
+      const ult = ultimaPosApplicataRef.current;
+      const mosso = !ult || !Number.isFinite(ult[0])
+        || Math.hypot((loc.latitude - ult[0]) * 111_320, (loc.longitude - ult[1]) * 111_320 * Math.cos((loc.latitude * Math.PI) / 180)) >= 3;
+      if (mosso) {
+        ultimaPosApplicataRef.current = [loc.latitude, loc.longitude];
+        setUserLocation([loc.latitude, loc.longitude]);
+      }
       if (!flewToGpsRef.current && !userDraggedRef.current && shouldFlyToGpsOnFirstFix()
           && Number.isFinite(loc.latitude) && Number.isFinite(loc.longitude)) {
         flewToGpsRef.current = true;
         try { mapRef.current?.flyTo([loc.latitude, loc.longitude], Math.max(mapRef.current.getZoom(), 14), { duration: 1.2 }); } catch { /* mappa non pronta */ }
       }
       if (loc.heading !== null) {
-        setUserHeading(loc.heading);
+        const h = Number(loc.heading), hPrima = ultimaDirezioneApplicataRef.current;
+        const diff = hPrima == null ? 999 : Math.abs(((h - hPrima + 540) % 360) - 180);
+        if (diff >= 5) { ultimaDirezioneApplicataRef.current = h; setUserHeading(loc.heading); }
       }
     });
     return unsub;
@@ -1522,7 +1565,12 @@ function MapArea({
     const acc = accuratezzaFixRef.current;
     if (acc != null && Number.isFinite(acc) && acc > 100) return;
     try {
-      mapRef.current.panTo(userLocation, { animate: true, duration: 0.5 });
+      // BATTERIA: sotto i 15 m dal centro niente animazione — con un fix al
+      // secondo la mappa era in movimento per metà del tempo.
+      const c = mapRef.current.getCenter();
+      const dCentro = Math.hypot((la - c.lat) * 111_320, (lo - c.lng) * 111_320 * Math.cos((la * Math.PI) / 180));
+      if (dCentro < 1) return;
+      mapRef.current.panTo(userLocation, dCentro < 15 ? { animate: false } : { animate: true, duration: 0.5 });
     } catch (e) {}
   }, [userLocation, followMode]);
 
@@ -1723,6 +1771,7 @@ function MapArea({
     emojiDefault: string,
     group: L.LayerGroup,
     bounds: L.LatLngBounds,
+    salta?: (p: any) => boolean,
   ) => {
     // shopping/lusso sono servizi non culturali: pin_mappa_servizi
     // (27/09/2026), non pin_mappa (quella resta gemme/monumenti/chiese/
@@ -1736,6 +1785,7 @@ function MapArea({
     // (i pin "vanno e vengono" a ogni pan/zoom, segnalato 06/09/2026).
     group.clearLayers();
     for (const p of data || []) {
+      if (salta?.(p)) continue;
       const emoji = emojiPerTipo[String(p.sub_category)] || emojiDefault;
       const icon = L.divIcon({
         html: cerchioMarker(emoji, MARKER_CERCHIO_PX, 14),
@@ -1777,14 +1827,48 @@ function MapArea({
     try {
       if (!lussoLayerRef.current) lussoLayerRef.current = L.layerGroup();
       const group = lussoLayerRef.current;
-      await caricaLayerVerticale('lusso', LUSSO_EMOJI, '👑', group, bounds);
+      // (03/10/2026, committente: «inseriamo i migliori anche nel livello
+      // lusso») I ristoranti stellati della Guida, da locali_pois
+      // (stessa RPC della chip «Stellati»). Versione prudente: il fumetto dice
+      // il riconoscimento e porta alla loro scheda; via, telefono e sito sono
+      // i nostri. Un «ristorante stellato» gia' presente nel livello entro 80 m
+      // da uno di questi non si disegna: e' lo stesso locale.
+      const { data: guida } = await supabase.rpc('locali_pois_vicini', {
+        p_south: bounds.getSouth(), p_west: bounds.getWest(), p_north: bounds.getNorth(), p_east: bounds.getEast(),
+        p_sub_category: null, p_limit: 300, p_diete: null, p_michelin: true,
+      }).then((r: any) => r, () => ({ data: null }));
+      // Tutti gli stellati, 1-3 stelle (committente 03/10: «anche 1 stella»); la RPC li ordina 3 → 2 → 1.
+      const migliori = (guida || []).filter((l: any) => stelleMichelin(l) > 0);
+      const vicinoAUnMigliore = (p: any) => /stellat/.test(String(p.sub_category || ''))
+        && migliori.some((m: any) => getDistanceFromLatLonInM(Number(p.lat), Number(p.lon), Number(m.lat), Number(m.lon)) < 80);
+      await caricaLayerVerticale('lusso', LUSSO_EMOJI, '👑', group, bounds, migliori.length ? vicinoAUnMigliore : undefined);
+      for (const m of migliori) {
+        const n = stelleMichelin(m);
+        const icon = L.divIcon({
+          html: cerchioMarker(`<span style="color:${ORO_STELLATI};font-weight:900;font-size:${n === 3 ? 9 : 10}px;letter-spacing:-.5px;">${'★'.repeat(n)}</span>`, MARKER_CERCHIO_PX, 10),
+          className: 'wip-lusso-marker',
+          ...cerchioMarkerOpts(),
+        });
+        const via = [m.address, m.city].map((x: any) => String(x || '').trim()).filter(Boolean).join(', ');
+        L.marker([Number(m.lat), Number(m.lon)], { icon })
+          .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:170px;max-width:240px;">
+            <div style="font-size:12px;font-weight:700;color:#111827;">${escapeHtml(m.name || '')}</div>
+            <div style="font-size:11px;font-weight:800;color:${ORO_STELLATI};margin-top:3px;">${'★'.repeat(n)} ${escapeHtml(etichettaMichelin(m, language))}${Number(m.michelin_anno) > 2000 ? ` · ${m.michelin_anno}` : ''}${m.michelin_stella_verde ? ` · 🍀 ${escapeHtml(tMichelin('verde', language))}` : ''}</div>
+            ${via ? `<div style="font-size:11px;color:#374151;margin-top:3px;">📍 ${escapeHtml(via)}</div>` : ''}
+            ${m.website ? `<a href="${escapeHtml(String(m.website).startsWith('http') ? m.website : `https://${m.website}`)}" target="_blank" rel="noopener" style="font-size:10px;color:#1e3a8a;font-weight:700;display:block;margin-top:4px;">${getTranslation('mp_sito', language)} ↗</a>` : ''}
+            ${m.phone ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;">${escapeHtml(m.phone)}</div>` : ''}
+            <a href="${escapeHtml(m.michelin_url)}" target="_blank" rel="noopener" style="font-size:10px;color:#1f2937;font-weight:700;display:block;margin-top:4px;">${escapeHtml(tMichelin('scheda', language))} ↗</a>
+            <div style="font-size:9px;color:#9ca3af;margin-top:4px;">${escapeHtml(tMichelin('nonAffiliata', language))}</div>
+          </div>`)
+          .addTo(group);
+      }
       if (lussoActiveRef.current && !map.hasLayer(group)) group.addTo(map);
     } catch (e) {
       console.warn('[Lusso] fetch fallito:', e);
     } finally {
       setLussoLoading(false);
     }
-  }, [caricaLayerVerticale]);
+  }, [caricaLayerVerticale, language]);
 
   const toggleShopping = useCallback(() => setShoppingActive((v) => {
     const next = !v;
@@ -4288,6 +4372,136 @@ function MapArea({
       return;
     }
 
+    /**
+     * Disegna dei POI appena arrivano, senza aspettare le altre fonti e senza
+     * toccare quelli gia' a schermo (stesso id = vince il nuovo). Solo se
+     * questo giro di fetch e' ancora l'ultimo.
+     */
+    const disegnaSubito = (arrivati: Poi[]) => {
+      if (!arrivati.length || fetchSeq !== fetchSeqRef.current) return;
+      setPois(prev => {
+        const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
+        let cambiato = false;
+        arrivati.forEach(p => { if (!m.has(String(p.id))) { m.set(String(p.id), p); cambiato = true; } });
+        return cambiato ? Array.from(m.values()) : prev;
+      });
+    };
+
+    /**
+     * I LOCALI DALLA TABELLA locali_pois, A QUALSIASI ZOOM (03/10/2026,
+     * committente: «i pin devono apparire in qualsiasi livello di zoom e
+     * usare l'accorpamento»). Fino a oggi questa lettura stava solo dentro
+     * fetchLocaliLive, cioe' DOPO l'uscita anticipata del ramo zoom < 8: a
+     * scala di paese o continente la chip Locali (e la Stellati) non caricava
+     * niente, anche se il 28/09 «locali» era stato tolto da macroFarMap proprio
+     * contando su questa lettura. Ora la chiamano tutti e due i rami; il
+     * MarkerClusterGroup accorpa.
+     * Torna null se la RPC non risponde; `filtro` = c'e' una sotto-chip che la
+     * tabella sa filtrare da sola.
+     *
+     * RPC locali_pois_vicini e non select diretta (28/09/2026): serve
+     * l'operatore spaziale per usare l'indice GIST. p_diete filtra su osm_diet
+     * DENTRO la query: sub_category non e' MAI valorizzato per le diete (vedi
+     * 20260928150000_fix_locali_pois_diete_e_zoom.sql).
+     */
+    const leggiLocaliTabella = async (b: L.LatLngBounds): Promise<{ righe: Poi[]; filtro: boolean } | null> => {
+      try {
+        const dieteAttive = Array.isArray(subFilter)
+          ? subFilter.reduce<string[]>((acc, s) => {
+              if (['glutenfree', 'gluten_free_only', 'gluten_free_options'].includes(s)) acc.push('gluten_free');
+              if (s === 'vegetariano') acc.push('vegetarian');
+              return acc;
+            }, [])
+          : [];
+        // Una sotto-chip rara (vegetariano, carne, pesce, sushi) veniva
+        // tagliata via dal taglio per confidence PRIMA che il filtro client la
+        // vedesse. "bar" copre sia sub_category "bar" sia "caffe".
+        const MAPPA_SUB: Record<string, string[]> = {
+          ristorante: ['ristorante'], pizzeria: ['pizzeria'], pesce: ['pesce'],
+          carne: ['carne'], sushi: ['sushi'], gelateria: ['gelateria'],
+          bar: ['bar', 'caffe'],
+        };
+        const subCategorieAttive = Array.isArray(subFilter)
+          ? subFilter.reduce<string[]>((acc, s) => { if (MAPPA_SUB[s]) acc.push(...MAPPA_SUB[s]); return acc; }, [])
+          : [];
+        // Diete e sotto-categorie sono ANDate dentro la funzione: attive
+        // insieme l'AND sarebbe sbagliato (l'utente vuole l'UNO O l'ALTRO),
+        // quindi non si manda nessuno dei due e resta il filtro lato client.
+        // (02/10/2026) Chip «Stellati» (id interno `michelin`): da sola chiede
+        // al server SOLO i ristoranti con 1, 2 o 3 stelle (indice parziale,
+        // regge il mondo intero). Insieme ad altre chip vale l'UNO O l'ALTRO:
+        // nessun filtro, e gli stellati del riquadro arrivano comunque (la
+        // RPC li include sempre).
+        const soloMichelin = Array.isArray(subFilter) && subFilter.includes('michelin');
+        const michelinMisto = soloMichelin && (dieteAttive.length > 0 || subCategorieAttive.length > 0);
+        const misti = (dieteAttive.length > 0 && subCategorieAttive.length > 0) || michelinMisto;
+        const filtroAttivo = !misti && (dieteAttive.length > 0 || subCategorieAttive.length > 0 || soloMichelin);
+        const glutenAcceso = dieteAttive.includes('gluten_free');
+        const gfStretti = glutenAcceso && Array.isArray(subFilter) ? subFilter.filter(s => s.startsWith('gf_')).map(s => s.slice(3)) : [];
+        const gfLivelli = gfStretti.filter(s => s === 'dedicato' || s === 'menu');
+        const gfTipi = gfStretti.filter(s => s !== 'dedicato' && s !== 'menu');
+        // Riquadro dentro il mondo: a zoom larghissimo (o con .pad) Leaflet
+        // esce da ±180/±85 e la RPC non troverebbe niente.
+        const sud = Math.max(-85, b.getSouth()), nord = Math.min(85, b.getNorth());
+        const ovest = Math.max(-180, b.getWest()), est = Math.min(180, b.getEast());
+        const zoomAmpio = (nord - sud) >= 0.6;
+        const { data: locali, error } = await supabase.rpc('locali_pois_vicini', {
+          p_south: sud, p_west: ovest, p_north: nord, p_east: est,
+          p_sub_category: !misti && subCategorieAttive.length > 0 ? subCategorieAttive : null,
+          // Zoom ampio o filtro specifico: più margine, il cluster accorpa.
+          p_limit: zoomAmpio || filtroAttivo || misti ? 800 : 400,
+          p_diete: !misti && dieteAttive.length > 0 ? dieteAttive : null,
+          ...(soloMichelin && !misti ? { p_michelin: true } : {}),
+          // (03/10/2026) La fila del senza glutine: con «Gluten-Free» accesa
+          // e una o piu' chip gf_* il server torna SOLO i locali della
+          // tabella locali_gf, per livello e/o per tipo.
+          ...(!misti && gfLivelli.length > 0 ? { p_gf: gfLivelli } : {}),
+          ...(!misti && gfTipi.length > 0 ? { p_gf_tipo: gfTipi } : {}),
+        });
+        if (error || !Array.isArray(locali)) return null;
+        const righe = locali.map((l: any) => ({
+          id: l.id,
+          lat: Number(l.lat),
+          lon: Number(l.lon),
+          name: l.name,
+          category: 'locali',
+          baseCategory: 'locali',
+          subCategory: l.sub_category || 'ristorante',
+          poi_type: l.cucina || null,
+          brand: l.brand || null,
+          address: l.address || null,
+          city: l.city || null,
+          contact_website: l.website || null,
+          contact_phone: l.phone || null,
+          socials: Array.isArray(l.socials) ? l.socials : null,
+          operating_status: l.operating_status || null,
+          osm_diet: l.osm_diet || null,
+          // La Guida MICHELIN: il link e' la prova che c'e'; la distinzione
+          // puo' mancare (livello non noto) e allora NON si mostra nessuna stella.
+          michelin_url: l.michelin_url || null,
+          michelin_distinzione: l.michelin_distinzione || null,
+          michelin_stella_verde: l.michelin_stella_verde === true,
+          michelin_anno: l.michelin_anno || null,
+          michelin_prezzo: l.michelin_prezzo || null,
+          michelin_cucina: l.michelin_cucina || null,
+          michelin_orari: l.michelin_orari || null,
+          michelin_servizi: Array.isArray(l.michelin_servizi) ? l.michelin_servizi : null,
+          // Il livello «senza glutine» (tabella locali_gf), il tipo di locale e la scheda sulla fonte.
+          gf_livello: l.gf_livello || null,
+          gf_tipo: l.gf_tipo || null,
+          gf_url: l.gf_url || null,
+          source: 'overture',
+          status: 'verified',
+          is_gem: false,
+          isFromDb: true,
+        })) as unknown as Poi[];
+        return { righe, filtro: filtroAttivo };
+      } catch (e) {
+        console.warn('[MapArea] locali_pois non leggibile, passo alle API live', e);
+        return null;
+      }
+    };
+
     const zoom = mapRef.current?.getZoom() || 13;
     if (zoom < 8) {
       // (27/08/2026) TUTTE LE CHIP INSIEME, NON UNA DOPO L'ALTRA.
@@ -4367,6 +4581,13 @@ function MapArea({
       // la sovrapposizione è certa a OGNI zoom, e produce due pin per lo
       // stesso locale con due nomi diversi (segnalato dal committente,
       // screenshot su Viale delle Pinete/Forte dei Marmi).
+      // (03/10/2026) …ma fetchLocaliLive sta DOPO il `return` di questo ramo,
+      // quindi qui sotto zoom 8 i locali non arrivavano mai. La stessa lettura
+      // della tabella, chiamata anche da qui: pin a ogni zoom, accorpati dal
+      // cluster. Con la chip «Stellati» tornano in ordine 3 → 2 → 1 stelle.
+      if (activeCategories.includes('locali') && bounds && typeof bounds.getSouth === 'function') {
+        compiti.push(leggiLocaliTabella(bounds.pad(0.2)).then(r => unisci(r?.righe || [])));
+      }
       const macroFarMap: Array<{ macro: string; tipi: string[]; limite: number }> = [
         { macro: 'monumenti', tipi: [...CHIESE_TYPES, ...MUSEI_TYPES, ...PANORAMI_TYPES, ...MONUMENTI_TYPES], limite: 600 },
         { macro: 'utilita', tipi: UTILITA_TYPES, limite: 400 },
@@ -5093,191 +5314,30 @@ function MapArea({
       fetchPromises.push(fetchOverpassDisabled());
     }
 
-    // 2. Locali live: Foursquare + TripAdvisor IN PARALLELO (Overpass parte
-    // già con le altre categorie al punto 1). Google Places rimosso: era
-    // codice morto, mai aggiunto alle fetchPromises.
+    // 2. I LOCALI: SOLO LA TABELLA locali_pois.
+    // (03/10/2026, committente: «elimina le chiamate a Foursquare/TripAdvisor
+    // - non servono») Fino a oggi, quando la tabella tornava vuota, a ogni
+    // spostamento della mappa partivano una ricerca Foursquare (credito
+    // esaurito, 429) e una TripAdvisor con fino a sei /details a consumo. La
+    // tabella ha ~10 milioni di locali in tutto il mondo (Overture + Guida):
+    // un riquadro vuoto e' un riquadro senza locali, non un buco da riempire.
+    // La lettura sta in leggiLocaliTabella (in cima a performFetchPois), usata
+    // anche dal ramo «da lontano» (zoom < 8). I pin si disegnano SUBITO, senza
+    // aspettare Wikipedia e Overpass che partono insieme (fino a 20 s): prima
+    // comparivano solo al merge finale.
     if (activeCategories.length === 0 || activeCategories.includes("locali")) {
-      const fetchLocaliLive = async () => {
-        const center = bounds.isValid()
-          ? bounds.getCenter()
-          : { lat: INITIAL_CENTER[0], lng: INITIAL_CENTER[1] };
-
-        // (29/08/2026) PRIMA LA TABELLA locali_pois: i locali di Overture
-        // importati in casa (nome, cucina, indirizzo con civico, sito,
-        // telefono, marchio, stato). Foursquare ha esaurito il credito e
-        // rispondeva 429 a ogni chiamata; TripAdvisor consuma quota a ogni
-        // spostamento della mappa. Le due API restano SOLO come rete di
-        // sicurezza per i riquadri dove la tabella e' vuota.
-        // (28/09/2026, committente: «deve mostrarsi tutti, zoom senza
-        // limiti») Il tetto a 0,6° di altezza mappa e' tolto: con l'indice
-        // GIST la RPC regge anche una regione/paese intero, e senza questa
-        // tabella lo zoom ampio ripiegava su shared_pois — che non ha i dati
-        // di dieta di Overture/OSM — mostrando solo i locali con "gluten"
-        // nel NOME (2 in tutta Italia invece delle centinaia reali).
-        if (bounds.isValid()) {
-          try {
-            // (28/09/2026) RPC locali_pois_vicini invece della select diretta:
-            // il filtro gte/lte su lat/lon separati non usa l'indice GIST
-            // aggiunto oggi (serve un operatore spaziale). Il filtro
-            // operating_status e l'ordine per confidence restano dentro la
-            // funzione (vedi migration 20260928140000_gist_locali_pois.sql).
-            // p_diete filtra su osm_diet DENTRO la query (prima del taglio
-            // per confidence): sub_category non è MAI valorizzato a
-            // "glutenfree" in locali_pois (0 righe su tutta la tabella), il
-            // dato vero sta solo in osm_diet (vedi
-            // 20260928150000_fix_locali_pois_diete_e_zoom.sql).
-            const dieteAttive = Array.isArray(subFilter)
-              ? subFilter.reduce<string[]>((acc, s) => {
-                  if (['glutenfree', 'gluten_free_only', 'gluten_free_options'].includes(s)) acc.push('gluten_free');
-                  if (s === 'vegetariano') acc.push('vegetarian');
-                  return acc;
-                }, [])
-              : [];
-            // (28/09/2026) Stesso motivo del gluten-free: senza questo, una
-            // sotto-chip rara (vegetariano 29.800 nel mondo, carne/pesce/
-            // sushi) veniva tagliata via dal taglio per confidence PRIMA che
-            // il filtro client la vedesse. "bar" copre sia sub_category
-            // "bar" sia "caffe" (due valori distinti, quasi alla pari).
-            const MAPPA_SUB: Record<string, string[]> = {
-              ristorante: ['ristorante'], pizzeria: ['pizzeria'], pesce: ['pesce'],
-              carne: ['carne'], sushi: ['sushi'], gelateria: ['gelateria'],
-              bar: ['bar', 'caffe'],
-            };
-            const subCategorieAttive = Array.isArray(subFilter)
-              ? subFilter.reduce<string[]>((acc, s) => { if (MAPPA_SUB[s]) acc.push(...MAPPA_SUB[s]); return acc; }, [])
-              : [];
-            // Diete e sotto-categorie strutturali sono due filtri ANDati
-            // dentro la funzione: se sono attive insieme (es. "Vegetariano"
-            // E "Pizzeria" contemporaneamente) l'AND sarebbe sbagliato
-            // (l'utente vuole l'UNO O l'ALTRO) — in quel caso non si manda
-            // nessuno dei due al server, resta il filtro lato client.
-            const misti = dieteAttive.length > 0 && subCategorieAttive.length > 0;
-            const zoomAmpio = (bounds.getNorth() - bounds.getSouth()) >= 0.6;
-            const filtroAttivo = !misti && (dieteAttive.length > 0 || subCategorieAttive.length > 0);
-            const { data: locali } = await supabase.rpc('locali_pois_vicini', {
-              p_south: bounds.getSouth(), p_west: bounds.getWest(),
-              p_north: bounds.getNorth(), p_east: bounds.getEast(),
-              p_sub_category: !misti && subCategorieAttive.length > 0 ? subCategorieAttive : null,
-              // Zoom ampio o filtro specifico: più margine, il cluster
-              // accorpa i punti visivamente (vedi nota sulle sette chip
-              // "anche a scala di paese/continente" più sotto in questo file).
-              p_limit: zoomAmpio || filtroAttivo || misti ? 800 : 400,
-              p_diete: !misti && dieteAttive.length > 0 ? dieteAttive : null,
-            });
-            if (locali && locali.length > 0) {
-              return locali.map((l: any) => ({
-                id: l.id,
-                lat: Number(l.lat),
-                lon: Number(l.lon),
-                name: l.name,
-                category: 'locali',
-                baseCategory: 'locali',
-                subCategory: l.sub_category || 'ristorante',
-                poi_type: l.cucina || null,
-                brand: l.brand || null,
-                address: l.address || null,
-                city: l.city || null,
-                contact_website: l.website || null,
-                contact_phone: l.phone || null,
-                socials: Array.isArray(l.socials) ? l.socials : null,
-                operating_status: l.operating_status || null,
-                osm_diet: l.osm_diet || null,
-                source: 'overture',
-                status: 'verified',
-                is_gem: false,
-                isFromDb: true,
-              }));
-            }
-          } catch (e) {
-            console.warn('[MapArea] locali_pois non leggibile, passo alle API live', e);
-          }
+      const fetchLocaliTabella = async () => {
+        if (!bounds.isValid()) return [];
+        const tabella = await leggiLocaliTabella(bounds);
+        if (tabella) {
+          disegnaSubito(tabella.righe);
+          return tabella.righe;
         }
-
-        const fsqPromise = (async () => {
-          logApiCall('foursquare', 'mappa_ricerca_locali');
-          try {
-            const res = await fetch('/api/foursquare', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ lat: center.lat, lon: center.lng, radius: 2000 })
-            });
-            if (res.ok) {
-              const data = await res.json();
-              return data.results || []; // Già mappati dal backend
-            }
-          } catch (e) {
-            console.error("Foursquare fetch error:", e);
-          }
-          return [];
-        })();
-
-        const taPromise = (async () => {
-          logApiCall('tripadvisor', 'mappa_ricerca_locali');
-          try {
-            // getApiUrl: percorso relativo = bundle locale sull'app nativa.
-            const res = await fetch(getApiUrl(`/api/trip/search?searchQuery=ristorante&latLong=${center.lat},${center.lng}`));
-            if (!res.ok) return [];
-            const data = await res.json();
-            const rows = (data.data || []).slice(0, 8);
-
-            // La search TripAdvisor NON restituisce le coordinate: servono i
-            // /details (a quota). Cache di sessione + max 6 lookup per fetch;
-            // i locali senza coordinate risolte vengono scartati (il vecchio
-            // fallback li ammucchiava tutti al centro mappa).
-            let lookups = 0;
-            const resolved = await Promise.all(rows.map(async (loc: any) => {
-              const id = String(loc.location_id);
-              let coords = tripCoordsCache.get(id);
-              if (coords === undefined && lookups < 6) {
-                lookups++;
-                try {
-                  const dRes = await fetch(`/api/trip/details?locationId=${id}`);
-                  const d = dRes.ok ? await dRes.json() : null;
-                  const dlat = parseFloat(d?.latitude);
-                  const dlon = parseFloat(d?.longitude);
-                  coords = (Number.isFinite(dlat) && Number.isFinite(dlon)) ? { lat: dlat, lon: dlon } : null;
-                } catch {
-                  coords = null;
-                }
-                tripCoordsCache.set(id, coords);
-              }
-              if (!coords) return null;
-              return {
-                id: `trip-${id}`,
-                lat: coords.lat,
-                lon: coords.lon,
-                name: loc.name,
-                category: "locali",
-                subCategory: "ristorante",
-                source: "tripadvisor",
-                status: "verified"
-              };
-            }));
-            return resolved.filter(Boolean);
-          } catch (e) {
-            console.error("TripAdvisor fetch error:", e);
-          }
-          return [];
-        })();
-
-        const [fsq, ta] = await Promise.all([fsqPromise, taPromise]);
-
-        // Dedup per nome: lo stesso ristorante su entrambe le piattaforme
-        // deve produrre UN pin solo (vince Foursquare: dati più ricchi)
-        const seen = new Set(fsq.map((p: any) => (p.name || '').trim().toLowerCase()).filter(Boolean));
-        const merged = fsq.concat((ta as any[]).filter((p: any) => {
-          const k = (p.name || '').trim().toLowerCase();
-          return k && !seen.has(k);
-        }));
-
-        if (merged.length > 0) return merged;
-
-        // Fallback: database locale se entrambe le API sono giù/vuote
-        console.log("[MapArea] Foursquare+TripAdvisor vuoti. Fallback su database locale.");
+        // La tabella non ha risposto: restano i locali gia' letti dal database.
         return dbPois.filter(p => p.category === 'locali');
       };
 
-      fetchPromises.push(fetchLocaliLive());
+      fetchPromises.push(fetchLocaliTabella());
     }
 
     // 3. Wikipedia API (Monumenti, Chiese, Musei, Panorami, Gemme)
@@ -6246,7 +6306,30 @@ function MapArea({
     const subIcon = getSubCategoryEmoji(poi.subCategory);
 
     const isCultural = effectiveCat === "monumenti" || effectiveCat === "chiese" || effectiveCat === "musei" || effectiveCat === "panorami" || effectiveCat === "gemme";
-    const subRightBadge = isGem ? "💎" : (isCommunity ? "📸" : (isCultural ? "" : subIcon));
+    // (02/10/2026) RISTORANTI STELLATI, versione prudente (vedi
+    // SchedaMichelin.tsx): pin antracite con le stelle in oro nella
+    // targhetta, o «Bib». Niente rosso ne' sigle della Guida; «selezionato» e
+    // livello non noto restano un pin normale — mai una stella non letta.
+    const targaMichelin = targaStellati(poi);
+    const eMichelin = targaMichelin !== "";
+    const nStelle = eMichelin ? stelleMichelin(poi) : 0;
+    if (eMichelin && !isCommunity) bgHex = COLORE_STELLATI;
+    // (03/10/2026) SENZA GLUTINE, grafica «A» scelta dal committente: pin
+    // verde, al centro il TIPO di locale (🍕 🍦 🥖 🍴), spiga in basso a
+    // sinistra, livello in basso a destra («100%» pieno, «Menu» col bordo,
+    // «Opz.» grigio). Se il locale e' anche stellato il colore e la targhetta
+    // di destra restano quelli delle stelle, e la spiga a sinistra dice il resto.
+    const gfLiv = isCommunity ? "" : livelloGf(poi);
+    const eGf = gfLiv !== "";
+    if (eGf && !eMichelin) bgHex = VERDE_GF;
+    const subRightBadge = (eMichelin || eGf) ? "" : (isGem ? "💎" : (isCommunity ? "📸" : (isCultural ? "" : subIcon)));
+    const emojiCentro = eGf ? emojiTipoGf(poi) : emoji;
+    const targaGfDestra = eGf && !eMichelin ? targaGf(poi) : "";
+    const stileTargaGf = gfLiv === "dedicato"
+      ? `background:${VERDE_GF};color:#fff;border:1.5px solid ${VERDE_GF};`
+      : gfLiv === "menu"
+        ? `background:#fff;color:${VERDE_GF};border:1.5px solid ${VERDE_GF};`
+        : `background:#fff;color:#6b7280;border:1.5px solid #9ca3af;`;
     const subLeftBadge = accessible ? "♿" : "";
 
     // POSIZIONE APPROSSIMATA (beni del catalogo ministeriale collocati al
@@ -6264,9 +6347,9 @@ function MapArea({
     if (fotoPin && /^https?:\/\//.test(fotoPin)) {
       const src = fotoPin.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
       const htmlFoto = `
-        <div style="position:relative;width:48px;height:58px;filter:drop-shadow(0 3px 5px rgba(0,0,0,.35));transform: rotate(calc(-1 * var(--map-rotation, 0deg)));transition: transform 0.15s ease-out;">
+        <div style="position:relative;width:48px;height:58px;transform: rotate(calc(-1 * var(--map-rotation, 0deg)));transition: transform 0.15s ease-out;">
           <svg viewBox="0 0 34 42" width="48" height="58" xmlns="http://www.w3.org/2000/svg" style="position:absolute;inset:0;">
-            <path d="M17 0C7.6 0 0 7.6 0 17c0 12.7 17 25 17 25S34 29.7 34 17C34 7.6 26.4 0 17 0z" fill="${bgHex}" stroke="#ffffff" stroke-width="1.5"/>
+            <ellipse cx="17" cy="40.6" rx="6" ry="1.4" fill="rgba(0,0,0,.28)"/><path d="M17 0C7.6 0 0 7.6 0 17c0 12.7 17 25 17 25S34 29.7 34 17C34 7.6 26.4 0 17 0z" fill="${bgHex}" stroke="#ffffff" stroke-width="1.5"/>
             <circle cx="17" cy="17" r="13" fill="white"/>
             <text x="17" y="22" text-anchor="middle" font-size="14" font-family="system-ui,sans-serif">${emoji}</text>
           </svg>
@@ -6287,16 +6370,19 @@ function MapArea({
 
     const approssimato = (poi as any).posizioneApprossimata === true;
     const html = `
-      <div style="position:relative;width:34px;height:42px;filter:drop-shadow(0 3px 5px rgba(0,0,0,.3));transform: rotate(calc(-1 * var(--map-rotation, 0deg)));transition: transform 0.15s ease-out;${approssimato ? 'opacity:.75;' : ''}">
+      <div style="position:relative;width:34px;height:42px;transform: rotate(calc(-1 * var(--map-rotation, 0deg)));transition: transform 0.15s ease-out;${approssimato ? 'opacity:.75;' : ''}">
         <svg viewBox="0 0 34 42" width="34" height="42" xmlns="http://www.w3.org/2000/svg">
-          <path d="M17 0C7.6 0 0 7.6 0 17c0 12.7 17 25 17 25S34 29.7 34 17C34 7.6 26.4 0 17 0z"
+          <ellipse cx="17" cy="40.6" rx="6" ry="1.4" fill="rgba(0,0,0,.28)"/><path d="M17 0C7.6 0 0 7.6 0 17c0 12.7 17 25 17 25S34 29.7 34 17C34 7.6 26.4 0 17 0z"
             fill="${bgHex}" stroke="${approssimato ? '#ffffff' : (isGem ? '#fbbf24' : '#ffffff')}" stroke-width="${isGem ? '2.5' : '1.5'}"${approssimato ? ' stroke-dasharray="3 2"' : ''}/>
           <circle cx="17" cy="16" r="11" fill="white" opacity="0.95"/>
-            <text x="17" y="21" text-anchor="middle" font-size="14" font-family="system-ui,sans-serif">${emoji}</text>
+            <text x="17" y="21" text-anchor="middle" font-size="14" font-family="system-ui,sans-serif">${emojiCentro}</text>
         </svg>
+        ${eGf ? `<div style="position:absolute;bottom:6px;left:-8px;min-width:18px;height:18px;background:#fff;border-radius:9px;border:1.5px solid ${VERDE_GF};display:flex;align-items:center;justify-content:center;font-size:10px;box-shadow:0 1px 4px rgba(0,0,0,.25);z-index:10;">🌾</div>` : ""}
+        ${targaGfDestra ? `<div style="position:absolute;bottom:6px;right:-10px;min-width:18px;height:18px;padding:0 3px;box-sizing:border-box;${stileTargaGf}border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:900;line-height:1;font-family:system-ui,-apple-system,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.25);z-index:10;white-space:nowrap;">${targaGfDestra}</div>` : ""}
         ${subLeftBadge ? `<div style="position:absolute;top:-4px;left:-8px;min-width:18px;height:18px;background:#fff;border-radius:9px;border:1.5px solid #e5e7eb;display:flex;align-items:center;justify-content:center;font-size:9px;box-shadow:0 1px 4px rgba(0,0,0,.25);z-index:10;">${subLeftBadge}</div>` : ""}
         ${conPiu ? `<div class="wip-poi-piu" title="${getTranslation('tour_aggiungi', language).replace(/"/g, '&quot;')}" style="position:absolute;top:-9px;right:-9px;width:22px;height:22px;border-radius:50%;background:#ffffff;border:2px solid #059669;color:#059669;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;line-height:1;font-family:system-ui,-apple-system,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.3);cursor:pointer;z-index:11;">+</div>` : ""}
         ${subRightBadge ? `<div style="position:absolute;bottom:6px;right:-8px;min-width:18px;height:18px;background:#fff;border-radius:9px;border:1.5px solid ${isGem ? '#fbbf24' : '#e5e7eb'};display:flex;align-items:center;justify-content:center;font-size:9px;box-shadow:0 1px 4px rgba(0,0,0,.25);z-index:10;">${subRightBadge}</div>` : ""}
+        ${targaMichelin ? `<div style="position:absolute;bottom:6px;right:${nStelle > 1 ? -8 - 5 * (nStelle - 1) : -8}px;min-width:18px;height:18px;padding:0 4px;box-sizing:border-box;background:#fff;border-radius:9px;border:1.5px solid ${ORO_STELLATI};color:${ORO_STELLATI};display:flex;align-items:center;justify-content:center;font-size:${nStelle > 0 ? 10 : 9}px;font-weight:900;line-height:1;font-family:system-ui,-apple-system,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.25);z-index:10;white-space:nowrap;">${targaMichelin}</div>` : ""}
       </div>
     `;
 
@@ -6320,7 +6406,7 @@ function MapArea({
     // `conPiu` fa parte della chiave: senza, il primo pin disegnato deciderebbe
     // per tutti e il "+" verde non comparirebbe (o non sparirebbe entrando nel
     // giro). E` un solo bit: la cache resta efficace.
-    const cacheKey = `${poi.is_gem === true}|${poi.baseCategory || poi.category}|${poi.category || ""}|${poi.subCategory || ""}|${isAccessible(poi)}|${(poi as any).posizioneApprossimata ? 'approx' : ''}|${conPiu ? 'piu' : ''}|${(poi as any).fotoPin || ''}`;
+    const cacheKey = `${poi.is_gem === true}|${poi.baseCategory || poi.category}|${poi.category || ""}|${poi.subCategory || ""}|${isAccessible(poi)}|${(poi as any).posizioneApprossimata ? 'approx' : ''}|${conPiu ? 'piu' : ''}|${(poi as any).fotoPin || ''}|${(poi as any).michelin_url ? `mic:${(poi as any).michelin_distinzione || ''}` : ''}|${(poi as any).gf_livello ? `gf:${(poi as any).gf_livello}:${(poi as any).gf_tipo || ''}` : ''}`;
     let icon = iconCacheRef.current.get(cacheKey);
     if (!icon) {
       icon = createPoiIcon(poi, conPiu);
@@ -6335,7 +6421,7 @@ function MapArea({
       return L.divIcon({
         html: `
           <div class="relative flex items-center justify-center" style="width:40px;height:40px;transform: rotate(calc(-1 * var(--map-rotation, 0deg)));transition: transform 0.15s ease-out;">
-            <div class="absolute w-10 h-10 bg-blue-500 rounded-full opacity-20 animate-ping"></div>
+            <div class="absolute w-10 h-10 bg-blue-500 rounded-full opacity-20"></div>
             <div class="w-8 h-8 bg-blue-600 rounded-full border-3 border-white shadow-xl flex items-center justify-center" style="border:3px solid white;">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="white" style="transform: rotate(${userHeading}deg); display:block;">
                 <path d="M12 2L8 20l4-3 4 3z"/>
@@ -6351,7 +6437,7 @@ function MapArea({
     return L.divIcon({
       html: `
         <div class="relative flex items-center justify-center" style="transform: rotate(calc(-1 * var(--map-rotation, 0deg)));">
-          <div class="absolute w-8 h-8 bg-blue-500 rounded-full animate-ping opacity-25"></div>
+          <div class="absolute w-8 h-8 bg-blue-500 rounded-full opacity-25"></div>
           <div class="w-4 h-4 bg-blue-500 rounded-full border-2 border-white shadow-lg ring-2 ring-blue-500/20"></div>
         </div>
       `,
@@ -6953,7 +7039,7 @@ function MapArea({
             exit={{ opacity: 0, y: -20 }}
             className="absolute top-[calc(0.75rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[1000] pointer-events-none"
           >
-            <div className="bg-slate-800/80 dark:bg-slate-900/80 backdrop-blur-2xl text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-2xl border border-white/20 flex items-center gap-2">
+            <div className="bg-slate-800/80 dark:bg-slate-900/80 text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-2xl border border-white/20 flex items-center gap-2">
               <WifiOff className="w-3 h-3" />
               {getTranslation('mp_sei_offline', language)}
             </div>
@@ -6972,7 +7058,7 @@ function MapArea({
               exit={{ opacity: 0, y: -24 }}
               className="pointer-events-auto w-full"
             >
-              <div className="bg-red-600/95 backdrop-blur-2xl text-white rounded-2xl shadow-[0_8px_32px_rgba(220,38,38,0.5)] border border-red-300/60 px-4 py-3 flex items-start gap-2.5">
+              <div className="bg-red-600/95 text-white rounded-2xl shadow-[0_8px_32px_rgba(220,38,38,0.5)] border border-red-300/60 px-4 py-3 flex items-start gap-2.5">
                 <span className="text-[20px] leading-none mt-0.5">🚫</span>
                 <p className="text-[13px] font-black leading-snug flex-1">
                   {getTranslation(ztlBanner.pre ? 'mp_ztl_entrando' : 'mp_ztl_dentro', language)
@@ -6999,7 +7085,7 @@ function MapArea({
               exit={{ opacity: 0, y: -16 }}
               className="pointer-events-auto w-full"
             >
-              <div className="bg-amber-500/95 backdrop-blur-2xl text-white rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.25)] border border-amber-300/60 px-4 py-2.5 flex items-start gap-2">
+              <div className="bg-amber-500/95 text-white rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.25)] border border-amber-300/60 px-4 py-2.5 flex items-start gap-2">
                 <span className="text-[15px] leading-none mt-0.5">⚠️</span>
                 <p className="text-[11px] font-bold leading-snug flex-1">
                   {getTranslation('mp_ztl_copertura', language)}
@@ -7026,7 +7112,7 @@ function MapArea({
               exit={{ opacity: 0, y: -16 }}
               className="pointer-events-auto w-full"
             >
-              <div className="bg-cyan-600/95 backdrop-blur-2xl text-white rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.25)] border border-cyan-300/60 px-4 py-2.5 flex items-start gap-2">
+              <div className="bg-cyan-600/95 text-white rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.25)] border border-cyan-300/60 px-4 py-2.5 flex items-start gap-2">
                 <span className="text-[15px] leading-none mt-0.5">🏖</span>
                 <p className="text-[11px] font-bold leading-snug flex-1">
                   {getTranslation('mp_balneazione_disclaimer', language)}
@@ -7052,7 +7138,7 @@ function MapArea({
               exit={{ opacity: 0, y: -16 }}
               className="pointer-events-auto w-full"
             >
-              <div className="bg-green-700/95 backdrop-blur-2xl text-white rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.25)] border border-green-400/60 px-4 py-2.5 flex items-start gap-2">
+              <div className="bg-green-700/95 text-white rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.25)] border border-green-400/60 px-4 py-2.5 flex items-start gap-2">
                 <span className="text-[15px] leading-none mt-0.5">🌿</span>
                 <p className="text-[11px] font-bold leading-snug flex-1">
                   {getTranslation('mp_natura2000_disclaimer', language)}
@@ -7113,7 +7199,7 @@ function MapArea({
       {meteo && (
         <div className={`absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-[1000] h-11 flex items-center pointer-events-none transition-opacity ${(ricercaAperta || activePoi) ? 'opacity-0 invisible' : ''}`}>
           {/* Chip meteo (Open-Meteo, cache 30 min) */}
-          <div className="pointer-events-auto bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-2xl rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.12)] border border-white/60 dark:border-white/10 px-3 py-1.5 flex items-center gap-1.5 text-[12px] font-black text-[#1e3a8a] dark:text-white select-none">
+          <div className="pointer-events-auto bg-white/85 dark:bg-[#1C1C1E]/85 rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.12)] border border-white/60 dark:border-white/10 px-3 py-1.5 flex items-center gap-1.5 text-[12px] font-black text-[#1e3a8a] dark:text-white select-none">
             <span className="text-[14px] leading-none">{weatherEmoji(meteo.code)}</span>
             {Math.round(meteo.temp)}°
           </div>
@@ -7138,7 +7224,7 @@ function MapArea({
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
-              className="pointer-events-auto max-w-[240px] bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 p-3"
+              className="pointer-events-auto max-w-[240px] bg-white/85 dark:bg-[#1C1C1E]/85 rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 p-3"
             >
               <p className="text-[11px] font-bold text-[#1e3a8a] dark:text-white leading-snug">
                 🌧 {getTranslation('mp_pioggia_domanda', language)}
@@ -7165,7 +7251,7 @@ function MapArea({
         {indoorMode && (
           <button
             onClick={() => setIndoorMode(false)}
-            className="pointer-events-auto bg-[#1e3a8a]/90 backdrop-blur-2xl text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-2xl border border-white/20 flex items-center gap-1.5 active:scale-95 transition-all"
+            className="pointer-events-auto bg-[#1e3a8a]/90 text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-2xl border border-white/20 flex items-center gap-1.5 active:scale-95 transition-all"
           >
             🏛 {getTranslation('mp_al_coperto_attivo', language)}
             <X className="w-3 h-3" />
@@ -7203,10 +7289,10 @@ function MapArea({
               layerAccesi.length ? ` · ${layerAccesi.length} ${getTranslation('mp_attivi', language)}` : ''}`}
             aria-expanded={serviziAperti}
             // 44 px: la soglia sotto la quale il pollice sbaglia bersaglio.
-            className={`relative shrink-0 w-11 h-11 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60 ${
+            className={`relative shrink-0 w-11 h-11 rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60 ${
               serviziAperti || layerAccesi.length
                 ? 'bg-[#1e3a8a] text-white border-blue-400 ring-2 ring-blue-500/40'
-                : 'bg-white/70 dark:bg-[#1C1C1E]/70 border-white/60 dark:border-white/10 text-[#1e3a8a] dark:text-white'
+                : 'bg-white/85 dark:bg-[#1C1C1E]/85 border-white/60 dark:border-white/10 text-[#1e3a8a] dark:text-white'
             }`}
           >
             {serviziAperti
@@ -7233,7 +7319,7 @@ function MapArea({
             <button
               onClick={() => setServiziAperti(true)}
               aria-label={`${getTranslation('mp_livelli_attivi', language)}: ${layerAccesi.map((l) => l.nome).join(', ')}`}
-              className="pointer-events-auto shrink-0 flex items-center gap-1.5 h-11 bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-full shadow-[0_2px_10px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 px-3 active:scale-95 transition-all focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60"
+              className="pointer-events-auto shrink-0 flex items-center gap-1.5 h-11 bg-white/90 dark:bg-[#1C1C1E]/90 rounded-full shadow-[0_2px_10px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 px-3 active:scale-95 transition-all focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60"
             >
               {layerAccesi.map((l) => (
                 <span key={l.id} aria-hidden="true" className="text-[15px] leading-none">{l.emoji}</span>
@@ -7291,7 +7377,7 @@ function MapArea({
                 // sul guscio della mappa) e il pannello e' un figlio flex
                 // che si restringe (`min-h-0`) e scorre dentro i suoi bordi,
                 // qualunque cosa gli stia sopra o sotto.
-                className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-2 flex flex-col gap-0.5 min-w-[232px] min-h-0 shrink overflow-y-auto overscroll-contain touch-pan-y [&>*]:shrink-0"
+                className="bg-white/85 dark:bg-[#1C1C1E]/85 rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-2 flex flex-col gap-0.5 min-w-[232px] min-h-0 shrink overflow-y-auto overscroll-contain touch-pan-y [&>*]:shrink-0"
               >
                 {(['reti', 'condizioni', 'sfondo'] as const).filter((g) => LIVELLI.some((v) => v.gruppo === g)).map((gruppo) => (
                   <Fragment key={gruppo}>
@@ -7363,7 +7449,7 @@ function MapArea({
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
-                className="shrink-0 bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 px-3 py-2.5 max-w-[240px]"
+                className="shrink-0 bg-white/90 dark:bg-[#1C1C1E]/90 rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 px-3 py-2.5 max-w-[240px]"
               >
                 {datiSole && (
                 <div className="flex items-center gap-2.5">
@@ -7466,7 +7552,7 @@ function MapArea({
                 // 26/09: su iPhone 58vh (viewport «grande», barra di Safari esclusa) sforava ancora e la X,
                 // in cima al contenuto, scorreva via col testo. Tetto in dvh (altezza visibile reale) e X
                 // appiccicata in alto: resta raggiungibile a qualunque punto dello scorrimento.
-                className="shrink-0 pointer-events-auto bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 px-3 py-2.5 max-w-[240px] max-h-[min(45dvh,26rem)] overflow-y-auto overscroll-contain relative"
+                className="shrink-0 pointer-events-auto bg-white/85 dark:bg-[#1C1C1E]/85 rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 px-3 py-2.5 max-w-[240px] max-h-[min(45dvh,26rem)] overflow-y-auto overscroll-contain relative"
               >
                 <div className="sticky top-0 z-10 flex justify-end -mb-6 pointer-events-none">
                   <button
@@ -7605,7 +7691,7 @@ function MapArea({
                 Tocco = esci dal follow-me; l'etichetta dice orientamento e azione. */}
             <button
               type="button"
-              className={`w-11 h-11 bg-white/90 dark:bg-black/80 backdrop-blur-3xl rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.25)] border border-white/50 dark:border-white/20 flex items-center justify-center cursor-pointer hover:scale-105 active:scale-95 transition-all ${followMode ? 'ring-2 ring-blue-500' : ''}`}
+              className={`w-11 h-11 bg-white/50 dark:bg-black/50 rounded-full shadow-[0_2px_8px_rgba(0,0,0,0.18)] border border-slate-400/60 dark:border-white/30 flex items-center justify-center cursor-pointer hover:scale-105 active:scale-95 transition-all ${followMode ? 'ring-2 ring-blue-500' : ''}`}
               title={`${getTranslation('map_orientamento', language)}: ${Math.round(mapRotation)}°`}
               aria-label={`${getTranslation('map_orientamento', language)}: ${Math.round(mapRotation)}°. ${getTranslation('a11y_esci_follow', language)}`}
               onClick={() => stopFollowMode()}
@@ -7625,7 +7711,7 @@ function MapArea({
               </svg>
             </button>
 
-            <div className="bg-blue-600/95 backdrop-blur-2xl text-white text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full shadow-2xl border border-white/20 flex items-center gap-1.5 whitespace-nowrap" aria-live="polite">
+            <div className="bg-blue-600/95 text-white text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full shadow-2xl border border-white/20 flex items-center gap-1.5 whitespace-nowrap" aria-live="polite">
               <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse inline-block" aria-hidden="true" />
               {getTranslation('map_follow_on', language)}
             </div>
@@ -7646,7 +7732,7 @@ function MapArea({
               initial={{ x: 50, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               exit={{ x: 50, opacity: 0 }}
-              className="bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-2xl border border-amber-500/30 shadow-[0_8px_32px_rgba(0,0,0,0.12)] rounded-2xl p-3 flex items-start gap-3 relative group overflow-hidden pointer-events-auto"
+              className="bg-white/85 dark:bg-[#1C1C1E]/85 border border-amber-500/30 shadow-[0_8px_32px_rgba(0,0,0,0.12)] rounded-2xl p-3 flex items-start gap-3 relative group overflow-hidden pointer-events-auto"
             >
               <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500" />
               <div className="mt-0.5 p-1 bg-amber-100 rounded-full shrink-0">
@@ -7702,7 +7788,7 @@ function MapArea({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setShowNearbyList(false)}
-              className="absolute inset-0 bg-black/40 backdrop-blur-md z-[2100]"
+              className="absolute inset-0 bg-black/40 z-[2100]"
             />
             <motion.div
               key="nearby-panel"
@@ -7712,7 +7798,7 @@ function MapArea({
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
               // z-[2101] e non z-[1002] (10/09/2026): sotto le chip categoria
               // (z-[2000], CategoryChips.tsx).
-              className="absolute bottom-0 left-0 w-full md:left-6 md:bottom-6 md:w-[420px] max-h-[65dvh] md:max-h-[60dvh] bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-3xl shadow-[0_16px_64px_rgba(0,0,0,0.3)] border border-white/40 dark:border-white/10 rounded-t-[2.5rem] md:rounded-[2rem] z-[2101] flex flex-col overflow-hidden"
+              className="absolute bottom-0 left-0 w-full md:left-6 md:bottom-6 md:w-[420px] max-h-[65dvh] md:max-h-[60dvh] bg-white/90 dark:bg-[#1C1C1E]/90 shadow-[0_16px_64px_rgba(0,0,0,0.3)] border border-white/40 dark:border-white/10 rounded-t-[2.5rem] md:rounded-[2rem] z-[2101] flex flex-col overflow-hidden"
             >
               <div className="px-6 py-5 border-b border-black/5 dark:border-white/5 flex items-center justify-between sticky top-0 z-10">
                 <div>
@@ -7813,7 +7899,7 @@ function MapArea({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setShowEverythingPanel(false)}
-              className="absolute inset-0 bg-black/40 backdrop-blur-md z-[1001]"
+              className="absolute inset-0 bg-black/40 z-[1001]"
             />
             <motion.div
               key="everything-panel"
@@ -7821,7 +7907,7 @@ function MapArea({
               animate={{ y: 0, opacity: 1, scale: 1 }}
               exit={{ y: "100%", opacity: 0, scale: 0.98 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
-              className="absolute bottom-0 left-0 w-full md:left-6 md:bottom-6 md:w-[420px] max-h-[70dvh] md:max-h-[65dvh] bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-3xl shadow-[0_16px_64px_rgba(0,0,0,0.3)] border border-white/40 dark:border-white/10 rounded-t-[2.5rem] md:rounded-[2rem] z-[1002] flex flex-col overflow-hidden"
+              className="absolute bottom-0 left-0 w-full md:left-6 md:bottom-6 md:w-[420px] max-h-[70dvh] md:max-h-[65dvh] bg-white/90 dark:bg-[#1C1C1E]/90 shadow-[0_16px_64px_rgba(0,0,0,0.3)] border border-white/40 dark:border-white/10 rounded-t-[2.5rem] md:rounded-[2rem] z-[1002] flex flex-col overflow-hidden"
             >
               <div className="px-6 py-5 border-b border-black/5 dark:border-white/5 sticky top-0 z-10">
                 <div className="flex items-center justify-between">
@@ -7996,7 +8082,7 @@ function MapArea({
            sta a bottom-1rem, sotto la card che arriva fin verso 5.25rem, e lo
            z-index altissimo la faceva comunque vincere sul fondo della card
            (tasti Guida/Naviga/Audio). Stessa regola degli altri due tasti. */
-        className={`absolute bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 md:bottom-8 md:left-8 md:max-w-md md:mx-auto z-[2200] flex flex-row items-center bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-3xl rounded-[2rem] shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 p-1.5 gap-2 select-none touch-manipulation transition-opacity ${activePoi ? 'opacity-0 pointer-events-none invisible' : ''}`}
+        className={`absolute bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 md:bottom-8 md:left-8 md:max-w-md md:mx-auto z-[2200] flex flex-row items-center bg-white/85 dark:bg-[#1C1C1E]/85 rounded-[2rem] shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 p-1.5 gap-2 select-none touch-manipulation transition-opacity ${activePoi ? 'opacity-0 pointer-events-none invisible' : ''}`}
         onMouseDown={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
@@ -8092,7 +8178,7 @@ function MapArea({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 8 }}
               transition={{ type: "spring", stiffness: 320, damping: 26 }}
-              className="absolute bottom-full left-0 right-0 mb-2 flex items-center gap-1 px-4 py-1 bg-white/90 dark:bg-[#1C1C1E]/90 backdrop-blur-3xl rounded-[2rem] shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10"
+              className="absolute bottom-full left-0 right-0 mb-2 flex items-center gap-1 px-4 py-1 bg-white/90 dark:bg-[#1C1C1E]/90 rounded-[2rem] shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10"
             >
               <Search className="w-5 h-5 text-[#1e3a8a] dark:text-white mr-1 shrink-0" />
           <form
@@ -8111,7 +8197,6 @@ function MapArea({
               aria-controls="map-search-results"
               aria-autocomplete="list"
               aria-activedescendant={activeSuggestionIdx >= 0 ? `map-sr-${activeSuggestionIdx}` : undefined}
-              onBlur={() => setTimeout(() => { setSuggestions([]); setNostri([]); setSearchNoResults(false); }, 200)}
               onKeyDown={(e) => {
                 // Navigazione da tastiera: ↑↓ evidenziano, Invio seleziona,
                 // Esc chiude. Senza selezione attiva Invio lancia la ricerca
@@ -8207,6 +8292,7 @@ function MapArea({
           <AnimatePresence>
             {(displayedSuggestions.length > 0 || (searchQuery.length >= 3 && (isSearching || searchNoResults))) && (
               <motion.div
+                ref={suggerimentiRef}
                 initial={{ opacity: 0, y: 10, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 10, scale: 0.98 }}
@@ -8217,7 +8303,7 @@ function MapArea({
                 /* mb-16 e non mb-4: i risultati stanno SOPRA la riga di
                    ricerca, che ora e' anch'essa sopra la barra. Con mb-4 le
                    due cose si sovrapponevano. */
-                className="absolute bottom-full mb-16 left-0 right-0 bg-white/95 dark:bg-[#1C1C1E]/95 backdrop-blur-3xl rounded-[2rem] shadow-[0_16px_64px_rgba(0,0,0,0.2)] border border-white/50 dark:border-white/10 overflow-hidden max-h-[300px] overflow-y-auto overscroll-none select-none touch-pan-y"
+                className="absolute bottom-full mb-16 left-0 right-0 bg-white/95 dark:bg-[#1C1C1E]/95 rounded-[2rem] shadow-[0_16px_64px_rgba(0,0,0,0.2)] border border-white/50 dark:border-white/10 overflow-hidden max-h-[300px] overflow-y-auto overscroll-none select-none touch-pan-y"
               >
                 {displayedSuggestions.length === 0 ? (
                   <div className="px-5 py-4 text-[15px] font-bold text-[#1e3a8a]/70 flex items-center gap-3" aria-live="polite">

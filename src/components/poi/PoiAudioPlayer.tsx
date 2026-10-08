@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Megaphone, Loader2, Sparkles, Headphones,
@@ -669,14 +670,20 @@ export default function PoiAudioPlayer({
         </div>
       </div>
 
-      {/* «Chiedi mentre ascolti»: domanda a voce o testo, risposta parlata */}
+      {/* «Chiedi mentre ascolti»: domanda a voce o testo, risposta parlata.
+          (03/10/2026) Portale su <body>: dentro la scheda (che ha un transform) il `fixed` era relativo
+          alla scheda e la barra delle schede dell'app copriva il riquadro, mezzo nascosto in basso.
+          Ora sta al centro, sopra tutto, alto al massimo 75% dello schermo; il titolo con la X resta
+          fermo in cima mentre la risposta scorre, e in fondo c'è anche «Chiudi». */}
+      {typeof document !== 'undefined' && createPortal(
       <AnimatePresence>
         {askOpen && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[1400] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4"
+            className="fixed inset-0 z-[5000] bg-black/60 backdrop-blur-sm flex items-center justify-center px-4"
+            style={{ paddingTop: 'calc(env(safe-area-inset-top) + 16px)', paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)' }}
             onClick={() => setAskOpen(false)}
           >
             <div
@@ -686,15 +693,15 @@ export default function PoiAudioPlayer({
               // leggere il resto — due aree con overflow annidate si
               // contendono il gesto di scorrimento sul telefono e quella
               // interna spesso non risponde al dito (10/09/2026).
-              className="w-full max-w-md max-h-[85vh] overflow-y-auto overscroll-contain bg-white rounded-3xl p-5 space-y-3 shadow-2xl"
+              className="w-full max-w-md max-h-[75dvh] overflow-y-auto overscroll-contain bg-white rounded-3xl px-5 pb-5 space-y-3 shadow-2xl"
               style={{ WebkitOverflowScrolling: 'touch' }}
               onClick={e => e.stopPropagation()}
             >
-              <div className="flex items-center justify-between">
+              <div className="sticky top-0 z-10 bg-white pt-5 pb-2 flex items-center justify-between gap-3">
                 <h4 className="font-black text-primary text-sm">
                   {getTranslation('sk_chiedi_a_su', language).replace('{guide}', localGuideMode === 'nicky' ? 'Nicky' : 'Dante').replace('{name}', String(poi?.name || ''))}
                 </h4>
-                <button onClick={() => setAskOpen(false)} className="p-1 text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
+                <button onClick={() => setAskOpen(false)} aria-label="Chiudi" className="shrink-0 w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-600 hover:bg-gray-200"><X className="w-5 h-5" /></button>
               </div>
 
               <div className="flex gap-2">
@@ -741,10 +748,16 @@ export default function PoiAudioPlayer({
               <p className="text-[10px] text-gray-500">
                 {getTranslation('sk_risposta_letta', language)}
               </p>
+              {askAnswer && (
+                <button onClick={() => setAskOpen(false)} className="w-full py-3 rounded-2xl bg-primary text-white font-black text-sm">
+                  {getTranslation('close', language) || 'Chiudi'}
+                </button>
+              )}
             </div>
           </motion.div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body)}
     </div>
   );
 }

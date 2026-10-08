@@ -280,8 +280,14 @@ export function speakInstruction(text: string, lang = 'it', character: GuideChar
     u.lang = bcp47(lang); // BCP-47 valido (niente più en-EN/zh-ZH)
     const v = pickVoice(lang, character);
     if (v) u.voice = v;
+    // (05/10/2026, prova a Roma) LA SVOLTA NON SI DICE SOPRA LA GUIDA: mentre
+    // parla il navigatore la guida si abbassa, e risale a fine frase. Nel giro lo
+    // faceva già il direttore audio; verso una meta singola le due voci si
+    // sovrapponevano a pieno volume.
+    try { locationService.setDucking(true); } catch { /* niente da abbassare */ }
     const finish = () => {
       if (activeUtterance !== u) return;
+      try { locationService.setDucking(false); } catch { /* niente */ }
       activeUtterance = null;
       if (activeUtteranceWatchdog) { clearTimeout(activeUtteranceWatchdog); activeUtteranceWatchdog = null; }
       emitSpeechEnded(text);
@@ -297,6 +303,7 @@ export function speakInstruction(text: string, lang = 'it', character: GuideChar
     activeUtteranceWatchdog = setTimeout(finish, Math.max(3000, (text.length / 15) * 1000) + 2000);
   } catch {
     activeUtterance = null;
+    try { locationService.setDucking(false); } catch { /* niente */ }
   }
 }
 

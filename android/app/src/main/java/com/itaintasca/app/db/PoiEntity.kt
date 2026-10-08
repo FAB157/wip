@@ -62,5 +62,15 @@ data class PoiEntity(
     // entrambi i casi — ma è l'unico appiglio se un domani una fonte peggiore
     // scriverà qui: chi legge deve poter decidere dalla qualità, non dalla
     // sola presenza.
-    val addressPointSource: String? = null
+    val addressPointSource: String? = null,
+    // LA FONTE della scheda (05/10/2026), per l'ARBITRATO fra luoghi vicini:
+    // la colonna `source` delle RPC nearby_pois / get_geofence_pois
+    // (= coalesce(enrichment_source, 'official')), lo stesso valore che il web
+    // legge in foregroundTriggers.ts. Un luogo con una voce di
+    // Wikipedia/Wikidata alle spalle «pesa» (vedi Arbitrato.pesa in
+    // GeofenceManager.kt): davanti al Pantheon parlava una targa, in Piazza
+    // Navona un locale. Nullable: tappe d'itinerario, pacchetti offline e
+    // righe gia' in cache non la portano e restano «senza peso» (salvo le
+    // gemme), cioe' col comportamento di prima. Parita' con Poi.source (Swift).
+    val source: String? = null
 )

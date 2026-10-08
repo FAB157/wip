@@ -518,6 +518,15 @@ export const TRAD_MAPPA: Record<string, Partial<Record<Language, string>>> = {
   mp_clima_pioggia_prevista: { IT: 'pioggia prevista', EN: 'rain expected', FR: 'pluie prévue', ES: 'lluvia prevista', DE: 'Regen erwartet', RU: 'ожидаемые осадки', ZH: '预计降雨' },
   mp_clima_attesa_mese: { IT: 'attesa per il periodo', EN: 'typical for the period', FR: 'habituelle pour la période', ES: 'habitual en el periodo', DE: 'üblich für den Zeitraum', RU: 'обычно за период', ZH: '同期通常' },
   mp_clima_col_luce: { IT: 'Luce', EN: 'Daylight', FR: 'Jour', ES: 'Luz', DE: 'Tageslicht', RU: 'Светло', ZH: '日照时长' },
+  mp_clima_invito: {
+    IT: 'Scegli il mese o la data: vedrai il clima atteso (temperature, pioggia, periodo migliore) e la scheda completa.',
+    EN: 'Pick a month or date: you will see the expected climate (temperatures, rain, best time) and the full report.',
+    FR: 'Choisissez le mois ou la date : vous verrez le climat attendu (températures, pluie, meilleure période) et la fiche complète.',
+    ES: 'Elige el mes o la fecha: verás el clima esperado (temperaturas, lluvia, mejor época) y la ficha completa.',
+    DE: 'Monat oder Datum wählen: Sie sehen das erwartete Klima (Temperaturen, Regen, beste Zeit) und den vollständigen Bericht.',
+    RU: 'Выберите месяц или дату: вы увидите ожидаемый климат (температуры, осадки, лучший период) и полный отчёт.',
+    ZH: '选择月份或日期：即可查看预期气候（气温、降雨、最佳时间）和完整报告。',
+  },
   mp_clima_avviso_peggiore: {
     IT: '{mese} è tra i mesi meno favorevoli per {citta}: {tmax}° di massima e {mm} mm di pioggia. Il periodo migliore è {migliori}.',
     EN: '{mese} is among the least favourable months for {citta}: highs of {tmax}° and {mm} mm of rain. The best time is {migliori}.',

@@ -4,7 +4,7 @@ import { X, Camera, Check, Volume2, Pause, Play, Loader2, RotateCcw, Landmark, C
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, fetchEsperienzeVicine, Esperienza, skipStop, unskipStop, markStopListened, prossimaTappa, ordinaPerTragitto, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto, leggiCartellino, Cartellino, coppieDaConfrontare, Coppia, fetchConfronto, matchTappa, fetchMuseumMap, MuseumMap, MuseumMapLink, normSalaMappa, fotoCommonsStandard } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, fetchEsperienzeVicine, Esperienza, skipStop, unskipStop, markStopListened, prossimaTappa, ordinaPerTragitto, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto, leggiCartellino, Cartellino, coppieDaConfrontare, Coppia, fetchConfronto, matchTappa, fetchMuseumMap, MuseumMap, MuseumMapLink, normSalaMappa, salaCombaciaConPin, fotoCommonsStandard } from '../lib/museumVisit';
 import { avviaAscolto, comandiVocaliDisponibili, ComandoVocale } from '../lib/comandiVocali';
 import { componiFotoRicordo, componiCartolina, condividiImmagine } from '../lib/fotoRicordo';
 import TargaSala from './TargaSala';
@@ -1760,7 +1760,8 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               <span className="flex-1 min-w-0">
                 <span className="block text-[13px] font-black">{t('mv_buy_ticket')}</span>
                 <span className="block text-[11px] font-bold text-white/80 truncate">
-                  {biglietto.prezzo ? t('mv_ticket_from').replace('{p}', biglietto.prezzo).replace('{f}', biglietto.fonte === 'tiqets' ? 'Tiqets' : biglietto.fonte === 'viator' ? 'Viator' : 'GetYourGuide') : biglietto.titolo}
+                  {/* Il server dà già «da €18»: senza toglierlo usciva «da da €18 · Tiqets» (06/10/2026). */}
+                  {biglietto.prezzo ? t('mv_ticket_from').replace('{p}', biglietto.prezzo.replace(/^\s*(da|from|ab|desde|dès|от)\s+/i, '')).replace('{f}', biglietto.fonte === 'tiqets' ? 'Tiqets' : biglietto.fonte === 'viator' ? 'Viator' : 'GetYourGuide') : biglietto.titolo}
                 </span>
               </span>
               <ExternalLink className="w-4 h-4 shrink-0 text-white/80" />
@@ -2283,7 +2284,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             const salaQui = ultimaVista !== undefined ? salaDi(ultimaVista) : '';
             const pinConTappe = mappa.pins.map(p => {
               const ns = normSalaMappa(p.sala);
-              const tappe = ordineAttivo.filter(k => !visit.guide.tappe[k].soloCollezione && (salaDi(k) === ns || normSalaMappa(visit.guide.tappe[k].dove) === ns));
+              const tappe = ordineAttivo.filter(k => !visit.guide.tappe[k].soloCollezione && (salaDi(k) === ns || normSalaMappa(visit.guide.tappe[k].dove) === ns || salaCombaciaConPin(p.sala, visit.guide.tappe[k] as any)));
               return { pin: p, tappe, seiQui: !!ns && ns === salaQui };
             }).filter(x => x.tappe.length > 0);
             return (

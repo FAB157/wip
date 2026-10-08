@@ -96,6 +96,44 @@ object NavFollower {
     // metri, gira a sinistra» mentre se ne allontanava.
     const val AVVICINA_M = 3.0
 
+    // ── (03/10/2026) AGGANCIO AL TRACCIATO e TEMPI DELLE SVOLTE ──────────────
+    // Collaudo del committente a Montecatini: «non andava bene, né come svolte né
+    // come matching map». Fino a oggi le soglie «vicino»/«lontano» erano a LINEA
+    // D'ARIA dal punto della manovra, fisse (30 e 50-150 m): dietro una curva la
+    // svolta veniva detta troppo presto o troppo tardi, e il banner mostrava metri
+    // che non erano quelli da camminare. Ora:
+    //  - AGGANCIO: a ogni fix buono la posizione si proietta sul tracciato in una
+    //    finestra che parte dall'aggancio precedente (15 m indietro, in avanti
+    //    quanto si può aver camminato): la posizione «sulla strada» è `u`, metri
+    //    dall'inizio del tracciato. Tre fix di fila senza aggancio → si riparte
+    //    dalla prima corrispondenza dopo 300 m prima del passo corrente.
+    //  - METRI ALLA SVOLTA = alongPasso[idx] - u (lungo la strada). Senza aggancio
+    //    o senza tracciato resta la linea d'aria, con le soglie di prima.
+    //  - TEMPI SULLA VELOCITÀ: «vicino» a 12 s dalla svolta (mai sotto 18 m, mai
+    //    sopra 35), «lontano» fra vicino+20 m e 70 s (mai sotto 70 m, mai sopra 150).
+    //  - Svolta superata di 12 m LUNGO la strada → si passa alla successiva.
+    // Uguale in Swift (NavFollower in BackgroundPoiManager.swift) e nella specifica.
+    const val MATCH_INDIETRO_M = 15.0
+    const val MATCH_AVANTI_MIN_M = 60.0
+    const val MATCH_CROSS_MIN_M = 25.0
+    const val MATCH_CROSS_MAX_M = 60.0
+    const val MATCH_PERSI_MAX = 3
+    const val MATCH_PENALITA_INDIETRO = 0.5
+    const val VEL_FINESTRA_MS = 10_000L
+    const val VEL_DEFAULT_MS = 1.3
+    const val VEL_MIN_MS = 0.5
+    const val VEL_MAX_MS = 2.5
+    const val VEL_SALTO_MS = 4.0
+    const val NEAR_SEC = 12.0
+    const val NEAR_MIN_M = 18.0
+    const val NEAR_MAX_M = 35.0
+    const val FAR_SEC = 70.0
+    const val FAR_DYN_MIN_M = 70.0
+    const val FAR_STACCO_M = 20.0
+    const val PASSATO_STRADA_M = 12.0
+    /** Righe del registro di collaudo tenute in memoria (un fix = una riga). */
+    const val LOG_MAX = 4000
+
     private const val RAGGIO_TERRA_M = 6_371_000.0
 
     /** Una manovra consegnata dal JS: il testo è già nella lingua dell'utente. */
@@ -215,6 +253,20 @@ object NavFollower {
     // nessun valore → non si dice ancora). Si aggiorna solo sui fix buoni.
     private var dPrec = 0.0
     private var dPrecIdx = -1
+    // (03/10/2026) Aggancio al tracciato: `uMatch` = metri lungo il tracciato
+    // dell'ultimo aggancio (NaN = non agganciati); velocità media mobile; i metri
+    // alla svolta LUNGO LA STRADA dell'ultimo fix, per il cruscotto.
+    private var uMatch = Double.NaN
+    private var agganciPersi = 0
+    private var vel = VEL_DEFAULT_MS
+    private var velTs = 0L
+    private var rifU = 0.0
+    private var rifTs = 0L
+    private var ultimoDStrada = Double.NaN
+    private var ultimoDStradaIdx = -1
+    // REGISTRO DI COLLAUDO: una riga per fix col percorso attivo. Vive in memoria,
+    // lo legge il plugin (`getNavLog`) dal pannello admin. Non si azzera a setRoute.
+    private val registro = ArrayDeque<String>()
     // (21/09/2026, REVISIONE 2) FOTOGRAFIA di «Termina» dal cruscotto: id,
     // indice e insiemi «davvero» presi un istante prima dello svuotamento.
     // Se al risveglio il JS chiede conferma e l'utente dice «no», riprende
@@ -345,6 +397,11 @@ object NavFollower {
         idx = root.optInt("indice", 0).coerceIn(0, nuoviPassi.size - 1)
         idxJs = idx
         dPrecIdx = -1
+        uMatch = Double.NaN
+        agganciPersi = 0
+        ultimoDStrada = Double.NaN
+        ultimoDStradaIdx = -1
+        scrivi("PERCORSO id=${routeId} passi=${nuoviPassi.size} linea=${nuovaLinea.size} indice=$idx")
         minDist = Double.POSITIVE_INFINITY
         dettiVicino.clear()
         dettiLontano.clear()
@@ -439,6 +496,10 @@ object NavFollower {
         spegniCruscotto = true
         idxJs = 0
         dPrecIdx = -1
+        uMatch = Double.NaN
+        agganciPersi = 0
+        ultimoDStrada = Double.NaN
+        ultimoDStradaIdx = -1
         fuoriDa = 0L
         fuoriDetto = false
         fuoriDettoTs = 0L
@@ -496,6 +557,13 @@ object NavFollower {
      */
     @Synchronized
     fun haPercorsoAttivo(): Boolean = passi.isNotEmpty() && !finito && !inPausa
+
+    /**
+     * (03/10/2026) C'è un giro in corso, ANCHE in pausa: serve al filtro delle notifiche
+     * di avvicinamento («durante un giro solo le tappe»). Uguale in Swift (`haPercorso`).
+     */
+    @Synchronized
+    fun haPercorso(): Boolean = passi.isNotEmpty() && !finito
 
     /**
      * Battito del JS: «sono vivo, parlo io, e sono arrivato fin qui».
@@ -635,7 +703,9 @@ object NavFollower {
         if (idx >= resto.size || idx >= restoTappa.size) return null
 
         val p = passi[idx]
-        val d = metri(lat, lon, p.lat, p.lon)
+        // (03/10/2026) I metri alla svolta sono quelli LUNGO LA STRADA dell'ultimo fix
+        // agganciato (stesso passo); senza aggancio resta la linea d'aria.
+        val d = if (ultimoDStradaIdx == idx && !ultimoDStrada.isNaN()) ultimoDStrada else metri(lat, lon, p.lat, p.lon)
         val rimTappa = d + restoTappa[idx]
         val rimTotale = d + resto[idx]
 
@@ -719,7 +789,7 @@ object NavFollower {
      * tiene il conto). Al massimo UNA frase per fix.
      */
     @Synchronized
-    fun onFix(lat: Double, lon: Double, accuracyM: Double, nowMs: Long): String? {
+    fun onFix(lat: Double, lon: Double, accuracyM: Double, nowMs: Long, velGpsMs: Double = Double.NaN): String? {
         val n = passi.size
         // L'ultimo fix buono si ricorda anche in pausa: serve al ridisegno
         // immediato del cruscotto quando si tocca «pausa»/«riprendi».
@@ -766,6 +836,12 @@ object NavFollower {
         var out: String? = null
         var tipoOut = ""
         var testoOut = "" // il `testo` del passo che ha generato `out`
+
+        // (03/10/2026) AGGANCIO AL TRACCIATO: dove si è LUNGO LA STRADA (NaN = non agganciati).
+        val u = aggancia(lat, lon, accuracyM, nowMs, velGpsMs)
+        val vicinoM = (vel * NEAR_SEC).coerceIn(NEAR_MIN_M, NEAR_MAX_M)
+        var logAria = Double.NaN
+        var logStrada = Double.NaN
 
         var giri = 0
         while (giri < n) {
@@ -889,7 +965,27 @@ object NavFollower {
                 dPrecIdx = idx
             }
 
-            if (d <= NEAR_M && (!dettiVicino.contains(idx) || (!jsVivo && !dettiVicinoDavvero.contains(idx)))) {
+            // (03/10/2026) METRI ALLA SVOLTA LUNGO LA STRADA, se agganciati e il passo
+            // sta sul tracciato; altrimenti la linea d'aria con le soglie di prima.
+            val aP = if (idx < alongPasso.size) alongPasso[idx] else Double.NaN
+            val suStrada = !u.isNaN() && !aP.isNaN()
+            if (suStrada && u > aP + PASSATO_STRADA_M && idx + 1 < n) {
+                // Svolta alle spalle di 12 m LUNGO la strada: detta o no, si passa
+                // alla successiva (se non era stata detta resta «contata», mai «davvero»).
+                dettiVicino.add(idx)
+                dettiLontano.add(idx)
+                avanza(); continue
+            }
+            val dS = if (suStrada) maxOf(0.0, aP - u) else d
+            val vicinoOra = if (suStrada) dS <= vicinoM else d <= NEAR_M
+            val lontanoMin = if (suStrada) vicinoM + FAR_STACCO_M else FAR_MIN_M
+            val lontanoMax = if (suStrada) (vel * FAR_SEC).coerceIn(FAR_DYN_MIN_M, FAR_MAX_M) else FAR_MAX_M
+            ultimoDStrada = if (suStrada) dS else Double.NaN
+            ultimoDStradaIdx = idx
+            logAria = d
+            logStrada = if (suStrada) dS else Double.NaN
+
+            if (vicinoOra && (!dettiVicino.contains(idx) || (!jsVivo && !dettiVicinoDavvero.contains(idx)))) {
                 dettiVicino.add(idx)
                 dettiLontano.add(idx)
                 if (!jsVivo) {
@@ -905,7 +1001,7 @@ object NavFollower {
                 avanza(); continue
             } else if (p.tipo == "turn" && !inPausa && avvicina &&
                 (!dettiLontano.contains(idx) || (!jsVivo && !dettiLontanoDavvero.contains(idx))) &&
-                d >= FAR_MIN_M && d <= FAR_MAX_M && p.testo.isNotEmpty()
+                dS >= lontanoMin && dS <= lontanoMax && p.testo.isNotEmpty()
             ) {
                 // (21/09/2026, REVISIONE 2) In pausa il preavviso NON si segna.
                 // E CONTATO ≠ DETTO anche qui: un preavviso contato in silenzio
@@ -915,7 +1011,7 @@ object NavFollower {
                 dettiLontano.add(idx)
                 if (!jsVivo) {
                     dettiLontanoDavvero.add(idx)
-                    out = fraseLontana(d, p.testo)
+                    out = fraseLontana(dS, p.testo)
                     tipoOut = "lontano"
                     testoOut = p.testo
                 }
@@ -956,6 +1052,14 @@ object NavFollower {
             }
         }
 
+        // (03/10/2026) REGISTRO: una riga per fix — posizione, precisione, passo, metri
+        // in linea d'aria e lungo la strada, aggancio, velocità, chi è al comando, frase.
+        scrivi(
+            "FIX ${f5(lat)},${f5(lon)} acc=${accuracyM.roundToInt()} idx=$idx aria=${f0(logAria)} strada=${f0(logStrada)} " +
+                "u=${f0(u)} v=${"%.1f".format(java.util.Locale.US, vel)} vicino=${vicinoM.roundToInt()} " +
+                "${if (jsVivo) (if (inPausa) "PAUSA" else "JS") else "NATIVO"}${if (out != null) " DICE[$tipoOut]: $out" else ""}"
+        )
+
         val frase = out ?: return null
         if (jsVivo) return null
         // Doppione = stessa frase PER LA STESSA manovra: due svolte diverse con
@@ -968,6 +1072,102 @@ object NavFollower {
         else if (tipoOut == "lontano") ultimoTestoLontano = testoOut
         return frase
     }
+
+    // ── (03/10/2026) Aggancio, registro ───────────────────────────────────────
+
+    /**
+     * Posizione LUNGO IL TRACCIATO (metri dall'inizio) o NaN. Aggiorna anche la
+     * velocità (media mobile sui fix buoni; un salto oltre 4 m/s non conta).
+     * Finestra: da 15 m PRIMA dell'aggancio precedente a quanto si può aver
+     * camminato dal fix prima (almeno 60 m); dentro la finestra vince il punto PIÙ
+     * VICINO entro la tolleranza laterale (la precisione del fix, fra 25 e 60 m).
+     * La finestra è ciò che tiene sulla strada giusta in un anello o su un'andata
+     * e ritorno: il tratto di ritorno che passa accanto non è nella finestra.
+     */
+    private fun aggancia(lat: Double, lon: Double, accuracyM: Double, nowMs: Long, velGpsMs: Double): Double {
+        val dtFix = if (velTs > 0L) (nowMs - velTs) / 1000.0 else 2.0
+        velTs = nowMs
+        if (linea.size < 2 || lineaCum.size != linea.size) { uMatch = Double.NaN; return Double.NaN }
+        val cross = accuracyM.coerceIn(MATCH_CROSS_MIN_M, MATCH_CROSS_MAX_M)
+        val uPrec = uMatch
+        var trovato = Double.NaN
+        if (!uPrec.isNaN()) {
+            val avanti = maxOf(MATCH_AVANTI_MIN_M, vel * dtFix.coerceIn(0.5, 30.0) * 3.0 + 40.0)
+            trovato = alongVicino(lat, lon, uPrec - MATCH_INDIETRO_M, uPrec + avanti, cross, uPrec)
+            if (trovato.isNaN()) {
+                agganciPersi++
+                if (agganciPersi < MATCH_PERSI_MAX) return Double.NaN
+            }
+        }
+        if (trovato.isNaN()) {
+            // (Ri)aggancio: la PRIMA corrispondenza da 300 m prima del passo corrente.
+            val base = if (idx < alongPasso.size && !alongPasso[idx].isNaN()) maxOf(0.0, alongPasso[idx] - 300.0) else 0.0
+            trovato = alongUtente(lat, lon, base, lineaCum[lineaCum.size - 1], cross)
+        }
+        if (trovato.isNaN()) { uMatch = Double.NaN; rifTs = 0L; return Double.NaN }
+        // LA VELOCITÀ. Fra due fix grezzi non si può misurare: il GPS che balla di
+        // 8 m ogni 2 s «cammina» a 4 m/s anche da fermi (scratch/collaudo-aggancio).
+        // Quindi: la velocità del GPS quando c'è (Doppler, non dalle posizioni);
+        // altrimenti i metri fatti LUNGO LA STRADA su almeno 10 secondi.
+        if (!velGpsMs.isNaN() && velGpsMs >= 0.0) {
+            if (velGpsMs <= VEL_SALTO_MS) vel = (0.8 * vel + 0.2 * velGpsMs).coerceIn(VEL_MIN_MS, VEL_MAX_MS)
+            rifTs = 0L
+        } else if (uPrec.isNaN() || rifTs == 0L) {
+            rifU = trovato; rifTs = nowMs
+        } else if (nowMs - rifTs >= VEL_FINESTRA_MS) {
+            val v = (trovato - rifU) / ((nowMs - rifTs) / 1000.0)
+            if (v in 0.0..VEL_SALTO_MS) vel = (0.5 * vel + 0.5 * v).coerceIn(VEL_MIN_MS, VEL_MAX_MS)
+            rifU = trovato; rifTs = nowMs
+        }
+        agganciPersi = 0
+        uMatch = trovato
+        return trovato
+    }
+
+    /**
+     * Il punto PIÙ VICINO del tracciato fra `da` e `a` (metri progressivi), entro
+     * `maxCross`; NaN se non c'è. A parità (o quasi) di distanza vince chi sta
+     * AVANTI rispetto a `uPrec`: tornare indietro costa mezzo metro per metro. Sul
+     * ritorno per la stessa strada dell'andata i due tratti sono alla stessa
+     * distanza, e senza questo la posizione scivolava all'indietro sull'andata.
+     */
+    private fun alongVicino(lat: Double, lon: Double, da: Double, a: Double, maxCross: Double, uPrec: Double): Double {
+        if (linea.size < 2 || lineaCum.size != linea.size) return Double.NaN
+        val kx = Math.toRadians(1.0) * RAGGIO_TERRA_M * cos(Math.toRadians(lat))
+        val ky = Math.toRadians(1.0) * RAGGIO_TERRA_M
+        var best = Double.POSITIVE_INFINITY
+        var along = Double.NaN
+        for (k in 1 until linea.size) {
+            if (lineaCum[k] < da) continue
+            if (lineaCum[k - 1] > a) break
+            val ax = (linea[k - 1][1] - lon) * kx
+            val ay = (linea[k - 1][0] - lat) * ky
+            val dx = (linea[k][1] - lon) * kx - ax
+            val dy = (linea[k][0] - lat) * ky - ay
+            val len2 = dx * dx + dy * dy
+            val t = if (len2 <= 0.0) 0.0 else (-(ax * dx + ay * dy) / len2).coerceIn(0.0, 1.0)
+            val px = ax + t * dx
+            val py = ay + t * dy
+            val dist = sqrt(px * px + py * py)
+            val al = lineaCum[k - 1] + t * (lineaCum[k] - lineaCum[k - 1])
+            if (al < da || al > a || dist > maxCross) continue
+            val punteggio = dist + if (al < uPrec) (uPrec - al) * MATCH_PENALITA_INDIETRO else 0.0
+            if (punteggio < best) { best = punteggio; along = al }
+        }
+        return along
+    }
+
+    private fun f5(x: Double): String = "%.5f".format(java.util.Locale.US, x)
+    private fun f0(x: Double): String = if (x.isNaN()) "-" else x.roundToInt().toString()
+
+    /** Una riga nel registro di collaudo, con l'ora del telefono. */
+    private fun scrivi(riga: String) {
+        // (04/10/2026) Su disco e insieme alle righe dell'audioguida: vedi RegistroCollaudo.
+        RegistroCollaudo.scrivi("NAV $riga")
+    }
+
+    /** Il registro di collaudo (copia), dal più vecchio al più recente. */
+    fun registroCollaudo(): List<String> = RegistroCollaudo.tutte()
 
     /** Manovra successiva, mai oltre l'ultima. Il minimo riparte da capo. */
     private fun avanza() {

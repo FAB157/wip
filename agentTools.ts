@@ -490,6 +490,49 @@ async function resolveDestinationId(cityName: string, apiKey: string): Promise<n
 }
 
 /**
+ * (06/10/2026) LA DESTINAZIONE VIATOR PIÙ VICINA ALLE COORDINATE. Quando il nome non è una destinazione Viator
+ * («Carrara»), il ripiego a testo libero prendeva i prodotti che CONTENGONO la parola, ovunque: a Carrara uscivano
+ * «Aeroporto di Gold Coast: trasferimento» (Carrara è un sobborgo australiano) e «cimitero di Guayaquil». L'elenco
+ * ufficiale /partner/destinations porta le coordinate di ogni destinazione: si prende la più vicina entro 60 km
+ * (città prima delle regioni). Elenco in memoria per 24 ore (è grande, ma cambia di rado).
+ */
+let destinazioniViator: { quando: number; voci: { id: number; nome: string; tipo: string; lat: number; lon: number }[] } | null = null;
+export async function destinazioneViatorVicina(lat: number, lng: number, apiKey: string): Promise<{ id: number; nome: string; km: number } | null> {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !apiKey) return null;
+  try {
+    if (!destinazioniViator || Date.now() - destinazioniViator.quando > 24 * 3600_000) {
+      const r = await axios.get(`https://${viatorApiHost()}/partner/destinations`, {
+        headers: { "exp-api-key": apiKey, "Accept": "application/json;version=2.0", "Accept-Language": "en-US" },
+        timeout: 15000, maxContentLength: 30_000_000,
+      });
+      const grezze: any[] = r.data?.destinations || [];
+      destinazioniViator = {
+        quando: Date.now(),
+        voci: grezze.map((d: any) => ({
+          id: Number(d.destinationId ?? d.id), nome: String(d.name || ''), tipo: String(d.type || ''),
+          lat: Number(d.center?.latitude ?? d.latitude), lon: Number(d.center?.longitude ?? d.longitude),
+        })).filter((d) => Number.isFinite(d.id) && Number.isFinite(d.lat) && Number.isFinite(d.lon)),
+      };
+    }
+    const km = (aLat: number, aLon: number, bLat: number, bLon: number) => {
+      const R = 6371, dLat = (bLat - aLat) * Math.PI / 180, dLon = (bLon - aLon) * Math.PI / 180;
+      const h = Math.sin(dLat / 2) ** 2 + Math.cos(aLat * Math.PI / 180) * Math.cos(bLat * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(h));
+    };
+    const pesoTipo = (t: string) => /^(CITY|TOWN|VILLAGE|ISLAND|DISTRICT|NEIGHBORHOOD)$/i.test(t) ? 0 : /^(REGION|STATE|PROVINCE|COUNTY)$/i.test(t) ? 1 : 2;
+    const vicine = destinazioniViator.voci
+      .map((d) => ({ ...d, km: km(lat, lng, d.lat, d.lon) }))
+      .filter((d) => d.km <= 60 && pesoTipo(d.tipo) < 2)
+      .sort((a, b) => (pesoTipo(a.tipo) - pesoTipo(b.tipo)) || (a.km - b.km));
+    const scelta = vicine[0];
+    return scelta ? { id: scelta.id, nome: scelta.nome, km: Math.round(scelta.km) } : null;
+  } catch (err: any) {
+    console.warn('[Viator] elenco destinazioni non letto:', err?.response?.status || err?.message);
+    return null;
+  }
+}
+
+/**
  * Link Viator tracciato secondo il formato ufficiale del programma
  * (?pid=…&mcid=…&medium=link). Ordine di precedenza:
  *  1. l'URL è già tracciato dall'API → si lascia intatto;
@@ -534,12 +577,31 @@ export const viatorAcceptLanguage = (lang?: string) => VIATOR_LANG[String(lang |
  * blossom Kyoto»): serve agli Stagionali e alle mostre. Stesso formato di
  * searchViatorExperiences.
  */
-export async function searchViatorFreetext(term: string, lang: string = 'it', count: number = 12): Promise<any[]> {
+/**
+ * (06/10/2026) La destinazione Viator di una città: prima per nome (mappa + ricerca dinamica), poi la più vicina alle
+ * coordinate. Serve a chi cerca a testo libero («vendemmia», «mercatini di Natale»): senza destinazione la ricerca
+ * prende i prodotti di tutto il mondo — a Carrara gli Stagionali davano Corfù, Alba e il Porto di Dow's.
+ */
+export async function destinazioneViatorPer(cityName: string, lat?: number, lng?: number): Promise<number | null> {
+  const apiKey = process.env.VIATOR_API_KEY || process.env.VITE_VIATOR_API_KEY;
+  if (!apiKey) return null;
+  const perNome = await resolveDestinationId(cityName || "", apiKey).catch(() => null);
+  if (perNome) return perNome;
+  if (Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) {
+    const vicina = await destinazioneViatorVicina(Number(lat), Number(lng), apiKey);
+    if (vicina) return vicina.id;
+  }
+  return null;
+}
+
+export async function searchViatorFreetext(term: string, lang: string = 'it', count: number = 12, destinationId?: number | null): Promise<any[]> {
   const apiKey = process.env.VIATOR_API_KEY || process.env.VITE_VIATOR_API_KEY;
   if (!apiKey || !term) return [];
   try {
     const res = await viatorPost(`/partner/search/freetext`, {
       searchTerm: term,
+      // Con la destinazione i prodotti sono di QUEL posto (06/10/2026, vedi destinazioneViatorPer).
+      ...(destinationId ? { productFiltering: { destination: String(destinationId) } } : {}),
       searchTypes: [{ searchType: "PRODUCTS", pagination: { start: 1, count: Math.min(50, Math.max(1, count)) } }],
       currency: "EUR",
       pagination: { start: 1, count: Math.min(50, Math.max(1, count)) }
@@ -578,6 +640,15 @@ export async function searchViatorExperiences(lat: number, lng: number, radiusKm
 
     // ── Risolvi il destinationId dinamicamente ──
     let destinationId = await resolveDestinationId(cityName || "", apiKey);
+
+    // Nome sconosciuto a Viator → la destinazione più vicina alle coordinate (06/10/2026, vedi sopra).
+    if (!destinationId) {
+      const vicina = await destinazioneViatorVicina(lat, lng, apiKey);
+      if (vicina) {
+        console.log(`[Viator] '${cityName || '?'}' non è una destinazione: uso la più vicina, ${vicina.nome} (${vicina.id}) a ${vicina.km} km`);
+        destinationId = vicina.id;
+      }
+    }
 
     // Se non troviamo il destinationId, possiamo provare una ricerca prodotti "Freetext"
     if (!destinationId) {

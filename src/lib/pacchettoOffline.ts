@@ -11,6 +11,7 @@ import { prefetchTilesForArea, removeTilesForArea, stimaDownloadArea } from './o
 import { bboxDaPunti, celleDelBbox, scaricaStradePerBbox, stimaByteCelle, rimuoviStradePerBbox, coperturaStrade } from './offlineRoads';
 import { registraDownload, rimuoviDownload, leggiDownload } from './downloadsRegistry';
 import { haversineMeters } from './geo';
+import { prescaricaStrade } from './roadSnap';
 
 export interface PuntoTappa { lat: number; lon: number; nome?: string }
 
@@ -98,6 +99,12 @@ export async function scaricaPacchettoOffline(
         esito.bytes += r.bytes;
       } catch { esito.strade = { scaricate: 0, giaPresenti: 0, mancanti: 1, richieste: 1 }; }
     }
+    // (03/10/2026, committente: «le tiles… anche nelle funzioni offline») Le
+    // celle qui sopra sono il grafo pedonale per il ricalcolo senza rete; queste
+    // sono le strade su cui l'app misura le distanze dai luoghi (trigger a
+    // 30/150 m di strada) e aggancia il GPS alla via — web e servizio nativo.
+    // Best-effort: non cambia l'esito del pacchetto.
+    try { await prescaricaStrade(tappe.map(t => [t.lat, t.lon])); } catch { /* best-effort */ }
   }
 
   await registraDownload('itinerario', itinerarioId, {

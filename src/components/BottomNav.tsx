@@ -70,7 +70,7 @@ export default function BottomNav({ activeTab, setActiveTab, isAudioGuideActive,
     <>
     <nav
       aria-label={getTranslation("a11y_nav_principale", language)}
-      className="w-full sm:max-w-none bg-surface-container-lowest/90 flex-shrink-0 backdrop-blur-xl border-t border-amber-100/60 shadow-[0_-4px_24px_rgba(0,0,0,0.02)] flex items-stretch min-h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] z-[100] relative print:hidden"
+      className="w-full sm:max-w-none bg-surface-container-lowest/90 flex-shrink-0 border-t border-amber-100/60 shadow-[0_-4px_24px_rgba(0,0,0,0.02)] flex items-stretch min-h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] z-[100] relative print:hidden"
     >
       <NavItem
         icon={<MapIcon className="w-5 h-5" />}
@@ -110,7 +110,7 @@ export default function BottomNav({ activeTab, setActiveTab, isAudioGuideActive,
         </button>
         {showWipTooltip && (
           <div className="absolute -bottom-4 flex flex-col items-center justify-center pb-0.5 pointer-events-none" aria-hidden="true">
-            <div className="flex items-center justify-center gap-1 opacity-90 bg-surface/80 backdrop-blur-sm px-2 py-0.5 rounded-full shadow-sm">
+            <div className="flex items-center justify-center gap-1 opacity-90 bg-surface/80 px-2 py-0.5 rounded-full shadow-sm">
               <div className="h-4 px-1 bg-primary rounded flex items-center justify-center shadow-sm transform -rotate-1">
                 <span className="text-white font-black text-[11px] italic leading-none">WIP</span>
               </div>
@@ -146,7 +146,7 @@ export default function BottomNav({ activeTab, setActiveTab, isAudioGuideActive,
         tone="secondary"
         badge={isAudioGuideActive && !isAudioGuideMuted ? (
           <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5" aria-hidden="true">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-secondary opacity-75"></span>
+            <span className="absolute inline-flex h-full w-full rounded-full bg-secondary opacity-75"></span>
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-secondary"></span>
           </span>
         ) : null}

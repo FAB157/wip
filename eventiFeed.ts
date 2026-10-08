@@ -123,27 +123,55 @@ export interface CittaNomi {
  */
 export async function cittaInTreNomi(lat: number, lon: number, lang: string): Promise<CittaNomi> {
   const lingua = String(lang || 'it').slice(0, 2).toLowerCase();
-  const chiave = `citta3_${lat.toFixed(2)}_${lon.toFixed(2)}_${lingua}`;
+  // v4 (06/10/2026): le chiavi `citta3_` tenevano in cache QUARTIERI al posto della città (sotto).
+  const chiave = `citta4_${lat.toFixed(2)}_${lon.toFixed(2)}_${lingua}`;
   const hit = await cacheLeggi(chiave, 30 * 86400_000);
   if (hit && hit.en) return hit;
   const vuoto: CittaNomi = { cc: '', locale: '', en: '', utente: '', lingua_locale: '', regione: '' };
+  const UA_NOMINATIM = { 'User-Agent': 'WorldInPocketEvents/1.0 (https://wip.guide)' };
   try {
     const r = await axios.get('https://nominatim.openstreetmap.org/reverse', {
       params: { lat, lon, format: 'jsonv2', zoom: 10, namedetails: 1, 'accept-language': `${lingua},en` },
-      headers: { 'User-Agent': 'WorldInPocketEvents/1.0 (https://wip.guide)' },
+      headers: UA_NOMINATIM,
       timeout: 8000,
     });
     const d = r.data || {};
     const a = d.address || {};
-    const nd = d.namedetails || {};
+    let nd = d.namedetails || {};
     const cc = String(a.country_code || '').toLowerCase();
     const linguaLocale = LINGUA_PAESE[cc] || '';
-    const base = a.city || a.town || a.village || a.municipality || a.county || a.state_district || '';
+    const base = String(a.city || a.town || a.village || a.municipality || a.county || a.state_district || '');
+    // (06/10/2026, verifica Eventi su 10 città) A zoom 10 il reverse restituisce spesso un QUARTIERE o un
+    // distretto, non la città: Lisbona → «Arroios», Tokyo → «Suginami», New York → «Manhattan», Londra → «City
+    // of Westminster». I partner cercavano quello: Trip.com dava Vila Real per «Arroios» e Disneyland California
+    // per «Westminster», i portali 0 eventi, Klook nessuna città. La città è quella di address.city (o town…);
+    // se il risultato non è lei, i nomi nelle altre lingue si chiedono con una seconda ricerca della città.
+    const nomeRisultato = String(d.name || nd.name || '');
+    let cittaNome = base;
+    if (cc === 'gb' && ([a.state_district, a.county, a.city, a.region].some((x: any) => /greater london|^london$/i.test(String(x || '')))
+      || /^(city of (westminster|london)|london borough of|royal borough of (kensington|greenwich|kingston))/i.test(base || nomeRisultato))) cittaNome = 'London';
+    else if (cc === 'jp' && (String(a['ISO3166-2-lvl4'] || '') === 'JP-13' || /東京|tokyo/i.test(`${a.province || ''} ${a.state || ''} ${a.region || ''} ${a.city || ''}`)) && !/^(tokyo|東京都?)$/i.test(base)) cittaNome = 'Tokyo';
+    else if (cc === 'us' && (/^(city of )?new york$/i.test(base) || /^(manhattan|brooklyn|queens|the bronx|bronx|staten island)$/i.test(nomeRisultato))) cittaNome = 'New York';
+    cittaNome = cittaNome.replace(/^City of /i, '').split(/[,(]/)[0].trim();
+    const stessoNome = (x: any) => !!cittaNome && normUnicode(String(x || '')) === normUnicode(cittaNome);
+    if (cittaNome && !stessoNome(nomeRisultato) && !stessoNome(nd['name:en']) && !stessoNome(nd[`name:${lingua}`])) {
+      nd = {};
+      try {
+        const s = await axios.get('https://nominatim.openstreetmap.org/search', {
+          params: { q: cittaNome, format: 'jsonv2', namedetails: 1, limit: 5, ...(cc ? { countrycodes: cc } : {}), 'accept-language': `${lingua},en` },
+          headers: UA_NOMINATIM, timeout: 8000,
+        });
+        const righe: any[] = Array.isArray(s.data) ? s.data : [];
+        const citta = righe.find((x) => /^(city|town|village|municipality|administrative|county|state)$/.test(String(x.addresstype || x.type || '')) && (x.class === 'place' || x.class === 'boundary'))
+          || righe.find((x) => x.class === 'place' || x.class === 'boundary');
+        if (citta?.namedetails) nd = citta.namedetails;
+      } catch { /* restano i nomi di base */ }
+    }
     const out: CittaNomi = {
       cc,
-      locale: String(nd.name || (linguaLocale && nd[`name:${linguaLocale}`]) || base || ''),
-      en: String(nd['name:en'] || d.name || base || ''),
-      utente: String(nd[`name:${lingua}`] || base || nd.name || ''),
+      locale: String(nd.name || (linguaLocale && nd[`name:${linguaLocale}`]) || cittaNome || nomeRisultato || ''),
+      en: String(nd['name:en'] || cittaNome || nomeRisultato || ''),
+      utente: String(nd[`name:${lingua}`] || nd['name:en'] || cittaNome || nd.name || ''),
       lingua_locale: linguaLocale,
       regione: String(a.state || a.region || ''),
     };
@@ -180,8 +208,18 @@ export interface AttivitaAffiliata {
 export async function klookAttivita(cityEn: string, lang: string): Promise<AttivitaAffiliata[]> {
   const lingua = String(lang || 'it').slice(0, 2).toLowerCase();
   const citta = klookCityFor(cityEn);
-  if (!citta) return [];
   const locale = KLOOK_LOCALE[lingua] || 'en-US';
+  // (06/10/2026) Città che Klook non elenca (Carrara, Lisbona prima della correzione dei nomi): il link
+  // affiliato alla RICERCA sul sito, invece di niente — «per tutti gli affiliati, in tutte le città».
+  if (!citta) {
+    const n = String(cityEn || '').trim();
+    if (n.length < 2) return [];
+    return [{
+      id: `klook-search-${slug(n)}`, name: n, description: '', price: '', rating: '', imageUrl: '',
+      url: klookAffiliateUrl(`https://www.klook.com/${locale}/search/?query=${encodeURIComponent(n)}`),
+      source: 'klook', city: n, isSearch: true,
+    }];
+  }
   const paginaCitta = klookAffiliateUrl(`https://www.klook.com/${locale}/city/${citta.id}-${klookCitySlug(citta)}/`);
   const ricerca: AttivitaAffiliata = {
     id: `klook-city-${citta.id}`,
@@ -243,11 +281,21 @@ const decodeHtml = (s: string) => String(s || '')
  * estraggono le card (attrazioni e tour). Nome locale o inglese: Trip.com
  * accetta entrambi. Cache 24 h per città e lingua.
  */
-export async function tripcomAttivita(cityName: string, lang: string): Promise<AttivitaAffiliata[]> {
+export async function tripcomAttivita(cityName: string, lang: string, altriNomi: string[] = []): Promise<AttivitaAffiliata[]> {
   const lingua = String(lang || 'it').slice(0, 2).toLowerCase();
   const nome = String(cityName || '').trim();
   if (nome.length < 2) return [];
-  const chiave = `tripcom_${slug(nome) || 'x'}_${lingua}`;
+  // (06/10/2026) La pagina elenco di Trip.com risponde anche con attrazioni di ALTRE città (per «Arroios»
+  // dava Vila Real e Porto, a 300 km): si tengono solo le card il cui indirizzo porta la città cercata
+  // (`/attraction/<città>/…`), confrontata con tutti i nomi che abbiamo (inglese, locale, dell'utente).
+  const slugsCitta = [nome, ...altriNomi].map((n) => slug(n)).filter((s) => s.length >= 3);
+  const dellaCitta = (href: string) => {
+    const seg = (href.match(/\/attraction\/([^/?#]+)\//i) || [])[1];
+    if (!seg) return true; // «things-to-do/detail/<id>»: la pagina non dice la città
+    const s = seg.toLowerCase();
+    return slugsCitta.some((c) => s === c || s.startsWith(c) || c.startsWith(s));
+  };
+  const chiave = `tripcom_v2_${slug(nome) || 'x'}_${lingua}`;
   const hit = await cacheLeggi(chiave, 24 * 3_600_000);
   if (Array.isArray(hit) && hit.length) return hit;
 
@@ -281,6 +329,7 @@ export async function tripcomAttivita(cityName: string, lang: string): Promise<A
     const idm = href.match(/-(\d+)(?:[/?]|$)|\/detail\/(\d+)/);
     const id = idm ? (idm[1] || idm[2]) : href;
     if (visti.has(id)) continue;
+    if (!dellaCitta(href)) continue;
     const titolo = decodeHtml((blocco.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i) || [])[1] || (blocco.match(/alt="([^"]+)"/i) || [])[1] || '');
     if (!titolo || titolo.length < 3) continue;
     visti.add(id);
@@ -542,7 +591,12 @@ export function eventiDaJsonLd(html: string, baseUrl: string, tipi: RegExp = TIP
     if (Array.isArray(nodo)) { nodo.forEach(visita); return; }
     if (Array.isArray(nodo['@graph'])) nodo['@graph'].forEach(visita);
     const tipo = Array.isArray(nodo['@type']) ? nodo['@type'].find((t: any) => tipi.test(String(t))) : nodo['@type'];
-    if (tipo && tipi.test(String(tipo))) {
+    // (06/10/2026) Eventi ONLINE: non si tengono in una città (Eventbrite ne elenca a decine in ogni pagina
+    // città: «AI Kids Music Video Studio» a Roma, «Free Massage» a Barcellona).
+    const modo = String(nodo.eventAttendanceMode || '');
+    const locTipo = String((Array.isArray(nodo.location) ? nodo.location[0] : nodo.location)?.['@type'] || '');
+    const online = (/OnlineEventAttendanceMode/i.test(modo) && !/Mixed/i.test(modo)) || /VirtualLocation/i.test(locTipo);
+    if (tipo && tipi.test(String(tipo)) && !online) {
       const titolo = testoJsonLd(nodo.name || nodo.headline);
       const dal = dataIsoJsonLd(nodo.startDate);
       const al = dataIsoJsonLd(nodo.endDate);
@@ -650,7 +704,8 @@ export async function ricercaWeb(query: string, opts: { lang?: string; cc?: stri
   if (!fornitore || !q) return [];
   const lang = String(opts.lang || 'en').slice(0, 2).toLowerCase();
   const cc = String(opts.cc || '').toUpperCase();
-  const count = Math.min(20, Math.max(1, opts.count || 8));
+  // Tetto 40 (era 20, 06/10/2026): per GetYourGuide le attività vere sono 4–6 su 40 risultati.
+  const count = Math.min(40, Math.max(1, opts.count || 8));
   const chiave = `web_${fornitore}_${lang}_${hashBreve(`${q}|${cc}|${count}`)}`;
   const hit = opts.senzaCache ? null : await cacheLeggi(chiave, 7 * 86400_000);
   if (Array.isArray(hit)) return hit;

@@ -310,7 +310,9 @@ export async function prescaricaPrimeOpere(
     // Le foto entrano nella cache del browser: si vedono anche senza rete.
     for (const url of [fotoCommonsStandard(t.fotoIcona), fotoCommonsStandard(t.foto)]) {
       if (!url) continue;
-      try { await fetch(url, { mode: 'cors' }); } catch { /* foto saltata */ }
+      // `no-cors` (06/10/2026): Commons risponde con un reindirizzamento SENZA intestazioni CORS e la richiesta
+      // `cors` veniva rifiutata («Failed to fetch») — la foto non entrava mai nella memoria del browser.
+      try { await fetch(url, { mode: 'no-cors' }); } catch { /* foto saltata */ }
     }
   }
   onProgress?.(tappe.length, tappe.length);
@@ -381,8 +383,10 @@ export async function scaricaPacchettoMuseo(
     for (const url of [fotoCommonsStandard(t.foto), fotoCommonsStandard(t.fotoIcona)]) {
       if (!url) continue;
       try {
-        const r = await fetch(url, { mode: 'cors' });
-        if (r.ok) { esito.foto++; esito.bytes += Number(r.headers.get('content-length') || 0) || 40_000; }
+        // `no-cors`: la risposta è opaca (non si legge né l'esito né la misura) ma entra nella memoria del
+        // browser, che è quello che serve per rivederla senza rete. Con `cors` Commons la rifiutava sempre.
+        const r = await fetch(url, { mode: 'no-cors' });
+        if (r.ok || r.type === 'opaque') { esito.foto++; esito.bytes += Number(r.headers.get('content-length') || 0) || 40_000; }
       } catch { /* foto saltata */ }
     }
   }

@@ -75,8 +75,14 @@ const RITENTA_GIORNI = 7;
 // foto-poi.service (--solo-ampio), ognuno col suo stato e il suo elenco dei
 // visti — uno solo in fila avrebbe fatto aspettare giorni il giro ampio.
 const SOLO_AMPIO = process.argv.includes('--solo-ampio');
-const STATO_FILE = path.join(BASE_DIR, 'scratch', SOLO_AMPIO ? 'foto-poi-stato.json' : 'foto-gemme-stato.json');
-const VISTI_FILE = path.join(BASE_DIR, 'scratch', SOLO_AMPIO ? 'foto-poi-visti.tsv' : 'foto-gemme-visti.tsv');
+// (07/10/2026, committente: «2 ok») Terzo servizio, foto-nuovi: solo i luoghi appena IMPORTATI dalle raccolte aperte
+// (Francia `dt-…`, Puglia/Umbria/Castilla y León/Zurigo/USA `od-…`), riconosciuti dal PREFISSO dell'id. Per fonte non
+// si può chiedere: `source=eq.datatourisme` su shared_pois va in statement timeout (misurato: 8 s, 57014), l'intervallo
+// di id sulla chiave primaria risponde in 0,14 s.
+const PREFISSI = (arg('prefissi', '') || '').split(',').map(s => s.trim()).filter(Boolean);
+const NOME_LAVORO = PREFISSI.length ? 'foto-nuovi' : SOLO_AMPIO ? 'foto-poi' : 'foto-gemme';
+const STATO_FILE = path.join(BASE_DIR, 'scratch', `${NOME_LAVORO}-stato.json`);
+const VISTI_FILE = path.join(BASE_DIR, 'scratch', `${NOME_LAVORO}-visti.tsv`);
 const UA = 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)';
 const STATI_VISIBILI = new Set(['verified', 'auto', 'approved']);
 
@@ -446,13 +452,19 @@ function tipoCombacia(titoloFile, nome) {
   const famiglie = FAMIGLIE_TIPO.filter(re => re.test(n));
   return !famiglie.length || famiglie.some(re => re.test(t));
 }
+// IL FILE DEVE NOMINARE IL LUOGO, NON IL SUO TIPO (02/10/2026): con «la metà dei pezzi» bastava una parola
+// di tipo — «Santa Monica Apartments» ha preso «Lindquist Apartments» per il solo «apartments». Le parole
+// di tipo non contano più come pezzi propri, e dei pezzi propri servono TUTTI (uno o due) o i due terzi
+// (tre o più), come per gli articoli (`articoloDelLuogo`). Senza pezzi propri non si scrive niente.
+const TIPI_GENERICI = new Set(['apartments','apartment','apartamentos','appartamenti','residence','residences','condominium','condominio','building','buildings','edificio','house','houses','casa','home','homes','hall','tower','towers','park','parc','parco','parque','garden','gardens','giardino','jardin','school','scuola','ecole','escuela','college','university','hospital','ospedale','station','stazione','bridge','ponte','pont','puente','center','centre','centro','complex','estate','court','terrace','manor','mansion','lodge','cottage','farm','mill','chapel','cappella','temple','tempio','mosque','shrine','monument','monumento','memorial','fountain','fontana','statue','statua','cemetery','cimitero','library','biblioteca','theatre','theater','teatro','hotel','market','mercato','street','road','avenue','lake','lago','river','fiume','hill','mount','monte','mountain','island','isola','township','county','district','village']);
+function tokensPropri(g) { return tokensDistintivi(g).filter(t => !TIPI_GENERICI.has(t)); }
 function combaciaPerBene(titoloFile, g) {
   if (!tipoCombacia(titoloFile, g.name)) return false;
-  const distintivi = tokensDistintivi(g);
-  if (!distintivi.length) return false;
+  const propri = tokensPropri(g);
+  if (!propri.length) return false;
   const nelTitolo = new Set(tokensSignificativi(titoloFile));
-  const trovati = distintivi.filter(t => nelTitolo.has(t)).length;
-  return trovati >= Math.max(1, Math.ceil(distintivi.length / 2));
+  const trovati = propri.filter(t => nelTitolo.has(t)).length;
+  return trovati >= (propri.length <= 2 ? propri.length : Math.ceil(propri.length * 2 / 3));
 }
 
 async function viaCommonsGeosearch(g) {
@@ -474,7 +486,7 @@ async function viaCommonsGeosearch(g) {
     // file senza il nome non può passare; Gonka decide i casi veri — «Place
     // royale du Peyrou» per la Promenade du Peyrou sì, «Porto di Numana» per
     // il Lungomare di Numana no. Gonka assente → niente scrittura diretta.
-    const conNome = file.filter(p => nomeCombacia(p.title, g.name || '') && tokensDistintivi(g).some(t => tokensSignificativi(p.title).includes(t)));
+    const conNome = file.filter(p => nomeCombacia(p.title, g.name || '') && tokensPropri(g).some(t => tokensSignificativi(p.title).includes(t)));
     if (conNome.length) {
       const scelto = await gonkaScegliFile(g, conNome.map(p => p.title.replace(/^File:/, '')));
       if (scelto !== null && scelto >= 0) {
@@ -562,7 +574,38 @@ const FAMIGLIE_AMPIE = [
   ['chiese', ['church', 'chiesa', 'chiese', 'place_of_worship', 'cathedral', 'cattedrale', 'chapel', 'cappella', 'basilica', 'monastery', 'monastero', 'abbey', 'abbazia', 'shrine', 'santuario']],
 ];
 
+async function* scorriPrefissi(stato) {
+  stato.cursori = stato.cursori || {};
+  for (const pre of PREFISSI) {
+    const c = (stato.cursori[pre] = stato.cursori[pre] || { id: '', finitaIl: 0 });
+    // i luoghi importati arrivano a ondate (una quota per notte): la lista si rilegge da capo ogni 6 ore
+    if (c.finitaIl && Date.now() - c.finitaIl < 6 * 3_600_000) continue;
+    if (c.finitaIl) { c.id = ''; c.finitaIl = 0; }
+    const fine = pre.slice(0, -1) + String.fromCharCode(pre.charCodeAt(pre.length - 1) + 1); // «dt-» → «dt.»
+    let ultimoId = c.id || pre;
+    for (;;) {
+      let blocco = null;
+      for (let tentativo = 1; tentativo <= 5 && !blocco; tentativo++) {
+        try {
+          const u = `${SB}/rest/v1/shared_pois?select=id,name,category,lat,lon,city,country,wikidata,wikipedia_url,contact_website,photo_url,image_url,status,is_gem&id=gt.${encodeURIComponent(ultimoId)}&id=lt.${encodeURIComponent(fine)}&image_url=is.null&order=id.asc&limit=500`;
+          const r = await fetch(u, { headers: H, signal: AbortSignal.timeout(40000) });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          blocco = await r.json();
+        } catch (e) {
+          console.log(`  [${pre}] pagina dopo '${ultimoId}': tentativo ${tentativo}/5 fallito (${e.message})`);
+          await new Promise(res => setTimeout(res, 15_000 * tentativo));
+        }
+      }
+      if (!blocco) { console.log(`  [${pre}] pagina fallita 5 volte: salto`); break; }
+      for (const p of blocco) { yield p; c.id = p.id; }
+      if (blocco.length < 500) { c.finitaIl = Date.now(); console.log(`  [${pre}] prefisso completato`); break; }
+      ultimoId = blocco[blocco.length - 1].id;
+    }
+  }
+}
+
 async function* gemme(stato) {
+  if (PREFISSI.length) { yield* scorriPrefissi(stato); return; }
   if (!SOLO_AMPIO) yield* scorri(CATEGORIE, true, null);
   if (SOLO_GEMME) return;
   stato.cursori = stato.cursori || {};

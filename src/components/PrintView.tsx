@@ -10,6 +10,8 @@ interface Tappa {
   consiglio_guida: string;
   tempo_necessario?: string;
   spostamento_precedente?: string | null;
+  /** Riga dei mezzi pubblici (Transitous) sulle tratte lunghe, già tradotta dal server. */
+  mezzi_precedente?: string | null;
   tipo: string;
 }
 
@@ -440,6 +442,9 @@ export default function PrintView({ plan, language }: PrintViewProps) {
                         </span>
                       )}
                     </div>
+                  )}
+                  {tappa.mezzi_precedente && (
+                    <div className="print-activity-duration">🚇 {tappa.mezzi_precedente}</div>
                   )}
                   
                   {/* Description */}

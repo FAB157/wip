@@ -2490,6 +2490,32 @@ class LocationService {
       return true;
     } catch (e) {
       console.warn("[LocationService] Audio playback failed", e);
+      // IL BROWSER HA BLOCCATO L'AUDIO AUTOMATICO (05/10/2026, test virtuale: 0
+      // guide suonate su 11, in silenzio, e gli stessi luoghi riscattavano ogni
+      // due minuti). Succede sul web quando la pagina non ha ancora ricevuto un
+      // tocco (PWA appena riaperta, scheda ricaricata). Non è un errore da
+      // nascondere: si dice all'utente cosa fare, e si avvisa il motore dei
+      // trigger perché non riprovi all'infinito lo stesso luogo — la scheda è
+      // aperta col suo tasto ▶.
+      try {
+        if ((e as any)?.name === 'NotAllowedError' && typeof window !== 'undefined') {
+          const l = String(this.language || 'IT').toUpperCase();
+          const frasi: Record<string, string> = {
+            IT: '🔇 Il browser ha bloccato l’audio automatico: tocca ▶ per ascoltare.',
+            EN: '🔇 Your browser blocked automatic audio: tap ▶ to listen.',
+            FR: '🔇 Le navigateur a bloqué l’audio automatique : touchez ▶ pour écouter.',
+            ES: '🔇 El navegador ha bloqueado el audio automático: toca ▶ para escuchar.',
+            DE: '🔇 Der Browser hat die automatische Wiedergabe blockiert: ▶ antippen.',
+            RU: '🔇 Браузер заблокировал автозвук: нажмите ▶, чтобы слушать.',
+            ZH: '🔇 浏览器已阻止自动播放：点按 ▶ 收听。',
+          };
+          if (Date.now() - this.ultimoAvvisoAudioBloccato > 60_000) {
+            this.ultimoAvvisoAudioBloccato = Date.now();
+            window.dispatchEvent(new CustomEvent('audioguide-status', { detail: frasi[l] || frasi.EN }));
+          }
+          window.dispatchEvent(new CustomEvent('wip-audio-bloccato', { detail: { poiId: this.audioState.poiId } }));
+        }
+      } catch { /* l'avviso non deve rompere il ramo d'errore */ }
       this.releaseCurrentTrack();
       this.audioState.isPlaying = false;
       this.audioState.isActive = false;
@@ -2836,8 +2862,16 @@ class LocationService {
     } catch { /* plugin assente o gia' cancellata */ }
   }
 
-  public injectMockLocation(lat: number, lon: number) {
-    const update: LocationUpdate = { latitude: lat, longitude: lon, speed: 0, heading: 0, accuracy: 10, timestamp: Date.now() };
+  /**
+   * Posizione finta, dallo stesso ingresso di quelle vere. `extra` (04/10/2026,
+   * test virtuale dell'admin): velocità, direzione e precisione del cammino
+   * simulato; senza, i valori di prima (fermo, 10 m).
+   */
+  /** Quando si è detto l'ultima volta «il browser ha bloccato l'audio» (al più una volta al minuto). */
+  private ultimoAvvisoAudioBloccato = 0;
+
+  public injectMockLocation(lat: number, lon: number, extra?: { speed?: number; heading?: number; accuracy?: number }) {
+    const update: LocationUpdate = { latitude: lat, longitude: lon, speed: extra?.speed ?? 0, heading: extra?.heading ?? 0, accuracy: extra?.accuracy ?? 10, timestamp: Date.now() };
     this.lastLocation = update;
     this.listeners.forEach(l => l(update));
   }

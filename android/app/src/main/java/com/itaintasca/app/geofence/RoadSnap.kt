@@ -158,6 +158,91 @@ object RoadSnap {
         return metersBetween(lat, lon, lastLat, lastLon) > th
     }
 
+    // ── STRADE SCARICATE IN ANTICIPO (03/10/2026, committente: «le tiles devono
+    // essere scaricate quando si crea un percorso, con o senza audioguida, e
+    // nelle funzioni offline») ───────────────────────────────────────────
+    // Fino a oggi esisteva UN solo tile su disco, l'ultimo: senza rete, dopo
+    // 500 m le distanze di strada e l'aggancio alla via non avevano piu' dati.
+    // Ora ogni tile va in una cartella, un file per chiave (la stessa griglia
+    // a 0,01° con cui il server tiene la cache), e `prescarica` la riempie
+    // lungo un percorso. `refresh` senza rete ripiega sul file della zona.
+    private const val TILE_DIR = "road_tiles"
+    private const val TILE_MAX = 400               // file tenuti su disco
+    private const val TILE_FRESCO_MS = 30L * 24 * 3600 * 1000
+    private const val PRESCARICO_MAX = 150         // chiavi per chiamata
+
+    private fun chiave(lat: Double, lon: Double): String =
+        String.format(java.util.Locale.US, "%.2f_%.2f", lat, lon)
+
+    private fun fileTile(lat: Double, lon: Double): java.io.File? {
+        val dir = cacheDir ?: return null
+        val d = java.io.File(dir, TILE_DIR)
+        if (!d.exists()) d.mkdirs()
+        return java.io.File(d, chiave(lat, lon) + ".json")
+    }
+
+    /** Applica un tile (testo JSON) come indice corrente. false se vuoto o illeggibile. */
+    private fun applica(body: String, lat: Double, lon: Double): Boolean {
+        val json = JSONObject(body)
+        val car = buildGrid(json.optJSONArray("car"))
+        val foot = buildGrid(json.optJSONArray("foot"))
+        // Un tile vuoto (risposta malformata o senza strade) non deve buttare
+        // via l'indice buono che abbiamo gia' in RAM.
+        if (car.isEmpty() && foot.isEmpty()) return false
+        carGrid = car; footGrid = foot
+        tieniPolilinee(json)
+        lastLat = lat; lastLon = lon; haveTile = true
+        return true
+    }
+
+    private fun pota() {
+        try {
+            val d = java.io.File(cacheDir ?: return, TILE_DIR)
+            val f = d.listFiles() ?: return
+            if (f.size <= TILE_MAX) return
+            f.sortedBy { it.lastModified() }.take(f.size - TILE_MAX).forEach { it.delete() }
+        } catch (_: Exception) { /* best-effort */ }
+    }
+
+    /**
+     * Scarica in anticipo le strade lungo un percorso. BLOCCANTE: chiamare
+     * fuori dal main thread. `punti` = [lat, lon] lungo il tracciato (anche
+     * fitti: si riducono alle chiavi distinte). Salta le chiavi gia' su disco
+     * e fresche. Ritorna quante ne ha scaricate.
+     */
+    fun prescarica(punti: List<DoubleArray>, radius: Int = 700): Int {
+        if (cacheDir == null) return 0
+        val chiavi = LinkedHashMap<String, DoubleArray>()
+        for (p in punti) {
+            if (p.size < 2 || p[0].isNaN() || p[1].isNaN()) continue
+            // il centro della chiave, non il punto: la risposta vale per tutta la chiave
+            val la = Math.round(p[0] * 100.0) / 100.0
+            val lo = Math.round(p[1] * 100.0) / 100.0
+            chiavi.putIfAbsent(chiave(la, lo), doubleArrayOf(la, lo))
+            if (chiavi.size >= PRESCARICO_MAX) break
+        }
+        var scaricate = 0
+        val ora = System.currentTimeMillis()
+        for ((_, c) in chiavi) {
+            val f = fileTile(c[0], c[1]) ?: break
+            if (f.exists() && f.length() > 50 && ora - f.lastModified() < TILE_FRESCO_MS) continue
+            try {
+                val url = "$ROADS_URL?lat=${c[0]}&lon=${c[1]}&radius=$radius"
+                client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+                    val body = if (resp.isSuccessful) resp.body?.string() else null
+                    if (body != null && body.length > 50) { f.writeText(body); scaricate++ }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "prescarico strade interrotto: ${e.message}")
+                break // rete assente: inutile insistere sulle altre
+            }
+            try { Thread.sleep(250) } catch (_: InterruptedException) { break }
+        }
+        pota()
+        Log.d(TAG, "Strade pre-scaricate: $scaricate su ${chiavi.size} chiavi")
+        return scaricate
+    }
+
     /** Scarica e reindicizza il tile. Best-effort, BLOCCANTE (chiamare su IO). */
     fun refresh(lat: Double, lon: Double, radius: Int = 700) {
         if (!fetching.compareAndSet(false, true)) return // una sola in volo
@@ -167,17 +252,10 @@ object RoadSnap {
             client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
                 val body = if (resp.isSuccessful) resp.body?.string() else null
                 if (body != null) {
-                    val json = JSONObject(body)
-                    val car = buildGrid(json.optJSONArray("car"))
-                    val foot = buildGrid(json.optJSONArray("foot"))
-                    // Un tile vuoto (risposta malformata o senza strade) non deve
-                    // buttare via l'indice buono che abbiamo gia' in RAM: meglio
-                    // tenerlo e trattare il tentativo come fallito.
-                    if (car.isNotEmpty() || foot.isNotEmpty()) {
-                        carGrid = car; footGrid = foot
-                        lastLat = lat; lastLon = lon; haveTile = true
+                    if (applica(body, lat, lon)) {
                         cacheDir?.let { try { java.io.File(it, CACHE_FILE).writeText(body) } catch (_: Exception) {} }
-                        Log.d(TAG, "Tile strade caricato: car=${car.size} celle, foot=${foot.size} celle")
+                        try { fileTile(lat, lon)?.writeText(body) } catch (_: Exception) {}
+                        Log.d(TAG, "Tile strade caricato: car=${carGrid.size} celle, foot=${footGrid.size} celle")
                         ok = true
                     }
                 }
@@ -185,7 +263,20 @@ object RoadSnap {
         } catch (e: Exception) {
             // Un solo log per serie di fallimenti: niente log a raffica.
             if (failStreak == 0) Log.w(TAG, "refresh fallito: ${e.message}")
-        } finally {
+        }
+        // SENZA RETE: il tile della zona scaricato in anticipo (o in un passaggio
+        // precedente). Vale come riuscito: niente attesa crescente, e al prossimo
+        // spostamento si riprova la rete.
+        if (!ok) {
+            try {
+                val f = fileTile(lat, lon)
+                if (f != null && f.exists() && applica(f.readText(), lat, lon)) {
+                    Log.d(TAG, "Tile strade dal disco (senza rete): ${f.name}")
+                    ok = true
+                }
+            } catch (_: Exception) { /* nessun tile su disco per questa zona */ }
+        }
+        run {
             // L'esito si registra SEMPRE, non solo in caso di successo.
             lastAttemptAt = SystemClock.elapsedRealtime()
             failStreak = if (ok) 0 else min(failStreak + 1, BACKOFF_MS.size)
@@ -202,9 +293,68 @@ object RoadSnap {
             val json = JSONObject(f.readText())
             carGrid = buildGrid(json.optJSONArray("car"))
             footGrid = buildGrid(json.optJSONArray("foot"))
+            tieniPolilinee(json)
             haveTile = true // shouldRefresh riscarica appena online ci si sposta
             Log.d(TAG, "Tile strade ripristinato da disco")
         } catch (_: Exception) { /* nessun tile persistito */ }
+    }
+
+    // ── DISTANZA DI STRADA (03/10/2026) ──────────────────────────────────
+    // Le stesse polilinee, tenute anche come elenco per costruirci il grafo
+    // (RoadGraph). Il grafo si costruisce alla prima richiesta dopo ogni tile
+    // nuova, una rete alla volta: a piedi la pedonale, in auto quella delle auto.
+    @Volatile private var carPoli: List<DoubleArray> = emptyList()
+    @Volatile private var footPoli: List<DoubleArray> = emptyList()
+    @Volatile private var carGrafo: RoadGraph? = null
+    @Volatile private var footGrafo: RoadGraph? = null
+    @Volatile private var carGrafoFatto = false
+    @Volatile private var footGrafoFatto = false
+
+    private fun polilinee(polys: JSONArray?): List<DoubleArray> {
+        if (polys == null) return emptyList()
+        val out = ArrayList<DoubleArray>(polys.length())
+        for (i in 0 until polys.length()) {
+            val poly = polys.optJSONArray(i) ?: continue
+            val a = DoubleArray(poly.length() * 2)
+            var n = 0
+            for (j in 0 until poly.length()) {
+                val p = poly.optJSONArray(j) ?: continue
+                a[n++] = p.optDouble(0); a[n++] = p.optDouble(1)
+            }
+            if (n >= 4) out.add(if (n == a.size) a else a.copyOf(n))
+        }
+        return out
+    }
+
+    private fun tieniPolilinee(json: JSONObject) {
+        carPoli = polilinee(json.optJSONArray("car"))
+        footPoli = polilinee(json.optJSONArray("foot"))
+        carGrafo = null; footGrafo = null
+        carGrafoFatto = false; footGrafoFatto = false
+    }
+
+    /**
+     * Il grafo della rete (auto o pedonale) del tile corrente, o null se non
+     * c'e' tile. Costruirlo costa qualche decina di ms: va chiamato fuori dal
+     * main thread (il giro dei trigger gira gia' su una coroutine).
+     */
+    @Synchronized
+    fun grafo(isCar: Boolean): RoadGraph? {
+        return try {
+            if (isCar) {
+                if (!carGrafoFatto) { carGrafo = RoadGraph.crea(carPoli); carGrafoFatto = true }
+                carGrafo
+            } else {
+                // A PIEDI la rete e' pedonale + auto: nelle tile pre-estratte la
+                // «foot» contiene solo i tratti pedonali e da sola e' a pezzi
+                // (misurato a Montecatini: 15 coppie su 25 irraggiungibili).
+                if (!footGrafoFatto) { footGrafo = RoadGraph.crea(footPoli + carPoli); footGrafoFatto = true }
+                footGrafo
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "grafo strade non costruito: ${e.message}")
+            null
+        }
     }
 
     private fun buildGrid(polys: JSONArray?): Map<String, List<Seg>> {

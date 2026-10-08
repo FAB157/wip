@@ -10,6 +10,7 @@ import { ensureAffiliateUrl } from '../../lib/affiliates';
 import { locationService } from '../../services/locationService';
 import { gramsForLeg, formatCo2, extractKmFromText } from '../../lib/carbonFootprint';
 import { guidePerTappe, apriGuidaMuseo, GuidaPerTappa } from '../../lib/museumVisit';
+import { linkMezzi, trattaLunga } from '../../lib/mezziPubblici';
 
 interface ItineraryStopProps {
   key?: React.Key;
@@ -31,7 +32,7 @@ interface ItineraryStopProps {
   /** Costo in crediti quando le gratuite sono esaurite. */
   replaceCost?: number;
   /** Tratta reale verso la tappa successiva (OSRM): calcolata in PlanScreen. */
-  legToNext?: { walkMin: number; carMin: number; km: number; taxiEur: number } | null;
+  legToNext?: { walkMin: number; carMin: number; km: number; taxiEur: number; da?: { lat: number; lon: number }; a?: { lat: number; lon: number } } | null;
 }
 
 export default function ItineraryStop({
@@ -81,6 +82,9 @@ export default function ItineraryStop({
   // Tratta verso la prossima tappa: CO₂ della sola variante in auto, sui km
   // reali OSRM. Se i km mancano non si mostra nulla.
   const legCo2Grams = legToNext ? gramsForLeg('car', legToNext.km) : null;
+  // Mezzi pubblici solo sulle tratte lunghe, e solo se gli estremi sono noti.
+  const urlMezzi = legToNext && trattaLunga(legToNext.km * 1000) && legToNext.da && legToNext.a
+    ? linkMezzi(legToNext.da, legToNext.a) : null;
   // Tappa "trasferimento" (roadtrip): i km vivono solo nel testo dell'AI
   // ("~250 km"), quindi si estraggono da lì; il confronto col treno è un
   // suggerimento curioso, mai un rimprovero.
@@ -232,6 +236,14 @@ export default function ItineraryStop({
                     {getTranslation("movement", language)}: {tappa.spostamento_precedente}
                   </div>
                 )}
+                {/* Riga dei mezzi pubblici scritta dal server (Transitous) sulle
+                    tratte lunghe (06/10/2026): già tradotta, si stampa com'è. */}
+                {tappa.mezzi_precedente && (
+                  <div className="flex items-start gap-2 mb-3 text-xs font-bold text-blue-700/80 bg-blue-50 px-3 py-1.5 rounded-xl w-fit">
+                    <span>🚇</span>
+                    <span>{tappa.mezzi_precedente}</span>
+                  </div>
+                )}
                 <p className="text-sm text-on-surface-variant font-bold leading-relaxed mb-4">{tappa.attivita}</p>
 
                 {tappa.nota_verifica && (
@@ -359,7 +371,24 @@ export default function ItineraryStop({
               taxi ~{legToNext.taxiEur}€
             </>
           )}
+          {/* Tratta lunga (≥ 1,5 km): «Mezzi» apre Google Maps in modalità
+              trasporto pubblico fra questa tappa e la prossima (06/10/2026). */}
+          {urlMezzi && (
+            <a
+              href={urlMezzi}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={e => e.stopPropagation()}
+              className="ml-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 normal-case tracking-normal font-bold"
+            >
+              🚇 {getTranslation('mezzi_tasto', language)}
+            </a>
+          )}
         </div>
+      )}
+      {/* La legenda del tasto: cosa succede quando lo si preme. */}
+      {!isLast && urlMezzi && (
+        <p className="mt-1 ml-6 text-[10px] text-gray-400 print:hidden">{getTranslation('mezzi_legenda', language)}</p>
       )}
     </div>
   );

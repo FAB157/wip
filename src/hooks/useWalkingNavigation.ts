@@ -17,9 +17,12 @@ import { locationService } from '../services/locationService';
 import { fetchWalkingRoute, translateManeuver, type WalkingRoute } from '../services/osrmService';
 import { speakInstruction, speakArrivalNative } from '../services/ttsService';
 import { haversineMeters, type LatLon } from '../lib/geo';
+import { metriDiStrada, tieniStradeAggiornate, prescaricaStrade } from '../lib/roadSnap';
+import { sogliaVicina, sogliaLontanaMax } from '../lib/nav/aggancio';
 import { notify } from '../lib/toast';
 import { reportTrigger } from '../lib/geofencing/telemetry';
 import { puntoArrivo } from '../lib/puntoArrivo';
+import { radiiForTransport } from '../lib/guideSettings';
 import { getTranslation, type Language } from '../lib/i18n';
 import { getGemmeVicine } from '../services/poiRepository';
 import { pubblicaPercorsoNativo, ritiraPercorsoNativo, battitoNav, segnaCruscottoTappa, nativoAlComando, type PassoNav } from '../lib/nav/navNativo';
@@ -28,6 +31,10 @@ import { pubblicaPercorsoNativo, ritiraPercorsoNativo, battitoNav, segnaCruscott
 import { tourService } from '../services/tourService';
 
 export type NavState = 'idle' | 'routing' | 'navigating' | 'arrived';
+
+/** Il nome senza parentesi, accenti e articolo: «Piazza Navona» è la stessa su due righe diverse. */
+const nomeNudoNav = (n: unknown): string => String(n || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/\([^)]*\)/g, ' ').replace(/^(the|il|la|lo|le|i|gli|l')\s+/i, '').replace(/[^a-z0-9]+/g, ' ').trim();
 
 const SPEAK_DISTANCE_M = 30;    // leggi la manovra entro 30 m dalla svolta
 // PRE-ANNUNCIO (08/09/2026): a piedi 30 m sono ~25 secondi — se sei distratto
@@ -63,7 +70,8 @@ const NEARBY_M = 60;            // "nei paraggi": entro questi metri per NEARBY_
 const NEARBY_S = 45;
 const ARRIVE_ACCURACY_MAX_M = 150; // per il SOLO controllo d'arrivo si accetta un fix peggiore di 80 m
 const WALK_SPEED_MS = 1.3;      // ~4.7 km/h per stima ETA
-const POI_TRIGGER_M = 80;       // audioguida automatica entro 80 m dal POI scelto
+// (04/10/2026) Il raggio dell'audioguida lungo il percorso non è più 80 m fissi:
+// è quello dell'utente (radiiForTransport, 30 m a piedi). Vedi checkRoutePois.
 const OFF_ROUTE_M = 45;         // oltre 45 m dal tracciato = fuori rotta
 const OFF_ROUTE_FIXES = 2;      // fix GPS consecutivi fuori rotta prima del ricalcolo
 const RECALC_COOLDOWN_MS = 20000;
@@ -131,6 +139,8 @@ const ROUTE_FAIL_PHRASES: Record<string, string> = {
 };
 
 // Pre-annuncio: "{m}" = metri arrotondati, "{i}" = istruzione (minuscola).
+// Quando il navigatore ha detto l'ultima frase di svolta (per non accavallare il preavviso della successiva).
+let ultimaVoceNavTs = 0;
 const PREANNOUNCE_PHRASES: Record<string, string> = {
   it: 'Tra {m} metri, {i}',
   en: 'In {m} meters, {i}',
@@ -353,6 +363,18 @@ export interface GemmaVicina {
 
 export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResult {
   const [state, setState] = useState<NavState>('idle');
+  // I nomi (senza parentesi né accenti) dei luoghi già raccontati in questa navigazione.
+  const nomiDettiRef = useRef<Set<string>>(new Set());
+  // (05/10/2026) MENTRE SI NAVIGA PARLA SOLO IL NAVIGATORE. Il modale lo promette
+  // («l'audioguida partirà in automatico solo per quelli selezionati») ma il motore
+  // dell'esplorazione restava acceso e faceva parlare i suoi luoghi sopra a quelli
+  // scelti. Questa bandierina lo ferma (foregroundTriggers la legge a ogni posizione).
+  useEffect(() => {
+    const attivo = state === 'navigating' || state === 'routing';
+    try { (window as any).__wipNavAttivo = attivo; } catch { /* niente */ }
+    if (state === 'idle') nomiDettiRef.current = new Set();
+    return () => { try { (window as any).__wipNavAttivo = false; } catch { /* niente */ } };
+  }, [state]);
   const [currentInstruction, setCurrentInstruction] = useState<string | null>(null);
   const [currentManeuver, setCurrentManeuver] = useState<ManeuverInfo | null>(null);
   const [distanceToNext, setDistanceToNext] = useState<number | null>(null);
@@ -701,6 +723,10 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
 
   const setRoute = (route: WalkingRoute, fit = false) => {
     routeRef.current = route;
+    // (03/10/2026, committente: «le tiles devono essere scaricate quando si
+    // crea un percorso») Le strade lungo il tracciato, subito: a ogni percorso
+    // nuovo o ricalcolato; quelle già salvate non si riscaricano.
+    void prescaricaStrade(route.geometry as number[][]);
     routeTotalRef.current = Math.max(route.distance, 1);
     const g = route.geometry;
     const remaining = new Array<number>(g.length).fill(0);
@@ -813,13 +839,16 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     return best;
   };
 
-  // Audioguide automatiche: se l'utente passa entro POI_TRIGGER_M da un POI
+  // Audioguide automatiche: se l'utente passa entro il raggio d'arrivo da un POI
   // scelto nel modal, si apre la scheda con autoplay (il pagamento/quota è
   // gestito a valle come per ogni altro ascolto). Dedupe condiviso con il
   // geofencing normale via __wipLastPoiTrigger.
   const checkRoutePois = (here: LatLon) => {
     const pending = pendingPoisRef.current;
     if (pending.length === 0) return;
+    // Le strade attorno, per misurare in metri di strada (durante la
+    // navigazione nessun altro le tiene aggiornate).
+    tieniStradeAggiornate(here.lat, here.lon);
     // Sul telefono, con i luoghi consegnati al nativo (voce 2, 23/09/2026),
     // l'arrivo lo dichiara il servizio ('poi-arrived' → wip-poi-trigger),
     // come per le tappe del giro (giroDriver): emetterlo anche da qui farebbe
@@ -827,13 +856,36 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     // pendenti; sul web (o se la consegna non c'e`) tutto come prima.
     const arrivoDalNativo = Capacitor.isNativePlatform() && locationService.haLuoghiWipNavNativi();
     const stillPending: RoutePoi[] = [];
-    for (const p of pending) {
+    // UNA ALLA VOLTA, A 30 METRI (04/10/2026, test virtuale: alla partenza sei
+    // luoghi entro 80 m scattavano nello stesso istante e le voci si
+    // sovrapponevano). Il raggio è quello dell'utente (30 m a piedi, come
+    // ovunque dal 03/10); scatta solo il più vicino, mai mentre una guida
+    // parla e non prima di 20 s dallo scatto precedente. Gli altri restano in
+    // attesa e partono dopo, se si è ancora entro il raggio.
+    let raggio = 30;
+    try { raggio = radiiForTransport('walk', null, null).trigger || 30; } catch { /* default */ }
+    let libero = true;
+    try { libero = !locationService.getAudioState().isPlaying; } catch { /* si prosegue */ }
+    // La scheda fa partire la voce per più strade: si guarda anche l'audio vero (foregroundTriggers).
+    try { if ((window as any).__wipVoceInCorso?.() === true) libero = false; } catch { /* si prosegue */ }
+    const ultimo = (window as any).__wipLastPoiTrigger;
+    if (ultimo && Date.now() - ultimo.ts < 20_000) libero = false;
+    const perDistanza = pending
+      .map(p => { const a = puntoArrivo(p); return { p, d: metriDiStrada(here.lat, here.lon, a.lat, a.lon) }; })
+      .sort((a, b) => a.d - b.d);
+    let scattato = false;
+    const nomiDetti = nomiDettiRef.current;
+    for (const { p, d } of perDistanza) {
+      // già raccontato con un'altra riga: non resta nemmeno in attesa
+      if (nomiDetti.has(nomeNudoNav(p.name || p.nome))) continue;
+      if (d <= raggio && (!libero || scattato) && !(Capacitor.isNativePlatform() && locationService.haLuoghiWipNavNativi())) { stillPending.push(p); continue; }
+      if (d <= raggio) scattato = true;
       // Dall'INGRESSO quando lo conosciamo, non dal centroide: su un edificio
       // grande il trigger scattava dal lato sbagliato (stesso criterio di
       // foregroundTriggers e del nativo).
-      const arrivo = puntoArrivo(p);
-      const d = haversineMeters(here.lat, here.lon, arrivo.lat, arrivo.lon);
-      if (d <= POI_TRIGGER_M) {
+      // (03/10/2026, «tutto in strada reale») `d` sono metri di STRADA dal punto
+      // d'arrivo, non linea d'aria: il luogo dietro l'isolato non scatta.
+      if (d <= raggio) {
         if (arrivoDalNativo) continue;
         const lastTrig = (window as any).__wipLastPoiTrigger;
         const isDup = lastTrig && String(lastTrig.id) === String(p.id) && Date.now() - lastTrig.ts < 60000;
@@ -841,7 +893,11 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         if (isDup) reportTrigger('suppressed', { poiId: p.id });
         else reportTrigger('fired', { poiId: p.id });
         if (!isDup) {
-          (window as any).__wipLastPoiTrigger = { id: String(p.id), ts: Date.now() };
+          (window as any).__wipLastPoiTrigger = { id: String(p.id), ts: Date.now(), nome: String(p.name || p.nome || '') };
+          // I DOPPIONI DELLO STESSO LUOGO lungo il percorso (05/10/2026, prova a
+          // Roma: «Piazza Navona» raccontata due volte, una riga dopo l'altra):
+          // chi ha lo stesso nome entro 150 m esce dall'attesa insieme a lui.
+          nomiDetti.add(nomeNudoNav(p.name || p.nome));
           // Anche il cooldown di 6 h dei trigger web: senza, passati 60 s il
           // modulo di prossimita' rifaceva parlare lo stesso POI gia' raccontato
           // da WIP Nav (segnalato 22/08/2026).
@@ -1423,8 +1479,12 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         const vicinoLungoIlTracciato = remaining <= NEARBY_M;
         if (joinedRouteRef.current && dDestAir <= NEARBY_M && vicinoLungoIlTracciato) { if (nearbySinceRef.current == null) nearbySinceRef.current = Date.now(); }
         else nearbySinceRef.current = null;
+        // (05/10/2026) Il raggio d'arrivo è quello scelto nel GeoControl (30 m se
+        // non è mai stato toccato), non più 30 m fissi.
+        let raggioArrivo = ARRIVE_DISTANCE_M;
+        try { raggioArrivo = radiiForTransport('walk', null, null).trigger || ARRIVE_DISTANCE_M; } catch { /* default */ }
         const arrivato = joinedRouteRef.current && (
-          (dDestAir <= ARRIVE_DISTANCE_M && vicinoLungoIlTracciato) ||
+          (dDestAir <= raggioArrivo && vicinoLungoIlTracciato) ||
           (remaining <= 15 && dDestAir <= NEARBY_M) ||
           (nearbySinceRef.current != null && Date.now() - nearbySinceRef.current >= NEARBY_S * 1000)
         );
@@ -1456,7 +1516,17 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
             continue;
           }
           const dStep = haversineMeters(here.lat, here.lon, step.location.lat, step.location.lon);
-          if (dStep <= SPEAK_DISTANCE_M) {
+          // (03/10/2026) «GIRA ADESSO» SUI METRI DI STRADA E SULLA VELOCITÀ. Prima:
+          // 30 m in linea d'aria, fissi — dietro una curva la svolta veniva detta
+          // presto o tardi. Se si è sul tracciato (entro 25 m) conta la distanza
+          // LUNGO la strada e la soglia è a 12 s dalla svolta (18-35 m), come nel
+          // follower nativo e nel giro (lib/nav/aggancio). Fuori dal tracciato
+          // restano i 30 m in linea d'aria.
+          const remManovra = stepRemainingRef.current[idx];
+          const sulTracciato = remManovra != null && nearest.dist <= 25;
+          const dStradaManovra = sulTracciato ? Math.max(0, remaining - (remManovra as number)) : dStep;
+          const vicinoM = sulTracciato ? sogliaVicina(velocitaStimata ?? WALK_SPEED_MS) : SPEAK_DISTANCE_M;
+          if (dStradaManovra <= vicinoM) {
             let appenaAnnunciata = false;
             if (!spokenRef.current.has(idx)) {
               spokenRef.current.add(idx);
@@ -1469,6 +1539,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
               // iOS, con la notifica locale come ripiego DENTRO updateNavBanner.
               aggiornaBannerNav(t, step.instruction, 0, metriResidui, etaSec, { type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
               appenaAnnunciata = true;
+              ultimaVoceNavTs = Date.now();
             }
             idx += 1; // passa alla manovra successiva
             stepIdxRef.current = idx;
@@ -1503,13 +1574,25 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
             const tipo = String(step.maneuverType || '').toLowerCase();
             if (!preannouncedRef.current.has(idx) && !spokenRef.current.has(idx)
                 && tipo !== 'depart' && tipo !== 'arrive'
-                && dLungoStrada <= PREANNOUNCE_DISTANCE_M && dLungoStrada >= PREANNOUNCE_MIN_M) {
+                // (05/10/2026, prova a Roma: «gira a sinistra» e nello stesso secondo
+                // «Tra 50 metri, gira a destra»; «Tra 80 metri, continua dritto»)
+                // Niente preavviso per un «continua dritto» — non è una svolta — né
+                // a ridosso di una frase appena detta: si aspetta che finisca (8 s);
+                // se intanto la svolta è troppo vicina la dice il «gira adesso».
+                && String(step.maneuverModifier || '').toLowerCase() !== 'straight'
+                && !((tipo === 'continue' || tipo === 'new name') && !step.maneuverModifier)
+                && Date.now() - ultimaVoceNavTs >= 8000
+                // (03/10/2026) Preavviso entro 70 s dalla svolta (70-150 m) e mai a
+                // ridosso del «gira adesso»: prima 60-150 m fissi.
+                && dLungoStrada <= (sulTracciato ? sogliaLontanaMax(velocitaStimata ?? WALK_SPEED_MS) : PREANNOUNCE_DISTANCE_M)
+                && dLungoStrada >= (sulTracciato ? vicinoM + 20 : PREANNOUNCE_MIN_M)) {
               preannouncedRef.current.add(idx);
               const metri = Math.round(dLungoStrada / 10) * 10;
               const l2 = (language || 'it').toLowerCase().slice(0, 2);
               const modello = PREANNOUNCE_PHRASES[l2] || PREANNOUNCE_PHRASES.en;
               // L'istruzione in minuscola iniziale dentro la frase ("Tra 120 metri, gira a destra").
               const istr = step.instruction ? step.instruction.charAt(0).toLowerCase() + step.instruction.slice(1) : '';
+              ultimaVoceNavTs = Date.now();
               speakInstruction(modello.replace('{m}', String(metri)).replace('{i}', istr), language, undefined, { ttlMs: NAV_TTL_MS });
             }
             setCurrentInstruction(step.instruction);

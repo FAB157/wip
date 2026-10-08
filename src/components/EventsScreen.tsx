@@ -310,6 +310,9 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   }, []);
 
   const prevCenterRef = useRef<[number, number] | undefined>(mapCenter);
+  // (07/10/2026) Generazione della ricerca: una risposta lenta (portali di Carrara, 40 s) arrivata DOPO il cambio
+  // di città (il viaggio attivo su Anversa) sovrascriveva la lista nuova con gli eventi della città vecchia.
+  const fetchGenRef = useRef(0);
   // Date e città correnti, lette dai loader per evitare closure stantie
   // quando il rilancio parte da un effetto diverso da fetchEvents.
   const datesRef = useRef<{ start: string; end: string }>({ start: startDate, end: endDate });
@@ -339,6 +342,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     }
 
     prevCenterRef.current = searchCenter;
+    fetchGenRef.current += 1;
 
     setLoading(true);
     setError(null);
@@ -497,6 +501,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   }, []);
 
   const loadVirgilio = async (lat: number, lon: number, cityName?: string) => {
+    const genAvvio = fetchGenRef.current;
     logApiCall('virgilio', 'ricerca_eventi_scraping');
     setLoadingSources(prev => ({ ...prev, virgilio: true }));
     setSourceErrors(prev => ({ ...prev, virgilio: null }));
@@ -504,6 +509,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       const activeCity = cityName || city;
       const targetCity = activeCity === "Italia" ? "roma" : activeCity;
       if (!targetCity) {
+        if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
         setSourceResults(prev => ({ ...prev, virgilio: [] }));
         return;
       }
@@ -514,6 +520,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       );
 
       if (!vRes.ok) {
+        if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
         setSourceResults(prev => ({ ...prev, virgilio: [] }));
         return;
       }
@@ -599,6 +606,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         });
       }
 
+      if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
       setSourceResults(prev => {
         const combined = [...prev.virgilio, ...newEvents];
         // Use name + date + venue as unique key for Virgilio events as they don't have stable IDs from HTML
@@ -612,6 +620,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       const geoCache = leggiGeoCache();
       const aggiorna = (id: string, coords: [number, number]) => {
         if (!mountedRef.current) return;
+        if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
         setSourceResults(prev => {
           const newList = [...prev.virgilio];
           const index = newList.findIndex(e => e.id === id);
@@ -654,6 +663,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   };
 
   const loadTicketmaster = async (lat: number, lon: number, searchRadius: number, cityName?: string) => {
+    const genAvvio = fetchGenRef.current;
     logApiCall('ticketmaster', 'ricerca_eventi_api');
     setLoadingSources(prev => ({ ...prev, ticketmaster: true }));
     setSourceErrors(prev => ({ ...prev, ticketmaster: null }));
@@ -696,6 +706,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
           };
         });
         
+        if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
         setSourceResults(prev => {
           // Merge to avoid duplicates and ensure additive feel
           const combined = [...prev.ticketmaster, ...newEvents];
@@ -762,6 +773,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
 
   // ── Klook (affiliato, forte in Asia) ────────────────────────────────────
   const loadKlook = async (lat: number, lon: number) => {
+    const genAvvio = fetchGenRef.current;
     logApiCall('klook', 'fetch_activities');
     setLoadingSources(prev => ({ ...prev, klook: true }));
     setSourceErrors(prev => ({ ...prev, klook: null }));
@@ -770,6 +782,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       if (!r.ok) throw new Error(`Klook ${r.status}`);
       const data = await r.json();
       const lista: EventData[] = (Array.isArray(data) ? data : []).map((a: any) => cardPartner(a, 'klook', lat, lon, '🎟️ Tour & Attività'));
+      if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
       setSourceResults(prev => ({ ...prev, klook: lista }));
     } catch (err) {
       console.warn('loadKlook:', err);
@@ -781,6 +794,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
 
   // ── Trip.com (affiliato, mondiale) ──────────────────────────────────────
   const loadTripcom = async (lat: number, lon: number) => {
+    const genAvvio = fetchGenRef.current;
     logApiCall('tripcom', 'fetch_activities');
     setLoadingSources(prev => ({ ...prev, tripcom: true }));
     setSourceErrors(prev => ({ ...prev, tripcom: null }));
@@ -789,6 +803,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       if (!r.ok) throw new Error(`Trip.com ${r.status}`);
       const data = await r.json();
       const lista: EventData[] = (Array.isArray(data) ? data : []).map((a: any) => cardPartner(a, 'tripcom', lat, lon, '🎫 Attrazioni & Tour'));
+      if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
       setSourceResults(prev => ({ ...prev, tripcom: lista }));
     } catch (err) {
       console.warn('loadTripcom:', err);
@@ -802,6 +817,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   // /api/tiqets/mostre: l'endpoint dedicato dell'API Tiqets, con date e
   // biglietto. Vanno nella vista Mostre «In corso», prima delle altre.
   const loadTiqetsMostre = async (lat: number, lon: number, searchRadius: number) => {
+    const genAvvio = fetchGenRef.current;
     const key = `${lat.toFixed(2)}_${lon.toFixed(2)}_${Math.min(searchRadius, 50)}_${language}`;
     if (tiqetsMostreKeyRef.current === key) return;
     tiqetsMostreKeyRef.current = key;
@@ -831,6 +847,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         bookable: true,
         price: m.prezzo || undefined,
       }));
+      if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
       setSourceResults(prev => ({ ...prev, tiqets_mostre: mapped }));
     } catch (err) {
       console.warn('loadTiqetsMostre:', err);
@@ -850,6 +867,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     teatro: '🎭 Teatro & Spettacolo', sport: '🏟️ Sport', altro: '📍 Evento',
   };
   const loadPortali = async (lat: number, lon: number) => {
+    const genAvvio = fetchGenRef.current;
     logApiCall('portali', 'eventi_portali_web');
     setLoadingSources(prev => ({ ...prev, portali: true }));
     setSourceErrors(prev => ({ ...prev, portali: null }));
@@ -875,6 +893,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         isMusic: e.kind === 'concerto',
         isFree: /gratuit|gratis|\bfree\b|libero|libre|kostenlos|免费|無料|무료|бесплатно/i.test(`${e.price} ${e.description}`) ? true : undefined,
       }));
+      if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
       setSourceResults(prev => ({ ...prev, portali: mapped }));
     } catch (err) {
       console.warn('loadPortali:', err);
@@ -886,6 +905,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
 
   // ── Stagionali dagli affiliati ──────────────────────────────────────────
   const loadStagionaliAffiliati = async (lat: number, lon: number) => {
+    const genAvvio = fetchGenRef.current;
     const key = `${lat.toFixed(2)}_${lon.toFixed(2)}_${language}`;
     if (stagionaliAffKeyRef.current === key) return;
     stagionaliAffKeyRef.current = key;
@@ -909,6 +929,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   // sagre/feste di paese da eventiesagre.it (Italia). Le sagre hanno le
   // coordinate del capoluogo di provincia: approxCoords allarga il filtro.
   const loadLocal = async (lat: number, lon: number, searchRadius: number) => {
+    const genAvvio = fetchGenRef.current;
     logApiCall('local_events', 'sagre_mercati');
     setLoadingSources(prev => ({ ...prev, local: true }));
     setSourceErrors(prev => ({ ...prev, local: null }));
@@ -973,6 +994,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
           isFree: undefined,
         }));
 
+      if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
       setSourceResults(prev => ({ ...prev, local: [...fiere, ...mapped] }));
     } catch (err) {
       console.error('loadLocal Error:', err);
@@ -995,6 +1017,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
           approxCoords: false,
           isFree: undefined,
         }));
+        if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
         setSourceResults(prev => ({ ...prev, local: fiere }));
         if (!fiere.length) setSourceErrors(prev => ({ ...prev, local: getTranslation("events_err_local", language) }));
       } catch {
@@ -1006,6 +1029,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   };
 
   const loadTiqets = async (lat: number, lon: number, searchRadius: number) => {
+    const genAvvio = fetchGenRef.current;
     logApiCall('tiqets', 'fetch_tickets');
     setLoadingSources(prev => ({ ...prev, tiqets: true }));
     setSourceErrors(prev => ({ ...prev, tiqets: null }));
@@ -1044,6 +1068,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         macroCategory: "🎫 Musei & Attrazioni"
       }));
 
+      if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
       setSourceResults(prev => {
         const combined = [...prev.tiqets, ...mappedEvents];
         const unique = Array.from(new Map(combined.map(item => [item.id, item])).values());
@@ -1058,6 +1083,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   };
 
   const loadViator = async (lat: number, lon: number, r: number, start: string, end: string, cityName: string) => {
+    const genAvvio = fetchGenRef.current;
     logApiCall('viator', 'fetch_experiences');
     setLoadingSources(prev => ({ ...prev, viator: true }));
     setSourceErrors(prev => ({ ...prev, viator: null }));
@@ -1104,6 +1130,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         lon
       }));
       
+      if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
       setSourceResults(prev => ({ ...prev, viator: mappedEvents }));
     } catch (err: any) {
       console.error("loadViator Error:", err);
@@ -1209,6 +1236,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   };
 
   const loadGetYourGuide = async (lat: number, lon: number, searchRadius: number, cityName: string) => {
+    const genAvvio = fetchGenRef.current;
     logApiCall('getyourguide', 'ricerca_eventi_api');
     setLoadingSources(prev => ({ ...prev, getyourguide: true }));
     setSourceErrors(prev => ({ ...prev, getyourguide: null }));
@@ -1252,6 +1280,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
           };
         });
         
+        if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
         setSourceResults(prev => {
           const combined = [...prev.getyourguide, ...newEvents];
           const unique = Array.from(new Map(combined.map(item => [item.id, item])).values());
@@ -1274,6 +1303,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   // 12 ore e un cron le rinfresca ogni 4. Si caricano SOLO con la vista
   // Mostre aperta: la prima lettura di una zona nuova puo' durare un minuto.
   const loadMostre = async (lat: number, lon: number, searchRadius: number) => {
+    const genAvvio = fetchGenRef.current;
     const key = `${lat.toFixed(2)}_${lon.toFixed(2)}_${searchRadius}_${language}`;
     if (mostreKeyRef.current === key) return;
     mostreKeyRef.current = key;
@@ -1315,6 +1345,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
           isFree: /gratuit|gratis|\bfree\b|libero|libre|kostenlos/i.test(prezzo) ? true : undefined,
         };
       });
+      if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
       setSourceResults(prev => ({ ...prev, mostre: mapped }));
     } catch (err) {
       console.error('loadMostre Error:', err);
@@ -1330,6 +1361,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   // AI: istantaneo. La collezione permanente e' il museo stesso, quindi la
   // card porta alla scheda POI sulla mappa (audioguida, Pass Museo).
   const loadPermanenti = async (lat: number, lon: number, searchRadius: number) => {
+    const genAvvio = fetchGenRef.current;
     const key = `${lat.toFixed(2)}_${lon.toFixed(2)}_${searchRadius}`;
     if (permanentiKeyRef.current === key) return;
     permanentiKeyRef.current = key;
@@ -1361,6 +1393,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         approxCoords: false,
         isFree: undefined,
       }));
+      if (genAvvio !== fetchGenRef.current) return; // risposta di una ricerca precedente
       setSourceResults(prev => ({ ...prev, permanenti: mapped }));
     } catch (err) {
       console.error('loadPermanenti Error:', err);
@@ -1377,6 +1410,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   // sono aperti ora, quali fioriture sono in corso o in arrivo.
   // La rotta e' facoltativa: 404/500/timeout = stato vuoto, mai un errore.
   const loadStagionali = async (lat: number, lon: number, searchRadius: number) => {
+    const genAvvio = fetchGenRef.current;
     const key = `${lat.toFixed(2)}_${lon.toFixed(2)}_${searchRadius}_${language}`;
     if (stagionaliKeyRef.current === key) return;
     stagionaliKeyRef.current = key;

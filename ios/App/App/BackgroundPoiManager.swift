@@ -137,6 +137,12 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         }
         pathMonitor.start(queue: DispatchQueue.global(qos: .utility))
         SpeechQueue.shared.onEvent = { [weak self] event, data in
+            // (05/10/2026, ARBITRATO) Una voce della coda è partita in QUESTO
+            // processo: serve a `motivoAttesaVoce` per credere alla pref
+            // `teaser_speaking` (vedi lì). Stato confinato: workQueue.
+            if event == "teaserStarted", let self = self {
+                self.workQueue.async { self.voceNativaVista = true }
+            }
             self?.sendEvent(event, json: data)
         }
         SpeechQueue.shared.onItineraryFinished = { [weak self] poiId in
@@ -385,6 +391,14 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // dimenticati — al prossimo avvio si riparte puliti.
         BearingGate.shared.spegni()
         SpeechQueue.shared.stopSpeaking()
+        // (03/10/2026) Guida spenta: nessun «ti stai avvicinando» resta appeso.
+        cancellaNotificaAvvicinamento(poiId: nil)
+        // (05/10/2026, ARBITRATO) Guida spenta: nessuno aspetta più il suo turno
+        // e nessuna voce è attesa. Il nome appena raccontato resta (10 minuti).
+        qualcunoAspetta = false
+        arrivoInVoloPoi = nil
+        ultimaValLoc = nil
+        ultimaValGrezza = nil
         isRunning = false
         avvioInAttesaDiPermesso = false
         fermatoPerPermesso = false
@@ -744,7 +758,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // scattare: il tile strade serve solo a evaluateTriggers, non si scarica.
         if !soloNavigatore && RoadSnap.shared.shouldRefresh(location) { RoadSnap.shared.refresh(location) }
         let evalLoc = RoadSnap.shared.snap(location, isDriving: guideMode == "driving") ?? location
-        evaluateTriggers(at: evalLoc)
+        // (05/10/2026, ARBITRATO) Anche il fix NON agganciato: l'aggancio alla
+        // strada non è creduto da solo (vedi evaluateTriggers).
+        evaluateTriggers(at: evalLoc, grezza: location)
         // Tiering GPS e distanze in tempo reale: una passata sola, sulla
         // posizione REALE (non quella snappata), come prima.
         aggiornaProssimitaEDistanze(location)
@@ -840,7 +856,8 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 if !raccontato {
                     if dist <= armWindow {
                         tuttiRaccontati = false
-                    } else if poi.footprint?.isEmpty == false {
+                    } else if poi.footprint?.isEmpty == false,
+                              PoiFootprints.senzaPorta(tipo: poi.poiType, nome: poi.nome) {
                         // Un perimetro può stare molto più vicino del suo
                         // punto d'arrivo: si controlla dopo, solo se serve.
                         poiConPerimetroDaVerificare.append(poi)
@@ -1108,7 +1125,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             lat: location.coordinate.latitude,
             lon: location.coordinate.longitude,
             accuracy: location.horizontalAccuracy,
-            nowMs: NavFollower.orologioMs()
+            nowMs: NavFollower.orologioMs(),
+            // (03/10/2026) La velocità del GPS (negativa = non valida): i tempi delle svolte la seguono.
+            velGpsMs: location.speed >= 0 ? location.speed : Double.nan
         ) {
             // Stessi campi che speakText passa per il JS (priority 0, kind
             // "nav", nessun POI) e la stessa scadenza di 20 s che il JS ora
@@ -1560,9 +1579,231 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     // MARK: - Trigger (port della macchina a stati del receiver)
 
     private var approachSpokenInBatch = false
-    /// (AUD-04) Arrivo già annunciato in questo fix: gli altri arrivi dello
-    /// stesso batch ricevono solo la notifica «Ascolta».
-    private var arrivalSpokenInBatch = false
+
+    // ── ARBITRATO FRA I LUOGHI (05/10/2026) ─────────────────────────────────
+    // Port delle regole del motore web del 04–05/10/2026 (foregroundTriggers.ts),
+    // identiche in ItaintaBackgroundPoiService.kt / GeofenceBroadcastReceiver.kt.
+    // Fino a ieri (AUD-04) il primo arrivo del fix aveva la guida e gli altri
+    // scrivevano lo stato con la sola notifica (muti per 24 ore), e la coda
+    // metteva i nuovi arrivi in fila dietro la guida in corso. Ora:
+    //  • MAI UN LUOGO SOPRA UNA GUIDA: finché una voce parla, o un arrivo è
+    //    stato emesso e la sua voce non è ancora partita, nessun altro arrivo
+    //    scatta; dopo la FINE della guida servono 20 s di silenzio;
+    //  • vince il più vicino in metri di strada, dove una gemma vale 50 m e una
+    //    fonte Wikipedia/Wikidata 25 (le tappe di un giro restano davanti);
+    //  • un vincitore che non pesa cede il passo a un luogo che pesa in arrivo
+    //    entro 100 m di strada;
+    //  • parla UNO per giro: gli altri, e chiunque sia stato fermato, NON
+    //    scrivono stato né cooldown — sono ancora nel raggio, restano in attesa
+    //    e si riprovano a ogni fix (da fermi: battito ogni 5 s). Uscendo dal
+    //    raggio non sono più fra i pronti: l'attesa cade;
+    //  • i doppioni (stesso nome nudo entro 150 m) tacciono col vincitore, e lo
+    //    stesso nome appena raccontato (10 min) non riparte con un'altra riga.
+    // Tutto lo stato qui sotto è confinato nella workQueue.
+
+    /// Un arrivo pronto a scattare, in attesa della scelta di fine giro.
+    private struct ArrivoPronto {
+        let poi: Poi
+        let punto: CLLocation
+        /// "arrivo" (cerchio attorno al punto d'arrivo) o "arrivo-muro" (perimetro).
+        let tipo: String
+        /// I metri che ordinano l'arbitrato.
+        let ordineM: Double
+        let raggioM: Double
+        /// Dentro il perimetro (0 m dal muro): non cede il passo a nessuno.
+        let dentro: Bool
+    }
+
+    private static let prefArbUltimoPoi = "wip_arb_ultimo_poi"
+    private static let prefArbUltimoNome = "wip_arb_ultimo_nome"
+    private static let prefArbUltimoTs = "wip_arb_ultimo_ts"
+    private var arbCaricato = false
+    /// L'ultimo luogo per cui è stato emesso un arrivo: id, nome nudo, quando.
+    /// Anche nelle prefs (stesse chiavi di Android): il processo può morire.
+    private var ultimoArrivoPoi = ""
+    private var ultimoArrivoNome = ""
+    private var ultimoArrivoMs: Double = 0
+    /// Arrivo emesso la cui voce non è ancora stata vista partire (nil = nessuno).
+    private var arrivoInVoloPoi: String?
+    private var arrivoInVoloMs: Double = 0
+    /// L'ultima volta che, valutando, si è trovata una guida in riproduzione.
+    private var ultimaGuidaVistaMs: Double = 0
+    /// Una voce della coda è partita in questo processo (evento `teaserStarted`).
+    /// La pref `teaser_speaking` da sola non basta: se il processo muore mentre
+    /// la voce parla resta `true` per sempre, e ogni arrivo aspetterebbe invano.
+    private var voceNativaVista = false
+    /// La guida completa del JS (AVPlayer del plugin) sta suonando. Si legge sul
+    /// main e si riporta qui: vale dall'aggiornamento precedente (un fix fa).
+    private var guidaJsSuona = false
+    /// Chi aspetta il suo turno, e l'ultima valutazione (per il battito da fermi).
+    private var qualcunoAspetta = false
+    private var battitoArbitratoProgrammato = false
+    private var ultimaValLoc: CLLocation?
+    private var ultimaValGrezza: CLLocation?
+    private var ultimaValMs: Double = 0
+    /// Registro di collaudo: una riga per attesa / per aggancio dubbio, non una per fix.
+    private var ultimaAttesaAnnotata = ""
+    private var ultimoAggancioDubbio = ""
+
+    private func caricaArbitrato() {
+        if arbCaricato { return }
+        ultimoArrivoPoi = prefs.string(forKey: Self.prefArbUltimoPoi) ?? ""
+        ultimoArrivoNome = prefs.string(forKey: Self.prefArbUltimoNome) ?? ""
+        ultimoArrivoMs = prefs.double(forKey: Self.prefArbUltimoTs)
+        arbCaricato = true
+    }
+
+    /// La guida del JS si legge sul main (AVPlayer) e si riporta sulla
+    /// workQueue: mai un `sync` fra le due code (vedi «CONFINAMENTO DI THREAD»).
+    private func aggiornaStatoGuidaJs() {
+        DispatchQueue.main.async { [weak self] in
+            let suona = WipBackgroundAudioPlugin.shared?.isPlaying ?? false
+            self?.workQueue.async { self?.guidaJsSuona = suona }
+        }
+    }
+
+    /// (05/10/2026, regola «mai sopra una guida») Perché un arrivo deve
+    /// aspettare ADESSO, oppure nil se può parlare. Tre motivi, nell'ordine del
+    /// web: una voce sta parlando (la coda nativa, o la guida completa del JS);
+    /// un arrivo è stato emesso e la sua voce non è ancora partita; la guida è
+    /// finita da meno di 20 s.
+    ///
+    /// I 20 s valgono solo dopo la voce di un ARRIVO (o la guida del JS): la
+    /// frase «ti stai avvicinando a…» e le svolte del navigatore fermano un
+    /// arrivo finché parlano, ma non aprono la pausa — altrimenti il luogo
+    /// appena annunciato dovrebbe aspettare 20 s il proprio arrivo.
+    /// Qui si LEGGE soltanto lo stato della coda (prefs `teaser_*`): la logica
+    /// della voce non è toccata. Stessa funzione in GeofenceBroadcastReceiver.kt.
+    private func motivoAttesaVoce() -> String? {
+        caricaArbitrato()
+        let now = nowMs()
+        if voceNativaVista && !prefs.bool(forKey: SpeechQueue.prefTeaserSpeaking) { voceNativaVista = false }
+        let parlaCoda = voceNativaVista
+        let poiCheParla = parlaCoda ? (prefs.string(forKey: SpeechQueue.prefTeaserSpeakingPoi) ?? "") : ""
+        let guidaJs = guidaJsSuona
+        let finitoPoi = prefs.string(forKey: SpeechQueue.prefTeaserLastPoi) ?? ""
+        let finitoAt = prefs.double(forKey: SpeechQueue.prefTeaserLastFinishedAt)
+
+        if let inVolo = arrivoInVoloPoi {
+            // La voce dell'arrivo emesso: partita (la si sente ora), partita e
+            // già finita fra due fix, oppure mai partita (voce mancante,
+            // modalità silenziosa accesa nel frattempo).
+            let partita = guidaJs || (parlaCoda && poiCheParla == inVolo)
+            let giaFinita = finitoPoi == inVolo && finitoAt >= arrivoInVoloMs
+            let scaduta = now - arrivoInVoloMs >= Arbitrato.attesaPartenzaMs || now < arrivoInVoloMs
+            if partita || giaFinita || scaduta { arrivoInVoloPoi = nil }
+        }
+        if parlaCoda || guidaJs {
+            if guidaJs || (!poiCheParla.isEmpty && poiCheParla == ultimoArrivoPoi) { ultimaGuidaVistaMs = now }
+            return guidaJs ? "una guida sta suonando" : "una voce sta parlando"
+        }
+        if arrivoInVoloPoi != nil { return "una guida sta per partire" }
+        var fine = ultimaGuidaVistaMs
+        if !finitoPoi.isEmpty, finitoPoi == ultimoArrivoPoi, finitoAt > fine { fine = finitoAt }
+        if now >= fine, now - fine < Arbitrato.pausaDopoGuidaMs { return "pausa dopo la guida" }
+        return nil
+    }
+
+    /// (05/10/2026) Un arrivo è stato EMESSO: da qui parte il silenzio per gli
+    /// altri luoghi e la memoria del nome appena raccontato. `conVoce` = la voce
+    /// partirà davvero (non in modalità silenziosa): solo allora la si aspetta.
+    private func registraArrivoEmesso(_ poi: Poi, conVoce: Bool) {
+        let now = nowMs()
+        ultimoArrivoPoi = poi.id
+        ultimoArrivoNome = Arbitrato.nomeNudo(poi.nome)
+        ultimoArrivoMs = now
+        arbCaricato = true
+        if conVoce {
+            arrivoInVoloPoi = poi.id
+            arrivoInVoloMs = now
+        }
+        prefs.set(poi.id, forKey: Self.prefArbUltimoPoi)
+        prefs.set(ultimoArrivoNome, forKey: Self.prefArbUltimoNome)
+        prefs.set(now, forKey: Self.prefArbUltimoTs)
+    }
+
+    /// (05/10/2026) STESSO NOME APPENA RACCONTATO: un'ALTRA riga con lo stesso
+    /// nome nudo del luogo raccontato da meno di 10 minuti (prova a Roma:
+    /// «Piazza Navona» finisce e 20 s dopo riparte con un'altra riga). La stessa
+    /// riga non passa di qui: la ferma già il suo stato ARRIVED_FIRED, e dopo un
+    /// «Azzera storico» deve poter riparlare subito.
+    private func nomeAppenaDetto(_ poi: Poi) -> Bool {
+        caricaArbitrato()
+        let eta = nowMs() - ultimoArrivoMs
+        return !ultimoArrivoNome.isEmpty && poi.id != ultimoArrivoPoi &&
+            eta >= 0 && eta < Arbitrato.nomeAppenaDettoMs &&
+            Arbitrato.nomeNudo(poi.nome) == ultimoArrivoNome
+    }
+
+    /// (05/10/2026) I DOPPIONI DELLO STESSO LUOGO: le altre righe del radar con
+    /// lo stesso nome nudo entro 150 m dal vincitore entrano nel cooldown
+    /// insieme a lui (stato ARRIVED_FIRED, senza evento né notifica) — il
+    /// Pantheon ha dieci righe visibili, e parlavano una dopo l'altra. Le tappe
+    /// di un giro non si toccano mai. Il riquadro in gradi (~220 m) viene prima
+    /// del nome (che costa tre espressioni regolari) e scarta anche le
+    /// coordinate NaN. Stessa regola di GeofenceBroadcastReceiver.silenziaDoppioni.
+    private func silenziaDoppioni(di vincitore: Poi) {
+        let nudo = Arbitrato.nomeNudo(vincitore.nome)
+        guard nudo.count >= 4 else { return }
+        let centro = CLLocation(latitude: vincitore.lat, longitude: vincitore.lon)
+        for p in currentPois {
+            if p.id == vincitore.id || p.isFromItinerary { continue }
+            guard abs(p.lat - vincitore.lat) < 0.002, abs(p.lon - vincitore.lon) < 0.004 else { continue }
+            guard Arbitrato.stessoLuogo(nudoVincitore: nudo, nudoAltro: Arbitrato.nomeNudo(p.nome)) else { continue }
+            let d = centro.distance(from: CLLocation(latitude: p.lat, longitude: p.lon))
+            guard d <= Arbitrato.doppioneM else { continue }
+            if store.getTriggerState(p.id)?.state != .arrivedFired {
+                store.setTriggerState(p.id, .arrivedFired)
+                NSLog("[WIP] doppione di \(vincitore.nome) messo a tacere: \(p.nome) (\(p.id))")
+            }
+        }
+    }
+
+    /// DA FERMI IL GPS TACE (web 05/10/2026, collaudo a Firenze: fermo a 29 m
+    /// dal Battistero, messo in attesa dal silenzio fra due guide, e poi muto
+    /// per oltre due minuti). Con il filtro di spostamento a 5 m Core Location
+    /// non manda posizioni a chi non si muove: finché qualcuno aspetta il suo
+    /// turno, l'ULTIMO fix valutato si rivaluta da solo ogni 5 secondi (se nel
+    /// frattempo non ne è arrivato uno nuovo). Uno solo in volo alla volta.
+    private func programmaBattitoArbitrato() {
+        guard !battitoArbitratoProgrammato else { return }
+        battitoArbitratoProgrammato = true
+        workQueue.asyncAfter(deadline: .now() + .milliseconds(Int(Arbitrato.battitoAttesaMs))) { [weak self] in
+            guard let self = self else { return }
+            self.battitoArbitratoProgrammato = false
+            guard self.isRunning, self.qualcunoAspetta, self.prefs.bool(forKey: "isServiceActive"),
+                  let loc = self.ultimaValLoc else { return }
+            if nowMs() - self.ultimaValMs >= Arbitrato.battitoAttesaMs - 500 {
+                self.evaluateTriggers(at: loc, grezza: self.ultimaValGrezza, daFermi: true)
+            } else {
+                // È arrivato un fix nel frattempo: si ricontrolla fra 5 s.
+                self.programmaBattitoArbitrato()
+            }
+        }
+    }
+
+    // ── NOTIFICHE: «una cosa alla volta, e sparisce quando non serve più» (03/10/2026) ──
+    // Collaudo del committente a Montecatini: 8 righe sulla lock screen in due ore,
+    // 4 della stessa raffica (la voce era già limitata a UNA per fix, la notifica no) e
+    // nessuna mai tolta. Regole decise: (1) UNA sola notifica di avvicinamento alla
+    // volta, id fisso `approach`, gli altri luoghi dello stesso fix nel corpo;
+    // (2) sparisce al superamento/uscita del luogo, a un arrivo qualsiasi, o dopo
+    // 10 minuti; (3) con un percorso attivo nel NavFollower notifica solo le tappe
+    // del giro (la VOCE non cambia: regola del 13/09, teaser intoccabili);
+    // (4) gli arrivi restano per luogo, ma al massimo 3: al quarto esce il più vecchio.
+    // Stesse regole in GeofenceBroadcastReceiver.kt.
+    private static let idNotificaAvvicinamento = "approach"
+    private static let scadenzaAvvicinamentoMs: Double = 10 * 60 * 1000
+    private static let tettoArriviNotificati = 3
+    private var avvicinamentoNotificatoPoiId: String?
+    private var avvicinamentoNotificatoMs: Double = 0
+    private var avvicinamentoTitolo = ""
+    private var avvicinamentoCorpo = ""
+    private var avvicinamentoGuida = ""
+    private var avvicinamentoAltri: [String] = []
+    /// Vero dal primo avvicinamento notificato in questo fix: i successivi si accodano nel corpo.
+    private var batchAvvicinamentoAperto = false
+    private var arriviNotificati: [String] = []
 
     /// Distanza al fix precedente, per POI: serve a rilevare il superamento
     /// (distanza crescente + CPA alle spalle). Port di `lastDistances`
@@ -1602,14 +1843,25 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         return (nowMs() - record.updatedAt) > approachRetriggerCooldownMs
     }
 
-    private func evaluateTriggers(at location: CLLocation) {
+    /// `grezza` = il fix NON agganciato alla strada (nil se non c'è stato
+    /// aggancio da confrontare); `daFermi` = rivalutazione dell'ULTIMO fix
+    /// perché qualcuno aspetta il suo turno (vedi programmaBattitoArbitrato).
+    private func evaluateTriggers(at location: CLLocation, grezza: CLLocation? = nil, daFermi: Bool = false) {
         lastFixLocation = location
         // Fail-closed: senza fix recente e preciso ogni trigger è sospetto
         let maxAccuracyM: Double = 100
-        let maxFixAgeMs: Double = 2 * 60_000
+        // (05/10/2026, ARBITRATO) Da fermi l'ultimo fix vale finché non ha più
+        // di 10 minuti (come il web): con il filtro di spostamento a 5 m non ne
+        // arriva un altro finché non ci si muove.
+        let maxFixAgeMs: Double = daFermi ? Arbitrato.fermiMaxEtaMs : 2 * 60_000
         guard location.horizontalAccuracy > 0,
               location.horizontalAccuracy <= maxAccuracyM,
               nowMs() - location.timestamp.timeIntervalSince1970 * 1000 <= maxFixAgeMs else { return }
+        ultimaValLoc = location
+        ultimaValGrezza = grezza
+        ultimaValMs = nowMs()
+        // La guida del JS: letta sul main, pronta per il prossimo giro.
+        aggiornaStatoGuidaJs()
 
         let isDriving = guideMode == "driving"
         // (28/08/2026, AUD-09) DUE SOGLIE, come Android e web. Fino a 100 m il
@@ -1631,6 +1883,11 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             /// `poi.coordinate`, che è una proprietà calcolata.
             let punto: CLLocation
             let dist: Double
+            /// (05/10/2026, ARBITRATO) I metri dal fix NON agganciato alla
+            /// strada, calcolati solo quando servono (aggancio che ha spostato
+            /// il fix di più di 5 m e luogo già nel raggio d'arrivo). nil =
+            /// nessuna seconda misura: decide `dist` come sempre.
+            let liberaM: Double?
         }
 
         // (22/08/2026) Prima il predittore girava su TUTTO il radar a ogni fix
@@ -1667,6 +1924,32 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         let metriPerGradoLat = 111_320.0
         let metriPerGradoLon = max(1.0, 111_320.0 * cos(latFix * .pi / 180))
 
+        // (04/10/2026) Traccia della passeggiata nel registro di collaudo: solo
+        // con la modalità collaudo accesa, una riga ogni 4 secondi.
+        RegistroCollaudo.shared.posizione(location)
+
+        // (03/10/2026) Le distanze di strada da QUI, calcolate una volta per
+        // fix e poi lette per ogni luogo. nil = nessuna strada nota attorno.
+        let ricercaStrada = RoadGraph.ricercaM(isDriving: isDriving)
+        let sorgenteStrada = RoadSnap.shared.grafo(isDriving: isDriving)?
+            .da(lat: latFix, lon: lonFix, maxM: ricercaStrada)
+
+        // (05/10/2026, ARBITRATO) L'AGGANCIO ALLA STRADA NON È CREDUTO DA SOLO
+        // (web 04/10/2026, test a Roma: Palazzo Doria-Pamphili scattato a 99 m
+        // di strada). Accanto a un incrocio l'aggancio può posare il telefono
+        // sulla via parallela, e da lì il luogo risulta «a 30 m». Se ha spostato
+        // il fix di più di 5 m si misura ANCHE dal punto non agganciato e per
+        // l'ARRIVO vale la distanza PIÙ LUNGA delle due: la guida parte solo se
+        // entrambe la danno nel raggio. Davanti alla porta coincidono. Serve
+        // solo a confermare un arrivo: la ricerca sul grafo si ferma poco oltre
+        // il raggio d'arrivo (100 m a piedi, 150 in auto).
+        var sorgenteLibera: RoadGraph.Sorgente? = nil
+        if let g = grezza, g.distance(from: location) > Arbitrato.snapDubbioM {
+            sorgenteLibera = RoadSnap.shared.grafo(isDriving: isDriving)?
+                .da(lat: g.coordinate.latitude, lon: g.coordinate.longitude,
+                    maxM: Arbitrato.ricercaLiberaM(isDriving: isDriving))
+        }
+
         var esaminati: [Candidate] = []
         esaminati.reserveCapacity(32)
         for (indice, poi) in currentPois.enumerated() {
@@ -1677,7 +1960,11 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             } else {
                 statoAcceso = false
             }
+            // (03/10/2026) I 30 m dal muro valgono solo per i luoghi senza
+            // porta (piazze, parchi, ponti, panorami): per gli edifici conta
+            // il punto d'arrivo. Vedi PoiFootprints.senzaPorta.
             let haPerimetro = poi.footprint?.isEmpty == false
+                && PoiFootprints.senzaPorta(tipo: poi.poiType, nome: poi.nome)
             let punto = puntoArrivo(indice, poi)
             if !haPerimetro && !statoAcceso {
                 let raggioMassimo = max(baseAlert * 2, Double(poi.alertRadius ?? 0))
@@ -1690,14 +1977,35 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // sfiora il muro, non quella col portone più vicino (parità Android).
             // Senza perimetro la distanza dal muro è per definizione infinita:
             // non serve chiamare la funzione per farselo dire (sono 4 POI su 5).
-            let dIngresso = location.distance(from: punto)
+            // (03/10/2026, «tutto in strada reale, mai linea d'aria») METRI DI
+            // STRADA fino al punto d'arrivo: dalla via parallela o dal retro
+            // dell'isolato il luogo è «a 20 m» solo sulla carta. La distanza
+            // diretta resta solo dove non c'è nessuna strada nota attorno
+            // (tile non scaricata): vedi RoadGraph.cheDecide. Oltre il raggio
+            // di ricerca del grafo la strada non può essere più corta: non si
+            // chiede nemmeno.
+            let aria = location.distance(from: punto)
+            let dIngresso = aria > ricercaStrada
+                ? aria
+                : RoadGraph.cheDecide(
+                    aria: aria,
+                    strada: sorgenteStrada?.verso(lat: punto.coordinate.latitude, lon: punto.coordinate.longitude))
             let dMuro = haPerimetro
                 ? PoiFootprints.distanzaDalPerimetro(
                     poiId: poi.id, footprint: poi.footprint,
                     lat: latFix, lon: lonFix,
                     entro: PoiFootprints.triggerCarM)
                 : Double.infinity
-            esaminati.append(Candidate(poi: poi, punto: punto, dist: min(dIngresso, dMuro)))
+            // (05/10/2026, ARBITRATO) La seconda misura, dal fix non agganciato:
+            // solo per chi è già nel raggio d'arrivo secondo la prima.
+            var liberaM: Double? = nil
+            if let libera = sorgenteLibera, let g = grezza,
+               dIngresso <= effectiveRadii(for: poi, isDriving: isDriving).arrival {
+                liberaM = RoadGraph.cheDecide(
+                    aria: g.distance(from: punto),
+                    strada: libera.verso(lat: punto.coordinate.latitude, lon: punto.coordinate.longitude))
+            }
+            esaminati.append(Candidate(poi: poi, punto: punto, dist: min(dIngresso, dMuro), liberaM: liberaM))
         }
 
         let sortedAll = esaminati
@@ -1722,7 +2030,17 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         }
 
         approachSpokenInBatch = false
-        arrivalSpokenInBatch = false
+        batchAvvicinamentoAperto = false
+        // (05/10/2026, ARBITRATO) Chi è pronto entra qui; in fondo al giro parla
+        // UNO e gli altri restano in attesa (prima, AUD-04: il primo con la
+        // guida, gli altri con stato scritto e sola notifica).
+        var pronti: [ArrivoPronto] = []
+        // I luoghi che pesano e stanno arrivando entro 100 m di strada.
+        var importanti = Set<String>()
+        // (03/10/2026, regola 2) Un avvicinamento notificato da più di 10 minuti non serve più.
+        if avvicinamentoNotificatoPoiId != nil, nowMs() - avvicinamentoNotificatoMs > Self.scadenzaAvvicinamentoMs {
+            cancellaNotificaAvvicinamento(poiId: nil)
+        }
         // (23/09/2026, R-BUSSOLA, parità Android `bussolaServe`) Candidati
         // (i 5 vicini, non tappe, non raccontati) che potrebbero chiedere il
         // gate ai prossimi fix, meno quelli per cui il gate ha appena deciso.
@@ -1742,6 +2060,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             if keptIds.contains(c.poi.id), !c.poi.isFromItinerary, state != .arrivedFired {
                 candidatiGate.append(c.poi.id)
             }
+            // (05/10/2026, ARBITRATO) La distanza al fix precedente, letta PRIMA
+            // che il giro la aggiorni: dice se ci si sta avvicinando.
+            let distPrecedente = lastDistances[c.poi.id]
 
             // A 30 METRI DAL PERIMETRO dell'edificio (poi_footprints, poligono
             // OSM; 0 m = dentro). Decisione del 22/08/2026: la guida parte a
@@ -1754,11 +2075,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // zittendo la guida proprio mentre l'utente è davanti al portale.
             // Costa quattro confronti sul riquadro quando il POI non ha un
             // perimetro, che sono i 4 POI su 5 del database.
-            let dentroPerimetro = PoiFootprints.alPerimetro(
-                poiId: c.poi.id, footprint: c.poi.footprint,
-                lat: location.coordinate.latitude, lon: location.coordinate.longitude,
-                isDriving: isDriving
-            )
+            // (03/10/2026) Solo per i luoghi senza porta: vedi PoiFootprints.senzaPorta.
+            let dentroPerimetro = PoiFootprints.senzaPorta(tipo: c.poi.poiType, nome: c.poi.nome)
+                && PoiFootprints.alPerimetro(
+                    poiId: c.poi.id, footprint: c.poi.footprint,
+                    lat: location.coordinate.latitude, lon: location.coordinate.longitude,
+                    isDriving: isDriving
+                )
 
             // ── Superamento (PASSED) ──
             // Il CPA è alle spalle e la distanza cresce: la voce che racconta
@@ -1799,6 +2122,8 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     // non deve uccidere B.
                     SpeechQueue.shared.stopSpeaking(poiId: c.poi.id)
                     sendPoiEvent("poiPassed", poi: c.poi)
+                    // (03/10/2026, regola 2) Superato: la riga «ti stai avvicinando» non vale più.
+                    cancellaNotificaAvvicinamento(poiId: c.poi.id)
                     lastDistances[c.poi.id] = c.dist
                     continue
                 }
@@ -1820,6 +2145,8 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     // primo rientro nel raggio (banner ogni pochi metri).
                     store.setTriggerState(c.poi.id, .exited)
                     sendPoiEvent("poiExited", poi: c.poi)
+                    // (03/10/2026, regola 2) Uscito dal raggio senza fermarsi: via la riga.
+                    cancellaNotificaAvvicinamento(poiId: c.poi.id)
                     continue
                 }
                 if state == .arrivedFired {
@@ -1840,11 +2167,40 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 // .pending → prosegue verso la valutazione predittiva.
             }
 
+            // (05/10/2026, ARBITRATO) UN LUOGO CHE PESA STA ARRIVANDO: non ancora
+            // nel raggio, in avvicinamento, entro 100 m di strada e libero di
+            // parlare. Chi non pesa gli cederà il passo (vedi in fondo al giro).
+            var etaStato = Double.infinity
+            if let rec = record { etaStato = nowMs() - rec.updatedAt }
+            let uscitoDaPoco = state == .exited && etaStato < arrivalAfterExitCooldownMs
+            if !dentroPerimetro, c.dist > arrivalRad, c.dist <= Arbitrato.attesaImportanteM,
+               let prima = distPrecedente, c.dist < prima - Arbitrato.avvicinaEpsM,
+               state != .passed, state != .arrivedFired, !uscitoDaPoco,
+               Arbitrato.pesa(c.poi) {
+                importanti.insert(c.poi.id)
+            }
+
+            // (05/10/2026, ARBITRATO) La distanza che decide l'ARRIVO: la più
+            // lunga fra quella dal fix agganciato e quella dal fix libero. Solo
+            // per l'arrivo: stati, superamento e isteresi leggono `c.dist`.
+            var distArrivo = c.dist
+            if let libera = c.liberaM, libera > distArrivo { distArrivo = libera }
+
             // Sicurezza distanza (come Android: raggio × 2.5 + accuratezza)
             // Dentro il perimetro l'arrivo è un fatto, non una stima: si è
             // dentro l'edificio, e il raggio d'arrivo — 30 metri a piedi — in
             // un museo di 200 non si raggiunge mai se l'ingresso è su un lato.
-            if dentroPerimetro || c.dist <= arrivalRad {
+            if !dentroPerimetro, c.dist <= arrivalRad, distArrivo > arrivalRad {
+                // L'aggancio dava l'arrivo, il punto libero no: non si arriva.
+                // Nessuno stato, nessun cooldown; si riprova al fix dopo. Nel
+                // registro di collaudo una volta per luogo.
+                if fixDaTrigger, ultimoAggancioDubbio != c.poi.id {
+                    ultimoAggancioDubbio = c.poi.id
+                    RegistroCollaudo.shared.guida(
+                        "aggancio-dubbio", poi: c.poi, stradaM: c.dist,
+                        raggioM: arrivalRad, location: location, punto: c.punto)
+                }
+            } else if dentroPerimetro || c.dist <= arrivalRad {
                 // Il TTL 24h ora copre anche PASSED (prima lo bypassava e un
                 // POI superato ri-arrivava al primo rientro); EXITED recente
                 // blocca il rientro-da-rumore-GPS con un cooldown più corto.
@@ -1887,18 +2243,21 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                             dentroPerimetro: dentroPerimetro, distanzaM: c.dist
                         )
                     if esitoGate != .rimanda {
-                        // (23/09/2026, R-BUSSOLA) Deciso: niente pre-riscaldamento per lui.
-                        decisiGate.insert(c.poi.id)
-                        // (28/08/2026, AUD-04) UNA guida completa per fix. I
-                        // candidati sono ordinati (itinerario > gemma > più
-                        // vicino): il primo che arriva riceve teaser, pass e
-                        // audioguida; gli altri dello stesso fix — tre chiese
-                        // sulla stessa piazza — scrivono lo stato e ricevono
-                        // la sola notifica «Ascolta». Prima ognuno consumava
-                        // una guida del pass e accodava minuti di audio che
-                        // nessuno avrebbe ascoltato in fila.
-                        handleArrival(poi: c.poi, soloNotifica: arrivalSpokenInBatch)
-                        arrivalSpokenInBatch = true
+                        // (28/08/2026, AUD-04) UNA guida completa per fix.
+                        // (05/10/2026, ARBITRATO) Pronto: non scatta qui, entra
+                        // in lista e si decide in fondo al giro — parla UNO, e
+                        // gli altri non scrivono più lo stato: restano in
+                        // attesa. Bussola, registro e arrivo sono là col
+                        // vincitore.
+                        pronti.append(ArrivoPronto(
+                            poi: c.poi, punto: c.punto,
+                            tipo: dentroPerimetro ? "arrivo-muro" : "arrivo",
+                            ordineM: dentroPerimetro ? c.dist : distArrivo,
+                            raggioM: arrivalRad,
+                            dentro: dentroPerimetro && PoiFootprints.dentroPerimetro(
+                                poiId: c.poi.id, footprint: c.poi.footprint,
+                                lat: location.coordinate.latitude, lon: location.coordinate.longitude)
+                        ))
                     }
                 }
             // Finestra allargata a 3× il raggio: il predittore deve poter
@@ -1924,12 +2283,62 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 )
                 // AUD-09: senza un fix entro 50 m l'avviso non scatta e non
                 // scrive lo stato — il predittore rivaluta al fix successivo.
-                if pred.decision == .fire && fixDaTrigger {
+                // `c.dist <= alertRad`: l'avviso scatta a 150/300 m DI STRADA.
+                if pred.decision == .fire && fixDaTrigger && c.dist <= alertRad {
+                    RegistroCollaudo.shared.guida(
+                        "avviso", poi: c.poi, stradaM: c.dist,
+                        raggioM: alertRad, location: location, punto: c.punto)
                     handleApproach(poi: c.poi, speak: !approachSpokenInBatch)
                     approachSpokenInBatch = true
                 }
             }
         }
+
+        // ── ARBITRATO: QUALE LUOGO PARLA (05/10/2026) ───────────────────────
+        // Le regole sono scritte sopra `ArrivoPronto`; stesso ordine e stessi
+        // valori di ItaintaBackgroundPoiService.runPredictiveEvaluation.
+        var aspetta = false
+        // (08/10/2026) TARGHE E LAPIDI IN SILENZIO SE C'È UN MONUMENTO VICINO:
+        // escono dai pronti senza scrivere stato né cooldown (vedi Arbitrato.eTarga).
+        let targheMute = Arbitrato.targheConMonumentoVicino(candidates.map { $0.poi })
+        if !targheMute.isEmpty {
+            pronti.removeAll { targheMute.contains($0.poi.id) && !$0.poi.isFromItinerary }
+        }
+        // Le tappe di un giro davanti a tutti (le ha scelte l'utente), poi il
+        // punteggio più basso: metri di strada meno i bonus d'importanza.
+        let vincitore = pronti.min { a, b in
+            if a.poi.isFromItinerary != b.poi.isFromItinerary { return a.poi.isFromItinerary }
+            return Arbitrato.punteggio(a.poi, distM: a.ordineM) < Arbitrato.punteggio(b.poi, distM: b.ordineM)
+        }
+        if let v = vincitore {
+            let motivo = motivoAttesaVoce()
+            let cede = motivo == nil && !Arbitrato.pesa(v.poi) && !v.dentro && !v.poi.isFromItinerary
+                && importanti.contains(where: { $0 != v.poi.id })
+            if motivo != nil || cede {
+                aspetta = true
+                let perche = motivo ?? "cede il passo a un luogo che pesa"
+                // Nel registro una riga sola per attesa, non una per fix.
+                let chiave = "\(v.poi.id)|\(perche)"
+                if chiave != ultimaAttesaAnnotata {
+                    ultimaAttesaAnnotata = chiave
+                    RegistroCollaudo.shared.guida(
+                        "attesa", poi: v.poi, stradaM: v.ordineM,
+                        raggioM: v.raggioM, location: location, punto: v.punto)
+                    RegistroCollaudo.shared.scrivi("GUIDA attesa-motivo \"\(v.poi.nome)\" id=\(v.poi.id) motivo=\"\(perche)\"")
+                }
+            } else {
+                ultimaAttesaAnnotata = ""
+                // (23/09/2026, R-BUSSOLA) Deciso: niente pre-riscaldamento per lui.
+                decisiGate.insert(v.poi.id)
+                RegistroCollaudo.shared.guida(
+                    v.tipo, poi: v.poi, stradaM: v.ordineM,
+                    raggioM: v.raggioM, location: location, punto: v.punto)
+                handleArrival(poi: v.poi)
+                if pronti.count > 1 { aspetta = true }
+            }
+        }
+        qualcunoAspetta = aspetta
+        if aspetta { programmaBattitoArbitrato() }
 
         // (23/09/2026, R-BUSSOLA, parità Android) Resta un candidato in gioco:
         // bussola pronta, ma solo se il gate l'aveva già chiesta in questa
@@ -2052,20 +2461,63 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // troncava a «Esplorazione: Politeama Ca…»: la parola fissa si
         // mangiava lo spazio e il nome — l'unica cosa che conta sulla lock
         // screen — non si leggeva. L'etichetta scende nel corpo, dove c'è posto.
-        if silent {
+        // (03/10/2026) Stesso testo di prima, ma per la strada della notifica UNICA:
+        // vedi notificaAvvicinamento (regole 1 e 3). La voce qui sopra non cambia.
+        let corpo = silent
             // In silenzioso il testo fa il lavoro della voce: body esteso col
             // messaggio di avvicinamento (già nella lingua dell'utente).
-            showNotification(
-                title: poi.nome,
-                body: "\(notifTitle) · \(approachMsg). \(distText)".trimmingCharacters(in: .whitespaces),
-                poiId: poi.id, guide: guideVoice, isArrival: false
-            )
+            ? "\(notifTitle) · \(approachMsg). \(distText)".trimmingCharacters(in: .whitespaces)
+            : "\(notifTitle) · \(distText) \(NotificationStrings.tapToListen(lang))".trimmingCharacters(in: .whitespaces)
+        notificaAvvicinamento(poi: poi, corpo: corpo, guida: guideVoice)
+    }
+
+    /// (03/10/2026, regole 1 e 3) LA notifica di avvicinamento: una sola, id fisso.
+    /// Il primo luogo del fix dà titolo e corpo; i successivi dello stesso fix entrano
+    /// nel corpo come «Vicino anche: …» (tocco = primo luogo). Con un percorso attivo
+    /// nel follower si notificano solo le tappe del giro: gli altri luoghi li dice la
+    /// voce come sempre, senza riga. Sulla workQueue (chiamata da handleApproach).
+    private func notificaAvvicinamento(poi: Poi, corpo: String, guida: String) {
+        if NavFollower.shared.haPercorso && !poi.isFromItinerary { return }
+        if batchAvvicinamentoAperto, avvicinamentoNotificatoPoiId != nil {
+            if !avvicinamentoAltri.contains(poi.nome) { avvicinamentoAltri.append(poi.nome) }
         } else {
-            showNotification(
-                title: poi.nome,
-                body: "\(notifTitle) · \(distText) \(NotificationStrings.tapToListen(lang))".trimmingCharacters(in: .whitespaces),
-                poiId: poi.id, guide: guideVoice, isArrival: false
-            )
+            batchAvvicinamentoAperto = true
+            avvicinamentoNotificatoPoiId = poi.id
+            avvicinamentoNotificatoMs = nowMs()
+            avvicinamentoTitolo = poi.nome
+            avvicinamentoCorpo = corpo
+            avvicinamentoGuida = guida
+            avvicinamentoAltri = []
+        }
+        let altri = avvicinamentoAltri.isEmpty ? "" : "\n\(NotificationStrings.nearbyAlso(appLanguage)) \(avvicinamentoAltri.joined(separator: ", "))"
+        postNotification(
+            id: Self.idNotificaAvvicinamento, title: avvicinamentoTitolo, body: avvicinamentoCorpo + altri,
+            poiId: avvicinamentoNotificatoPoiId ?? poi.id, guide: avvicinamentoGuida, timeSensitive: false
+        )
+    }
+
+    /// (03/10/2026, regola 2) Toglie la notifica di avvicinamento: `poiId` nil = comunque,
+    /// altrimenti solo se è quella di quel luogo (un altro luogo appena notificato resta).
+    private func cancellaNotificaAvvicinamento(poiId: String?) {
+        guard let corrente = avvicinamentoNotificatoPoiId else { return }
+        if let poiId = poiId, poiId != corrente { return }
+        avvicinamentoNotificatoPoiId = nil
+        avvicinamentoNotificatoMs = 0
+        avvicinamentoAltri = []
+        batchAvvicinamentoAperto = false
+        let centro = UNUserNotificationCenter.current()
+        centro.removeDeliveredNotifications(withIdentifiers: [Self.idNotificaAvvicinamento])
+        centro.removePendingNotificationRequests(withIdentifiers: [Self.idNotificaAvvicinamento])
+    }
+
+    /// (03/10/2026, regola 4) Gli arrivi restano per luogo, ma al massimo 3 sulla lock
+    /// screen: al quarto esce il più vecchio (lo stesso luogo ri-notificato non conta due volte).
+    private func registraArrivoNotificato(_ poiId: String) {
+        arriviNotificati.removeAll { $0 == poiId }
+        arriviNotificati.append(poiId)
+        while arriviNotificati.count > Self.tettoArriviNotificati {
+            let vecchio = arriviNotificati.removeFirst()
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["poi_\(vecchio)"])
         }
     }
 
@@ -2162,10 +2614,29 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// autorizzazione del tasto in app.
     private func handleArrival(poi initialPoi: Poi, soloNotifica: Bool = false) {
         var poi = initialPoi
+        // (05/10/2026, ARBITRATO) STESSO NOME APPENA RACCONTATO = SILENZIO, anche
+        // se la riga è un'altra: entra nel cooldown senza evento, senza voce e
+        // senza notifica (sul web: markFired e fuori dai pronti). Le tappe di
+        // un giro non passano di qui: le ha scelte l'utente e parlano comunque.
+        if !poi.isFromItinerary, nomeAppenaDetto(poi) {
+            store.setTriggerState(poi.id, .arrivedFired)
+            NSLog("[WIP] \(poi.nome) (\(poi.id)) muto: stesso nome appena raccontato")
+            RegistroCollaudo.shared.scrivi("GUIDA muto-stesso-nome \"\(poi.nome)\" id=\(poi.id)")
+            return
+        }
         // Il POI ha parlato: il gate dimentica i suoi rinvii (specifica, punto 7).
         BearingGate.shared.azzera(poiId: poi.id)
         store.setTriggerState(poi.id, .arrivedFired)
+        if !soloNotifica {
+            // (05/10/2026, ARBITRATO) Da qui parte il silenzio per gli altri
+            // luoghi (in modalità silenziosa non c'è voce da aspettare), e i
+            // doppioni dello stesso luogo tacciono insieme al vincitore.
+            registraArrivoEmesso(poi, conVoce: !isSilentMode)
+            silenziaDoppioni(di: poi)
+        }
         sendPoiEvent("poiArrived", poi: poi)
+        // (03/10/2026, regola 2) Un arrivo qualsiasi chiude la riga «ti stai avvicinando».
+        cancellaNotificaAvvicinamento(poiId: nil)
 
         let priority = poi.isFromItinerary ? 0 : 1
         // Personaggio scelto dall'utente (prefs), default del POI come riserva:
@@ -2556,6 +3027,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     }
 
     private func showNotification(title: String, body: String, poiId: String, guide: String, isArrival: Bool, withListenAction: Bool = false, muted: Bool = false) {
+        if isArrival { registraArrivoNotificato(poiId) }
         postNotification(
             id: "poi_\(poiId)", title: title, body: body,
             poiId: poiId, guide: guide, timeSensitive: isArrival,
@@ -3120,6 +3592,52 @@ final class NavFollower {
     private var dPrec = Double.nan
     private var dPrecIdx = -1
 
+    // ── (03/10/2026) AGGANCIO AL TRACCIATO e TEMPI DELLE SVOLTE ──────────────
+    // Collaudo del committente a Montecatini: «non andava bene, né come svolte
+    // né come matching map». Le soglie «vicino»/«lontano» erano a LINEA D'ARIA
+    // dal punto della manovra, fisse (30 e 50-150 m). Ora la posizione si
+    // proietta sul tracciato in una finestra che parte dall'aggancio precedente
+    // (`uMatch`, metri dall'inizio del tracciato), i metri alla svolta sono
+    // quelli LUNGO LA STRADA e le soglie seguono la velocità: «vicino» a 12 s
+    // (18-35 m), «lontano» fra vicino+20 m e 70 s (70-150 m); una svolta alle
+    // spalle di 12 m lungo la strada è superata. Senza aggancio: tutto come
+    // prima. Uguale in NavFollower.kt e nella specifica.
+    private static let matchIndietroM: Double = 15
+    private static let matchAvantiMinM: Double = 60
+    private static let matchCrossMinM: Double = 25
+    private static let matchCrossMaxM: Double = 60
+    private static let matchPersiMax = 3
+    private static let matchPenalitaIndietro: Double = 0.5
+    private static let velFinestraMs: Double = 10_000
+    private static let velDefaultMs: Double = 1.3
+    private static let velMinMs: Double = 0.5
+    private static let velMaxMs: Double = 2.5
+    private static let velSaltoMs: Double = 4.0
+    private static let nearSec: Double = 12
+    private static let nearMinM: Double = 18
+    private static let nearMaxM: Double = 35
+    private static let farSec: Double = 70
+    private static let farDynMinM: Double = 70
+    private static let farStaccoM: Double = 20
+    private static let passatoStradaM: Double = 12
+    private static let logMax = 4000
+    private var uMatch = Double.nan
+    private var agganciPersi = 0
+    private var vel: Double = 1.3
+    private var velTs: Double = 0
+    private var rifU: Double = 0
+    private var rifTs: Double = 0
+    private var ultimoDStrada = Double.nan
+    private var ultimoDStradaIdx = -1
+    /// REGISTRO DI COLLAUDO: una riga per fix col percorso attivo, in memoria.
+    private var registro: [String] = []
+    private static let formatoOraLog: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
     /// (21/09/2026, REVISIONE 2) FOTOGRAFIA scattata dal tasto «Termina» del
     /// cruscotto prima di svuotare il follower: al «Termina» in ritardo
     /// seguito da «no» il JS deve riprendere prima il progresso fatto a
@@ -3148,6 +3666,14 @@ final class NavFollower {
         lock.lock()
         defer { lock.unlock() }
         return !passi.isEmpty && !finito && !inPausa
+    }
+
+    /// (03/10/2026) C'è un giro in corso, ANCHE in pausa: serve al filtro delle notifiche
+    /// di avvicinamento («durante un giro solo le tappe»). Uguale in NavFollower.kt.
+    var haPercorso: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !passi.isEmpty && !finito
     }
 
     // MARK: - Contratto del plugin
@@ -3455,7 +3981,9 @@ final class NavFollower {
         }
 
         let p = passi[idx]
-        let d = Self.metri(lat, lon, p.lat, p.lon)
+        // (03/10/2026) I metri alla svolta sono quelli LUNGO LA STRADA dell'ultimo
+        // fix agganciato (stesso passo); senza aggancio resta la linea d'aria.
+        let d: Double = (ultimoDStradaIdx == idx && !ultimoDStrada.isNaN) ? ultimoDStrada : Self.metri(lat, lon, p.lat, p.lon)
         let rimTappa = d + restoTappa[idx]
         let rimTotale = d + resto[idx]
 
@@ -3583,7 +4111,7 @@ final class NavFollower {
     /// dire solo se tocca al nativo (battito scaduto) e non è un doppione.
     /// Al massimo UNA frase per fix. `nowMs` DEVE essere lo stesso orologio
     /// del battito: `NavFollower.orologioMs()` (monotono), non la data.
-    func onFix(lat: Double, lon: Double, accuracy: Double, nowMs: Double) -> String? {
+    func onFix(lat: Double, lon: Double, accuracy: Double, nowMs: Double, velGpsMs: Double = Double.nan) -> String? {
         lock.lock()
         defer { lock.unlock() }
         let n = passi.count
@@ -3636,6 +4164,12 @@ final class NavFollower {
         var out: String?
         var tipoOut = ""
         var testoPasso = ""
+
+        // (03/10/2026) AGGANCIO AL TRACCIATO: dove si è LUNGO LA STRADA (nan = non agganciati).
+        let u = aggancia(lat: lat, lon: lon, accuracy: accuracy, nowMs: nowMs, velGpsMs: velGpsMs)
+        let vicinoM: Double = min(Self.nearMaxM, max(Self.nearMinM, vel * Self.nearSec))
+        var logAria = Double.nan
+        var logStrada = Double.nan
 
         var giri = 0
         while giri < n {
@@ -3775,7 +4309,29 @@ final class NavFollower {
                 break
             }
 
-            if d <= Self.nearM &&
+            // (03/10/2026) METRI ALLA SVOLTA LUNGO LA STRADA, se agganciati e il
+            // passo sta sul tracciato; altrimenti la linea d'aria con le soglie
+            // di prima. Uguale in NavFollower.kt.
+            let aP: Double = idx < alongPasso.count ? alongPasso[idx] : Double.nan
+            let suStrada = !u.isNaN && !aP.isNaN
+            if suStrada && u > aP + Self.passatoStradaM && idx + 1 < n {
+                // Svolta alle spalle di 12 m LUNGO la strada: detta o no, si passa
+                // alla successiva (se non detta resta «contata», mai «davvero»).
+                dettiVicino.insert(idx)
+                dettiLontano.insert(idx)
+                avanzaSottoLock()
+                continue
+            }
+            let dS: Double = suStrada ? max(0, aP - u) : d
+            let vicinoOra: Bool = suStrada ? (dS <= vicinoM) : (d <= Self.nearM)
+            let lontanoMin: Double = suStrada ? (vicinoM + Self.farStaccoM) : Self.farMinM
+            let lontanoMax: Double = suStrada ? min(Self.farMaxM, max(Self.farDynMinM, vel * Self.farSec)) : Self.farMaxM
+            ultimoDStrada = suStrada ? dS : Double.nan
+            ultimoDStradaIdx = idx
+            logAria = d
+            logStrada = suStrada ? dS : Double.nan
+
+            if vicinoOra &&
                 (!dettiVicino.contains(idx) || (!jsVivo && !dettiVicinoDavvero.contains(idx))) {
                 dettiVicino.insert(idx)
                 dettiLontano.insert(idx) // a 30 m il «tra 100 metri» non ha più senso
@@ -3799,7 +4355,7 @@ final class NavFollower {
                 continue
             } else if p.tipo == "turn" && !inPausa && inAvvicinamento &&
                         (!dettiLontano.contains(idx) || (!jsVivo && !dettiLontanoDavvero.contains(idx))) &&
-                        d >= Self.farMinM && d <= Self.farMaxM && !p.testo.isEmpty {
+                        dS >= lontanoMin && dS <= lontanoMax && !p.testo.isEmpty {
                 // (21/09/2026, REVISIONE 2) In pausa il preavviso NON si segna.
                 // E CONTATO ≠ DETTO anche qui: un preavviso contato in silenzio
                 // negli 8 s dopo il congelamento (JS creduto vivo, ma non l'ha
@@ -3811,7 +4367,7 @@ final class NavFollower {
                 dettiLontano.insert(idx)
                 if !jsVivo {
                     dettiLontanoDavvero.insert(idx)
-                    let frase = fraseLontana(metri: d, istruzione: p.testo)
+                    let frase = fraseLontana(metri: dS, istruzione: p.testo)
                     if !frase.isEmpty {
                         out = frase
                         tipoOut = "lontano"
@@ -3864,6 +4420,13 @@ final class NavFollower {
                 fuoriRipetizioni = 0
             }
         }
+
+        // (03/10/2026) REGISTRO: una riga per fix — posizione, precisione, passo,
+        // metri in linea d'aria e lungo la strada, aggancio, velocità, chi è al
+        // comando, frase. Uguale in NavFollower.kt.
+        let chi: String = jsVivo ? (inPausa ? "PAUSA" : "JS") : "NATIVO"
+        let detto: String = out.map { " DICE[\(tipoOut)]: \($0)" } ?? ""
+        scrivi("FIX \(Self.f5(lat)),\(Self.f5(lon)) acc=\(Int(accuracy.rounded())) idx=\(idx) aria=\(Self.f0(logAria)) strada=\(Self.f0(logStrada)) u=\(Self.f0(u)) v=\(String(format: "%.1f", vel)) vicino=\(Int(vicinoM.rounded())) \(chi)\(detto)")
 
         guard let frase = out, !jsVivo else { return nil }
         // Doppione = stessa frase PER LA STESSA manovra: due svolte diverse con
@@ -3919,6 +4482,10 @@ final class NavFollower {
         agganciato = true
         dPrec = Double.nan
         dPrecIdx = -1
+        uMatch = Double.nan
+        agganciPersi = 0
+        ultimoDStrada = Double.nan
+        ultimoDStradaIdx = -1
         // Cruscotto: via i resti e la firma del percorso tolto. `ultimoJs`
         // resta: è lo stato del BANNER, non del percorso (in muto il JS toglie
         // e riconsegna il percorso senza rimandare il banner).
@@ -4014,6 +4581,110 @@ final class NavFollower {
             }
         }
         return .nan
+    }
+
+    // MARK: - (03/10/2026) Aggancio al tracciato e registro (a lock preso)
+
+    /// Posizione LUNGO IL TRACCIATO (metri dall'inizio) o nan. Aggiorna anche la
+    /// velocità (media mobile sui fix buoni; un salto oltre 4 m/s non conta).
+    /// Finestra: da 15 m PRIMA dell'aggancio precedente a quanto si può aver
+    /// camminato dal fix prima (almeno 60 m); dentro, vince il punto PIÙ VICINO
+    /// entro la tolleranza laterale (precisione del fix, fra 25 e 60 m). Tre fix
+    /// di fila senza aggancio → si riparte dalla PRIMA corrispondenza da 300 m
+    /// prima del passo corrente. Uguale in NavFollower.kt.
+    private func aggancia(lat: Double, lon: Double, accuracy: Double, nowMs: Double, velGpsMs: Double) -> Double {
+        let dtFix: Double = velTs > 0 ? (nowMs - velTs) / 1000 : 2
+        velTs = nowMs
+        guard linea.count >= 2, lineaCum.count == linea.count else {
+            uMatch = Double.nan
+            return Double.nan
+        }
+        let cross: Double = min(Self.matchCrossMaxM, max(Self.matchCrossMinM, accuracy))
+        let uPrec: Double = uMatch
+        var trovato = Double.nan
+        if !uPrec.isNaN {
+            let dt: Double = min(30, max(0.5, dtFix))
+            let avanti: Double = max(Self.matchAvantiMinM, vel * dt * 3 + 40)
+            trovato = alongVicino(lat: lat, lon: lon, da: uPrec - Self.matchIndietroM, a: uPrec + avanti, maxCross: cross, uPrec: uPrec)
+            if trovato.isNaN {
+                agganciPersi += 1
+                if agganciPersi < Self.matchPersiMax { return Double.nan }
+            }
+        }
+        if trovato.isNaN {
+            var base: Double = 0
+            if idx < alongPasso.count && !alongPasso[idx].isNaN { base = max(0, alongPasso[idx] - 300) }
+            trovato = alongUtente(lat: lat, lon: lon, da: base, a: lineaCum[lineaCum.count - 1], maxCross: cross)
+        }
+        if trovato.isNaN {
+            uMatch = Double.nan
+            rifTs = 0
+            return Double.nan
+        }
+        // LA VELOCITÀ. Fra due fix grezzi non si può misurare: il GPS che balla
+        // di 8 m ogni 2 s «cammina» a 4 m/s anche da fermi. Quindi: la velocità
+        // del GPS quando c'è (Doppler); altrimenti i metri fatti LUNGO LA STRADA
+        // su almeno 10 secondi. Uguale in NavFollower.kt.
+        if !velGpsMs.isNaN && velGpsMs >= 0 {
+            if velGpsMs <= Self.velSaltoMs {
+                let media: Double = 0.8 * vel + 0.2 * velGpsMs
+                vel = min(Self.velMaxMs, max(Self.velMinMs, media))
+            }
+            rifTs = 0
+        } else if uPrec.isNaN || rifTs == 0 {
+            rifU = trovato
+            rifTs = nowMs
+        } else if nowMs - rifTs >= Self.velFinestraMs {
+            let v: Double = (trovato - rifU) / ((nowMs - rifTs) / 1000)
+            if v >= 0 && v <= Self.velSaltoMs {
+                let media: Double = 0.5 * vel + 0.5 * v
+                vel = min(Self.velMaxMs, max(Self.velMinMs, media))
+            }
+            rifU = trovato
+            rifTs = nowMs
+        }
+        agganciPersi = 0
+        uMatch = trovato
+        return trovato
+    }
+
+    /// Il punto PIÙ VICINO del tracciato fra `da` e `a` (metri progressivi),
+    /// entro `maxCross`; nan se non c'è. A parità (o quasi) di distanza vince
+    /// chi sta AVANTI rispetto a `uPrec`: tornare indietro costa mezzo metro per
+    /// metro (sul ritorno per la stessa strada dell'andata la posizione
+    /// scivolava all'indietro). Uguale in NavFollower.kt.
+    private func alongVicino(lat: Double, lon: Double, da: Double, a: Double, maxCross: Double, uPrec: Double) -> Double {
+        guard linea.count >= 2, lineaCum.count == linea.count else { return Double.nan }
+        var migliore = Double.infinity
+        var along = Double.nan
+        for k in 1..<linea.count {
+            if lineaCum[k] < da { continue }
+            if lineaCum[k - 1] > a { break }
+            let pr = proiettaSulSegmento(k, lat: lat, lon: lon)
+            let al: Double = lineaCum[k - 1] + pr.t * (lineaCum[k] - lineaCum[k - 1])
+            if al < da || al > a || pr.dist > maxCross { continue }
+            let penalita: Double = al < uPrec ? (uPrec - al) * Self.matchPenalitaIndietro : 0
+            let punteggio: Double = pr.dist + penalita
+            if punteggio < migliore {
+                migliore = punteggio
+                along = al
+            }
+        }
+        return along
+    }
+
+    private static func f5(_ x: Double) -> String { String(format: "%.5f", x) }
+    private static func f0(_ x: Double) -> String { x.isNaN ? "-" : String(Int(x.rounded())) }
+
+    /// Una riga nel registro di collaudo, con l'ora del telefono.
+    private func scrivi(_ riga: String) {
+        // (04/10/2026) Su disco e insieme alle righe dell'audioguida: vedi RegistroCollaudo.
+        RegistroCollaudo.shared.scrivi("NAV \(riga)")
+    }
+
+    /// Il registro di collaudo (copia), dal più vecchio al più recente.
+    func registroCollaudo() -> [String] {
+        RegistroCollaudo.shared.tutte()
     }
 
     /// avanza() della specifica: mai oltre l'ultimo passo.
@@ -4175,5 +4846,155 @@ final class NavFollower {
             spegniCruscotto: radice["spegniCruscotto"] as? Bool ?? true,
             fuoriSoloDopoAggancio: radice["fuoriSoloDopoAggancio"] as? Bool ?? false
         )
+    }
+}
+
+/// REGISTRO DI COLLAUDO (04/10/2026, committente: «fai queste 3 implementazioni»).
+///
+/// Una riga per ogni cosa che l'app decide camminando: dove il navigatore ha
+/// agganciato la posizione e cosa ha detto (righe «NAV …» di NavFollower), e a
+/// quanti metri DI STRADA sono scattati l'avviso e la guida di ogni luogo, con
+/// le coordinate di dove si era e del punto d'arrivo (righe «GUIDA …»).
+/// Fino al 03/10 viveva solo in memoria: chiusa l'app, era perso. Ora sta su
+/// DISCO (Documents/collaudo.log) e lo scrivono navigatore E audioguida.
+/// Gemello di RegistroCollaudo.kt: stesso formato («MM-dd HH:mm:ss testo»),
+/// stessi tetti. In questo file e non in uno nuovo: il pbxproj è scritto a mano.
+final class RegistroCollaudo {
+    static let shared = RegistroCollaudo()
+    private init() {}
+
+    private let maxRighe = 4000
+    /// Oltre questo peso il file si riscrive con le sole ultime `maxRighe`.
+    private let maxByte = 700_000
+    private let lock = NSLock()
+    private var righe: [String] = []
+    private var caricato = false
+    private let formato: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MM-dd HH:mm:ss"
+        return f
+    }()
+
+    private var file: URL? {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("collaudo.log")
+    }
+
+    /// Da chiamare con il lock preso.
+    private func carica() {
+        if caricato { return }
+        caricato = true
+        guard let f = file, let testo = try? String(contentsOf: f, encoding: .utf8) else { return }
+        righe = Array(testo.split(separator: "\n").map(String.init).suffix(maxRighe))
+    }
+
+    /// Aggiunge una riga, con data e ora del telefono, in memoria e su disco. Non lancia mai.
+    func scrivi(_ riga: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        carica()
+        let completa = "\(formato.string(from: Date())) \(riga)"
+        righe.append(completa)
+        if righe.count > maxRighe { righe.removeFirst(righe.count - maxRighe) }
+        guard let f = file else { return }
+        let peso = ((try? FileManager.default.attributesOfItem(atPath: f.path))?[.size] as? NSNumber)?.intValue ?? 0
+        if peso > maxByte || peso == 0 {
+            try? (righe.joined(separator: "\n") + "\n").write(to: f, atomically: true, encoding: .utf8)
+        } else if let h = try? FileHandle(forWritingTo: f), let dati = (completa + "\n").data(using: .utf8) {
+            h.seekToEndOfFile()
+            h.write(dati)
+            h.closeFile()
+        }
+    }
+
+    /// Tutto il registro (copia), dal più vecchio al più recente.
+    func tutte() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        carica()
+        return righe
+    }
+
+    /// Svuota memoria e disco (dopo un invio riuscito, o a mano dall'admin).
+    func svuota() {
+        lock.lock()
+        defer { lock.unlock() }
+        righe = []
+        caricato = true
+        if let f = file { try? FileManager.default.removeItem(at: f) }
+    }
+
+    // ── MODALITÀ COLLAUDO (04/10/2026, parità con RegistroCollaudo.kt) ──
+    // NAV e GUIDA si scrivono sempre; la TRACCIA (una riga «POS» ogni 4
+    // secondi) solo con la modalità collaudo accesa dall'admin.
+    private static let chiaveAcceso = "wip_collaudo_attivo"
+    private var ultimaPos: TimeInterval = 0
+
+    var attivo: Bool { UserDefaults.standard.bool(forKey: Self.chiaveAcceso) }
+
+    func imposta(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: Self.chiaveAcceso)
+        scrivi(on ? "COLLAUDO acceso" : "COLLAUDO spento")
+    }
+
+    // CONSUMO (04/10/2026, parità con RegistroCollaudo.kt): ogni 5 minuti di
+    // collaudo una riga «BATT» con il livello della batteria, se il telefono è
+    // in carica e quante posizioni GPS sono arrivate nel frattempo.
+    private var ultimaBatt: TimeInterval = 0
+    private var fixContati = 0
+
+    /// La traccia: una posizione ogni 4 secondi, solo in modalità collaudo.
+    func posizione(_ location: CLLocation) {
+        guard attivo else { return }
+        let ora = ProcessInfo.processInfo.systemUptime
+        lock.lock()
+        fixContati += 1
+        let primaBatt = ultimaBatt == 0
+        let scriviBatt = primaBatt || ora - ultimaBatt >= 300
+        var fixDaScrivere = 0
+        if scriviBatt { ultimaBatt = ora; fixDaScrivere = primaBatt ? 0 : fixContati; fixContati = 0 }
+        let troppoPresto = ora - ultimaPos < 4
+        if !troppoPresto { ultimaPos = ora }
+        lock.unlock()
+        if scriviBatt {
+            // UIDevice va letto sul main; il livello è -1 finché il monitoraggio non è acceso.
+            let fix = fixDaScrivere
+            DispatchQueue.main.async { [weak self] in
+                UIDevice.current.isBatteryMonitoringEnabled = true
+                let livello = Int((UIDevice.current.batteryLevel * 100).rounded())
+                let stato = UIDevice.current.batteryState
+                let inCarica = stato == .charging || stato == .full
+                if livello >= 0 { self?.scrivi("BATT livello=\(livello) carica=\(inCarica ? "si" : "no") fix=\(fix)") }
+            }
+        }
+        if troppoPresto { return }
+        scrivi(String(format: "POS %.5f,%.5f acc=%d", locale: Locale(identifier: "en_US_POSIX"),
+                      location.coordinate.latitude, location.coordinate.longitude,
+                      Int(max(0, location.horizontalAccuracy))))
+    }
+
+    /// Il segno di chi collauda («qui ha sbagliato»), con la posizione se nota.
+    func segno(_ testo: String, lat: Double?, lon: Double?) {
+        let pulito = String(testo.replacingOccurrences(of: "\"", with: "'")
+            .replacingOccurrences(of: "\n", with: " ").prefix(200))
+        var dove = ""
+        if let la = lat, let lo = lon, la.isFinite, lo.isFinite {
+            dove = String(format: " %.5f,%.5f", locale: Locale(identifier: "en_US_POSIX"), la, lo)
+        }
+        scrivi("SEGNO \"\(pulito)\"\(dove)")
+    }
+
+    /// Riga «GUIDA …»: avviso o arrivo dell'audioguida. Stesso formato di
+    /// ItaintaBackgroundPoiService.annotaGuida (Android).
+    func guida(_ tipo: String, poi: Poi, stradaM: Double, raggioM: Double, location: CLLocation, punto: CLLocation) {
+        let strada = stradaM.isFinite ? String(Int(stradaM)) : "inf"
+        let aria = Int(location.distance(from: punto))
+        let acc = location.horizontalAccuracy >= 0 ? String(Int(location.horizontalAccuracy)) : "-"
+        let dove = String(format: "%.5f,%.5f", locale: Locale(identifier: "en_US_POSIX"),
+                          location.coordinate.latitude, location.coordinate.longitude)
+        let arrivo = String(format: "%.5f,%.5f", locale: Locale(identifier: "en_US_POSIX"),
+                            punto.coordinate.latitude, punto.coordinate.longitude)
+        scrivi("GUIDA \(tipo) \"\(poi.nome)\" id=\(poi.id) strada=\(strada) aria=\(aria) raggio=\(Int(raggioM)) acc=\(acc) \(dove) punto=\(arrivo)")
     }
 }

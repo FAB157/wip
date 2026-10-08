@@ -79,10 +79,19 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         CAPPluginMethod(name: "clearNavRoute", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "navHeartbeat", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getNavProgress", returnType: CAPPluginReturnPromise),
+        // (03/10/2026) Registro di collaudo del navigatore (una riga per fix).
+        CAPPluginMethod(name: "getNavLog", returnType: CAPPluginReturnPromise),
         // (18/09/2026) Pre-scarico delle audioguide di un giro nella cache
         // NATIVA (il JS le mette nell'IndexedDB della WebView, che a schermo
         // spento dorme). Dichiarato QUI o dal JS la promise resta appesa.
-        CAPPluginMethod(name: "prefetchGuides", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "prefetchGuides", returnType: CAPPluginReturnPromise),
+        // (03/10/2026) Pre-scarico delle strade lungo un percorso (RoadSnap.prescarica).
+        CAPPluginMethod(name: "prefetchRoads", returnType: CAPPluginReturnPromise),
+        // (04/10/2026) Svuota il registro di collaudo dopo l'invio.
+        CAPPluginMethod(name: "clearNavLog", returnType: CAPPluginReturnPromise),
+        // (04/10/2026) Modalità collaudo e segno «qui ha sbagliato».
+        CAPPluginMethod(name: "setCollaudo", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "addNavLogNote", returnType: CAPPluginReturnPromise)
     ]
 
     private let prefs = UserDefaults.standard
@@ -742,6 +751,31 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         call.resolve(NavFollower.shared.progress())
     }
 
+    /// (03/10/2026) REGISTRO DI COLLAUDO del navigatore: una riga per fix col
+    /// percorso attivo. Lo scarica il pannello admin dopo un giro di prova.
+    @objc func getNavLog(_ call: CAPPluginCall) {
+        call.resolve(["righe": NavFollower.shared.registroCollaudo()])
+    }
+
+    /// (04/10/2026) Modalità collaudo: accesa, il registro tiene anche la
+    /// traccia della passeggiata. Senza `attivo` risponde soltanto lo stato.
+    @objc func setCollaudo(_ call: CAPPluginCall) {
+        if let on = call.getBool("attivo") { RegistroCollaudo.shared.imposta(on) }
+        call.resolve(["attivo": RegistroCollaudo.shared.attivo])
+    }
+
+    /// (04/10/2026) Il segno di chi collauda: «qui ha sbagliato», con nota e posizione.
+    @objc func addNavLogNote(_ call: CAPPluginCall) {
+        RegistroCollaudo.shared.segno(call.getString("text") ?? "", lat: call.getDouble("lat"), lon: call.getDouble("lon"))
+        call.resolve()
+    }
+
+    /// (04/10/2026) Svuota il registro di collaudo (dopo un invio riuscito, o a mano).
+    @objc func clearNavLog(_ call: CAPPluginCall) {
+        RegistroCollaudo.shared.svuota()
+        call.resolve()
+    }
+
     /// (18/09/2026, committente: «fai che sia scaricato sempre in nativo
     /// anche») Pre-scarico delle audioguide di un giro nella cache NATIVA: il
     /// JS le mette nell'IndexedDB della WebView, che a schermo spento dorme.
@@ -759,6 +793,27 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         let lang = linguaGrezza.isEmpty ? "it" : String(linguaGrezza.prefix(2))
         let n = BackgroundPoiManager.shared.prescaricaGuide(poiIds: ids, lang: lang, character: call.getString("character"))
         call.resolve(["ok": true, "accodati": n])
+    }
+
+    /// (03/10/2026, committente: «le tiles devono essere scaricate quando si
+    /// crea un percorso, con o senza audioguida, e nelle funzioni offline»)
+    /// Pre-scarico delle strade lungo un percorso nella cache nativa: a schermo
+    /// spento e senza rete le distanze di strada devono avere i loro dati.
+    /// `points` = [[lat, lon], ...]. Risponde subito, lo scarico è in background.
+    /// Parità con ItaintaBackgroundPoiPlugin.kt::prefetchRoads.
+    @objc func prefetchRoads(_ call: CAPPluginCall) {
+        let grezzi: JSArray = call.getArray("points") ?? []
+        var punti: [(Double, Double)] = []
+        for g in grezzi {
+            if let p = g as? [Any], p.count >= 2,
+               let la = (p[0] as? NSNumber)?.doubleValue, let lo = (p[1] as? NSNumber)?.doubleValue,
+               la.isFinite, lo.isFinite {
+                punti.append((la, lo))
+            }
+        }
+        let raggio = (call.getBool("car") ?? false) ? 1500 : 700
+        if !punti.isEmpty { RoadSnap.shared.prescarica(punti: punti, radius: raggio) }
+        call.resolve(["ok": true, "punti": punti.count])
     }
 
     // MARK: - Teaser / deep link

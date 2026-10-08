@@ -483,6 +483,676 @@ function TriggerTelemetrySection() {
   );
 }
 
+// ── REGISTRO DEL NAVIGATORE NATIVO (03/10/2026) ─────────────────────────
+// Dopo un giro di prova camminato: una riga per fix col percorso attivo —
+// posizione, precisione, passo, metri in linea d'aria e lungo la strada,
+// aggancio al tracciato, velocità, chi era al comando (JS o nativo) e la frase
+// detta. Vive nella memoria del servizio nativo: si scarica PRIMA di chiudere
+// l'app. Serve a correggere il navigatore sui fatti, non a tentativi.
+// ── TEST VIRTUALE (04/10/2026) ───────────────────────────────────────────
+// Sempre pronto: un tasto apre la barra del test sopra la mappa di WIP. Da lì
+// un telefono finto cammina dentro l'app vera (vedi src/lib/testVirtuale.ts).
+function TestVirtualeSection() {
+  const [aperto, setAperto] = useState<boolean>(() => { try { return localStorage.getItem('wip_test_virtuale') === '1'; } catch { return false; } });
+  const cambia = () => {
+    const nuovo = !aperto;
+    setAperto(nuovo);
+    try { if (nuovo) localStorage.setItem('wip_test_virtuale', '1'); else localStorage.removeItem('wip_test_virtuale'); } catch { /* storage assente */ }
+    window.dispatchEvent(new CustomEvent('wip-test-virtuale-cambiato'));
+  };
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-2">
+      <div className="flex items-center gap-2">
+        <Smartphone className="w-4 h-4 text-primary" />
+        <h3 className="font-black text-primary text-sm">Test virtuale</h3>
+      </div>
+      <p className="text-xs text-gray-500">
+        Un telefono finto cammina dentro l'app vera, sulla mappa di WIP. Apri la barra, vai sulla Mappa e tocca: il primo tocco posa il telefono, i successivi lo mandano a quel punto lungo un percorso pedonale vero.
+        Per provare un itinerario, un giro o un percorso su misura avvialo come sempre e premi «Segui il giro»; per il navigatore avvia la navigazione e tocca la meta.
+      </p>
+      <p className="text-[11px] text-gray-500">
+        Vale per la versione web (browser o PWA): dentro l'app Android e iPhone l'audioguida la decide il servizio nativo, che il GPS finto non raggiunge. Accendi l'audioguida prima di cominciare; un luogo già ascoltato non riparte per 24 ore («Azzera ascolti» nella barra).
+      </p>
+      <button onClick={cambia} className={`px-3 py-2 rounded-xl text-xs font-black ${aperto ? 'bg-gray-200 text-gray-700' : 'bg-primary text-white'}`}>
+        {aperto ? 'Chiudi la barra del test' : 'Apri la barra del test sulla mappa'}
+      </button>
+      <FollaTelefoni />
+    </div>
+  );
+}
+
+// ── FOLLA DI TELEFONI FINTI (04/10/2026) ─────────────────────────────────
+// Più copie dell'app vera, una per scenario salvato, tutte insieme: ogni
+// copia è un riquadro con `?testScenario=<nome>`, che lancia lo scenario da
+// sola a ×4 e alla fine manda qui la sua pagella (messaggio `wip-test-folla`).
+// Le copie sono app intere: 4 alla volta è il massimo ragionevole su un PC.
+const FOLLA_MAX = 6;
+function FollaTelefoni() {
+  const [scenari, setScenari] = useState<Array<{ nome: string }>>([]);
+  const [scelti, setScelti] = useState<string[]>([]);
+  const [inCorso, setInCorso] = useState<string[]>([]);
+  const [esiti, setEsiti] = useState<Record<string, any>>({});
+  const [stato, setStato] = useState('');
+  const riquadri = React.useRef<Record<string, HTMLIFrameElement | null>>({});
+
+  const carica = async () => {
+    setStato('Leggo gli scenari…');
+    try {
+      const res = await fetch(getApiUrl('/api/admin/collaudo/scenari'), { headers: await adminAuthHeaders() });
+      const j = await res.json();
+      const lista = Array.isArray(j?.scenari) ? j.scenari : [];
+      setScenari(lista);
+      setScelti(lista.slice(0, 4).map((x: any) => x.nome));
+      setStato(res.ok ? (lista.length ? '' : 'Nessuno scenario salvato: fanne uno dalla barra del test («Scenari»).') : `Errore (${j?.error || res.status})`);
+    } catch (e: any) { setStato(`Errore (${e?.message || 'rete'})`); }
+  };
+
+  useEffect(() => {
+    const suMessaggio = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      const d: any = e.data;
+      if (!d || d.tipo !== 'wip-test-folla' || typeof d.nome !== 'string') return;
+      setEsiti(v => ({ ...v, [d.nome]: d }));
+    };
+    window.addEventListener('message', suMessaggio);
+    return () => window.removeEventListener('message', suMessaggio);
+  }, []);
+
+  // Le voci di più telefoni insieme si accavallano: si prova a zittire gli audio delle copie.
+  // La voce di sistema del browser (ripiego senza MP3) non si può zittire da qui.
+  useEffect(() => {
+    if (inCorso.length === 0) return;
+    const t = setInterval(() => {
+      for (const n of inCorso) {
+        try { riquadri.current[n]?.contentDocument?.querySelectorAll('audio,video').forEach((m: any) => { m.muted = true; }); } catch { /* copia non pronta */ }
+      }
+    }, 1500);
+    return () => clearInterval(t);
+  }, [inCorso]);
+
+  const spunta = (nome: string) => setScelti(v => v.includes(nome) ? v.filter(x => x !== nome) : (v.length >= FOLLA_MAX ? v : [...v, nome]));
+  const lancia = () => { setEsiti({}); setInCorso(scelti.slice(0, FOLLA_MAX)); };
+  const finiti = inCorso.filter(n => esiti[n]).length;
+
+  return (
+    <div className="border-t border-gray-100 pt-3 space-y-2">
+      <h4 className="font-black text-primary text-xs">Folla di telefoni finti</h4>
+      <p className="text-[11px] text-gray-500">
+        Più scenari salvati tutti insieme, ognuno in una copia dell'app vera che cammina da sola a velocità ×4 e alla fine riporta qui la sua pagella.
+        Ogni copia è un'app intera: fino a {FOLLA_MAX}, meglio 4. Accendi l'audioguida prima di lanciare.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button onClick={carica} className="px-3 py-2 rounded-xl text-xs font-black bg-white border border-primary/20 text-primary">Leggi gli scenari</button>
+        {scelti.length > 0 && <button onClick={lancia} className="px-3 py-2 rounded-xl text-xs font-black bg-primary text-white">Lancia {scelti.length} {scelti.length === 1 ? 'telefono' : 'telefoni'}</button>}
+        {inCorso.length > 0 && <button onClick={() => setInCorso([])} className="px-3 py-2 rounded-xl text-xs font-black bg-gray-200 text-gray-700">Chiudi le copie</button>}
+      </div>
+      {stato && <p className="text-xs text-gray-500">{stato}</p>}
+      {scenari.length > 0 && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          {scenari.map(sc => (
+            <label key={sc.nome} className="flex items-center gap-1.5 text-xs text-gray-700">
+              <input type="checkbox" checked={scelti.includes(sc.nome)} onChange={() => spunta(sc.nome)} />
+              {sc.nome}
+            </label>
+          ))}
+        </div>
+      )}
+      {inCorso.length > 0 && (
+        <>
+          <p className="text-xs font-bold text-gray-700">{finiti} su {inCorso.length} arrivati</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {inCorso.map(n => {
+              const e = esiti[n];
+              const p = e?.pagella;
+              return (
+                <div key={n} className="rounded-xl border border-gray-200 overflow-hidden">
+                  <div className={`px-2 py-1.5 text-[11px] font-bold ${e ? (e.errore ? 'bg-red-50 text-red-700' : p?.voto == null ? 'bg-gray-50 text-gray-700' : p.voto >= 80 ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800') : 'bg-gray-50 text-gray-600'}`}>
+                    {n} — {e ? (e.errore ? `errore: ${e.errore}` : `voto ${p?.voto == null ? 'n.d.' : p.voto + '%'} · guide ${p?.guide?.giuste ?? 0}/${p?.guide?.totali ?? 0} · avvisi ${p?.avvisi?.giusti ?? 0}/${p?.avvisi?.totali ?? 0} · svolte ${p?.svolte?.giuste ?? 0}/${p?.svolte?.totali ?? 0} · frasi ripetute ${p?.frasiRipetute ?? 0}`) : 'in cammino…'}
+                  </div>
+                  <iframe
+                    ref={el => { riquadri.current[n] = el; }}
+                    title={`Telefono finto: ${n}`}
+                    src={`/?testScenario=${encodeURIComponent(n)}`}
+                    style={{ width: '100%', height: 420, border: 0, display: 'block' }}
+                  />
+                  {e && Array.isArray(e.scatti) && e.scatti.length > 0 && (
+                    <div className="px-2 py-1.5 text-[11px] text-gray-600 space-y-0.5">
+                      {e.scatti.slice(0, 8).map((x: any, i: number) => (
+                        <div key={i}>{x.esito === 'giusto' || x.esito === 'giusta' ? '✓' : '✕'} {x.nome} — {x.strada == null ? 'strada n.d.' : `${Math.round(x.strada)} m`} (raggio {x.raggio} m, {x.esito})</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── REGISTRI DI COLLAUDO INVIATI: pagella e mappa (04/10/2026) ───────────
+// Ogni invio dal telefono è una voce: si sceglie, e il server restituisce le
+// righe già lette — traccia, scatti di avviso e guida, svolte, segni — con la
+// pagella (quanti scatti sono caduti dentro il raggio di strada).
+const CollaudoMappa = React.lazy(() => import('./CollaudoMappa'));
+function CollaudoRegistriSection() {
+  const [elenco, setElenco] = useState<Array<{ chiave: string; quando: string }>>([]);
+  const [scelto, setScelto] = useState('');
+  const [dati, setDati] = useState<any>(null);
+  const [stato, setStato] = useState('');
+  const carica = async () => {
+    setStato('Leggo l\'elenco…');
+    try {
+      const res = await fetch(getApiUrl('/api/admin/collaudo/registri'), { headers: await adminAuthHeaders() });
+      const j = await res.json();
+      setElenco(Array.isArray(j?.registri) ? j.registri : []);
+      setStato(res.ok ? '' : `Errore (${j?.error || res.status})`);
+    } catch (e: any) { setStato(`Errore (${e?.message || 'rete'})`); }
+  };
+  useEffect(() => { void carica(); }, []);
+  const apri = async (chiave: string) => {
+    setScelto(chiave); setDati(null);
+    if (!chiave) return;
+    setStato('Leggo il registro…');
+    try {
+      const res = await fetch(getApiUrl(`/api/admin/collaudo/registri?chiave=${encodeURIComponent(chiave)}`), { headers: await adminAuthHeaders() });
+      const j = await res.json();
+      if (res.ok) { setDati(j); setStato(''); } else setStato(`Errore (${j?.error || res.status})`);
+    } catch (e: any) { setStato(`Errore (${e?.message || 'rete'})`); }
+  };
+  // RIPROVA A TAVOLINO: la stessa passeggiata con strade e punti d'arrivo di oggi.
+  const [riprova, setRiprova] = useState<any>(null);
+  const faiRiprova = async () => {
+    if (!scelto) return;
+    setRiprova(null); setStato('Rigioco la passeggiata con le regole di oggi…');
+    try {
+      const res = await fetch(getApiUrl(`/api/admin/collaudo/riprova?chiave=${encodeURIComponent(scelto)}`), { headers: await adminAuthHeaders() });
+      const j = await res.json();
+      if (res.ok) { setRiprova(j); setStato(''); } else setStato(`Errore (${j?.error || res.status})`);
+    } catch (e: any) { setStato(`Errore (${e?.message || 'rete'})`); }
+  };
+  // CONFRONTO: un secondo collaudo accanto al primo (prima e dopo una build).
+  const [altro, setAltro] = useState('');
+  const [datiAltro, setDatiAltro] = useState<any>(null);
+  const apriAltro = async (chiave: string) => {
+    setAltro(chiave); setDatiAltro(null);
+    if (!chiave) return;
+    try {
+      const res = await fetch(getApiUrl(`/api/admin/collaudo/registri?chiave=${encodeURIComponent(chiave)}`), { headers: await adminAuthHeaders() });
+      const j = await res.json();
+      if (res.ok) setDatiAltro(j); else setStato(`Errore (${j?.error || res.status})`);
+    } catch (e: any) { setStato(`Errore (${e?.message || 'rete'})`); }
+  };
+  useEffect(() => { setRiprova(null); setAltro(''); setDatiAltro(null); }, [scelto]);
+  // Per ogni luogo scattato in tutti e due: i metri di strada all'arrivo, qui e là.
+  const confronto = (() => {
+    if (!dati?.letto || !datiAltro?.letto) return [];
+    const arrivi = (l: any) => (l.scatti as any[]).filter(s => s.tipo === 'arrivo' || s.tipo === 'arrivo-muro');
+    const diLa: Record<string, any> = {};
+    for (const s of arrivi(datiAltro.letto)) if (!diLa[s.id]) diLa[s.id] = s;
+    return arrivi(dati.letto).filter(s => diLa[s.id]).map(s => ({ nome: s.nome, qui: s, la: diLa[s.id] }));
+  })();
+  const metriO = (v: number | null | undefined) => (v == null ? 'irragg.' : `${Math.round(v)} m`);
+  const batt = (b: any) => !b ? 'non registrata' : `${b.da}% → ${b.a}% in ${b.minuti} min${b.perOra != null ? ` (${b.perOra} punti all'ora)` : ''}${b.fixAlMinuto != null ? ` · ${b.fixAlMinuto} posizioni al minuto` : ''}${b.inCarica ? ' · ATTENZIONE: telefono in carica, il numero non vale' : ''}`;
+
+  // PASSEGGIATE DI RIFERIMENTO: un collaudo segnato come campione viene
+  // rigiocato ogni notte dal server; se il voto scende di 10 punti, avvisa.
+  const [campioni, setCampioni] = useState<any[]>([]);
+  const [nomeCampione, setNomeCampione] = useState('');
+  const caricaCampioni = async () => {
+    try {
+      const res = await fetch(getApiUrl('/api/admin/collaudo/campioni'), { headers: await adminAuthHeaders() });
+      const j = await res.json();
+      setCampioni(Array.isArray(j?.campioni) ? j.campioni : []);
+    } catch { /* elenco non disponibile */ }
+  };
+  useEffect(() => { void caricaCampioni(); }, []);
+  const segnaCampione = async (chiave: string, togli = false) => {
+    setStato(togli ? 'Tolgo il riferimento…' : 'Rigioco e segno come riferimento…');
+    try {
+      const res = await fetch(getApiUrl('/api/admin/collaudo/campione'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
+        body: JSON.stringify({ chiave, nome: nomeCampione, togli }),
+      });
+      const j = await res.json();
+      if (res.ok) { setCampioni(j.campioni || []); setNomeCampione(''); setStato(''); } else setStato(`Non segnato (${j?.nota || j?.error || res.status})`);
+    } catch (e: any) { setStato(`Errore (${e?.message || 'rete'})`); }
+  };
+  const verificaCampioni = async () => {
+    setStato('Rigioco tutte le passeggiate di riferimento…');
+    try {
+      const res = await fetch(getApiUrl('/api/collaudo/campioni/verifica'), { headers: await adminAuthHeaders() });
+      const j = await res.json();
+      setStato(res.ok ? `Verificate ${j.verificati}: ${(j.esiti || []).filter((e: any) => e.peggiorato).length} peggiorate.` : `Errore (${j?.error || res.status})`);
+      void caricaCampioni();
+    } catch (e: any) { setStato(`Errore (${e?.message || 'rete'})`); }
+  };
+
+  // PUNTO D'ARRIVO PROPOSTO DALLA MAPPA: si sceglie il luogo, si tocca la
+  // mappa nel punto giusto, si propone. Va in coda: il database cambia solo
+  // con «Approva», e «Ripristina» rimette il punto di prima.
+  const [luogoDaSpostare, setLuogoDaSpostare] = useState('');
+  const [puntoNuovo, setPuntoNuovo] = useState<[number, number] | null>(null);
+  const [proposte, setProposte] = useState<any[]>([]);
+  const caricaProposte = async () => {
+    try {
+      const res = await fetch(getApiUrl('/api/admin/collaudo/punti-arrivo'), { headers: await adminAuthHeaders() });
+      const j = await res.json();
+      setProposte(Array.isArray(j?.proposte) ? j.proposte : []);
+    } catch { /* elenco non disponibile */ }
+  };
+  useEffect(() => { void caricaProposte(); }, []);
+  useEffect(() => { setLuogoDaSpostare(''); setPuntoNuovo(null); }, [scelto]);
+  const proponi = async () => {
+    if (!luogoDaSpostare || !puntoNuovo) return;
+    setStato('Invio la proposta…');
+    try {
+      const res = await fetch(getApiUrl('/api/admin/collaudo/punto-arrivo'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
+        body: JSON.stringify({ poiId: luogoDaSpostare, lat: puntoNuovo[0], lon: puntoNuovo[1], chiave: scelto }),
+      });
+      const j = await res.json();
+      setStato(res.ok ? `Proposta in coda (a ${j.dCentro} m dal centro del luogo). Va approvata qui sotto.` : `Non proposta: ${j?.nota || j?.error || res.status}`);
+      if (res.ok) { setPuntoNuovo(null); void caricaProposte(); }
+    } catch (e: any) { setStato(`Errore (${e?.message || 'rete'})`); }
+  };
+  const decidi = async (chiave: string, azione: 'approva' | 'scarta' | 'ripristina') => {
+    setStato('Applico…');
+    try {
+      const res = await fetch(getApiUrl('/api/admin/collaudo/punto-arrivo/decidi'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
+        body: JSON.stringify({ chiave, azione }),
+      });
+      const j = await res.json();
+      setStato(res.ok ? `Fatto: ${j.stato}.` : `Non riuscito (${j?.error || res.status})`);
+      void caricaProposte();
+    } catch (e: any) { setStato(`Errore (${e?.message || 'rete'})`); }
+  };
+  const luoghiDelCollaudo: Array<{ id: string; nome: string }> = (() => {
+    const visti: Record<string, string> = {};
+    for (const s of (dati?.letto?.scatti || []) as any[]) if (s.id && !visti[s.id]) visti[s.id] = s.nome;
+    return Object.entries(visti).map(([id, nome]) => ({ id, nome }));
+  })();
+
+  const p = dati?.letto?.pagella;
+  const riga = (nome: string, v: { totali: number; giuste?: number; giusti?: number; tardi: number; presto: number }) => (
+    <tr className="border-t border-gray-100">
+      <td className="py-1 pr-3 font-bold">{nome}</td>
+      <td className="py-1 pr-3 tabular-nums">{v.totali}</td>
+      <td className="py-1 pr-3 tabular-nums text-green-700">{v.giuste ?? v.giusti ?? 0}</td>
+      <td className="py-1 pr-3 tabular-nums text-orange-600">{v.tardi}</td>
+      <td className="py-1 tabular-nums text-red-600">{v.presto}</td>
+    </tr>
+  );
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <Map className="w-4 h-4 text-primary" />
+        <h3 className="font-black text-primary text-sm">Collaudi inviati: pagella e mappa</h3>
+        <button onClick={carica} className="ml-auto text-xs font-bold text-primary underline">Aggiorna</button>
+      </div>
+      <select value={scelto} onChange={(e) => void apri(e.target.value)} className="w-full border border-gray-200 rounded-xl p-2 text-xs">
+        <option value="">{elenco.length ? 'Scegli un collaudo…' : 'Nessun registro inviato'}</option>
+        {elenco.map(r => <option key={r.chiave} value={r.chiave}>{new Date(r.quando).toLocaleString()}</option>)}
+      </select>
+      {stato && <p className="text-xs text-gray-600">{stato}</p>}
+
+      {/* Le passeggiate di riferimento e la coda dei punti d'arrivo: sempre visibili. */}
+      {campioni.length > 0 && (
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <h4 className="text-xs font-black text-gray-700">Passeggiate di riferimento (rigiocate ogni notte)</h4>
+            <button onClick={verificaCampioni} className="ml-auto text-xs font-bold text-primary underline">Verifica ora</button>
+          </div>
+          <ul className="text-xs space-y-1">
+            {campioni.map((c, i) => (
+              <li key={i} className={c.peggiorato ? 'text-red-600 font-bold' : ''}>
+                {c.nome}: voto di partenza {c.votoBase ?? '—'}%{c.ultimaVerifica ? ` · ultimo ${c.ultimoVoto ?? '—'}% (${new Date(c.ultimaVerifica).toLocaleDateString()})` : ' · mai rigiocata'}{c.peggiorato ? ' · PEGGIORATA' : ''}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {proposte.length > 0 && (
+        <div className="space-y-1">
+          <h4 className="text-xs font-black text-gray-700">Punti d'arrivo proposti</h4>
+          <ul className="text-xs space-y-2">
+            {proposte.map((pr, i) => (
+              <li key={i} className="flex flex-wrap items-center gap-2">
+                <span className="flex-1 min-w-[180px]">
+                  <b>{pr.nome}</b> → {Number(pr.lat).toFixed(5)}, {Number(pr.lon).toFixed(5)} · {pr.dCentro} m dal centro · <i>{pr.stato}</i>{' '}
+                  <a className="text-primary underline" target="_blank" rel="noopener noreferrer" href={`https://www.google.com/maps/place/${pr.lat},${pr.lon}/@${pr.lat},${pr.lon},120m/data=!3m1!1e3`}>satellite</a>
+                </span>
+                {pr.stato === 'da_approvare' && (
+                  <>
+                    <button onClick={() => void decidi(pr.chiave, 'approva')} className="px-2 py-1 rounded-lg bg-emerald-600 text-white font-black">Approva</button>
+                    <button onClick={() => void decidi(pr.chiave, 'scarta')} className="px-2 py-1 rounded-lg bg-gray-200 text-gray-700 font-black">Scarta</button>
+                  </>
+                )}
+                {pr.stato === 'approvata' && <button onClick={() => void decidi(pr.chiave, 'ripristina')} className="px-2 py-1 rounded-lg bg-amber-500 text-white font-black">Ripristina</button>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {p && (
+        <>
+          <div className="flex items-baseline gap-3">
+            <span className="text-3xl font-black text-primary tabular-nums">{p.voto == null ? '—' : `${p.voto}%`}</span>
+            <span className="text-xs text-gray-500">scatti giusti · {dati.righe?.length || 0} righe · {p.segni} segni «qui ha sbagliato»</span>
+          </div>
+          <table className="text-xs w-full">
+            <thead><tr className="text-left text-gray-500"><th className="pr-3"></th><th className="pr-3">Totali</th><th className="pr-3">Giusti</th><th className="pr-3">Tardi</th><th>Presto</th></tr></thead>
+            <tbody>{riga('Guide (arrivo)', p.guide)}{riga('Avvisi', p.avvisi)}{riga('Svolte dette', p.svolte)}</tbody>
+          </table>
+          <p className="text-[11px] text-gray-500">Giusto = scattato fra metà raggio e il raggio (più 10 m di tolleranza), in metri di strada. Tardi = sotto metà raggio, o strada irraggiungibile. Presto = oltre il raggio.</p>
+          <React.Suspense fallback={<p className="text-xs text-gray-500">Carico la mappa…</p>}>
+            <CollaudoMappa letto={dati.letto} onTocco={luogoDaSpostare ? (la, lo) => setPuntoNuovo([la, lo]) : undefined} proposto={puntoNuovo} />
+          </React.Suspense>
+          {/* PUNTO D'ARRIVO DALLA MAPPA */}
+          {luoghiDelCollaudo.length > 0 && (
+            <div className="space-y-1">
+              <select value={luogoDaSpostare} onChange={(e) => { setLuogoDaSpostare(e.target.value); setPuntoNuovo(null); }} className="w-full border border-gray-200 rounded-xl p-2 text-xs">
+                <option value="">Sposta il punto d'arrivo di un luogo…</option>
+                {luoghiDelCollaudo.map(l => <option key={l.id} value={l.id}>{l.nome}</option>)}
+              </select>
+              {luogoDaSpostare && (
+                <div className="flex items-center gap-2 text-xs text-gray-700">
+                  <span className="flex-1">{puntoNuovo ? `Punto scelto: ${puntoNuovo[0].toFixed(5)}, ${puntoNuovo[1].toFixed(5)} (stella azzurra)` : 'Tocca la mappa nel punto giusto, davanti all\'ingresso.'}</span>
+                  <button onClick={proponi} disabled={!puntoNuovo} className="px-3 py-2 rounded-xl bg-cyan-700 text-white font-black disabled:opacity-40">Proponi</button>
+                </div>
+              )}
+            </div>
+          )}
+          {dati.letto.scatti.filter((s: any) => s.esito === 'tardi' || s.esito === 'presto').length > 0 && (
+            <ul className="text-xs space-y-1">
+              {dati.letto.scatti.filter((s: any) => s.esito === 'tardi' || s.esito === 'presto').map((s: any, i: number) => (
+                <li key={i}><b>{s.nome}</b> ({s.tipo}, {s.ora}): {s.nota}</li>
+              ))}
+            </ul>
+          )}
+          {dati.letto.segni.length > 0 && (
+            <ul className="text-xs space-y-1">
+              {dati.letto.segni.map((s: any, i: number) => (
+                <li key={i}>{s.contenuto ? '📝' : '🚩'} {s.ora} — {s.contenuto ? <><b>Guida sbagliata:</b> {s.nota}{s.poi ? ` (luogo ${s.poi})` : ''}</> : s.nota}</li>
+              ))}
+            </ul>
+          )}
+          <p className="text-xs text-gray-700"><b>Batteria:</b> {batt(dati.letto.batteria)}</p>
+
+          {/* PASSEGGIATA DI RIFERIMENTO */}
+          <div className="border-t border-gray-100 pt-3 flex flex-wrap items-center gap-2">
+            {campioni.some(c => c.chiave === scelto) ? (
+              <button onClick={() => void segnaCampione(scelto, true)} className="px-3 py-2 rounded-xl bg-gray-200 text-gray-700 text-xs font-black">Togli dalle passeggiate di riferimento</button>
+            ) : (
+              <>
+                <input value={nomeCampione} onChange={(e) => setNomeCampione(e.target.value)} placeholder="Nome (es. Montecatini centro)" className="flex-1 min-w-[160px] border border-gray-200 rounded-xl p-2 text-xs" />
+                <button onClick={() => void segnaCampione(scelto)} className="px-3 py-2 rounded-xl bg-primary text-white text-xs font-black">Segna come passeggiata di riferimento</button>
+              </>
+            )}
+          </div>
+
+          {/* RIPROVA A TAVOLINO */}
+          <div className="border-t border-gray-100 pt-3 space-y-2">
+            <button onClick={faiRiprova} className="px-3 py-2 rounded-xl bg-primary text-white text-xs font-black">Riprova con le regole di oggi</button>
+            {riprova?.errore && <p className="text-xs text-gray-600">{riprova.nota}</p>}
+            {riprova?.scatti && (
+              <>
+                <p className="text-[11px] text-gray-500">
+                  Stessa passeggiata, strade e punti d'arrivo di oggi ({riprova.luoghi} luoghi, {riprova.polilinee} strade{riprova.conStrade ? '' : ' — NESSUNA strada trovata: distanze dirette'}; raggi {riprova.raggi.arrivo}/{riprova.raggi.avviso} m).
+                  Non rigioca bussola, attese fra luoghi, categorie e regola del muro: dice dove scatterebbe per distanza.
+                </p>
+                <table className="text-xs w-full">
+                  <thead><tr className="text-left text-gray-500"><th className="pr-2">Luogo</th><th className="pr-2">Tipo</th><th className="pr-2">Oggi</th><th className="pr-2">Quel giorno</th><th>Spostato di</th></tr></thead>
+                  <tbody>
+                    {riprova.scatti.map((s: any, i: number) => (
+                      <tr key={i} className="border-t border-gray-100">
+                        <td className="py-1 pr-2 font-bold">{s.nome}</td>
+                        <td className="py-1 pr-2">{s.tipo}</td>
+                        <td className="py-1 pr-2 tabular-nums">{metriO(s.strada)}</td>
+                        <td className="py-1 pr-2 tabular-nums">{s.registrato ? metriO(s.registrato.strada) : '—'}</td>
+                        <td className="py-1 tabular-nums">{s.spostatoM == null ? '—' : `${s.spostatoM} m`}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {riprova.maiScattati?.length > 0 && (
+                  <ul className="text-xs space-y-1">
+                    {riprova.maiScattati.map((m: any, i: number) => (
+                      <li key={i}><b>{m.nome}</b>: oggi la guida non scatterebbe — minimo {metriO(m.minimaStrada)} di strada, {m.minimaAria} m in linea d'aria.</li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* CONFRONTO FRA DUE COLLAUDI */}
+          <div className="border-t border-gray-100 pt-3 space-y-2">
+            <select value={altro} onChange={(e) => void apriAltro(e.target.value)} className="w-full border border-gray-200 rounded-xl p-2 text-xs">
+              <option value="">Confronta con un altro collaudo…</option>
+              {elenco.filter(r => r.chiave !== scelto).map(r => <option key={r.chiave} value={r.chiave}>{new Date(r.quando).toLocaleString()}</option>)}
+            </select>
+            {datiAltro?.letto && (
+              <>
+                <table className="text-xs w-full">
+                  <thead><tr className="text-left text-gray-500"><th className="pr-2"></th><th className="pr-2">Questo</th><th>L'altro</th></tr></thead>
+                  <tbody>
+                    <tr className="border-t border-gray-100"><td className="py-1 pr-2 font-bold">Scatti giusti</td><td className="pr-2 tabular-nums">{p.voto == null ? '—' : `${p.voto}%`}</td><td className="tabular-nums">{datiAltro.letto.pagella.voto == null ? '—' : `${datiAltro.letto.pagella.voto}%`}</td></tr>
+                    <tr className="border-t border-gray-100"><td className="py-1 pr-2 font-bold">Guide giuste</td><td className="pr-2 tabular-nums">{p.guide.giuste}/{p.guide.totali}</td><td className="tabular-nums">{datiAltro.letto.pagella.guide.giuste}/{datiAltro.letto.pagella.guide.totali}</td></tr>
+                    <tr className="border-t border-gray-100"><td className="py-1 pr-2 font-bold">Avvisi giusti</td><td className="pr-2 tabular-nums">{p.avvisi.giusti}/{p.avvisi.totali}</td><td className="tabular-nums">{datiAltro.letto.pagella.avvisi.giusti}/{datiAltro.letto.pagella.avvisi.totali}</td></tr>
+                    <tr className="border-t border-gray-100"><td className="py-1 pr-2 font-bold">Svolte giuste</td><td className="pr-2 tabular-nums">{p.svolte.giuste}/{p.svolte.totali}</td><td className="tabular-nums">{datiAltro.letto.pagella.svolte.giuste}/{datiAltro.letto.pagella.svolte.totali}</td></tr>
+                    <tr className="border-t border-gray-100"><td className="py-1 pr-2 font-bold">Batteria</td><td className="pr-2">{batt(dati.letto.batteria)}</td><td>{batt(datiAltro.letto.batteria)}</td></tr>
+                  </tbody>
+                </table>
+                {confronto.length > 0 ? (
+                  <table className="text-xs w-full">
+                    <thead><tr className="text-left text-gray-500"><th className="pr-2">Luogo in entrambi</th><th className="pr-2">Guida: questo</th><th>Guida: l'altro</th></tr></thead>
+                    <tbody>
+                      {confronto.map((c, i) => (
+                        <tr key={i} className="border-t border-gray-100">
+                          <td className="py-1 pr-2 font-bold">{c.nome}</td>
+                          <td className="py-1 pr-2 tabular-nums">{metriO(c.qui.strada)} · {c.qui.esito}</td>
+                          <td className="py-1 tabular-nums">{metriO(c.la.strada)} · {c.la.esito}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : <p className="text-xs text-gray-500">Nessun luogo scattato in entrambi i collaudi.</p>}
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── LUOGHI SENZA STRADA e VOTO PER ZONA (04/10/2026) ─────────────────────
+// Li calcola ogni notte il server di lavoro (Oracle) sulle gemme: quanto dista
+// il punto d'arrivo dalla strada più vicina. Oltre 60 m la guida rischia di
+// non partire mai: qui si vede l'elenco e si propone il punto giusto.
+const PuntoSuMappaLazy = React.lazy(() => import('./CollaudoMappa').then(m => ({ default: m.PuntoSuMappa })));
+const ZoneMappaLazy = React.lazy(() => import('./CollaudoMappa').then(m => ({ default: m.ZoneMappa })));
+function SenzaStradaSection() {
+  const [dati, setDati] = useState<any>(null);
+  const [zone, setZone] = useState<any>(null);
+  const [aperto, setAperto] = useState<any>(null);
+  const [punto, setPunto] = useState<[number, number] | null>(null);
+  const [stato, setStato] = useState('');
+  const [mostraZone, setMostraZone] = useState(false);
+  const carica = async () => {
+    try {
+      const h = await adminAuthHeaders();
+      const [a, b] = await Promise.all([
+        fetch(getApiUrl('/api/admin/collaudo/senza-strada'), { headers: h }).then(r => r.json()),
+        fetch(getApiUrl('/api/admin/collaudo/zone'), { headers: h }).then(r => r.json()),
+      ]);
+      setDati(a); setZone(b);
+    } catch (e: any) { setStato(`Errore (${e?.message || 'rete'})`); }
+  };
+  useEffect(() => { void carica(); }, []);
+  const proponi = async () => {
+    if (!aperto || !punto) return;
+    setStato('Invio la proposta…');
+    try {
+      const res = await fetch(getApiUrl('/api/admin/collaudo/punto-arrivo'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
+        body: JSON.stringify({ poiId: aperto.id, lat: punto[0], lon: punto[1], nota: 'da «luoghi senza strada»' }),
+      });
+      const j = await res.json();
+      setStato(res.ok ? `Proposta in coda per ${aperto.nome}: va approvata in «Collaudi inviati › Punti d'arrivo proposti».` : `Non proposta: ${j?.nota || j?.error || res.status}`);
+      if (res.ok) { setAperto(null); setPunto(null); }
+    } catch (e: any) { setStato(`Errore (${e?.message || 'rete'})`); }
+  };
+  const luoghi: any[] = Array.isArray(dati?.luoghi) ? dati.luoghi : [];
+  const elencoZone: any[] = Array.isArray(zone?.zone) ? zone.zone : [];
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <AlertTriangle className="w-4 h-4 text-primary" />
+        <h3 className="font-black text-primary text-sm">Luoghi senza strada e voto per zona</h3>
+        <button onClick={carica} className="ml-auto text-xs font-bold text-primary underline">Aggiorna</button>
+      </div>
+      {dati?.nota && <p className="text-xs text-gray-500">{dati.nota}</p>}
+      {dati?._salvatoIl && (
+        <p className="text-xs text-gray-600">
+          Ultimo controllo {new Date(dati._salvatoIl).toLocaleString()}: {dati.controllati} gemme guardate, <b>{dati.totale}</b> con il punto d'arrivo a più di {dati.soglia} m dalla strada più vicina. Qui le {luoghi.length} peggiori.
+        </p>
+      )}
+      {stato && <p className="text-xs text-gray-600">{stato}</p>}
+      {aperto && (
+        <div className="space-y-2">
+          <p className="text-xs font-bold">{aperto.nome}: tocca la mappa davanti all'ingresso.</p>
+          <React.Suspense fallback={<p className="text-xs text-gray-500">Carico la mappa…</p>}>
+            <PuntoSuMappaLazy lat={aperto.lat} lon={aperto.lon} proposto={punto} onTocco={(la, lo) => setPunto([la, lo])} />
+          </React.Suspense>
+          <div className="flex gap-2">
+            <button onClick={proponi} disabled={!punto} className="px-3 py-2 rounded-xl bg-cyan-700 text-white text-xs font-black disabled:opacity-40">Proponi questo punto</button>
+            <button onClick={() => { setAperto(null); setPunto(null); }} className="px-3 py-2 rounded-xl bg-gray-200 text-gray-700 text-xs font-black">Annulla</button>
+          </div>
+        </div>
+      )}
+      {luoghi.length > 0 && (
+        <ul className="text-xs space-y-1 max-h-64 overflow-y-auto">
+          {luoghi.slice(0, 200).map((l, i) => (
+            <li key={i} className="flex items-center gap-2">
+              <span className="flex-1 min-w-0 truncate"><b>{l.nome}</b> · {l.metri == null ? 'nessuna strada entro 200 m' : `${l.metri} m dalla strada`} · {l.fonte}</span>
+              <a className="text-primary underline shrink-0" target="_blank" rel="noopener noreferrer" href={`https://www.google.com/maps/place/${l.lat},${l.lon}/@${l.lat},${l.lon},150m/data=!3m1!1e3`}>satellite</a>
+              <button onClick={() => { setAperto(l); setPunto(null); }} className="px-2 py-1 rounded-lg bg-cyan-700 text-white font-black shrink-0">Correggi</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="border-t border-gray-100 pt-3 space-y-2">
+        <button onClick={() => setMostraZone(v => !v)} className="px-3 py-2 rounded-xl bg-primary text-white text-xs font-black">{mostraZone ? 'Nascondi la mappa delle zone' : `Mostra il voto per zona (${elencoZone.length} zone)`}</button>
+        {mostraZone && (
+          <>
+            <p className="text-[11px] text-gray-500">Un quadrato per grado. Verde: 85 o più — le gemme hanno la strada vicina e le strade di servizio sono caricate. Giallo 60–84, arancio 30–59, rosso sotto 30 (punti d'arrivo lontani dalle strade, o zona senza dati stradali). Il voto guarda solo le gemme.</p>
+            <React.Suspense fallback={<p className="text-xs text-gray-500">Carico la mappa…</p>}>
+              <ZoneMappaLazy zone={elencoZone} />
+            </React.Suspense>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NavLogSection() {
+  const [stato, setStato] = useState('');
+  const [righe, setRighe] = useState<string[]>([]);
+  // Modalità collaudo: accesa, il telefono registra anche la traccia della
+  // passeggiata e sulla mappa compare il tasto «Qui ha sbagliato».
+  const [collaudo, setCollaudo] = useState<boolean>(() => { try { return localStorage.getItem('wip_collaudo') === '1'; } catch { return false; } });
+  const cambiaCollaudo = async () => {
+    const nuovo = !collaudo;
+    setCollaudo(nuovo);
+    try { if (nuovo) localStorage.setItem('wip_collaudo', '1'); else localStorage.removeItem('wip_collaudo'); } catch { /* storage assente */ }
+    window.dispatchEvent(new CustomEvent('wip-collaudo-cambiato'));
+    try {
+      const { ItaintaBackgroundPoi } = await import('../plugins/ItaintaBackgroundPoi');
+      await ItaintaBackgroundPoi.setCollaudo({ attivo: nuovo });
+      setStato(nuovo ? 'Modalità collaudo accesa: traccia registrata, tasto «Qui ha sbagliato» sulla mappa.' : 'Modalità collaudo spenta.');
+    } catch (e: any) {
+      setStato(`Sul telefono serve l'app aggiornata (${e?.message || 'metodo non disponibile'}).`);
+    }
+  };
+  const scarica = async () => {
+    setStato('Leggo il registro…');
+    try {
+      const { ItaintaBackgroundPoi } = await import('../plugins/ItaintaBackgroundPoi');
+      const r = await ItaintaBackgroundPoi.getNavLog();
+      const elenco = Array.isArray(r?.righe) ? r.righe : [];
+      setRighe(elenco);
+      if (elenco.length === 0) { setStato('Registro vuoto: nessun percorso seguito da quando l\'app è aperta.'); return; }
+      const nome = `wip-nav-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.txt`;
+      const { saveBlobAsFile } = await import('../services/premiumGuideService');
+      const ok = await saveBlobAsFile(new Blob([elenco.join('\n')], { type: 'text/plain' }), nome);
+      setStato(ok ? `${elenco.length} righe salvate in ${nome}` : `${elenco.length} righe lette (salvataggio non riuscito: copia dal riquadro)`);
+    } catch (e: any) {
+      setStato(`Non disponibile su questo dispositivo (${e?.message || 'solo app Android/iOS'})`);
+    }
+  };
+  // (04/10/2026) Invio diretto al server: niente file da passare a mano. Dopo
+  // un invio riuscito il registro sul telefono NON si svuota da solo: lo
+  // decide chi collauda, col tasto accanto.
+  const invia = async () => {
+    setStato('Leggo e invio il registro…');
+    try {
+      const { ItaintaBackgroundPoi } = await import('../plugins/ItaintaBackgroundPoi');
+      const r = await ItaintaBackgroundPoi.getNavLog();
+      const elenco = Array.isArray(r?.righe) ? r.righe : [];
+      setRighe(elenco);
+      if (elenco.length === 0) { setStato('Registro vuoto: niente da inviare.'); return; }
+      const res = await fetch(getApiUrl('/api/admin/collaudo/registro'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
+        body: JSON.stringify({ righe: elenco, dispositivo: navigator.userAgent }),
+      });
+      const j = await res.json().catch(() => ({}));
+      setStato(res.ok && j?.ok ? `Inviate ${j.righe} righe (${j.chiave}).` : `Invio non riuscito (${j?.error || res.status}).`);
+    } catch (e: any) {
+      setStato(`Invio non riuscito (${e?.message || 'solo app Android/iOS'})`);
+    }
+  };
+  const svuota = async () => {
+    try {
+      const { ItaintaBackgroundPoi } = await import('../plugins/ItaintaBackgroundPoi');
+      await ItaintaBackgroundPoi.clearNavLog();
+      setRighe([]);
+      setStato('Registro svuotato.');
+    } catch (e: any) {
+      setStato(`Non svuotato (${e?.message || 'solo app Android/iOS'})`);
+    }
+  };
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-2">
+      <div className="flex items-center gap-2">
+        <Navigation className="w-4 h-4 text-primary" />
+        <h3 className="font-black text-primary text-sm">Registro del navigatore (collaudo)</h3>
+      </div>
+      <p className="text-xs text-gray-500">Dopo una prova a piedi: cosa ha visto e detto il navigatore a ogni fix e a quanti metri di strada sono scattati avviso e guida di ogni luogo, con le coordinate. Resta sul telefono anche se chiudi l'app.</p>
+      <label className="flex items-center gap-2 text-xs font-bold text-gray-700">
+        <input type="checkbox" checked={collaudo} onChange={() => void cambiaCollaudo()} />
+        Modalità collaudo (registra la traccia, mostra il tasto «Qui ha sbagliato»)
+      </label>
+      <div className="flex flex-wrap gap-2">
+        <button onClick={scarica} className="px-3 py-2 rounded-xl bg-primary text-white text-xs font-black">Scarica registro</button>
+        <button onClick={invia} className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-black">Invia al server</button>
+        <button onClick={svuota} className="px-3 py-2 rounded-xl bg-gray-200 text-gray-700 text-xs font-black">Svuota</button>
+      </div>
+      {stato && <p className="text-xs text-gray-600">{stato}</p>}
+      {righe.length > 0 && (
+        <textarea readOnly value={righe.slice(-200).join('\n')} className="w-full h-40 text-[10px] font-mono border border-gray-200 rounded-xl p-2" />
+      )}
+    </div>
+  );
+}
+
 // ── REPLAY GPS: riproduzione di tracce reali nel geofencing web ─────────
 // Il replay SOSPENDE il watch GPS reale finché è in corso (mai due sorgenti
 // di posizione insieme) e lo riattiva alla fine. Solo per il pannello admin.
@@ -1527,6 +2197,10 @@ export default function AdminDiagnostics() {
       <RoutingSection />
       <FlagsSection />
       <TriggerTelemetrySection />
+      <TestVirtualeSection />
+      <NavLogSection />
+      <CollaudoRegistriSection />
+      <SenzaStradaSection />
       <GpsReplaySection />
       <LibrarySeedSection />
 
