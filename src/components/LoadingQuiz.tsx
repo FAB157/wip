@@ -22,9 +22,13 @@ interface LoadingQuizProps {
   /** Chiude il quiz lasciando proseguire la generazione: l'overlay è opaco
    *  a tutto schermo e nascondeva l'itinerario che si costruisce in streaming. */
   onDismiss?: () => void;
+  /** (06/09/2026) Avviso «non devi aspettare»: il server salva nell'Archivio
+   *  e manda l'email a fine lavoro anche se l'utente chiude. 'itinerario' o
+   *  'guida' cambia solo la parola nel testo. */
+  avvisoAttesa?: 'itinerario' | 'guida';
 }
 
-export default function LoadingQuiz({ destination, quizLength = 5, userId, language = 'it', onDismiss }: LoadingQuizProps) {
+export default function LoadingQuiz({ destination, quizLength = 5, userId, language = 'it', onDismiss, avvisoAttesa }: LoadingQuizProps) {
   const [questions, setQuestions] = useState<TriviaQuestion[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentIdx, setCurrentIdx] = useState(0);
@@ -159,6 +163,16 @@ export default function LoadingQuiz({ destination, quizLength = 5, userId, langu
 
       {/* Background Decor */}
       <div className="absolute top-0 left-0 w-full h-64 bg-gradient-to-b from-primary/30 to-transparent blur-3xl pointer-events-none"></div>
+
+      {/* «Non vuoi aspettare?» (committente, 06/09/2026): itinerario e guida
+          finiscono comunque nell'Archivio e arrivano via email. */}
+      {avvisoAttesa && (
+        <div className="absolute top-20 left-4 right-4 z-20 rounded-2xl bg-secondary/95 border border-white/30 shadow-lg px-4 py-3 text-center">
+          <p className="text-[14px] font-black leading-snug text-primary">
+            ✉️ {getTranslation(avvisoAttesa === 'guida' ? 'attesa_avviso_guida' : 'attesa_avviso_itinerario', language as any)}
+          </p>
+        </div>
+      )}
 
       {/* Il quiz è un passatempo, non un muro: si può chiudere e guardare
           l'itinerario mentre viene generato. I punti già maturati vengono

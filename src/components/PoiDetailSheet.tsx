@@ -1,22 +1,26 @@
 // @ts-nocheck
 import { useState, useEffect, ReactNode, useRef } from "react";
+import { tracciaEvento } from "../lib/pageviewTracker";
 import { motion, AnimatePresence } from "motion/react";
 import { checkUserQuota, incrementUserQuota } from '../lib/quotaManager';
 import QuotaLimitToast, { useQuotaToast } from './QuotaLimitToast';
 import CreditConfirmationModal from './CreditConfirmationModal';
+import SchedaMichelin from './SchedaMichelin';
+import SchedaSenzaGlutine from './SchedaSenzaGlutine';
 import { notify } from '../lib/toast';
+import { migliorFoto } from '../lib/fotoHttps';
 import ShopScreen from './ShopScreen';
-import { PRICING_LIST, getWalletBalance, refundCredits, notifyCreditsChanged, consumeCredits } from '../lib/pricing';
+import { PRICING_LIST, getWalletBalance, notifyCreditsChanged } from '../lib/pricing';
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import PoiContactButtons from './PoiContactButtons';
 import PoiTicketsButtons from './PoiTicketsButtons';
 import PoiGallery from './PoiGallery';
 import AttribuzioneFoto from './AttribuzioneFoto';
+import AttribuzioneDati from './AttribuzioneDati';
 import { Capacitor } from '@capacitor/core';
 import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
 import { saveOfflineAudio, getOfflineAudioUrl } from "../lib/offlineStorage";
 import { supabase } from "../lib/supabase";
-import { puntoArrivoSuStrada } from "../lib/puntoArrivo";
 import {
   X,
   Globe,
@@ -56,6 +60,8 @@ import wipLogo from '../assets/images/wip-icon.png';
 import { SUBCATEGORY_DETAILS } from "../data/subcategoryDetails";
 import ActionButton from "./ui/ActionButton";
 import NavChoiceSheet from "./NavChoiceSheet";
+import IngressoQuiButton from "./IngressoQuiButton";
+import { BottoneGiro } from "./PoiPopupContent";
 
 import {
   getCachedPoiDetails,
@@ -118,11 +124,13 @@ const fetchWithTimeout = (url: string, opts: any = {}, ms = 12000): Promise<Resp
   apiFetch(url, opts, ms);
 
 import { apiFetch, bearerHeaders } from '../lib/api';
-import { mapItineraryCategoryToMapCategory, getAudioguide, upsertAudioguide, ensureSharedPoi } from "../services/poiRepository";
+import { mapItineraryCategoryToMapCategory, getAudioguide, ensureSharedPoi } from "../services/poiRepository";
+import { getAudioguideForPlayback } from "../services/audioguideService";
 import PoiAudioPlayer from "./poi/PoiAudioPlayer";
 import PoiExtraDetails from "./poi/PoiExtraDetails";
 import PoiBiodiversity from "./poi/PoiBiodiversity";
 import DenominazioniZona from "./DenominazioniZona";
+import { ensureAffiliateUrl, trackAffiliateClick } from "../lib/affiliates";
 import PoiNearbyList from "./poi/PoiNearbyList";
 
 interface PoiDetailSheetProps {
@@ -164,6 +172,10 @@ interface PoiDetailSheetProps {
   onSetSubFilter?: (filter: string | null) => void;
   nearbyPois?: any[];
   onSelectNearby?: (poi: any) => void;
+  /** Radar acceso: la scheda serve a DECIDERE se il posto entra nel giro. */
+  modalitaGiro?: boolean;
+  /** Admin: mostra «L'ingresso e` qui» (correzione dell'ingresso sul posto, 03/09/2026). */
+  isAdmin?: boolean;
   language: Language;
 }
 
@@ -200,9 +212,13 @@ export default function PoiDetailSheet({
   onSetSubFilter,
   nearbyPois: propNearbyPois = [],
   onSelectNearby,
+  modalitaGiro,
+  isAdmin,
   language,
 }: PoiDetailSheetProps) {
   const [nearbyPois, setNearbyPois] = useState<any[]>(propNearbyPois);
+  // Statistiche anonime (26/09/2026): scheda aperta, per categoria.
+  useEffect(() => { if (poi?.id) tracciaEvento('scheda_aperta', poi.category || 'altro'); }, [poi?.id]);
   const [showNearbyList, setShowNearbyList] = useState(false);
   const [showNavChoice, setShowNavChoice] = useState(false);
 
@@ -282,6 +298,71 @@ export default function PoiDetailSheet({
     return () => { alive = false; };
   }, [poi?.id]);
 
+  // ── LE OPERE GIRATE O AMBIENTATE QUI (works_json, 29/08/2026) ──────────
+  // Committente: «attacchiamo l'opera al POI, ma creiamo nella categoria
+  // tematici un POI specifico che da' informazioni sul film». Le opere stanno
+  // in shared_pois.works_json — sia sul luogo (Marina Corricella resta un
+  // porto e in fondo dice «qui hanno girato…») sia sul POI dedicato
+  // (category='cinema'). La RPC della mappa non porta la colonna: mini-fetch
+  // alla prima apertura, come per l'indirizzo.
+  type Opera = { qid?: string; titolo: string; anno?: number | null; anni?: string | null; tipo?: string; ruolo?: string; fonte?: string; regista?: string | null; autore?: string | null; attori?: string[]; scena?: string | null; scena_fonte?: string | null; scena_lingua?: string | null; immagine?: string | null; serie?: string | null; descrizione?: string | null; wikipedia?: string | null; scena_i18n?: Record<string, string> | null; descrizione_i18n?: Record<string, string> | null };
+  const [tutteOpere, setTutteOpere] = useState(false);
+  // Testi fissi della sezione (26/09/2026): «Mostra tutte» e l'etichetta dei film citati solo da Wikipedia.
+  const lingOpere = String(language || 'it').toLowerCase().slice(0, 2);
+  const TOP: Record<string, { tutte: string; wiki: string; fonte: string }> = {
+    it: { tutte: 'Mostra tutte', wiki: 'secondo Wikipedia', fonte: 'Wikipedia' },
+    en: { tutte: 'Show all', wiki: 'according to Wikipedia', fonte: 'Wikipedia' },
+    fr: { tutte: 'Tout afficher', wiki: 'selon Wikipédia', fonte: 'Wikipédia' },
+    es: { tutte: 'Ver todas', wiki: 'según Wikipedia', fonte: 'Wikipedia' },
+    de: { tutte: 'Alle anzeigen', wiki: 'laut Wikipedia', fonte: 'Wikipedia' },
+    ru: { tutte: 'Показать все', wiki: 'по данным Википедии', fonte: 'Википедия' },
+    zh: { tutte: '显示全部', wiki: '据维基百科', fonte: '维基百科' },
+  };
+  const tOp = TOP[lingOpere] || TOP.en;
+  const [opere, setOpere] = useState<Opera[]>(() => (Array.isArray((poi as any)?.works_json) ? (poi as any).works_json : []));
+  useEffect(() => {
+    let alive = true;
+    const locali = Array.isArray((poi as any)?.works_json) ? (poi as any).works_json : null;
+    setOpere(locali || []);
+    if (!poi?.id) return;
+    // UNIONE PER LUOGO (27/09/2026, committente: «dobbiamo avere più di questo sito»): lo stesso luogo ha spesso
+    // più righe con lo stesso QID (cine-Q180212 e wd-Q180212 per il Foro Romano, da fonti diverse) e ognuna
+    // portava solo la sua parte di film. Si uniscono le opere di tutte le righe con lo stesso `wikidata`.
+    const unisci = (liste: any[][]) => {
+      const visti = new Set<string>(); const out: Opera[] = [];
+      for (const l of liste) for (const o of (Array.isArray(l) ? l : [])) {
+        const k = o?.qid || `${String(o?.titolo || '').toLowerCase()}|${o?.anno || ''}`;
+        if (!o?.titolo || visti.has(k)) continue;
+        visti.add(k); out.push(o);
+      }
+      return out;
+    };
+    (async () => {
+      try {
+        const { data } = await supabase.from('shared_pois').select('works_json, wikidata').eq('id', String(poi.id)).maybeSingle();
+        const proprie = Array.isArray((data as any)?.works_json) ? (data as any).works_json : (locali || []);
+        const qid = String((data as any)?.wikidata || (poi as any)?.wikidata || String(poi.id).match(/^(?:cine|wd)-(Q\d+)$/)?.[1] || '');
+        let gemelle: any[][] = [];
+        if (/^Q\d+$/.test(qid)) {
+          const { data: altre } = await supabase.from('shared_pois').select('id, works_json').eq('wikidata', qid).not('works_json', 'is', null).limit(10);
+          gemelle = (altre || []).filter((r: any) => String(r.id) !== String(poi.id)).map((r: any) => r.works_json);
+        }
+        if (alive) setOpere(unisci([proprie, ...gemelle]));
+      } catch { /* niente opere, niente sezione */ }
+    })();
+    return () => { alive = false; };
+  }, [poi?.id]);
+  /** Testo della scena preso da Wikipedia: via titoli di sezione («== Produzione ==») ed elenchi puntati
+   *  («* Ghetto di Roma;») rimasti dal wikitesto (27/09/2026, Fori Imperiali). */
+  const pulisciScena = (t: string) => t
+    .replace(/={2,}\s*[^=]+?\s*={2,}/g, ' ')
+    .replace(/(^|[\s:;])\*+\s*/g, '$1')
+    .replace(/'{2,}/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  /** La locandina/immagine di Commons in piccolo: Special:FilePath accetta ?width. */
+  const miniatura = (u?: string | null) => (u && /commons\.wikimedia\.org|upload\.wikimedia\.org/.test(u) ? `${u}${u.includes('?') ? '&' : '?'}width=96` : null);
+
   const [tripData, setTripData] = useState<{
     rating?: string | null;
     numReviews?: string | number;
@@ -290,6 +371,10 @@ export default function PoiDetailSheet({
     phone?: string;
     tags?: string[];
   } | null>(null);
+
+  // Vero quando la copertina mostra la foto di ripiego (wikiData.thumbnail):
+  // il credito deve essere quello di QUELLA foto, non di poi.image_url.
+  const [heroRipiego, setHeroRipiego] = useState(false);
 
   const [parkingData, setParkingData] = useState<{
     availability?: string;
@@ -300,6 +385,11 @@ export default function PoiDetailSheet({
 
   // Dati tecnici (anno, architetto, stile, materiale, altezza, comune, zona)
   // mostrati come chip con icone lucide, separati dal testo descrittivo/TTS.
+  // Provenienza del dato (shared_pois.source), letta da /api/poi/details: la
+  // RPC del radar ha colonne fisse e non la restituisce, quindi `poi.source`
+  // e' spesso assente e non ci si puo' contare. Vedi AttribuzioneDati.
+  const [fonteDati, setFonteDati] = useState<string | null>(null);
+
   const [technicalData, setTechnicalData] = useState<{
     inception?: string;
     architect?: string;
@@ -314,6 +404,11 @@ export default function PoiDetailSheet({
     wwd_url?: string;
     artista?: string;
     anno?: string;
+    // Prenotazioni (28/08/2026, regola del committente: ogni POI abbinato a
+    // GYG/Viator/Tiqets porta il link CON il codice affiliato). Gli URL
+    // stanno in technical_data (viator_url/tiqets_url/gyg_url) e finora la
+    // scheda non li mostrava affatto: commissione zero.
+    prenota?: Array<{ fornitore: string; url: string }>;
   } | null>(null);
 
   const [generatedText, setGeneratedText] = useState<string | null>(null);
@@ -650,7 +745,13 @@ export default function PoiDetailSheet({
           return;
         }
 
-        if (!ctx.isLoading && !ctx.isRegenerating && textToSpeak) {
+        // UNA RIGA NON È UNA GUIDA (05/10/2026, prova a Parigi: «Île de la Cité» partiva
+        // da sola e diceva «Isola fluviale a Parigi», sei secondi, tre volte su tre). Allo
+        // scatto automatico un testo sotto gli 80 caratteri non si legge: la scheda resta
+        // aperta, chi vuole tocca «Ascolta». Meglio il silenzio di una guida di quattro parole.
+        if (!ctx.isLoading && !ctx.isRegenerating && textToSpeak && String(textToSpeak).trim().length < 80) {
+          console.warn(`[PoiDetailSheet] AutoPlay: testo troppo corto per ${poi?.name}, niente voce automatica.`);
+        } else if (!ctx.isLoading && !ctx.isRegenerating && textToSpeak) {
           console.log(`[PoiDetailSheet] AutoPlay: dettagli pronti, avvio guida per ${poi?.name}`);
           // Belt & braces: se la voce nativa stesse ancora parlando, la fermiamo
           // un attimo prima di partire — mai due voci sovrapposte.
@@ -672,8 +773,11 @@ export default function PoiDetailSheet({
     window.addEventListener('wip-teaser-finished', onTeaserFinished);
 
     if (!Capacitor.isNativePlatform()) {
-      // Su web non esiste il teaser nativo: partire subito, senza attese inutili
-      startPlayback();
+      // Su web non esiste il teaser nativo: partire subito, senza attese inutili.
+      // Solo nel TEST VIRTUALE il teaser lo dice il test (lib/testVirtuale.ts) e
+      // manda 'wip-teaser-finished': si aspetta quello, con un tetto di 25 s.
+      if ((window as any).__wipTestVirtuale === true && !triggerManualePer(poiIdStr)) fallbackTimer = setTimeout(startPlayback, 25000);
+      else startPlayback();
     } else {
       // Chiediamo al nativo lo stato reale del teaser: se ha già finito (o non
       // sta parlando) partiamo subito — es. utente che sblocca il telefono
@@ -711,9 +815,50 @@ export default function PoiDetailSheet({
     setWikiData(null);
     setParkingData(null);
     setTechnicalData(null);
+    // Il credito riparte da quello che il chiamante ci ha passato: se la rotta
+    // dei dettagli risponde lo sovrascrive, se non risponde non resta appeso
+    // il credito del POI precedente (che sarebbe un'attribuzione FALSA).
+    setFonteDati(((poi as any)?.source as string) || null);
     setIsTyping(false);
     setDisplayedText("");
     
+    // BUGFIX 10/09/2026: un POI con testo già pronto (description_long, es.
+    // "Scultura Dunchi") ma senza foto restava SENZA FOTO PER SEMPRE. La
+    // ricerca vera dell'immagine (Wikipedia/Commons via /api/poi/enrich,
+    // fast+mode:"short") esisteva già più sotto in runEnrichment — ma tre
+    // scorciatoie diverse (cache globale, isAlreadyEnriched, cache locale
+    // con testo lungo) tornavano prima di arrivarci, appena il testo c'era,
+    // senza mai controllare la foto. Qui si tenta la stessa chiamata
+    // leggera, in background, SOLO per la foto: il testo già mostrato non
+    // viene toccato. Il server (già pronto per questo, vedi /api/poi/enrich)
+    // scrive la foto trovata su shared_pois senza sovrascrivere la
+    // descrizione esistente, quindi la prossima apertura la trova subito.
+    const provaFotoMancante = async (poiTarget: typeof poi) => {
+      try {
+        const res = await fetchWithTimeout("/api/poi/enrich", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: poiTarget.id, name: poiTarget.name, lat: poiTarget.lat, lon: poiTarget.lon,
+            category: poiTarget.category, subCategory: (poiTarget as any).subCategory,
+            wikipedia: (poiTarget as any).wikipedia, lang: language, fast: true, mode: "short",
+          }),
+        }, 12000);
+        if (!res.ok || !active) return;
+        const data = await res.json();
+        const thumb = data?.thumbnail;
+        if (!thumb) return;
+        setWikiData((prev) => prev ? { ...prev, thumbnail: thumb } : prev);
+        const chiave = chiaveScheda(poiTarget.id);
+        const attuale = getCachedPoiDetails(chiave);
+        if (attuale?.wikiData) {
+          setCachedPoiDetails(chiave, { ...attuale, wikiData: { ...attuale.wikiData, thumbnail: thumb } });
+        }
+      } catch (e) {
+        console.debug('[DetailSheet] Foto mancante: tentativo in background fallito:', e);
+      }
+    };
+
     const loadPoiDetails = async () => {
       if (!poi) {
         processedRef.current = ""; // Reset when closed
@@ -788,6 +933,8 @@ export default function PoiDetailSheet({
           });
 
           setIsLoading(false);
+          // Stesso bugfix: anche questa cache più vecchia può non avere foto.
+          if (!cachedWiki?.thumbnail) void provaFotoMancante(poi);
           return;
         }
       } catch(e) {
@@ -797,17 +944,26 @@ export default function PoiDetailSheet({
       // 2. Se non abbiamo l'audio in cache, ma il POI ha già una descrizione arricchita nel DB principale
       const isAlreadyEnriched = poi.description_long || (poi.description && poi.description.length > 80) || (poi.description_ai && poi.description_ai.length > 80);
 
-      // La scorciatoia vale SOLO in italiano: i campi del POI sono in
-      // italiano, e per le altre lingue si prosegue fino a /api/poi/details
-      // che li restituisce tradotti (23/08/2026). Il testo qui sotto resta
-      // comunque visibile subito come segnaposto.
+      // ANTEPRIMA ISTANTANEA, MAI LA VERSIONE FINALE (22/09/2026, segnalazione
+      // del committente: pin, schede e audioguide uscivano nella lingua
+      // sbagliata). Fino a ieri, con l'app in italiano, questo blocco
+      // MOSTRAVA e METTEVA IN CACHE `poi.description_long` come se fosse per
+      // forza italiano e si FERMAVA (return) — ma quel campo su shared_pois
+      // è scritto dalla PRIMA persona che ha arricchito il luogo, in
+      // qualunque lingua stesse usando (o da uno script di sfondo mondiale):
+      // un POI arricchito in spagnolo restava mostrato "in italiano" per
+      // sempre. Ora si mostra solo come segnaposto immediato (niente cache,
+      // niente return): l'esecuzione prosegue sempre fino a /api/poi/details,
+      // che ora conosce la lingua vera del testo (description_lang, vedi
+      // traduciCampiPoi in server.ts) e lo corregge quando serve — è quella
+      // risposta, non questa, a finire in cache.
       if (isAlreadyEnriched && linguaIt) {
-        console.log("[DetailSheet] Initializing from pre-loaded POI details:", poi.name);
+        console.log("[DetailSheet] Anteprima da POI pre-caricato (in attesa di conferma dal server):", poi.name);
         const desc = poi.description_long || poi.description_ai || poi.description || "";
 
         const wikiPayload = {
           extract: desc,
-          thumbnail: poi.image_url || (poi as any).photo_url || undefined,
+          thumbnail: migliorFoto(poi) || undefined,
           description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
           pageUrl: "#"
         };
@@ -815,8 +971,8 @@ export default function PoiDetailSheet({
         const tripPayload = {
           address: (poi as any).address || "",
           tags: [poi.category],
-          rating: (poi as any).rating || "4.2",
-          numReviews: (poi as any).user_ratings_total || 12,
+          rating: (poi as any).rating || null,
+          numReviews: (poi as any).user_ratings_total || 0,
           reviews: []
         };
 
@@ -824,19 +980,16 @@ export default function PoiDetailSheet({
         setTripData(tripPayload);
         // setDisplayedText(desc); // Removed to allow typewriter effect to run
 
-        setCachedPoiDetails(chiaveScheda(poi.id), {
-          wikiData: wikiPayload,
-          tripData: tripPayload,
-          generatedText: null
-        });
-
         setIsLoading(false);
-        return;
+        // Testo già pronto, ma se manca la foto la si cerca in background
+        // (vedi provaFotoMancante sopra): l'utente vede subito il testo e la
+        // foto compare quando arriva, senza bloccare l'apertura della scheda.
+        if (!wikiPayload.thumbnail) void provaFotoMancante(poi);
       } else if (poi.description || poi.description_short || poi.description_ai) {
         const shortDesc = poi.description_short || poi.description_ai || poi.description || "";
         setWikiData({
           extract: shortDesc,
-          thumbnail: poi.image_url || (poi as any).photo_url || undefined,
+          thumbnail: migliorFoto(poi) || undefined,
           description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
           pageUrl: "#"
         });
@@ -850,7 +1003,7 @@ export default function PoiDetailSheet({
         if (!cached.wikiData && (cached.descriptionLong || cached.description || cached.audioScript || cached.imageUrl)) {
            setWikiData({
               extract: cached.descriptionLong || cached.description || cached.audioScript || "",
-              thumbnail: cached.imageUrl || cached.image_url || poi.image_url || (poi as any).photo_url || undefined,
+              thumbnail: cached.imageUrl || migliorFoto(cached) || migliorFoto(poi) || undefined,
               description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
               pageUrl: "#"
            });
@@ -872,6 +1025,11 @@ export default function PoiDetailSheet({
 
         if (hasDetailedContent) {
           setIsLoading(false);
+          // Stesso bugfix del ramo isAlreadyEnriched: la cache locale può
+          // avere un testo lungo ma nessuna foto, se fu popolata prima che
+          // ne esistesse una. Non si tocca il testo già mostrato.
+          const fotoInCache = cached.wikiData?.thumbnail || migliorFoto(cached) || migliorFoto(poi);
+          if (!fotoInCache) void provaFotoMancante(poi);
           return;
         }
       }
@@ -910,10 +1068,14 @@ export default function PoiDetailSheet({
           const poiIdStr = String(poi.id);
 
           // Arricchimento già in volo per questo POI (doppio mount di React,
-          // cambio lingua/personaggio): aspettiamo QUELLA promise e rileggiamo
+          // cambio personaggio): aspettiamo QUELLA promise e rileggiamo
           // la cache. Prima si usciva subito senza spegnere isLoading → la
           // scheda restava su "Caricamento dettagli..." per sempre.
-          const inFlight = enrichmentPromises.get(poiIdStr);
+          // La chiave porta la LINGUA, come la cache: aspettando la promise
+          // di un'altra lingua si rileggeva una cache che quella non riempie,
+          // e la scheda restava senza testo.
+          const chiaveInVolo = chiaveScheda(poi.id);
+          const inFlight = enrichmentPromises.get(chiaveInVolo);
           if (inFlight) {
             console.warn(`[PoiDetailSheet] Enrichment for ${poiIdStr} already in flight. Waiting for it...`);
             await inFlight.catch(() => {});
@@ -949,7 +1111,7 @@ export default function PoiDetailSheet({
                    const basicWiki = {
                      extract: currentDesc || "Analisi storica in corso...",
                      description: poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : "Cultura",
-                     thumbnail: dbData.image_url || dbData.photo_url || poi.image_url || undefined,
+                     thumbnail: migliorFoto(dbData) || migliorFoto(poi) || undefined,
                      pageUrl: "#"
                    };
                    const basicTrip = { address: '', phone: '', website: '', tags: [poi.category], rating: null, numReviews: 0, reviews: [] };
@@ -960,6 +1122,10 @@ export default function PoiDetailSheet({
                    }
                    return;
                 }
+
+                // Provenienza del dato: dal DB, che e' l'unica versione
+                // attendibile (il POI del radar spesso non ce l'ha).
+                if (active && dbData.source) setFonteDati(String(dbData.source));
 
                 const fullDesc = dbData.full_description || dbData.description_long || dbData.description_ai;
                 const techData = dbData.technical_data || {};
@@ -978,7 +1144,16 @@ export default function PoiDetailSheet({
                   wwd_url: techData.wwd_url || undefined,
                   artista: techData.artista || techData.artist_name || undefined,
                   anno: techData.anno || undefined,
+                  // Link di prenotazione, sempre passati da ensureAffiliateUrl:
+                  // Tiqets arriva già col partner, Viator/GYG vengono completati.
+                  prenota: ([
+                    ['Viator', techData.viator_url], ['Tiqets', techData.tiqets_url],
+                    ['GetYourGuide', techData.gyg_url || techData.getyourguide_url],
+                  ] as Array<[string, unknown]>)
+                    .filter(([, u]) => typeof u === 'string' && /^https?:\/\//.test(u))
+                    .map(([fornitore, u]) => ({ fornitore, url: ensureAffiliateUrl(String(u)) })),
                 };
+                if (!techPayload.prenota?.length) delete (techPayload as any).prenota;
                 const hasTechData = Object.values(techPayload).some(Boolean);
                 // I POI appena importati (montagne russe, cascate, murales) hanno
                 // i link e i dati tecnici ma ancora nessuna descrizione: le chip
@@ -997,7 +1172,7 @@ export default function PoiDetailSheet({
 
                   const wikiPayload = {
                     extract: finalDesc,
-                    thumbnail: dbData.image_url || dbData.photo_url || poi.image_url || undefined,
+                    thumbnail: migliorFoto(dbData) || migliorFoto(poi) || undefined,
                     description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
                     pageUrl: techData.wikipedia_url || techData.wikivoyage_url || '#',
                   };
@@ -1011,54 +1186,73 @@ export default function PoiDetailSheet({
                     setTripData(tripPayload);
                     if (hasTechData) setTechnicalData(techPayload);
                     if (storedAudioScript) setGeneratedText(storedAudioScript);
-                    setCachedPoiDetails(chiaveScheda(poi.id), { wikiData: wikiPayload, tripData: tripPayload, generatedText: storedAudioScript, technicalData: hasTechData ? techPayload : undefined });
+                    // In cache SOLO se il testo e' nella lingua della UI
+                    // (`lingua_testo` dal server, 22/09/2026 sera): una
+                    // traduzione mancata non deve diventare «la scheda in
+                    // spagnolo» per il resto della sessione.
+                    const linguaTesto = String(dbData.lingua_testo || '').toLowerCase().slice(0, 2);
+                    if (!linguaTesto || linguaTesto === String(language || 'IT').toLowerCase().slice(0, 2)) {
+                      setCachedPoiDetails(chiaveScheda(poi.id), { wikiData: wikiPayload, tripData: tripPayload, generatedText: storedAudioScript, technicalData: hasTechData ? techPayload : undefined });
+                    }
                     setIsLoading(false);
                   }
                   return; // ✅ Dati DB trovati
+                }
+
+                // (19/09/2026) COMMERCIALI DI OVERTURE: «nessuna prosa, solo
+                // dati» (approvato dal committente). Il server lo segnala con
+                // `solo_dati`: al posto del testo va la riga dei dati — via ·
+                // citta` — e l'AI non si chiama. Se manca la foto si chiede
+                // UNA volta a /api/poi/enrich, che per questi POI non genera
+                // testo e cerca solo lo scatto dalla strada.
+                if (dbData.solo_dati) {
+                  const rigaDati = String(dbData.riga_dati || '').trim() || [dbData.address, dbData.city].map((x: any) => String(x || '').trim()).filter(Boolean).join(' · ');
+                  let foto: string | undefined = migliorFoto(dbData) || migliorFoto(poi) || undefined;
+                  if (!foto) {
+                    try {
+                      const r = await fetchWithTimeout("/api/poi/enrich", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ id: poi.id, name: poi.name, lat: poi.lat, lon: poi.lon, category: poi.category, subCategory: poi.subCategory, lang: language, fast: true, mode: "short" }),
+                      }, 12000);
+                      if (r.ok) { const j = await r.json(); if (j?.thumbnail) foto = String(j.thumbnail); }
+                    } catch { /* senza foto la scheda resta coi soli dati */ }
+                  }
+                  const wikiPayload = {
+                    extract: rigaDati,
+                    thumbnail: foto,
+                    description: poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language),
+                    pageUrl: '#',
+                  };
+                  const tripPayload = { address: String(dbData.address || ''), phone: '', website: '', tags: [poi.category], rating: null, numReviews: 0, reviews: [] };
+                  if (active) {
+                    setWikiData(wikiPayload);
+                    setTripData(tripPayload);
+                    setCachedPoiDetails(chiaveScheda(poi.id), { wikiData: wikiPayload, tripData: tripPayload, generatedText: null, technicalData: hasTechData ? techPayload : undefined });
+                    setIsLoading(false);
+                    setIsStreaming(false);
+                  }
+                  return;
                 }
               }
             } catch (dbErr) {
               console.debug('[DetailSheet] /api/poi/details skip:', dbErr);
             }
 
-            // ── STEP 1: Quota check (solo se serve l'AI) ─────────────────────
-            const { data: sessionData } = await supabase.auth.getSession();
-            const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
-
-            // ✅ [CONTROLLO STORIA ACQUISTI] - Verifica se l'utente ha già pagato per questo POI
-            const { getListeningHistory } = await import('../lib/listeningHistory');
-            const history = await getListeningHistory(currentUserId);
-            const poiIdStr = String(poi?.id);
-            const alreadyPaid = history.some(h => String(h.poi_id) === poiIdStr) || poi?.isFromItinerary === true;
-
-            if (!alreadyPaid) {
-                // Saldo fresco PRIMA di aprire il modale: currentBalance parte
-                // da 0 e senza fetch il modale mostrava "Crediti Insufficienti"
-                // anche a saldo pieno.
-                try {
-                  const bal = await getWalletBalance(currentUserId);
-                  setCurrentBalance(bal.total);
-                } catch { /* il modale mostrerà l'ultimo saldo noto */ }
-                // ✅ [STOP ADDEBITO AUTOMATICO] - Chiediamo conferma solo se il POI non è già stato acquistato
-                const confirmed = await creditConfirm.requestConfirmation(PRICING_LIST.poi_detail, "Arricchimento Dettagli (AI)");
-                if (!confirmed) {
-                  setIsLoading(false);
-                  processedRef.current = ""; // Permetti di riprovare
-                  return;
-                }
-                // ADDEBITO LATO SERVER: la scheda dettagli è ora scalata dalla
-                // route di arricchimento (col token utente). Il vecchio
-                // consumeCredits qui provocava un DOPPIO addebito. Restano la
-                // conferma qui sopra e, dopo l'arricchimento, il refresh del
-                // saldo nei widget (notifyCreditsChanged più in basso).
-            } else {
-                console.log("[DetailSheet] POI già acquistato, salto conferma crediti.");
-            }
+            // ── STEP 1: NESSUN CANCELLO A CREDITI (19/09/2026) ───────────────
+            // Committente: «togli il cancello». Qui stava la conferma da 5
+            // crediti «Arricchimento Dettagli (AI)», PRIMA ancora della ricerca
+            // gratuita su Wikipedia: chi rifiutava o non aveva crediti restava
+            // con la scheda vuota, e il POI non veniva mai arricchito per
+            // nessuno (misurato: 105 arricchimenti al volo in 7 giorni). La
+            // scheda di un luogo — testo e foto — ora e` gratis per chi ha fatto
+            // l'accesso; il server continua a volere il login per generare
+            // («ospiti no»). A pagamento resta l'AUDIOGUIDA, col suo cancello.
 
             let enriched: any = {};
             let finalEnriched: any = {};
             let currentExtract = poi.description_short || poi.description || "";
-            let currentThumbnail = poi.image_url || (poi as any).photo_url || undefined;
+            let currentThumbnail = migliorFoto(poi) || undefined;
             let currentPageUrl = "#";
 
             // Serve anche quando il testo c'è ma MANCA LA FOTO: questa è
@@ -1112,21 +1306,8 @@ export default function PoiDetailSheet({
               }
             }
 
-            // Saldo addebitato lato server durante l'arricchimento: allinea i
-            // widget crediti come dopo un acquisto (evento wip-credits-updated)
-            // e aggiorna il saldo mostrato nel modale.
-            if (!alreadyPaid) {
-              // ADDEBITO CLIENT-SIDE alla consegna dei dettagli: consumeCredits
-              // scala i crediti SERVER-SIDE via token utente (/api/credits/consume).
-              // Si paga solo dopo aver ottenuto la scheda; la rotta /api/poi/enrich
-              // NON scala crediti da sé → nessun doppio addebito.
-              try { await consumeCredits(currentUserId, PRICING_LIST.poi_detail); } catch { /* saldo già verificato dal gate; contenuto già consegnato */ }
-              notifyCreditsChanged({ userId: currentUserId });
-              try {
-                const bal = await getWalletBalance(currentUserId);
-                if (active) setCurrentBalance(bal.total);
-              } catch { /* saldo aggiornato al prossimo refresh */ }
-            }
+            // (19/09/2026) Qui c'era l'addebito di 5 crediti alla consegna della
+            // scheda: tolto insieme al cancello qui sopra. La scheda non costa.
 
             if (active) {
               const categoryLabel = poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language);
@@ -1196,6 +1377,10 @@ export default function PoiDetailSheet({
                   const reader = streamRes.body.getReader();
                   const decoder = new TextDecoder("utf-8");
                   let accumulatedJson = "";
+                  // Buffer di riga (come PlanScreen): i chunk HTTP non
+                  // coincidono con gli eventi SSE, e senza `stream: true` una
+                  // lettera accentata a cavallo di due chunk usciva corrotta.
+                  let bufferRighe = "";
 
                   while (true) {
                     if (!active) break;
@@ -1203,9 +1388,10 @@ export default function PoiDetailSheet({
                     if (done) break;
                     resetStreamWatchdog();
 
-                    const chunkStr = decoder.decode(value);
-                    const lines = chunkStr.split("\n");
-                    
+                    bufferRighe += decoder.decode(value, { stream: true });
+                    const lines = bufferRighe.split("\n");
+                    bufferRighe = lines.pop() ?? "";
+
                     for (const line of lines) {
                       if (line.startsWith("data: ")) {
                         const dataStr = line.substring(6);
@@ -1284,8 +1470,8 @@ export default function PoiDetailSheet({
                     const tripPayload = {
                       address: finalEnriched.address || "",
                       tags: finalEnriched.tags || [poi.category],
-                      rating: finalEnriched.rating || "4.2",
-                      numReviews: finalEnriched.numReviews || 45,
+                      rating: finalEnriched.rating || null,
+                      numReviews: finalEnriched.numReviews || 0,
                       reviews: finalEnriched.reviews || []
                     };
                     setTripData(tripPayload);
@@ -1358,8 +1544,8 @@ export default function PoiDetailSheet({
               setTripData({
                 address: "",
                 tags: [poi.category],
-                rating: isRejected ? "0.0" : "4.2",
-                numReviews: isRejected ? 0 : 45,
+                rating: null,
+                numReviews: 0,
                 reviews: []
               });
             }
@@ -1372,8 +1558,8 @@ export default function PoiDetailSheet({
           };
 
           const job = runEnrichment();
-          enrichmentPromises.set(poiIdStr, job);
-          try { await job; } finally { enrichmentPromises.delete(poiIdStr); }
+          enrichmentPromises.set(chiaveInVolo, job);
+          try { await job; } finally { enrichmentPromises.delete(chiaveInVolo); }
         };
 
         callEnrichApi();
@@ -1420,7 +1606,7 @@ export default function PoiDetailSheet({
         const { getOfflineAudioUrl } = await import('../lib/offlineStorage');
         const ownedUrl = await getOfflineAudioUrl(`${String(poi?.id)}_${localGuideMode}`);
         if (ownedUrl) {
-          await locationService.playAudioUrl(ownedUrl, String(poi?.id), poi?.name);
+          await locationService.playAudioUrl(ownedUrl, String(poi?.id), poi?.name, poi?.photo_url || poi?.image_url);
           return;
         }
       } catch { /* nessun file locale: si prosegue con pass/per-listen */ }
@@ -1461,12 +1647,24 @@ export default function PoiDetailSheet({
       // Le gemme NON sono gratuite: costano come ogni altra categoria.
       const alreadyUnlocked = history.some(h => String(h.poi_id) === poiIdStr) ||
                               poi?.isFromItinerary === true ||
-                              !!ownedUrl;
+                              !!ownedUrl ||
+                              // TEST VIRTUALE dell'admin: l'ascolto di prova parte senza il modale crediti.
+                              (isAdmin === true && (window as any).__wipTestVirtuale === true);
 
       if (alreadyUnlocked) {
         console.log("[PoiDetailSheet] POI già sbloccato, avvio riproduzione...");
         if (ownedUrl) {
-          await locationService.playAudioUrl(ownedUrl, poiIdStr, poi?.name);
+          const esitoUrl = await locationService.playAudioUrl(ownedUrl, poiIdStr, poi?.name, poi?.photo_url || poi?.image_url);
+          // TOUR DI GRUPPO: l'MP3 acquistato/offline vive solo su questo
+          // telefono, quindi playAudioUrl non trasmette nulla e il gruppo
+          // restava muto proprio sui POI gia' sbloccati dal leader. Si manda
+          // il TESTO: chi ascolta lo sente con la stessa voce, dal proprio
+          // apparecchio. (Per i non-leader l'evento non ha ascoltatori.)
+          if (esitoUrl === 'started' && textToSpeak) {
+            window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
+              detail: { textToSpeak, poiName: poi?.name, character: localGuideMode, language },
+            }));
+          }
           return;
         }
         if (language !== 'IT' && !generatedText) {
@@ -1476,7 +1674,7 @@ export default function PoiDetailSheet({
         if (textToSpeak) {
           // Il personaggio selezionato nella scheda decide la voce TTS:
           // Nicky = femminile, Dante = maschile (in ogni lingua).
-          await locationService.playAudio(textToSpeak, poi?.name, poi?.category, String(poi?.id), localGuideMode);
+          await locationService.playAudio(textToSpeak, poi?.name, poi?.category, String(poi?.id), localGuideMode, undefined, poi?.photo_url || poi?.image_url);
         }
         return;
       }
@@ -1508,6 +1706,7 @@ export default function PoiDetailSheet({
               if (!ok) passEsaurito = true;
               return ok;
             },
+            poi?.photo_url || poi?.image_url,
           );
           if (esito || !passEsaurito) {
             // Errore tecnico di riproduzione: MAI il modale crediti a chi ha
@@ -1561,7 +1760,7 @@ export default function PoiDetailSheet({
             console.log("[DetailSheet] Audioguida da cache poi_audioguides:", poi?.name);
             setGeneratedText(cachedGuide.audio_text);
             if (autoPlay) {
-              await locationService.playAudio(cachedGuide.audio_text, poi?.name, poi?.category, String(poi?.id), modeToUse);
+              await locationService.playAudio(cachedGuide.audio_text, poi?.name, poi?.category, String(poi?.id), modeToUse, undefined, poi?.photo_url || poi?.image_url);
             }
             return;
           }
@@ -1596,6 +1795,13 @@ export default function PoiDetailSheet({
         // Prima assicuriamo che il POI stesso esista in shared_pois (fonti
         // terze OSM/FSQ/Google): crowdsourcing per i visitatori successivi.
         if (!isDeepDive) {
+          // NOTA (10/09/2026): qui si chiamava anche upsertAudioguide() per
+          // persistere il testo in poi_audioguides, ma la RLS ora blocca la
+          // scrittura client (vedi audioguideService.ts, righe 3-5): il
+          // .catch(() => {}) la faceva fallire sempre in silenzio, un falso
+          // senso di sicurezza. Rimossa: la persistenza resta server-side
+          // (via getOrCreateAudioguideText -> /api/poi/audioguide). Qui
+          // resta solo il crowdsourcing del POI per i prossimi visitatori.
           ensureSharedPoi({
             id: String(poi.id),
             name: poi.name || "",
@@ -1604,12 +1810,10 @@ export default function PoiDetailSheet({
             category: poi.category,
             description_short: poi.description_short || null,
             description_long: wikiData?.extract || null,
-          }).then(() => {
-            upsertAudioguide(String(poi.id), String(language), charKeyFor(modeToUse) as any, data.result).catch(() => {});
           }).catch(() => {});
         }
         if (autoPlay) {
-          const played = await locationService.playAudio(data.result, poi?.name, poi?.category, String(poi?.id), modeToUse);
+          const played = await locationService.playAudio(data.result, poi?.name, poi?.category, String(poi?.id), modeToUse, undefined, poi?.photo_url || poi?.image_url);
           // Ritorna l'esito reale: il chiamante a pagamento (onConfirm non-IT)
           // rimborsa se la riproduzione fallisce. Prima la funzione inghiottiva
           // ogni errore e non lanciava mai → il refund era codice morto.
@@ -2164,21 +2368,49 @@ export default function PoiDetailSheet({
         }
       }
 
-      // 3. Fallback TripAdvisor API
-      const TRIPADVISOR_KEY = "B054515DAED943B9884DD6FB4A73F4B1";
+      // 3. Fallback TripAdvisor API (la chiave sta SOLO sul server: qui c'era
+      // una costante cablata, finita nel bundle pubblico — tolta il 29/08/2026)
       if (!loaded) {
-        const searchRes = await fetch(
-          `/api/trip/search?searchQuery=${encodeURIComponent(poi.name || "")}&latLong=${poi.lat},${poi.lon}`,
-        );
-        if (searchRes.ok) {
-          const searchData = await searchRes.json();
+        // (29/08/2026) Locale di locali_pois (id ov-…): il server cerca su
+        // TripAdvisor UNA volta e salva voto/recensioni/prezzo/location_id
+        // sulla riga (ta_*); le aperture successive non consumano quota per
+        // search+details. Solo API gratuite, per ordine del committente.
+        let schedaLocale: any = null;
+        if (poi.category === 'locali' && String(poi.id).startsWith('ov-')) {
+          try {
+            const sRes = await fetch(`/api/locali/scheda?id=${encodeURIComponent(String(poi.id))}`);
+            if (sRes.ok) schedaLocale = await sRes.json();
+          } catch { /* si passa alla ricerca classica */ }
+        }
+        let searchData: any = null;
+        if (schedaLocale?.location_id) {
+          searchData = { data: [{ location_id: schedaLocale.location_id }] };
+        } else if (!schedaLocale?.cercato) {
+          const searchRes = await fetch(
+            `/api/trip/search?searchQuery=${encodeURIComponent(poi.name || "")}&latLong=${poi.lat},${poi.lon}`,
+          );
+          if (searchRes.ok) searchData = await searchRes.json();
+        }
+        if (searchData) {
           const locationId = searchData.data?.[0]?.location_id;
 
           if (locationId) {
-            const detailsRes = await fetch(
-              `/api/trip/details?locationId=${locationId}`,
-            );
-            const detailsData = detailsRes.ok ? await detailsRes.json() : {};
+            let detailsData: any = {};
+            if (schedaLocale?.location_id && schedaLocale?.rating != null) {
+              // Dettagli gia' in tabella: niente chiamata /details.
+              detailsData = {
+                rating: schedaLocale.rating,
+                num_reviews: schedaLocale.num_reviews,
+                price_level: schedaLocale.price_level,
+                web_url: schedaLocale.web_url,
+                address_obj: { address_string: (poi as any).address || '', city: (poi as any).city || '' },
+              };
+            } else {
+              const detailsRes = await fetch(
+                `/api/trip/details?locationId=${locationId}`,
+              );
+              detailsData = detailsRes.ok ? await detailsRes.json() : {};
+            }
 
             const photosRes = await fetch(
               `/api/trip/photos?locationId=${locationId}`,
@@ -2675,7 +2907,9 @@ export default function PoiDetailSheet({
           <div className="relative h-[240px] px-4">
             <div className="w-full h-full rounded-2xl overflow-hidden relative group">
               <AttractionImage
-                src={poi?.image_url || poi?.photo_url || wikiData?.thumbnail}
+                src={migliorFoto(poi) || wikiData?.thumbnail}
+                srcRipiego={wikiData?.thumbnail}
+                onRipiego={setHeroRipiego}
                 alt={poi.name || getTranslation('sk_attrazione', language)}
                 category={poi.category}
                 className="w-full h-full"
@@ -2687,7 +2921,7 @@ export default function PoiDetailSheet({
                   illeggibile. Arriva da /api/poi/details, che lo legge da
                   shared_pois — la RPC della mappa ha la lista di colonne fissa
                   e non lo porta. */}
-              <AttribuzioneFoto testo={(poi as any)?.image_attribution || (wikiData as any)?.attribution || null} />
+              <AttribuzioneFoto testo={(heroRipiego ? null : (poi as any)?.image_attribution) || (wikiData as any)?.attribution || null} />
 
               <div className="absolute top-4 right-4 flex gap-2">
                 <button
@@ -2777,14 +3011,13 @@ export default function PoiDetailSheet({
                 tap = apre le indicazioni. Nascosto se non disponibile. */}
             {poiAddress && (
               <button
-                onClick={() => {
-                  // Verso la porta; senza porta, il civico dell'indirizzo
-                  // appena mostrato (la via principale). Vedi puntoArrivoSuStrada.
-                  void puntoArrivoSuStrada({ ...(poi as any), address: poiAddress, address_source: addressSource }).then((a) => {
-                    const q = encodeURIComponent(`${a.lat},${a.lon}`);
-                    window.open(`https://www.google.com/maps/dir/?api=1&destination=${q}`, '_blank');
-                  });
-                }}
+                // Riusa la stessa doppia scelta del tasto "Naviga" più sotto
+                // (13/09/2026): prima apriva Google Maps diretto, senza
+                // l'alternativa Mappe di Apple richiesta da Apple (Guideline
+                // 4) — questo tocco è lo stesso identico caso d'uso, solo un
+                // secondo modo per raggiungerlo, non doveva avere una regola
+                // diversa.
+                onClick={() => setShowNavChoice(true)}
                 className="flex items-center gap-2 mb-3 text-left w-full group"
               >
                 <MapPin className="w-4 h-4 text-primary/60 shrink-0" />
@@ -2794,6 +3027,57 @@ export default function PoiDetailSheet({
                     : poiAddress}
                 </span>
               </button>
+            )}
+
+            {/* QUI HANNO GIRATO (29/08/2026). Una riga per opera: titolo, anno,
+                regista (o autore per i libri), la scena quando la conosciamo, e
+                la locandina di Commons se c'e'. Massimo otto: un luogo come
+                Cinecitta' ne ha trenta e la scheda non e' un catalogo. */}
+            {opere.length > 0 && (
+              <div className="mt-4 rounded-2xl bg-slate-50 border border-black/5 p-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-primary/60 mb-2">
+                  🎬 {opere.some(o => o.ruolo === 'riprese') ? getTranslation('sk_qui_hanno_girato', language) : getTranslation('sk_ambientato_qui', language)}
+                  {opere.length > 8 ? ` · ${opere.length}` : ''}
+                </p>
+                <ul className="space-y-2">
+                  {[...opere].sort((a, b) => (a.ruolo === 'ambientazione' ? 1 : 0) - (b.ruolo === 'ambientazione' ? 1 : 0) || (a.fonte === 'wikipedia' ? 1 : 0) - (b.fonte === 'wikipedia' ? 1 : 0)).slice(0, tutteOpere ? 400 : 8).map((o, i) => {
+                    const img = miniatura(o.immagine);
+                    const chi = o.regista || o.autore;
+                    return (
+                      <li key={`${o.qid || o.titolo}-${i}`} className="flex items-start gap-2.5">
+                        {img ? (
+                          <img src={img} alt="" loading="lazy" className="w-9 h-12 rounded-md object-cover shrink-0 bg-black/5" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                        ) : (
+                          <span className="w-9 h-12 rounded-md bg-black/5 flex items-center justify-center text-base shrink-0">{o.tipo === 'libro' ? '📖' : o.tipo === 'serie' ? '📺' : '🎬'}</span>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[13px] font-bold text-primary leading-snug">
+                            {o.titolo}{o.anni || o.anno ? <span className="text-primary/50 font-semibold"> ({o.anni || o.anno})</span> : null}
+                          </p>
+                          {chi && <p className="text-[11px] text-primary/60 leading-snug">{chi}{o.attori?.length ? ` · ${o.attori.slice(0, 3).join(', ')}` : ''}</p>}
+                          {o.serie && o.serie !== o.titolo && <p className="text-[10px] text-primary/50 leading-snug">{o.serie}</p>}
+                          {!o.scena && o.descrizione && <p className="text-[10px] text-primary/50 leading-snug line-clamp-2">{o.descrizione_i18n?.[lingOpere] || o.descrizione}</p>}
+                          {o.scena && (
+                            <p className="text-[11px] text-primary/70 italic leading-snug mt-0.5">
+                              {pulisciScena(o.scena_i18n?.[lingOpere] || o.scena)}
+                              {o.scena_fonte && (
+                                <a href={o.scena_fonte} target="_blank" rel="noopener noreferrer" className="not-italic text-[9px] text-primary/50 underline ml-1 whitespace-nowrap">{tOp.fonte} · CC BY-SA</a>
+                              )}
+                            </p>
+                          )}
+                          {o.ruolo === 'ambientazione' && <p className="text-[10px] text-primary/40 leading-snug">{getTranslation('sk_ambientato_qui', language)}</p>}
+                          {o.fonte === 'wikipedia' && o.ruolo !== 'ambientazione' && <p className="text-[9px] text-primary/35 leading-snug">{tOp.wiki}</p>}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {opere.length > 8 && !tutteOpere && (
+                  <button type="button" onClick={() => setTutteOpere(true)} className="mt-2.5 w-full text-[11px] font-bold text-primary/70 bg-white border border-black/10 rounded-xl py-2 active:scale-[0.98] transition-transform">
+                    {tOp.tutte} ({opere.length})
+                  </button>
+                )}
+              </div>
             )}
             {/* Contatti strutturati (telefono / sito / orari) da OSM+Wikidata,
                 resi come bottoni d'azione — SOLO per le categorie turistico-
@@ -2956,6 +3240,59 @@ export default function PoiDetailSheet({
                 </div>
               </div>
             )}
+            {/* La scheda del locale (29/08/2026): i dati di Overture letti da
+                locali_pois — cucina, catena, indirizzo con civico, telefono,
+                sito, social, stato. Niente API: e' tutto gia' sul pin. Il
+                voto/foto/recensioni arrivano dal fallback TripAdvisor sopra. */}
+            {/* (02/10/2026) Guida MICHELIN: distinzione, cucina, prezzo,
+                orari e servizi, sopra i dati del locale. */}
+            {(poi as any).michelin_url && (
+              <div className="mb-3"><SchedaMichelin poi={poi} language={language} variante="scheda" /></div>
+            )}
+            {(poi as any).gf_livello && (
+              <div className="mb-3"><SchedaSenzaGlutine poi={poi} language={language} variante="scheda" /></div>
+            )}
+            {poi.category === "locali" && ((poi as any).address || (poi as any).contact_phone || (poi as any).contact_website || (poi as any).brand || (poi as any).poi_type) && (
+              <div className="mb-6 bg-white p-4 rounded-[2rem] border border-rose-100/60 shadow-sm">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-black text-rose-600 uppercase tracking-widest px-2 py-0.5 bg-rose-100 rounded-md">
+                    {getTranslation('sk_scheda_locale', language)}
+                  </span>
+                  {(poi as any).operating_status === 'closed' && (
+                    <span className="text-[10px] font-black text-red-700 bg-red-100 px-2 py-0.5 rounded-md">{getTranslation('sk_chiuso_definitivamente', language)}</span>
+                  )}
+                </div>
+                {(poi as any).poi_type && (
+                  <p className="text-[12px] font-bold text-primary/80 capitalize">{String((poi as any).poi_type).replace(/_/g, ' ')}</p>
+                )}
+                {(poi as any).brand && (
+                  <p className="text-[11px] text-primary/60">{getTranslation('sk_catena', language)}: {(poi as any).brand}</p>
+                )}
+                {(poi as any).address && (
+                  <p className="text-[12px] text-primary/70 mt-1">{(poi as any).address}{(poi as any).city ? `, ${(poi as any).city}` : ''}</p>
+                )}
+                <div className="flex flex-wrap gap-2 mt-3">
+                  {(poi as any).contact_phone && (
+                    <a href={`tel:${String((poi as any).contact_phone).replace(/\s+/g, '')}`} className="px-4 py-2 bg-rose-600 text-white rounded-2xl text-[11px] font-black shadow-sm active:scale-95 transition-all">
+                      📞 {getTranslation('sk_chiama', language)}
+                    </a>
+                  )}
+                  {(poi as any).contact_website && (
+                    <a href={String((poi as any).contact_website).startsWith('http') ? (poi as any).contact_website : `https://${(poi as any).contact_website}`} target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-white border border-rose-200 text-rose-900 rounded-2xl text-[11px] font-black shadow-sm active:scale-95 transition-all">
+                      🌐 {getTranslation('sk_sito_web', language)}
+                    </a>
+                  )}
+                  {Array.isArray((poi as any).socials) && (poi as any).socials.slice(0, 3).map((s: string) => {
+                    const dominio = String(s).replace(/^https?:\/\/(www\.)?/, '').split('/')[0].split('.')[0];
+                    return (
+                      <a key={s} href={s} target="_blank" rel="noopener noreferrer" className="px-3 py-2 bg-white border border-rose-100 text-rose-800 rounded-2xl text-[11px] font-bold capitalize active:scale-95 transition-all">
+                        {dominio}
+                      </a>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {/* Special Parking Section */}
             {poi.category === "utilita" && (
               <div className="bg-blue-50 rounded-2xl p-4 mb-6 border border-blue-100 flex flex-col gap-3">
@@ -3024,11 +3361,17 @@ export default function PoiDetailSheet({
             )}
 
             <div className="flex items-center gap-4 mb-6 text-[#1e3a8a] text-sm font-medium">
-              {tripData && (
+              {/* Solo voti VERI (Google/Foursquare/TripAdvisor). Le coppie
+                  4.2/12, 4.2/45 e 0.0 erano segnaposto inventati, e alcune
+                  sono rimaste salvate in shared_poi_audio_cache.trip_data. */}
+              {tripData?.rating
+                && !(String(tripData.rating) === "0.0")
+                && !(String(tripData.rating) === "4.2" && [12, 45].includes(Number(tripData.numReviews)))
+                && (
                 <div className="flex items-center gap-1.5 px-2.5 py-1 bg-white rounded-lg border border-amber-100/50 shadow-sm">
                   <Star className="w-4 h-4 text-yellow-500 fill-yellow-500" />
                   <span className="text-[#1e3a8a] font-bold">
-                    {tripData.rating || "N/A"}
+                    {tripData.rating}
                   </span>
                   <span className="text-[10px] opacity-60">
                     {tripData.numReviews || "0"} {getTranslation("reviews", language)}
@@ -3044,6 +3387,18 @@ export default function PoiDetailSheet({
                 </span>
               </div>
             </div>
+
+            {/* DIECI TAPPE ANCHE QUI (29/08/2026, collaudo Realme). Col radar
+                acceso, dalla lista «Vicino a te» si apre QUESTA scheda, non il
+                popup della mappa — e qui il tasto «Aggiungi al giro» non
+                c'era: restavano solo la stella dei preferiti e il cuore, e il
+                committente aggiungeva tappe col cuore senza sapere perche'
+                funzionasse. Stesso bottone del popup, stessa bozza. */}
+            {modalitaGiro && <BottoneGiro poi={poi} language={language} />}
+
+            {/* SOLO ADMIN (03/09/2026): «L'ingresso e` qui» scrive la
+                posizione GPS come porta del luogo. Vedi IngressoQuiButton. */}
+            {isAdmin && <IngressoQuiButton poi={poi} language={language} />}
 
             <div className="grid grid-cols-2 gap-3 mb-6">
               <ActionButton
@@ -3179,6 +3534,11 @@ export default function PoiDetailSheet({
               </div>
             )}
 
+            {/* Provenienza del DATO (non della foto: quella e' AttribuzioneFoto
+                sotto l'immagine). Sta qui, subito dopo la descrizione, perche'
+                il credito va accanto a cio' che accredita. */}
+            <AttribuzioneDati source={fonteDati} />
+
             {/* Dati tecnici (anno, architetto, stile, materiale, altezza, comune, zona):
                 chip con icone lucide al posto delle emoji native, fuori dal testo/TTS. */}
             {technicalData && (
@@ -3238,6 +3598,18 @@ export default function PoiDetailSheet({
                     💧 {getTranslation('poi_scheda_wwd', language)} ↗
                   </a>
                 )}
+                {technicalData.prenota?.map((b) => (
+                  <a
+                    key={b.fornitore}
+                    href={b.url}
+                    target="_blank"
+                    rel="noopener"
+                    onClick={() => trackAffiliateClick(b.url, String(poi?.name || ''), String((poi as any)?.city || ''), 'poi_sheet')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-emerald-200 bg-emerald-50 text-emerald-900 text-[11px] font-bold rounded-xl shadow-sm hover:bg-emerald-100"
+                  >
+                    🎟 {getTranslation('poi_prenota_su', language)} {b.fornitore} ↗
+                  </a>
+                ))}
               </div>
             )}
 
@@ -3371,11 +3743,13 @@ export default function PoiDetailSheet({
         if (!pendingAudioTask) return;
         const task = pendingAudioTask;
         setPendingAudioTask(null);
-        // ADDEBITO CLIENT-SIDE alla conferma: consumeCredits scala i crediti
-        // SERVER-SIDE via token utente (POST /api/credits/consume, atomico). I
-        // rami sotto rimborsano con refundCredits se la generazione o la
-        // riproduzione falliscono. Le rotte di generazione/TTS NON scalano da
-        // sé → nessun doppio addebito.
+        // ADDEBITO ALLA CONFERMA, tramite getAudioguideForPlayback(charge:true)
+        // (10/09/2026): passa SEMPRE da /api/poi/audioguide, cosi' il possesso
+        // viene registrato in user_poi_purchases e il POI non si ripaga alla
+        // visita successiva (prima consumeCredits scalava lato client senza
+        // mai passare dal server). Se poi la voce non parte NON si rimborsa
+        // dal client (20/09/2026): l'audioguida resta posseduta e il nuovo
+        // tentativo è gratis — vedi i rami sotto.
         const { data: sessionData } = await supabase.auth.getSession();
         const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
         const creditiInsufficienti = () => {
@@ -3388,18 +3762,40 @@ export default function PoiDetailSheet({
         // Qui l'addebito resta PRIMA della generazione: e' la generazione la
         // cosa che costa.
         if (language !== 'IT' && !generatedText) {
-          const audioPaid = await consumeCredits(currentUserId, PRICING_LIST.audio_guide);
-          if (!audioPaid) { creditiInsufficienti(); return; }
-          // regenerateWithGemini ora ritorna l'esito reale (true = generata e
-          // riprodotta). Su fallimento rimborsiamo l'addebito appena fatto.
-          const regenOk = await regenerateWithGemini(true, localGuideMode);
-          if (regenOk) {
-            notifyCreditsChanged({ userId: currentUserId });
+          // ADDEBITO E GENERAZIONE ORA PASSANO DAL SERVER, come PoiCard.tsx
+          // (10/09/2026): consumeCredits qui addebitava lato client SENZA MAI
+          // chiamare /api/poi/audioguide, quindi il possesso non veniva mai
+          // scritto in user_poi_purchases e il POI si ripagava alla visita
+          // successiva. getAudioguideForPlayback con charge:true genera E
+          // addebita (se dovuto) in un solo giro dal server.
+          const esitoAudio = await getAudioguideForPlayback(
+            { id: String(poi?.id), name: poi?.name || '', lat: poi?.lat, lon: poi?.lon, category: poi?.category as any },
+            language,
+            localGuideMode,
+            { charge: true },
+          );
+          if (esitoAudio.status === 'insufficient_credits' || esitoAudio.status === 'credits_required') {
+            creditiInsufficienti();
+            return;
+          }
+          if (esitoAudio.status === 'auth_required') {
+            notify(getTranslation('auth_richiesta', language));
+            return;
+          }
+          if (esitoAudio.status === 'ok' || (esitoAudio.status === 'error' && esitoAudio.text)) {
+            const testo = esitoAudio.text as string;
+            setGeneratedText(testo);
+            const riprodotta = await locationService.playAudio(testo, poi?.name, poi?.category, String(poi?.id), localGuideMode, undefined, poi?.photo_url || poi?.image_url);
+            if (esitoAudio.status === 'ok' && esitoAudio.charged) notifyCreditsChanged({ userId: currentUserId });
+            if (!riprodotta) {
+              // (20/09/2026) Niente più rimborso dal client: l'audioguida l'ha
+              // addebitata il SERVER e il possesso resta per sempre (il testo
+              // è già a schermo, il riascolto è gratis). Il rimborso dal client
+              // era il buco «compro, ascolto, mi riprendo i crediti»: ora
+              // /api/credits/refund copre solo le spese fatte dal client.
+              notify(getTranslation('sk_audioguida_tua_riprova', language));
+            }
           } else {
-            const { data: sd } = await supabase.auth.getSession();
-            const uid = sd?.session?.user?.id || "mock-user-id";
-            await refundCredits(uid, PRICING_LIST.audio_guide)
-              .catch(err => console.error('[Audioguida] Rimborso fallito:', err));
             notify(getTranslation('sk_audioguida_non_generata', language));
           }
           return;
@@ -3410,28 +3806,50 @@ export default function PoiDetailSheet({
           // un'altra. Prima si addebitava PRIMA di playAudio, e 'queued'
           // (truthy) passava per un avvio: una traccia accodata e poi fermata
           // restava pagata. Se l'addebito riesce ma il TTS fallisce, rimborso.
+          let autorizzato = false;
           let addebitato = false;
           let rifiutato = false;
           const esito = await locationService.playAudio(
             task.text, poi?.name, poi?.category, String(poi?.id), localGuideMode,
             async () => {
-              const ok = await consumeCredits(currentUserId, PRICING_LIST.audio_guide).catch(() => false);
-              if (ok) addebitato = true; else rifiutato = true;
+              // ADDEBITO DAL SERVER (10/09/2026), come PoiCard.tsx: consumeCredits
+              // qui addebitava lato client SENZA passare da /api/poi/audioguide,
+              // quindi il possesso non veniva scritto in user_poi_purchases e il
+              // POI si ripagava alla visita successiva.
+              const esitoAddebito = await getAudioguideForPlayback(
+                { id: String(poi?.id), name: poi?.name || '', lat: poi?.lat, lon: poi?.lon, category: poi?.category as any },
+                language,
+                localGuideMode,
+                { charge: true },
+              ).catch(() => ({ status: 'error', text: null } as const));
+              const ok = esitoAddebito.status === 'ok' || (esitoAddebito.status === 'error' && !!esitoAddebito.text);
+              if (ok) {
+                autorizzato = true;
+                // charged=true solo se il server ha scalato crediti ORA: se il
+                // POI era gia' posseduto (o day pass, o listino zero) non c'e'
+                // nulla da rimborsare ne' saldo da rinfrescare.
+                addebitato = esitoAddebito.status === 'ok' && esitoAddebito.charged === true;
+              } else {
+                rifiutato = true;
+              }
               return ok;
             },
+            poi?.photo_url || poi?.image_url,
           );
           if (rifiutato) { creditiInsufficienti(); return; }
-          if (esito === 'started' && addebitato) {
-            // Saldo scalato lato server: aggiorna i widget crediti.
-            notifyCreditsChanged({ userId: currentUserId });
+          if (esito === 'started') {
+            // Saldo scalato lato server: aggiorna i widget crediti (solo se
+            // e' stato scalato ora: un POI gia' posseduto non lo tocca).
+            if (addebitato) notifyCreditsChanged({ userId: currentUserId });
           } else if (esito === 'queued') {
-            // Partira' (e si paghera') a fine traccia corrente: niente da fare ora.
-          } else if (addebitato) {
-            const { data: sd } = await supabase.auth.getSession();
-            const uid = sd?.session?.user?.id || "mock-user-id";
-            await refundCredits(uid, PRICING_LIST.audio_guide)
-              .catch(e => console.error('[Audioguida] Rimborso fallito:', e));
-            notify(getTranslation('sk_audioguida_non_riprodotta', language));
+            // Partira' (e si paghera', se dovuto) a fine traccia corrente: niente da fare ora.
+          } else if (addebitato || autorizzato) {
+            // Addebitata ora oppure già posseduta/day pass: in entrambi i casi
+            // l'audioguida è dell'utente e la voce non è partita per un motivo
+            // tecnico. Nessun rimborso dal client (vedi sopra): si dice che è
+            // sua e che il nuovo tentativo non costa. Aggiorna comunque il saldo.
+            if (addebitato) notifyCreditsChanged({ userId: currentUserId });
+            notify(getTranslation('sk_audioguida_tua_riprova', language));
           } else {
             notify(getTranslation('riproduzione_fallita', language));
           }

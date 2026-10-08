@@ -77,6 +77,55 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         const val APPROACH_RETRIGGER_COOLDOWN_MS = 30 * 60 * 1000L
         const val ARRIVAL_AFTER_EXIT_COOLDOWN_MS = 10 * 60 * 1000L
 
+        // ── NOTIFICHE: «una cosa alla volta, e sparisce quando non serve più» (03/10/2026) ──
+        // Collaudo del committente a Montecatini: 8 righe sulla lock screen in due ore, 4
+        // della stessa raffica (la voce era già limitata a UNA per fix, la notifica no) e
+        // nessuna mai tolta. Regole: (1) UNA sola notifica di avvicinamento alla volta, id
+        // fisso, gli altri luoghi dello stesso fix nel corpo; (2) sparisce al superamento/
+        // uscita del luogo, a un arrivo qualsiasi, o dopo 10 minuti; (3) con un percorso nel
+        // NavFollower notifica solo le tappe del giro (la VOCE non cambia); (4) gli arrivi
+        // restano per luogo ma al massimo 3. Lo stato vive nelle prefs: il receiver rinasce
+        // a ogni broadcast e il processo può morire. Stesse regole in BackgroundPoiManager.swift.
+        const val NOTIF_ID_AVVICINAMENTO = 4101
+        private const val SCADENZA_AVVICINAMENTO_MS = 10 * 60 * 1000L
+        private const val TETTO_ARRIVI_NOTIFICATI = 3
+        private const val PREF_AVVIC_POI = "wip_avvic_poi"
+        private const val PREF_AVVIC_TS = "wip_avvic_ts"
+        private const val PREF_AVVIC_TITOLO = "wip_avvic_titolo"
+        private const val PREF_AVVIC_TESTO = "wip_avvic_testo"
+        private const val PREF_AVVIC_GUIDA = "wip_avvic_guida"
+        private const val PREF_AVVIC_BIG = "wip_avvic_big"
+        private const val PREF_AVVIC_ALTRI = "wip_avvic_altri"
+        private const val PREF_ARRIVI_NOTIFICATI = "wip_arrivi_notificati"
+        /** Vero dal primo avvicinamento notificato nel fix corrente: i successivi vanno nel corpo. */
+        @Volatile private var batchAvvicinamentoAperto = false
+
+        /** Da chiamare all'inizio di ogni valutazione di fix (receiver e servizio). */
+        fun nuovoBatchAvvicinamenti() { batchAvvicinamentoAperto = false }
+
+        /** (regola 2) Un avvicinamento notificato da più di 10 minuti non serve più. */
+        fun scadenzaAvvicinamento(context: Context) {
+            val p = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+            val ts = p.getLong(PREF_AVVIC_TS, 0L)
+            if (ts > 0L && System.currentTimeMillis() - ts > SCADENZA_AVVICINAMENTO_MS) cancellaNotificaAvvicinamento(context, null)
+        }
+
+        /**
+         * (regola 2) Toglie la notifica di avvicinamento: `poiId` null = comunque, altrimenti
+         * solo se è quella di quel luogo (un altro luogo appena notificato resta).
+         */
+        fun cancellaNotificaAvvicinamento(context: Context, poiId: String?) {
+            val p = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+            val corrente = p.getString(PREF_AVVIC_POI, null) ?: return
+            if (poiId != null && poiId != corrente) return
+            p.edit().remove(PREF_AVVIC_POI).remove(PREF_AVVIC_TS).remove(PREF_AVVIC_TITOLO).remove(PREF_AVVIC_TESTO)
+                .remove(PREF_AVVIC_GUIDA).remove(PREF_AVVIC_BIG).remove(PREF_AVVIC_ALTRI).apply()
+            batchAvvicinamentoAperto = false
+            try {
+                (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIF_ID_AVVICINAMENTO)
+            } catch (_: Exception) { }
+        }
+
         // Stato teaser condiviso col JS (via prefs + eventi plugin)
         const val PREF_TEASER_SPEAKING = "teaser_speaking"
         const val PREF_TEASER_SPEAKING_POI = "teaser_speaking_poi"
@@ -135,13 +184,49 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // presente e valido si riproduce quello (partenza istantanea,
             // voce neurale) invece del TTS di sistema; se la riproduzione
             // fallisce si torna al TTS del campo text.
-            val audioFile: String? = null
+            val audioFile: String? = null,
+            // (18/09/2026) SCADENZA, solo per le svolte del navigatore a
+            // schermo spento (NavFollower): la coda e` sequenziale e senza
+            // prelazione, e un «gira a destra» uscito dietro a una guida di
+            // quattro minuti e` un'indicazione SBAGLIATA, non in ritardo.
+            // Orologio SystemClock.elapsedRealtime(). null = non scade mai:
+            // teaser, arrivi e guide restano esattamente com'erano. (21/09/2026)
+            // La portano anche le svolte del navigatore JS, via
+            // `speakText({ttlMs})`; gli altri speakText restano senza.
+            val scadenzaElapsedMs: Long? = null,
+            // (22/09/2026) L'item e` gia` stato rimesso in coda UNA volta dopo
+            // un speak() rifiutato (motore TTS scollegato, vedi
+            // scollegaMotoreTts): al secondo rifiuto si passa oltre, mai un ciclo.
+            val riprovato: Boolean = false
         )
 
         // Player per gli MP3 prefetchati: vive accanto al TTS nella stessa coda
         // sequenziale, mai due voci insieme.
         @Volatile
         private var activeMediaPlayer: android.media.MediaPlayer? = null
+
+        // LA SVOLTA SOPRA LA GUIDA MP3 (21/09/2026, verifica del navigatore a
+        // schermo spento; stessa regola di SpeechQueue.swift). La coda e`
+        // sequenziale: una guida completa di 3-4 minuti (MP3 del Day Pass,
+        // accodata all'arrivo a una tappa) teneva dietro di se' tutte le
+        // svolte del navigatore, che scadevano dopo 20 s — si ripartiva verso
+        // la tappa dopo senza sentire nulla. A schermo acceso succede gia` il
+        // contrario: la guida del JS si mette in pausa per la svolta (AUD-01).
+        // Qui lo stesso: una frase del navigatore CON SCADENZA che arriva
+        // mentre suona l'MP3 della coda mette in pausa l'MP3, si dice con lo
+        // stesso TTS (libero durante l'MP3) e l'MP3 riprende dal punto esatto.
+        // Teaser, guide lette dal TTS (che non sa riprendere da meta`) e item
+        // senza scadenza non cambiano: aspettano il loro turno come prima.
+        // `navSopraId` = utterance della frase sopra (null = nessuna); tutto
+        // questo stato si tocca solo sul main looper.
+        @Volatile
+        private var navSopraId: String? = null
+        // L'MP3 suonava quando la svolta l'ha fermato: a svolta finita
+        // riparte (da pausedMp3PositionMs). Se l'utente l'aveva in pausa,
+        // resta in pausa.
+        @Volatile
+        private var riprendiMp3DopoSopra = false
+        private var sopraRunnable: Runnable? = null
 
         // Mappa tra categorie UI (del setup) e categorie DB reali.
         // Copia unica in CategoryMap.kt (usata anche da SupabaseClient.kt e dal
@@ -163,6 +248,137 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         private fun lockForPoi(poiId: String): Mutex =
             triggerLocks.getOrPut(poiId) { Mutex() }
 
+        // ── ARBITRATO: LO STATO DELLA VOCE (05/10/2026) ──────────────────────
+        // Port delle regole web del 04–05/10/2026 (foregroundTriggers.ts), che
+        // sul nativo mancavano: la coda e' sequenziale, quindi due luoghi non
+        // si parlavano SOPRA, ma si accodavano — tre chiese sulla stessa piazza
+        // = una guida e, in coda dietro di lei, gli altri arrivi — e le dieci
+        // righe del Pantheon arrivavano una dopo l'altra.
+        //  • MAI UN LUOGO SOPRA UNA GUIDA: finche' una voce parla, o un arrivo e'
+        //    stato emesso e la sua voce non e' ancora partita, nessun altro
+        //    arrivo scatta (non si scrive stato, non si consuma cooldown: chi e'
+        //    nel raggio resta in attesa e si riprova al fix dopo). Dopo la FINE
+        //    della guida servono 20 s di silenzio.
+        //  • STESSO NOME APPENA RACCONTATO = SILENZIO, anche se la riga e'
+        //    un'altra (10 minuti).
+        // Qui si LEGGE soltanto lo stato della coda (isSpeaking, activeItem, le
+        // prefs teaser_last_*): la logica della voce non e' toccata.
+        // L'ultimo arrivo (id, nome, quando) sta anche nelle prefs: il receiver
+        // rinasce a ogni broadcast e il processo puo' morire. Stesse chiavi e
+        // stessa logica in BackgroundPoiManager.swift (`motivoAttesaVoce`).
+        private const val PREF_ARB_ULTIMO_POI = "wip_arb_ultimo_poi"
+        private const val PREF_ARB_ULTIMO_NOME = "wip_arb_ultimo_nome"
+        private const val PREF_ARB_ULTIMO_TS = "wip_arb_ultimo_ts"
+        private val arbLock = Any()
+        private var arbCaricato = false
+        /** L'ultimo luogo per cui e' stato emesso un arrivo: id, nome nudo, quando. */
+        private var ultimoArrivoPoi = ""
+        private var ultimoArrivoNome = ""
+        private var ultimoArrivoTs = 0L
+        /** Arrivo emesso la cui voce non e' ancora stata vista partire (null = nessuno). */
+        private var arrivoInVoloPoi: String? = null
+        private var arrivoInVoloTs = 0L
+        /** L'ultima volta che, valutando, si e' trovata una guida in riproduzione. */
+        private var ultimaGuidaVistaMs = 0L
+        /** Lucchetto comune ai due percorsi (servizio e recinti): un solo arrivo alla volta passa il cancello. */
+        private val arbitratoMutex = Mutex()
+
+        private fun caricaArbitrato(context: Context) {
+            if (arbCaricato) return
+            val p = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+            ultimoArrivoPoi = p.getString(PREF_ARB_ULTIMO_POI, "") ?: ""
+            ultimoArrivoNome = p.getString(PREF_ARB_ULTIMO_NOME, "") ?: ""
+            ultimoArrivoTs = p.getLong(PREF_ARB_ULTIMO_TS, 0L)
+            arbCaricato = true
+        }
+
+        /**
+         * (05/10/2026, regola «mai sopra una guida») Perche' un arrivo deve
+         * aspettare ADESSO, oppure null se puo' parlare. Tre motivi, nell'ordine
+         * del web: una voce sta parlando (la coda nativa, o la guida completa
+         * del JS nell'ExoPlayer); un arrivo e' stato emesso e la sua voce non e'
+         * ancora partita; la guida e' finita da meno di 20 s.
+         *
+         * I 20 s valgono solo dopo la voce di un ARRIVO (o la guida del JS):
+         * la frase «ti stai avvicinando a…» e le svolte del navigatore fermano
+         * un arrivo finche' parlano, ma non aprono la pausa — altrimenti il
+         * luogo appena annunciato dovrebbe aspettare 20 s il proprio arrivo.
+         */
+        fun motivoAttesaVoce(context: Context): String? =
+            synchronized(arbLock) { motivoAttesaSottoLucchetto(context) }
+
+        private fun motivoAttesaSottoLucchetto(context: Context): String? {
+            caricaArbitrato(context)
+            val now = System.currentTimeMillis()
+            val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+            val parlaCoda = isSpeaking
+            val poiCheParla = activeItem?.poiId ?: ""
+            val guidaJs = try { WipBackgroundAudioService.isPlayingNow() } catch (_: Exception) { false }
+            val finitoPoi = prefs.getString(PREF_TEASER_LAST_POI, "") ?: ""
+            val finitoAt = prefs.getLong(PREF_TEASER_LAST_FINISHED_AT, 0L)
+
+            val inVolo = arrivoInVoloPoi
+            if (inVolo != null) {
+                // La voce dell'arrivo emesso: partita (la si sente ora), partita
+                // e gia' finita fra due fix, oppure mai partita (voce mancante,
+                // telefonata, app in primo piano che non ha fatto partire nulla).
+                val partita = guidaJs || (parlaCoda && poiCheParla == inVolo)
+                val giaFinita = finitoPoi == inVolo && finitoAt >= arrivoInVoloTs
+                val scaduta = now - arrivoInVoloTs >= Arbitrato.ATTESA_PARTENZA_MS || now < arrivoInVoloTs
+                if (partita || giaFinita || scaduta) arrivoInVoloPoi = null
+            }
+            if (parlaCoda || guidaJs) {
+                if (guidaJs || (poiCheParla.isNotEmpty() && poiCheParla == ultimoArrivoPoi)) ultimaGuidaVistaMs = now
+                return if (guidaJs) "una guida sta suonando" else "una voce sta parlando"
+            }
+            if (arrivoInVoloPoi != null) return "una guida sta per partire"
+            var fine = ultimaGuidaVistaMs
+            if (finitoPoi.isNotEmpty() && finitoPoi == ultimoArrivoPoi && finitoAt > fine) fine = finitoAt
+            if (now >= fine && now - fine < Arbitrato.PAUSA_DOPO_GUIDA_MS) return "pausa dopo la guida"
+            return null
+        }
+
+        /**
+         * (05/10/2026) Un arrivo e' stato EMESSO: da qui parte il silenzio per
+         * gli altri luoghi e la memoria del nome appena raccontato. `conVoce` =
+         * la voce partira' davvero (non in modalita' silenziosa): solo allora
+         * si aspetta di sentirla.
+         */
+        private fun registraArrivoEmesso(context: Context, poiId: String, nome: String, conVoce: Boolean) {
+            synchronized(arbLock) {
+                val now = System.currentTimeMillis()
+                ultimoArrivoPoi = poiId
+                ultimoArrivoNome = Arbitrato.nomeNudo(nome)
+                ultimoArrivoTs = now
+                arbCaricato = true
+                if (conVoce) {
+                    arrivoInVoloPoi = poiId
+                    arrivoInVoloTs = now
+                }
+                context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE).edit()
+                    .putString(PREF_ARB_ULTIMO_POI, poiId)
+                    .putString(PREF_ARB_ULTIMO_NOME, ultimoArrivoNome)
+                    .putLong(PREF_ARB_ULTIMO_TS, now)
+                    .apply()
+            }
+        }
+
+        /**
+         * (05/10/2026) STESSO NOME APPENA RACCONTATO: un'ALTRA riga con lo
+         * stesso nome nudo del luogo raccontato da meno di 10 minuti (prova a
+         * Roma: «Piazza Navona» finisce e 20 s dopo riparte con un'altra riga).
+         * La stessa riga non passa di qui: la ferma gia' il suo stato
+         * ARRIVED_FIRED, e dopo un «Azzera storico» deve poter riparlare subito.
+         */
+        private fun nomeAppenaDetto(context: Context, poiId: String, nome: String): Boolean =
+            synchronized(arbLock) {
+                caricaArbitrato(context)
+                val eta = System.currentTimeMillis() - ultimoArrivoTs
+                ultimoArrivoNome.isNotEmpty() && poiId != ultimoArrivoPoi &&
+                    eta >= 0 && eta < Arbitrato.NOME_APPENA_DETTO_MS &&
+                    Arbitrato.nomeNudo(nome) == ultimoArrivoNome
+            }
+
         /**
          * Ferma subito il teaser nativo e svuota la coda. Chiamato dal JS (plugin)
          * quando l'app sta per avviare l'audioguida completa, per evitare che le
@@ -170,6 +386,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
          */
         fun stopSpeaking(context: Context) {
             speechQueue.clear()
+            // Anche una svolta detta sopra l'MP3 si ferma: il suo onStop
+            // tardivo trova navSopraId gia` nullo e non riprende nulla.
+            dimenticaSopra()
             // (AUD-06) Si "disconosce" l'utterance PRIMA dello stop: l'onStop
             // che il motore manda dopo porta l'id vecchio e viene ignorato.
             activeUtteranceId = null
@@ -207,7 +426,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             Handler(Looper.getMainLooper()).post {
                 if (activeItem == null) return@post
                 activeUtteranceId = null
-                try { ttsInstance?.stop() } catch (_: Exception) { }
+                // Il TTS sta dicendo una svolta sopra l'MP3 saltato: la svolta
+                // finisce, la coda riparte da chiudiSopra.
+                if (navSopraId == null) try { ttsInstance?.stop() } catch (_: Exception) { }
                 finishActiveSpeech(appContext, notifyJs = true)
                 processNextSpeech(appContext)
             }
@@ -241,15 +462,185 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // utterance viene scartato da onUtteranceFinished e NON chiude
             // l'item successivo che processNextSpeech fa partire qui sotto.
             activeUtteranceId = null
-            try { ttsInstance?.stop() } catch (_: Exception) { }
+            // Una svolta detta sopra l'MP3 di questo POI non si tronca: e` del
+            // navigatore, non della guida superata.
+            if (navSopraId == null) try { ttsInstance?.stop() } catch (_: Exception) { }
             // finishActiveSpeech rilascia anche l'eventuale MediaPlayer attivo
             finishActiveSpeech(context.applicationContext, notifyJs = true)
             processNextSpeech(context.applicationContext)
         }
 
         fun enqueue(context: Context, item: SpeechItem) {
+            val appContext = context.applicationContext
+            // Svolta del navigatore mentre suona l'MP3 della guida: sopra, non
+            // dietro (vedi navSopraId). Si decide sul main, dove vive il
+            // MediaPlayer; se non si puo', si accoda come sempre.
+            // (`activeItem?.audioFile`, non `activeMediaPlayer`: fra l'avvio
+            // dell'item e il post che crea il player c'e` una finestra; il post
+            // qui sotto arriva dopo quello, sullo stesso looper.)
+            // (21/09/2026) Anche dietro una voce che l'UTENTE ha messo in pausa
+            // (tasto Pausa della notifica): la svolta si dice, la voce resta
+            // in pausa. Prima le svolte restavano in coda dietro di lei e
+            // scadevano tutte.
+            if (item.kind == "nav" && item.scadenzaElapsedMs != null && isSpeaking &&
+                (activeItem?.audioFile != null || (speechPaused && pausedByUser))
+            ) {
+                Handler(Looper.getMainLooper()).post {
+                    if (!diciSopra(appContext, item)) {
+                        speechQueue.add(item)
+                        processNextSpeech(appContext)
+                    }
+                }
+                return
+            }
             speechQueue.add(item)
-            processNextSpeech(context.applicationContext)
+            processNextSpeech(appContext)
+        }
+
+        /**
+         * Sul main. Dice `item` sopra l'MP3 attivo, messo in pausa; false se
+         * non si puo' (una svolta sopra gia` in corso — la prende chiudiSopra
+         * —, scaduta, telefonata, pausa per perdita di focus): il chiamante la
+         * accoda come sempre. Con l'MP3 in pausa PER L'UTENTE la svolta si
+         * dice lo stesso, e l'MP3 resta in pausa.
+         */
+        private fun diciSopra(appContext: Context, item: SpeechItem): Boolean {
+            val mp = activeMediaPlayer
+            if (navSopraId != null || !isSpeaking) return false
+            if (speechPaused && !pausedByUser) return false
+            // Senza MP3 si dice sopra solo una voce TTS in pausa per l'utente
+            // (il TTS e` fermo: alla ripresa quella si rilegge da capo, come
+            // sempre). Mai sopra un TTS che sta parlando.
+            if (mp == null && !(speechPaused && pausedByUser)) return false
+            val scadenza = item.scadenzaElapsedMs
+            if (scadenza != null && android.os.SystemClock.elapsedRealtime() > scadenza) return false
+            val am = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            if (am.mode == AudioManager.MODE_IN_CALL || am.mode == AudioManager.MODE_IN_COMMUNICATION) return false
+            val id = "NAVSOPRA_${System.currentTimeMillis()}"
+            navSopraId = id
+            val suonava = try { mp?.isPlaying == true } catch (_: Exception) { false }
+            // Solo la PRIMA frase decide se l'MP3 va ripreso: quelle
+            // concatenate trovano l'MP3 gia` fermo per causa nostra.
+            if (!riprendiMp3DopoSopra) riprendiMp3DopoSopra = suonava && !speechPaused
+            if (mp == null) {
+                // Voce TTS in pausa per l'utente: niente player da fermare.
+            } else if (suonava) {
+                try {
+                    // La posizione della pausa normale: la usano sia la ripresa
+                    // a svolta finita sia un «Riprendi» dell'utente dopo.
+                    pausedMp3PositionMs = mp.currentPosition
+                    mp.pause()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Pausa MP3 per la svolta fallita: ${e.message}")
+                }
+            } else if (!speechPaused) {
+                // MP3 ancora in preparazione (prepareAsync): partira` a svolta
+                // finita, da capo (vedi onPrepared).
+                pausedMp3PositionMs = 0
+            }
+            // Il watchdog dell'MP3 (fermo e sano) si sospende: lo riarma
+            // chiudiSopra. La guardia della svolta parte SUBITO, prima
+            // dell'init del TTS: se il motore non risponde mai la svolta si
+            // chiude e l'MP3 riparte — mai la coda bloccata.
+            safetyRunnable?.let { safetyHandler.removeCallbacks(it) }
+            safetyRunnable = null
+            sopraRunnable?.let { safetyHandler.removeCallbacks(it) }
+            val guardia = Runnable {
+                if (navSopraId == id) {
+                    try { ttsInstance?.stop() } catch (_: Exception) { }
+                    chiudiSopra(appContext, id)
+                }
+            }
+            sopraRunnable = guardia
+            safetyHandler.postDelayed(guardia, (13_000L + item.text.length * 120L).coerceAtMost(60_000L))
+            initTtsIfNeeded(appContext) {
+                if (navSopraId != id) return@initTtsIfNeeded // annullata nel frattempo
+                if (missingVoiceLang != null) { chiudiSopra(appContext, id); return@initTtsIfNeeded }
+                requestFocus(appContext)
+                // Stesso avviso sonoro di ogni frase della coda.
+                try {
+                    val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                    RingtoneManager.getRingtone(appContext, uri).play()
+                } catch (_: Exception) { }
+                val params = Bundle()
+                params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+                val esito = ttsInstance?.speak(speakableText(item.text), TextToSpeech.QUEUE_FLUSH, params, id)
+                    ?: TextToSpeech.ERROR
+                if (esito != TextToSpeech.SUCCESS) {
+                    // (22/09/2026) Motore forse scollegato: lo stesso reset della
+                    // coda (scollegaMotoreTts) e la svolta torna in coda UNA
+                    // volta — chiudiSopra la riprende sopra l'MP3 col motore
+                    // nuovo, se non e` scaduta.
+                    scollegaMotoreTts()
+                    if (!item.riprovato) speechQueue.add(item.copy(riprovato = true))
+                    chiudiSopra(appContext, id)
+                    return@initTtsIfNeeded
+                }
+            }
+            return true
+        }
+
+        /**
+         * Sul main. Fine della svolta detta sopra l'MP3 (onDone/onError/onStop
+         * della sua utterance, o la sua guardia): altre svolte valide in coda
+         * si dicono sopra anche loro, poi l'MP3 riparte dal punto; se nel
+         * frattempo l'MP3 e` stato chiuso (POI superato, Salta) la coda riparte.
+         */
+        private fun chiudiSopra(appContext: Context, id: String, concatena: Boolean = true) {
+            if (navSopraId != id) return
+            navSopraId = null
+            sopraRunnable?.let { safetyHandler.removeCallbacks(it) }
+            sopraRunnable = null
+            if (concatena && isSpeaking && (activeMediaPlayer != null || (speechPaused && pausedByUser))) {
+                val adesso = android.os.SystemClock.elapsedRealtime()
+                val prossima = synchronized(this) {
+                    speechQueue.firstOrNull { it.kind == "nav" && it.scadenzaElapsedMs != null && adesso <= it.scadenzaElapsedMs }
+                        ?.also { speechQueue.remove(it) }
+                }
+                if (prossima != null) {
+                    if (diciSopra(appContext, prossima)) return
+                    // Rifiutata (telefonata, focus perso): resta in coda.
+                    speechQueue.add(prossima)
+                }
+            }
+            val riprendi = riprendiMp3DopoSopra
+            riprendiMp3DopoSopra = false
+            val mp = activeMediaPlayer
+            if (isSpeaking && mp != null) {
+                if (riprendi && !speechPaused) {
+                    try {
+                        requestFocus(appContext)
+                        // pausedMp3PositionMs: la aggiornano sia diciSopra sia
+                        // la Pausa dell'utente, quindi e` sempre il punto giusto.
+                        mp.seekTo(pausedMp3PositionMs)
+                        mp.start()
+                        val restMs = (mp.duration - pausedMp3PositionMs).toLong() + 15_000L
+                        armSpeechWatchdog(appContext, restMs.coerceIn(15_000L, 15 * 60_000L), "MP3 watchdog fired, resetting queue state")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Ripresa MP3 dopo la svolta fallita: ${e.message}, passo oltre")
+                        finishActiveSpeech(appContext, notifyJs = true)
+                        processNextSpeech(appContext)
+                    }
+                }
+                // In pausa per l'utente (o per il focus): resta in pausa, come
+                // prima della svolta; la ripresa passa da resumeActiveSpeech.
+            } else {
+                // L'MP3 e` stato chiuso mentre la svolta parlava: la coda,
+                // ferma durante la frase, riparte adesso.
+                if (!isSpeaking) {
+                    abandonFocus(appContext)
+                    if (speechQueue.isEmpty()) WipBackgroundAudioService.resumeAfterNativeVoice()
+                }
+                processNextSpeech(appContext)
+            }
+        }
+
+        /** Stop globale: la svolta sopra l'MP3 si dimentica senza riprendere nulla. */
+        private fun dimenticaSopra() {
+            navSopraId = null
+            riprendiMp3DopoSopra = false
+            sopraRunnable?.let { safetyHandler.removeCallbacks(it) }
+            sopraRunnable = null
         }
 
         /**
@@ -366,8 +757,15 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
             val next: SpeechItem
             synchronized(this) {
-                if (isSpeaking) return
-                val sorted = speechQueue.toList().sortedWith(compareBy({ it.priority }, { if (it.isItinerary) 0 else 1 }))
+                // Mentre una svolta parla sopra l'MP3 il TTS e` occupato: la
+                // coda riparte da chiudiSopra.
+                if (isSpeaking || navSopraId != null) return
+                // Le svolte scadute si buttano (vedi SpeechItem.scadenzaElapsedMs):
+                // senza scadenza (tutto il resto) non cambia nulla.
+                val adesso = android.os.SystemClock.elapsedRealtime()
+                val sorted = speechQueue.toList()
+                    .filter { it.scadenzaElapsedMs == null || adesso <= it.scadenzaElapsedMs }
+                    .sortedWith(compareBy({ it.priority }, { if (it.isItinerary) 0 else 1 }))
                 speechQueue.clear()
                 sorted.forEach { speechQueue.add(it) }
                 next = speechQueue.poll() ?: return
@@ -429,8 +827,24 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                     broadcastTeaserEvent(appContext, "teaserStarted", next)
 
                     if (!speakTts(appContext, next)) {
-                        Log.e(TAG, "tts.speak() returned error, skipping item")
-                        finishActiveSpeech(appContext, notifyJs = true)
+                        // (22/09/2026) MOTORE SCOLLEGATO? Un aggiornamento dei
+                        // Servizi vocali Google scollega il TextToSpeech per
+                        // sempre: ogni speak() da` ERROR, ttsReady restava true
+                        // e la coda scartava ogni frase (svolte comprese) finche`
+                        // il processo viveva. Si butta l'istanza — la prossima
+                        // initTtsIfNeeded ne crea una nuova — e l'item riprova
+                        // UNA volta (senza «teaserFinished» in mezzo, che fara`
+                        // partire l'autoplay della scheda). Al secondo rifiuto
+                        // si passa oltre, come prima.
+                        if (!next.riprovato) {
+                            Log.e(TAG, "tts.speak() returned error: motore ricreato, l'item riprova una volta")
+                            scollegaMotoreTts()
+                            speechQueue.add(next.copy(riprovato = true))
+                            finishActiveSpeech(appContext, notifyJs = false)
+                        } else {
+                            Log.e(TAG, "tts.speak() returned error, skipping item")
+                            finishActiveSpeech(appContext, notifyJs = true)
+                        }
                         processNextSpeech(appContext)
                         return@initTtsIfNeeded
                     }
@@ -498,6 +912,21 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
          */
         private fun pauseActiveSpeech(appContext: Context, byUser: Boolean): Boolean {
             val item = activeItem ?: return false
+            // Svolta in corso sopra l'MP3 (gia` fermo per lei):
+            //  - Pausa dell'utente: la svolta finisce (come su iOS), e a svolta
+            //    finita l'MP3 resta in pausa;
+            //  - focus perso (telefonata): la svolta si ferma e non se ne
+            //    concatenano altre; l'MP3 resta in pausa fino al GAIN.
+            navSopraId?.let { id ->
+                speechPaused = true
+                riprendiMp3DopoSopra = false
+                if (byUser) {
+                    pausedByUser = true
+                    return true
+                }
+                try { ttsInstance?.stop() } catch (_: Exception) { }
+                chiudiSopra(appContext, id, concatena = false)
+            }
             if (speechPaused) {
                 if (byUser) pausedByUser = true
                 return true
@@ -535,6 +964,21 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             if (!speechPaused) return false
             speechPaused = false
             val mp = activeMediaPlayer
+            // Ripresa chiesta mentre una svolta parla sopra l'MP3: l'MP3
+            // riparte a svolta finita (chiudiSopra), mai due voci insieme.
+            if (mp != null && navSopraId != null) {
+                riprendiMp3DopoSopra = true
+                return true
+            }
+            // (21/09/2026) Una frase del navigatore fermata da una telefonata
+            // non si rilegge se e` scaduta: «gira a destra» detto cinque
+            // minuti dopo e` un'indicazione sbagliata.
+            val scadenza = item.scadenzaElapsedMs
+            if (mp == null && scadenza != null && android.os.SystemClock.elapsedRealtime() > scadenza) {
+                finishActiveSpeech(appContext, notifyJs = true)
+                processNextSpeech(appContext)
+                return false
+            }
             if (mp != null) {
                 try {
                     requestFocus(appContext)
@@ -554,8 +998,17 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // TTS: si rilegge da capo (il testo di un teaser e' breve).
             requestFocus(appContext)
             if (ttsInstance == null || !ttsReady || !speakTts(appContext, item)) {
-                Log.w(TAG, "Ripresa TTS fallita per ${item.poiId}, passo oltre")
-                finishActiveSpeech(appContext, notifyJs = true)
+                // (22/09/2026) Come in processNextSpeech: motore forse
+                // scollegato → istanza nuova e l'item riprova UNA volta dalla coda.
+                if (!item.riprovato) {
+                    Log.w(TAG, "Ripresa TTS fallita per ${item.poiId}: motore ricreato, l'item riprova una volta")
+                    scollegaMotoreTts()
+                    speechQueue.add(item.copy(riprovato = true))
+                    finishActiveSpeech(appContext, notifyJs = false)
+                } else {
+                    Log.w(TAG, "Ripresa TTS fallita per ${item.poiId}, passo oltre")
+                    finishActiveSpeech(appContext, notifyJs = true)
+                }
                 processNextSpeech(appContext)
                 return false
             }
@@ -616,6 +1069,16 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                     true
                 }
                 mp.setOnPreparedListener { player ->
+                    // Una svolta sta parlando sopra (arrivata mentre l'MP3 si
+                    // preparava): partira` a svolta finita, da capo — lo fa
+                    // chiudiSopra, che arma anche il watchdog. Mai due voci.
+                    if (navSopraId != null) {
+                        if (!speechPaused) {
+                            riprendiMp3DopoSopra = true
+                            pausedMp3PositionMs = 0
+                        }
+                        return@setOnPreparedListener
+                    }
                     try {
                         player.start()
                         // Watchdog come per il TTS: se onCompletion non arriva
@@ -655,12 +1118,15 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 try { mp.stop() } catch (_: Exception) { }
                 try { mp.release() } catch (_: Exception) { }
             }
-            abandonFocus(appContext)
+            // Una svolta sta ancora parlando sopra l'MP3 appena chiuso: focus e
+            // guida JS si rilasciano quando finisce lei (chiudiSopra).
+            val sopraInCorso = navSopraId != null
+            if (!sopraInCorso) abandonFocus(appContext)
 
             // (AUD-01) Coda finita: la guida JS che avevamo messo in pausa
             // riprende (no-op se non l'abbiamo fermata noi o se l'utente ha
             // premuto Pausa/Stop nel frattempo).
-            if (speechQueue.isEmpty()) {
+            if (speechQueue.isEmpty() && !sopraInCorso) {
                 WipBackgroundAudioService.resumeAfterNativeVoice()
             }
             if (item != null) notifyVoiceStateChanged()
@@ -701,6 +1167,25 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             processNextSpeech(appContext)
         }
 
+        /**
+         * (22/09/2026) speak() rifiutato da un motore che risultava PRONTO: il
+         * collegamento al servizio TTS e` morto (tipicamente l'aggiornamento
+         * dei Servizi vocali Google). Si butta l'istanza: la prossima
+         * initTtsIfNeeded ne crea una nuova e si ricollega al motore. Solo se
+         * era pronta: un init in corso o gia` fallito non si tocca (il suo
+         * onInit tardivo segnerebbe «pronta» un'istanza che non e` piu` questa).
+         * Sul main, come chi la chiama.
+         */
+        private fun scollegaMotoreTts() {
+            synchronized(this) {
+                if (!ttsReady) return
+                val vecchio = ttsInstance
+                ttsInstance = null
+                ttsReady = false
+                try { vecchio?.shutdown() } catch (_: Exception) { }
+            }
+        }
+
         private fun initTtsIfNeeded(context: Context, onReady: () -> Unit) {
             val appContext = context.applicationContext
             if (ttsInstance != null && ttsReady) {
@@ -724,7 +1209,12 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                     } else {
                         ttsReady = false
                         Log.e(TAG, "TTS Initialization failed")
-                        finishActiveSpeech(appContext, notifyJs = true)
+                        // Init chiesto da una svolta sopra l'MP3: si chiude la
+                        // svolta (l'MP3 riparte), non la guida che col TTS non
+                        // c'entra.
+                        val sopra = navSopraId
+                        if (sopra != null) chiudiSopra(appContext, sopra, concatena = false)
+                        else finishActiveSpeech(appContext, notifyJs = true)
                     }
                 }
             }
@@ -744,6 +1234,17 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
          */
         @Volatile
         private var missingVoiceLang: String? = null
+
+        /**
+         * (22/09/2026) La lingua che la coda SA senza voce usabile (l'ultimo
+         * applyTtsConfig l'ha accertato), o null = si può parlare / non si sa
+         * ancora. La legge speakText del plugin: una svolta del navigatore JS
+         * in quella lingua verrebbe scartata qui dentro (processNextSpeech) con
+         * ok:true già restituito, e il JS non ripiegava sulla voce di rete
+         * (Azure). Sola lettura: la regola del 23/08 sulla voce che c'è solo
+         * in rete non cambia.
+         */
+        fun voceMancante(): String? = missingVoiceLang
 
         /** Ultima notifica "voce mancante": una ogni 10 minuti, non una per POI. */
         @Volatile
@@ -842,7 +1343,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
          * I nomi delle voci Android hanno la forma `it-it-x-kda#female_1-local`:
          * il marcatore `#female`/`#male` è la fonte affidabile del genere.
          */
-        private fun applyTtsGender(tts: TextToSpeech, appContext: Context) {
+        // Non più private (29/08/2026): la usa anche la voce diretta del plugin
+        // (ItaintaBackgroundPoiPlugin.speakDirect), stesso genere del personaggio.
+        fun applyTtsGender(tts: TextToSpeech, appContext: Context) {
             try {
                 // Stessa preferenza letta da resolveGuideVoice (persistita dal
                 // plugin): qui non si può chiamare, è nel corpo della classe.
@@ -871,12 +1374,21 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
         private fun attachProgressListener(appContext: Context) {
             ttsInstance?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                // La svolta detta sopra l'MP3 non e` l'item attivo: la sua
+                // fine la gestisce chiudiSopra, sul main dove vive il player.
+                private fun fine(utteranceId: String?) {
+                    if (utteranceId != null && utteranceId.startsWith("NAVSOPRA_")) {
+                        safetyHandler.post { chiudiSopra(appContext, utteranceId) }
+                        return
+                    }
+                    onUtteranceFinished(appContext, utteranceId)
+                }
                 override fun onStart(utteranceId: String?) { }
-                override fun onDone(utteranceId: String?) { onUtteranceFinished(appContext, utteranceId) }
+                override fun onDone(utteranceId: String?) { fine(utteranceId) }
                 @Deprecated("Deprecated in Java")
-                override fun onError(utteranceId: String?) { onUtteranceFinished(appContext, utteranceId) }
-                override fun onError(utteranceId: String?, errorCode: Int) { onUtteranceFinished(appContext, utteranceId) }
-                override fun onStop(utteranceId: String?, interrupted: Boolean) { onUtteranceFinished(appContext, utteranceId) }
+                override fun onError(utteranceId: String?) { fine(utteranceId) }
+                override fun onError(utteranceId: String?, errorCode: Int) { fine(utteranceId) }
+                override fun onStop(utteranceId: String?, interrupted: Boolean) { fine(utteranceId) }
             })
         }
 
@@ -890,7 +1402,8 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             "[\\x{1F000}-\\x{1FAFF}\\x{2600}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{2190}-\\x{21FF}\\x{FE00}-\\x{FE0F}\\x{200D}\\x{20E3}\\x{2122}\\x{2139}\\x{00A9}\\x{00AE}]"
         )
 
-        private fun speakableText(text: String): String {
+        // Non più private (29/08/2026): la usa anche la voce diretta del plugin.
+        fun speakableText(text: String): String {
             val cleaned = EMOJI_REGEX.replace(text, "").replace(Regex("\\s+"), " ").trim()
             // Mai utterance vuota (item tutto-emoji): la coda resterebbe bloccata.
             return cleaned.ifBlank { text.trim() }
@@ -1235,13 +1748,19 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         // Anti-spam: se in un unico batch scattano più "approach" (piazza densa),
         // solo il più prioritario parla; gli altri restano su vibrazione+notifica.
         var approachSpokenInBatch = false
+        // (03/10/2026) Stessa idea per la notifica unica di avvicinamento, più la scadenza.
+        nuovoBatchAvvicinamenti()
+        scadenzaAvvicinamento(context)
         // (AUD-04) Stessa regola per gli ARRIVI: prima ogni arrivo del batch
         // chiamava handleArrival → ArrivalWorker, che scalava il Day Pass e
         // accodava la guida COMPLETA per ciascuno (tre monumenti nella stessa
         // piazza = tre guide consumate e 10 minuti di voce in fila). Ora solo
         // il primo (per priorita' e distanza) ha la guida; gli altri scrivono
         // lo stato e mostrano la notifica «Tocca per ascoltare».
-        var arrivalSpokenInBatch = false
+        // (05/10/2026, ARBITRATO) Gli altri non scrivono piu' lo stato: restano
+        // in attesa e parlano appena tocca a loro. Qui si raccolgono i pronti,
+        // la scelta e' in fondo alla funzione.
+        val arriviPronti = mutableListOf<ArrivoPronto>()
 
         for (info in sorted) {
             val poi = db.poiDao().getPoiById(info.poiId) ?: continue
@@ -1257,7 +1776,10 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // metri o accanto a una cinta muraria si e' spesso oltre il
             // distLimit pur essendo esattamente dove si deve essere, e il
             // controllo qui sotto scarterebbe un trigger giusto.
-            val dentroPerimetro = Footprints.alPerimetro(
+            // (03/10/2026) Solo per i luoghi senza porta (Footprints.senzaPorta):
+            // per un edificio conta il punto d'arrivo, non il muro.
+            val senzaPorta = Footprints.senzaPorta(poi.poiType, poi.nome)
+            val dentroPerimetro = senzaPorta && Footprints.alPerimetro(
                 info.poiId, poi.footprint,
                 currentLoc.latitude, currentLoc.longitude,
                 isDriving = isDrivingMode
@@ -1269,6 +1791,61 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 Log.w(TAG, "Geofence fake trigger for ${poi.nome}: real dist ${info.realDist}m > limit ${distLimit}m")
                 continue
             }
+
+            // (03/10/2026, «tutto in strada reale, mai linea d'aria») Il recinto
+            // di sistema e' un cerchio: l'ENTER arriva anche dalla via parallela
+            // o dal retro dell'isolato. Se di STRADA si e' ancora oltre il
+            // raggio, qui non si fa niente — niente stato, niente cooldown: ci
+            // pensa il giro del servizio (approach/arrivo radiale) al fix in cui
+            // i metri di strada rientrano. Fuori rete o senza tile vale la linea
+            // d'aria, come prima (RoadGraph.cheDecide).
+            var distStrada = RoadGraph.cheDecide(
+                info.realDist.toDouble(),
+                try {
+                    RoadSnap.grafo(isDrivingMode)
+                        ?.da(currentLoc.latitude, currentLoc.longitude, RoadGraph.ricercaM(isDrivingMode))
+                        ?.verso(poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon)
+                } catch (e: Exception) { null }
+            )
+            // (05/10/2026, ARBITRATO) L'AGGANCIO ALLA STRADA NON E' CREDUTO DA
+            // SOLO. Qui si misura dal fix NON agganciato; il giro del servizio
+            // misura da quello agganciato. Le due misure devono dare entrambe
+            // l'arrivo: se l'aggancio sposta il punto di piu' di 5 m si misura
+            // anche da li' e decide la PIU' LUNGA (sul web: Palazzo
+            // Doria-Pamphili scattato a 99 m di strada dalla via parallela).
+            if (info.type == "arrival" && distStrada <= targetRadius) {
+                try {
+                    val agg = RoadSnap.snap(currentLoc.latitude, currentLoc.longitude, currentLoc.accuracy, isDrivingMode)
+                    if (agg != null) {
+                        val buf = FloatArray(1)
+                        Location.distanceBetween(currentLoc.latitude, currentLoc.longitude, agg.first, agg.second, buf)
+                        if (buf[0] > Arbitrato.SNAP_DUBBIO_M) {
+                            val pLat = poi.entranceLat ?: poi.lat
+                            val pLon = poi.entranceLon ?: poi.lon
+                            Location.distanceBetween(agg.first, agg.second, pLat, pLon, buf)
+                            val dallAggancio = RoadGraph.cheDecide(
+                                buf[0].toDouble(),
+                                RoadSnap.grafo(isDrivingMode)
+                                    ?.da(agg.first, agg.second, Arbitrato.ricercaLiberaM(isDrivingMode))
+                                    ?.verso(pLat, pLon)
+                            )
+                            if (dallAggancio > distStrada) distStrada = dallAggancio
+                        }
+                    }
+                } catch (e: Exception) { /* senza seconda misura resta la prima */ }
+            }
+            // (04/10/2026) Registro di collaudo: cosa ha deciso il ricevitore dei
+            // recinti di sistema, con metri di strada e in linea d'aria.
+            val rigaCollaudo = "\"${poi.nome}\" id=${info.poiId} strada=${if (distStrada.isInfinite()) "inf" else distStrada.toInt().toString()} " +
+                "aria=${info.realDist.toInt()} raggio=${targetRadius.toInt()} acc=${currentLoc.accuracy.toInt()} " +
+                String.format(java.util.Locale.US, "%.5f,%.5f punto=%.5f,%.5f",
+                    currentLoc.latitude, currentLoc.longitude, poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon)
+            if (!dentroPerimetro && distStrada > targetRadius) {
+                Log.d(TAG, "${info.type} rinviato per ${poi.nome}: ${info.realDist.toInt()} m in linea d'aria ma oltre ${targetRadius.toInt()} m di strada")
+                com.itaintasca.app.service.RegistroCollaudo.scrivi("GUIDA recinto-rinviato ${info.type} $rigaCollaudo")
+                continue
+            }
+            com.itaintasca.app.service.RegistroCollaudo.scrivi("GUIDA recinto ${info.type} $rigaCollaudo stato=$triggerState")
 
             // Ri-avvicinamento consentito da PENDING oppure da EXITED dopo il
             // cooldown anti-rimbalzo (30 min): il rientro immediato nell'isteresi
@@ -1327,7 +1904,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 // muro. Se non si e' ancora a 30 m, non e' un arrivo: ci
                 // pensera' il loop del servizio (firePerimeterArrival) al
                 // fix in cui lo si diventa.
-                val haPerimetro = !poi.footprint.isNullOrBlank()
+                val haPerimetro = senzaPorta && !poi.footprint.isNullOrBlank()
 
                 // GATE DI BUSSOLA (23/08/2026), SOLO sull'arrivo: se il POI e'
                 // ormai alle spalle non si racconta ADESSO — si rimanda, senza
@@ -1352,15 +1929,68 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                     Log.d(TAG, "Arrivo rimandato per ${poi.nome}: e' alle spalle (gate di bussola)")
                 } else if (!blockedArrival) {
                     // ✅ [ROBUSTEZZA] - Permettiamo l'arrivo anche se l'approccio è stato saltato (es. marcia veloce)
-                    val fired = handleArrival(
-                        context, info.poiId, poi.nome, poi.guideDefault, poi.isGem, info.isItinerary,
-                        isAutomaticMode, db, distanceM = info.realDist, fullGuide = !arrivalSpokenInBatch
-                    )
-                    if (fired) arrivalSpokenInBatch = true
+                    // (05/10/2026, ARBITRATO) Non scatta qui: chi e' pronto entra
+                    // in lista e si decide in fondo, uno solo (vedi sotto).
+                    arriviPronti.add(ArrivoPronto(
+                        poi, info.isItinerary, distStrada.toFloat(), info.realDist,
+                        dentro = Footprints.dentroPerimetro(
+                            info.poiId, poi.footprint, currentLoc.latitude, currentLoc.longitude
+                        )
+                    ))
                 }
             }
         }
+
+        // ── ARBITRATO FRA GLI ARRIVI DEL BATCH (05/10/2026) ─────────────────
+        // Port delle regole web (foregroundTriggers.ts), le stesse del giro del
+        // servizio. Prima (AUD-04) il primo aveva la guida e gli altri
+        // scrivevano lo stato con la sola notifica: restavano muti per 24 ore.
+        // Ora parla UNO — il piu' vicino, dove una gemma vale 50 m e una fonte
+        // Wikipedia/Wikidata 25 — e gli altri NON scrivono nulla: sono ancora
+        // nel raggio, li riprova il giro del servizio appena tocca a loro.
+        // (08/10/2026) Targhe e lapidi con un monumento entro 100 m: in silenzio
+        // (la lista la pubblica il giro del servizio, vedi Arbitrato.targaMuta).
+        arriviPronti.removeAll { !it.tappa && Arbitrato.targaMuta(it.poi.id) }
+        if (arriviPronti.isEmpty()) return
+        val vincitore = arriviPronti.minWithOrNull(
+            compareByDescending<ArrivoPronto> { it.tappa }.thenBy { Arbitrato.punteggio(it.poi, it.stradaM) }
+        ) ?: return
+        val motivo = motivoAttesaVoce(context)
+        if (motivo != null) {
+            Log.d(TAG, "Arrivo in attesa per ${vincitore.poi.nome}: $motivo")
+            com.itaintasca.app.service.RegistroCollaudo.scrivi("GUIDA attesa \"${vincitore.poi.nome}\" id=${vincitore.poi.id} motivo=$motivo")
+            return
+        }
+        // Il vincitore non pesa e un luogo che pesa sta arrivando entro 100 m
+        // di strada: si aspetta quello. Niente stato, niente cooldown: se il
+        // luogo importante non arriva, il minore parla al fix dopo.
+        if (!Arbitrato.pesa(vincitore.poi) && !vincitore.dentro && !vincitore.tappa &&
+            Arbitrato.importanteInArrivo(tranne = vincitore.poi.id)
+        ) {
+            Log.d(TAG, "Arrivo rimandato per ${vincitore.poi.nome}: cede il passo a un luogo che pesa")
+            com.itaintasca.app.service.RegistroCollaudo.scrivi("GUIDA cede-il-passo \"${vincitore.poi.nome}\" id=${vincitore.poi.id}")
+            return
+        }
+        // (23/09/2026, R-BUSSOLA) Il gate ha deciso: bussola spenta subito; il
+        // servizio la riaccende se resta un candidato.
+        BearingGate.decisa()
+        handleArrival(
+            context, vincitore.poi.id, vincitore.poi.nome, vincitore.poi.guideDefault, vincitore.poi.isGem,
+            vincitore.tappa, isAutomaticMode, db, distanceM = vincitore.ariaM, fullGuide = true
+        )
     }
+
+    /** (05/10/2026) Un arrivo pronto a scattare, in attesa dell'arbitrato di fine batch. */
+    private class ArrivoPronto(
+        val poi: PoiEntity,
+        val tappa: Boolean,
+        /** Metri di strada (la piu' lunga fra le due misure): ordinano l'arbitrato. */
+        val stradaM: Float,
+        /** Metri in linea d'aria: vanno nell'evento, come prima. */
+        val ariaM: Float,
+        /** Dentro il perimetro (0 m dal muro): non cede il passo a nessuno. */
+        val dentro: Boolean
+    )
 
     private suspend fun handleExitTransitions(
         context: Context,
@@ -1401,6 +2031,8 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 TriggerState.APPROACH_FIRED -> {
                     db.poiDao().updateTriggerState(TriggerStateEntity(poiId, TriggerState.EXITED))
                     sendEventToPlugin(context, "poiExited", poiId, "")
+                    // (03/10/2026, regola 2) Uscito dal raggio senza fermarsi: via la riga.
+                    cancellaNotificaAvvicinamento(context, poiId)
                 }
                 TriggerState.ARRIVED_FIRED -> {
                     // Uscita "vera" (visita durata almeno 30 min): il POI torna
@@ -1548,7 +2180,53 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         val approachBigText = if (silentMode && !poi.teaserText.isNullOrBlank()) {
             "$approachMsg\n\n${poi.teaserText}"
         } else null
-        showNotification(context, "$notifTitle: $name", NotificationStrings.get(lang, "approach_text", alertRadNow.toInt().toString()), poiId, guideVoice, false, bigText = approachBigText)
+        // (03/10/2026) Stesso testo di prima, ma per la strada della notifica UNICA (regole 1 e 3).
+        notificaAvvicinamento(context, poiId, name, isItinerary, "$notifTitle: $name", NotificationStrings.get(lang, "approach_text", alertRadNow.toInt().toString()), guideVoice, approachBigText)
+    }
+
+    /**
+     * (03/10/2026, regole 1 e 3) LA notifica di avvicinamento: una sola, id fisso. Il primo
+     * luogo del fix dà titolo e testo; i successivi dello stesso fix entrano nel testo come
+     * «Vicino anche: …» (tocco = primo luogo). Con un percorso nel follower si notificano
+     * solo le tappe del giro: gli altri luoghi li dice la voce come sempre, senza riga.
+     */
+    private fun notificaAvvicinamento(context: Context, poiId: String, name: String, isItinerary: Boolean, titolo: String, testo: String, guide: String, bigText: String?) {
+        if (com.itaintasca.app.service.NavFollower.haPercorso() && !isItinerary) return
+        val p = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+        val corrente = p.getString(PREF_AVVIC_POI, null)
+        val altri: MutableList<String>
+        if (batchAvvicinamentoAperto && corrente != null) {
+            altri = (p.getString(PREF_AVVIC_ALTRI, "") ?: "").split("\u0001").filter { it.isNotBlank() }.toMutableList()
+            if (!altri.contains(name)) altri.add(name)
+            p.edit().putString(PREF_AVVIC_ALTRI, altri.joinToString("\u0001")).apply()
+        } else {
+            batchAvvicinamentoAperto = true
+            altri = mutableListOf()
+            p.edit().putString(PREF_AVVIC_POI, poiId).putLong(PREF_AVVIC_TS, System.currentTimeMillis())
+                .putString(PREF_AVVIC_TITOLO, titolo).putString(PREF_AVVIC_TESTO, testo).putString(PREF_AVVIC_GUIDA, guide)
+                .putString(PREF_AVVIC_BIG, bigText ?: "").putString(PREF_AVVIC_ALTRI, "").apply()
+        }
+        val lang = NotificationStrings.lang(context)
+        val coda = if (altri.isEmpty()) "" else " · ${NotificationStrings.get(lang, "nearby_also")} ${altri.joinToString(", ")}"
+        val big = (p.getString(PREF_AVVIC_BIG, "") ?: "").ifBlank { null }
+        showNotification(
+            context, p.getString(PREF_AVVIC_TITOLO, titolo) ?: titolo, (p.getString(PREF_AVVIC_TESTO, testo) ?: testo) + coda,
+            p.getString(PREF_AVVIC_POI, poiId) ?: poiId, p.getString(PREF_AVVIC_GUIDA, guide) ?: guide, false,
+            bigText = if (big != null) big + coda else if (altri.isNotEmpty()) (p.getString(PREF_AVVIC_TESTO, testo) ?: testo) + coda else null
+        )
+    }
+
+    /** (03/10/2026, regola 4) Gli arrivi restano per luogo, ma al massimo 3: al quarto esce il più vecchio. */
+    private fun registraArrivoNotificato(context: Context, poiId: String) {
+        val p = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+        val lista = (p.getString(PREF_ARRIVI_NOTIFICATI, "") ?: "").split("\u0001").filter { it.isNotBlank() && it != poiId }.toMutableList()
+        lista.add(poiId)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        while (lista.size > TETTO_ARRIVI_NOTIFICATI) {
+            val vecchio = lista.removeAt(0)
+            try { nm.cancel(vecchio.hashCode()) } catch (_: Exception) { }
+        }
+        p.edit().putString(PREF_ARRIVI_NOTIFICATI, lista.joinToString("\u0001")).apply()
     }
 
     /**
@@ -1583,7 +2261,42 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             Log.d(TAG, "handleArrival: $poiId già ARRIVED_FIRED, doppio trigger evitato")
             return false
         }
-        db.poiDao().updateTriggerState(TriggerStateEntity(poiId, TriggerState.ARRIVED_FIRED))
+        // (05/10/2026, ARBITRATO) STESSO NOME APPENA RACCONTATO = SILENZIO, anche
+        // se la riga e' un'altra: entra nel cooldown senza evento, senza voce e
+        // senza notifica (sul web: markFired e fuori dai pronti). Le tappe di
+        // un giro non passano di qui: le ha scelte l'utente e parlano comunque.
+        val tappa = isItinerary || poi?.isFromItinerary == true
+        if (!tappa && nomeAppenaDetto(context, poiId, name)) {
+            db.poiDao().updateTriggerState(TriggerStateEntity(poiId, TriggerState.ARRIVED_FIRED))
+            Log.d(TAG, "handleArrival: $name ($poiId) muto, stesso nome appena raccontato")
+            com.itaintasca.app.service.RegistroCollaudo.scrivi("GUIDA muto-stesso-nome \"$name\" id=$poiId")
+            return false
+        }
+        // (05/10/2026, ARBITRATO) MAI UN LUOGO SOPRA UNA GUIDA. I chiamanti hanno
+        // gia' guardato, ma sono due (giro del servizio e recinti di sistema) e
+        // possono arrivare qui insieme per due luoghi diversi: l'ultimo
+        // controllo e la scrittura dello stato stanno sotto un lucchetto
+        // comune, cosi' un solo arrivo alla volta passa. Chi resta fuori non
+        // scrive nulla: e' ancora nel raggio, il prossimo fix lo riprova.
+        // In modalita' silenziosa non c'e' voce da aspettare.
+        val silenzioso = com.itaintasca.app.service.WebViewPrefs.isSilentMode(context)
+        val passato = arbitratoMutex.withLock {
+            val motivo = if (fullGuide) motivoAttesaVoce(context) else null
+            if (motivo != null) {
+                Log.d(TAG, "handleArrival: $name ($poiId) resta in attesa, $motivo")
+                false
+            } else {
+                db.poiDao().updateTriggerState(TriggerStateEntity(poiId, TriggerState.ARRIVED_FIRED))
+                if (fullGuide) registraArrivoEmesso(context, poiId, name, conVoce = !silenzioso)
+                true
+            }
+        }
+        if (!passato) return false
+        // (05/10/2026, ARBITRATO) I DOPPIONI DELLO STESSO LUOGO tacciono insieme
+        // al vincitore (il Pantheon ha dieci righe visibili).
+        if (fullGuide) poi?.let { silenziaDoppioni(db, it) }
+        // (03/10/2026, regola 2) Un arrivo qualsiasi chiude la riga «ti stai avvicinando».
+        cancellaNotificaAvvicinamento(context, null)
         // Il POI ha parlato: il suo contatore di rinvii non serve piu' (spec
         // del gate, punto 7 — si azzera appena torna davanti o appena parla).
         BearingGate.azzera(poiId)
@@ -1746,6 +2459,47 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             showNotification(context, NotificationStrings.get(lang, "arrival_at", name), NotificationStrings.get(lang, "arrived_tap"), poiId, guideVoice, true)
         }
         true
+    }
+
+    /**
+     * (05/10/2026, ARBITRATO) I DOPPIONI DELLO STESSO LUOGO: le altre righe con
+     * lo stesso nome nudo entro 150 m dal vincitore entrano nel cooldown
+     * insieme a lui (stato ARRIVED_FIRED, senza evento ne' notifica) — prima
+     * parlavano una dopo l'altra. Stessa regola di foregroundTriggers.ts e di
+     * BackgroundPoiManager.swift. Le tappe di un giro non si toccano mai.
+     *
+     * Il riquadro in gradi (~220 m) viene prima del nome: nella cache ci sono
+     * migliaia di righe e il nome nudo costa quattro espressioni regolari.
+     * Scarta anche le coordinate NaN, che `distanceBetween` non sa confrontare.
+     * `tryLock`: se l'altro percorso sta decidendo proprio quel doppione, lo si
+     * lascia stare — lo fermera' comunque la regola del nome appena raccontato.
+     */
+    private suspend fun silenziaDoppioni(db: PoiDatabase, vincitore: PoiEntity) {
+        try {
+            val nudo = Arbitrato.nomeNudo(vincitore.nome)
+            if (nudo.length < 4) return
+            val buf = FloatArray(1)
+            for (p in db.poiDao().getAllPois()) {
+                if (p.id == vincitore.id || p.isFromItinerary) continue
+                if (!(Math.abs(p.lat - vincitore.lat) < 0.002 && Math.abs(p.lon - vincitore.lon) < 0.004)) continue
+                if (!Arbitrato.stessoLuogo(nudo, Arbitrato.nomeNudo(p.nome))) continue
+                Location.distanceBetween(p.lat, p.lon, vincitore.lat, vincitore.lon, buf)
+                if (!(buf[0] <= Arbitrato.DOPPIONE_M)) continue
+                val lucchetto = lockForPoi(p.id)
+                if (!lucchetto.tryLock()) continue
+                try {
+                    if (db.poiDao().getTriggerState(p.id)?.state != TriggerState.ARRIVED_FIRED) {
+                        db.poiDao().updateTriggerState(TriggerStateEntity(p.id, TriggerState.ARRIVED_FIRED))
+                        Log.d(TAG, "Doppione di ${vincitore.nome} messo a tacere: ${p.nome} (${p.id})")
+                    }
+                } finally {
+                    lucchetto.unlock()
+                }
+            }
+        } catch (e: Exception) {
+            // Un nome strano o una lettura fallita non fermano l'arrivo.
+            Log.w(TAG, "Doppioni non controllati: ${e.message}")
+        }
     }
 
     private fun triggerTeaserGeneration(context: Context, poiId: String, lang: String) {
@@ -1918,9 +2672,11 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
         if (isArrival) {
             builder.setVibrate(longArrayOf(0, 500, 200, 500))
+            registraArrivoNotificato(context, poiId)
         }
 
-        nm.notify(poiId.hashCode(), builder.build())
+        // (03/10/2026) Avvicinamento: id FISSO, una riga sola; arrivo: una per luogo.
+        nm.notify(if (isArrival) poiId.hashCode() else NOTIF_ID_AVVICINAMENTO, builder.build())
     }
 
     private fun launchApp(context: Context, poiId: String, guide: String) {

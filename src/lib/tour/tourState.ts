@@ -14,6 +14,7 @@
  *   DEVIATO a 120 m per 30 s — sotto, e` un marciapiede sbagliato; il tempo
  *                        serve a non ricalcolare per un rimbalzo del GPS
  */
+import { radiiForTransport } from '../guideSettings';
 
 export type StatoGiro =
   | 'IN_CAMMINO'
@@ -29,10 +30,19 @@ export const SOGLIE = {
   arrivo_m: 80,
   /** Sotto questa si e` arrivati: parte l'audioguida. */
   ingresso_m: 25,
-  /** Oltre questa, fuori percorso. */
-  deviazione_m: 120,
+  /**
+   * Oltre questa distanza dal TRATTO davanti (proiezione sul segmento, vedi
+   * tourService.scostamentoDalPercorso) si e` fuori percorso. Era 120 m
+   * misurati dai vertici campionati dell'intera geometria: troppo larga per
+   * accorgersi di una strada sbagliata in centro, e falsata sui rettilinei
+   * (03/09/2026, collaudo: «ero uscito dal percorso e la mappa mi mostra
+   * sempre il percorso originale»).
+   */
+  deviazione_m: 70,
+  /** Sotto questa si e` di nuovo sul percorso: isteresi contro il GPS che balla sul bordo. */
+  deviazione_rientro_m: 45,
   /** Per quanto bisogna restare fuori percorso prima di ricalcolare. */
-  deviazione_s: 30,
+  deviazione_s: 15,
   /** Fermo piu` di cosi` = pausa vera, non un semaforo. */
   pausa_s: 180,
   /** Sotto questa velocita` si e` considerati fermi (m/s). */
@@ -76,6 +86,12 @@ export interface TappaGiro {
    * pre-scaricata, ne' letta all'arrivo, ne' pagata.
    */
   senzaGuida?: boolean;
+  /**
+   * Foto del luogo (URL), se il POI ce l'ha. Va nel cruscotto a display
+   * spento (icona grande della notifica Android, miniatura della Live
+   * Activity iOS). Assente = cruscotto solo testo, mai una foto di ripiego.
+   */
+  foto?: string | null;
 }
 
 /**
@@ -87,13 +103,34 @@ export type LivelloIngresso = 'dichiarato' | 'civico' | 'indirizzo' | 'centroide
 
 /** Soglia d'arrivo adattata alla fiducia che abbiamo nel punto. */
 export function sogliaArrivo(livello: LivelloIngresso | undefined, raggioEdificio?: number | null): number {
-  if (livello === 'dichiarato') return SOGLIE.ingresso_m;
-  if (livello === 'civico') return SOGLIE.ingresso_m + 10;
-  if (livello === 'indirizzo') return SOGLIE.ingresso_m + 25;
-  // Centroide: senza sapere quanto e` grande l'edificio si tira a indovinare.
-  // Col perimetro invece la soglia diventa "quando sei addosso all'edificio",
-  // che e` il massimo ottenibile senza conoscere la porta.
-  return raggioEdificio ? Math.max(SOGLIE.ingresso_m, raggioEdificio + 15) : 70;
+  // (05/10/2026, committente: «le distanze del GeoControl si devono poter
+  // modificare, e devono essere sempre distanze in strada») Quando il punto è
+  // una porta o un punto sulla via (dichiarato, civico, indirizzo) la soglia è
+  // QUELLA SCELTA DALL'UTENTE nel GeoControl — 30 m se non l'ha mai toccata —
+  // e non si allarga più di 10 o 25 m «per prudenza». La distanza che le si
+  // confronta è già in metri di strada (tourService.metriStradaAllaTappa + coda).
+  let utente: number = SOGLIE.ingresso_m;
+  try { utente = radiiForTransport('walk', null, null).trigger || SOGLIE.ingresso_m; } catch { /* fuori dal browser: predefinito */ }
+  if (livello === 'dichiarato' || livello === 'civico' || livello === 'indirizzo') return utente;
+  // Centroide: il punto è il centro dell'edificio, e la strada finisce prima.
+  // Qui la soglia stretta fermerebbe il giro per sempre davanti a un palazzo
+  // grande: resta "quando sei addosso all'edificio" (perimetro) o 70 m, mai
+  // sotto la scelta dell'utente.
+  return raggioEdificio ? Math.max(utente, raggioEdificio + 15) : Math.max(utente, 70);
+}
+
+/**
+ * A quanti metri dalla tappa parte il teaser breve (stato IN_ARRIVO).
+ * (05/10/2026, committente: sì a «anche il teaser del percorso segua il
+ * GeoControl») È l'AVVISO A PIEDI scelto dall'utente — 150 m se non l'ha mai
+ * toccato — al posto degli 80 m fissi. Mai sotto la soglia d'arrivo più 20 m:
+ * il teaser deve restare PRIMA dell'arrivo, altrimenti non partirebbe mai.
+ * La distanza che gli si confronta è in metri di strada, come l'arrivo.
+ */
+export function sogliaAvviso(sogliaDArrivo: number): number {
+  let utente: number = SOGLIE.arrivo_m;
+  try { utente = radiiForTransport('walk', null, null).alert || SOGLIE.arrivo_m; } catch { /* fuori dal browser: predefinito */ }
+  return Math.max(utente, sogliaDArrivo + 20);
 }
 
 export interface StatoCorrente {
@@ -113,6 +150,8 @@ export interface Osservazione {
   distanzaTappa: number;
   /** Distanza dal percorso tracciato, in metri. */
   scostamento: number;
+  /** Accuratezza del fix in metri, se nota: allarga la soglia di deviazione. */
+  accuratezza?: number;
   /** Velocita` corrente in m/s (dal GPS o calcolata). */
   velocita: number;
   /** La guida della tappa corrente sta parlando? */
@@ -152,15 +191,21 @@ export function prossimoStato(
   }
 
   // Fuori percorso, ma solo se ci si resta: un rimbalzo del GPS non deve far
-  // ricalcolare il giro.
-  const fuoriDa = o.scostamento > SOGLIE.deviazione_m ? (corrente.fuoriPercorsoDa ?? o.adesso) : null;
+  // ricalcolare il giro. La soglia cresce con l'incertezza del fix (a 50 m
+  // di accuratezza servono 75 m di scostamento) e, una volta fuori, si
+  // rientra solo sotto la soglia bassa: cosi` un fix sul bordo non azzera il
+  // timer a ogni passo (03/09/2026).
+  const sogliaFuori = Math.max(SOGLIE.deviazione_m, (o.accuratezza ?? 0) * 1.5);
+  const eraFuori = corrente.fuoriPercorsoDa != null;
+  const fuori = o.scostamento > sogliaFuori || (eraFuori && o.scostamento > SOGLIE.deviazione_rientro_m);
+  const fuoriDa = fuori ? (corrente.fuoriPercorsoDa ?? o.adesso) : null;
   if (fuoriDa && o.adesso - fuoriDa > SOGLIE.deviazione_s * 1000) {
     return cambia('DEVIATO', { fuoriPercorsoDa: fuoriDa, fermoDa });
   }
 
   const soglia = sogliaArrivo(tappa.ingresso?.livello, raggioEdificio);
   if (o.distanzaTappa <= soglia) return cambia('ALL_INGRESSO', { fermoDa, fuoriPercorsoDa: null });
-  if (o.distanzaTappa <= SOGLIE.arrivo_m) return cambia('IN_ARRIVO', { fermoDa, fuoriPercorsoDa: null });
+  if (o.distanzaTappa <= sogliaAvviso(soglia)) return cambia('IN_ARRIVO', { fermoDa, fuoriPercorsoDa: null });
   return cambia('IN_CAMMINO', { fermoDa, fuoriPercorsoDa: fuoriDa });
 }
 

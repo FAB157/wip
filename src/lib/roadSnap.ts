@@ -5,6 +5,9 @@
 // momento dello snap (l'indice è già in memoria), degradazione elegante senza
 // tile. Vedi endpoint server /api/roads/tile.
 import { getApiUrl } from './api';
+import { get as idbGet, set as idbSet, del as idbDel, keys as idbKeys } from 'idb-keyval';
+import { prescaricaStradeNativo } from '../plugins/ItaintaBackgroundPoi';
+import { creaGrafoStrade, distanzaCheDecide, type GrafoStrade, type SorgenteStrada } from './geofencing/distanzaStrada';
 
 type LatLon = [number, number]; // [lat, lon]
 interface Seg { a: LatLon; b: LatLon; }
@@ -105,6 +108,45 @@ let inFlight = false;
 const BACKOFF_MS = [5_000, 15_000, 60_000, 300_000, 900_000];
 const backoffFor = (n: number) => BACKOFF_MS[Math.min(n, BACKOFF_MS.length - 1)];
 
+// ── METRI DI STRADA PER CHI NON HA UN TRACCIATO (03/10/2026) ───────────────
+// Un solo ingresso per banner, liste, incontri del giro e luoghi lungo il
+// navigatore: la distanza fra una posizione e un luogo, in metri di strada
+// quando la rete attorno è nota, altrimenti la distanza diretta. La sorgente
+// (le distanze da una posizione) si ricalcola solo se ci si è spostati di più
+// di 3 m o è arrivata una tile nuova: cento luoghi in elenco costano un solo
+// Dijkstra.
+const RICERCA_STRADA_M = { car: 700, walk: 450 } as const;
+let sorgenteInCache: { lat: number; lon: number; mode: 'car' | 'walk'; grafo: GrafoStrade; s: SorgenteStrada | null } | null = null;
+function sorgenteDa(lat: number, lon: number, mode: 'car' | 'walk'): SorgenteStrada | null {
+  const grafo = getGrafoStrade(mode);
+  if (!grafo) return null;
+  const c = sorgenteInCache;
+  if (c && c.grafo === grafo && c.mode === mode && metersBetween(lat, lon, c.lat, c.lon) < 3) return c.s;
+  let s: SorgenteStrada | null = null;
+  try { s = grafo.da(lat, lon, RICERCA_STRADA_M[mode]); } catch { s = null; }
+  sorgenteInCache = { lat, lon, mode, grafo, s };
+  return s;
+}
+/**
+ * La distanza CHE DECIDE (trigger, incontri): metri di strada, Infinity se il
+ * luogo non si raggiunge entro il raggio di ricerca. Vedi distanzaCheDecide.
+ */
+export function metriDiStrada(lat: number, lon: number, pLat: number, pLon: number, mode: 'car' | 'walk' = 'walk'): number {
+  const aria = metersBetween(lat, lon, pLat, pLon);
+  if (!Number.isFinite(aria) || aria > RICERCA_STRADA_M[mode]) return aria;
+  const s = sorgenteDa(lat, lon, mode);
+  return distanzaCheDecide(aria, s ? s.verso(pLat, pLon) : null);
+}
+/** La distanza DA MOSTRARE (banner, elenchi): come sopra, ma sempre un numero finito. */
+export function metriDiStradaDaMostrare(lat: number, lon: number, pLat: number, pLon: number, mode: 'car' | 'walk' = 'walk'): number {
+  const d = metriDiStrada(lat, lon, pLat, pLon, mode);
+  return Number.isFinite(d) ? d : metersBetween(lat, lon, pLat, pLon);
+}
+/** Tiene aggiornata la tile attorno alla posizione (per chi non passa da foregroundTriggers: giro, navigatore). */
+export function tieniStradeAggiornate(lat: number, lon: number): void {
+  if (shouldRefreshRoads(lat, lon)) void refreshRoadTile(lat, lon);
+}
+
 // Modo di trasporto stimato in casa: il chiamante (foregroundTriggers) non lo
 // passa, ma fra due fix consecutivi la velocità si ricava. >4 m/s (~14 km/h) =
 // veicolo. Nessuna dipendenza esterna, nessun cambio di firma per i chiamanti.
@@ -136,6 +178,135 @@ const RAGGIO_M: Record<'car' | 'walk', number> = { car: 1500, walk: 700 };
 
 export function getRoadIndex(): RoadIndex | null { return currentIndex; }
 
+// DISTANZA DI STRADA (03/10/2026): le stesse polilinee, come grafo. Costruito
+// alla prima richiesta dopo ogni tile nuova, una rete alla volta (a piedi si
+// usa la pedonale, in auto quella delle auto). Vedi geofencing/distanzaStrada.ts.
+let currentTile: Tile | null = null;
+const grafi: { car: GrafoStrade | null; foot: GrafoStrade | null } = { car: null, foot: null };
+export function getGrafoStrade(mode: 'car' | 'walk'): GrafoStrade | null {
+  if (!currentTile) return null;
+  const rete = mode === 'car' ? 'car' : 'foot';
+  if (!grafi[rete]) {
+    // A PIEDI la rete è pedonale + auto: nelle tile pre-estratte la «foot»
+    // contiene solo i tratti pedonali (marciapiedi, sentieri, scalinate) e da
+    // sola è a pezzi — a Montecatini 15 coppie di punti su 25 risultavano
+    // irraggiungibili; unite, 25 su 25 e mai più lunghe del percorso OSRM
+    // (scratch/collaudo-distanza-strada-vera.mts).
+    const polilinee = rete === 'foot' ? [...(currentTile.foot || []), ...(currentTile.car || [])] : (currentTile.car || []);
+    try { grafi[rete] = creaGrafoStrade(polilinee); } catch { return null; }
+  }
+  return grafi[rete];
+}
+
+// ── STRADE SCARICATE IN ANTICIPO (03/10/2026, committente: «le tiles devono
+// essere scaricate quando si crea un percorso, con o senza audioguida, e nelle
+// funzioni offline») ──────────────────────────────────────────────────────
+// Fino a oggi il tile attorno all'utente viveva solo in memoria: senza rete,
+// dopo 500 m le distanze di strada e l'aggancio alla via non avevano più dati.
+// Ora ogni tile si salva in IndexedDB, una voce per chiave (la griglia a 0,01°
+// con cui il server tiene la cache), e `prescaricaStrade` le prende tutte lungo
+// un percorso al momento in cui lo si crea. Il servizio nativo ha la sua copia
+// (prescaricaStradeNativo → RoadSnap.prescarica): a schermo spento la WebView
+// dorme e questa non la legge nessuno.
+const STRADE_PREFISSO = 'wip-strade:';
+const STRADE_MAX = 400;                         // tile tenute
+const STRADE_FRESCO_MS = 30 * 24 * 3600 * 1000; // dopo si riscarica
+const chiaveTile = (lat: number, lon: number) => `${lat.toFixed(2)},${lon.toFixed(2)}`;
+
+async function salvaTile(chiave: string, tile: any): Promise<void> {
+  try { await idbSet(STRADE_PREFISSO + chiave, { ts: Date.now(), car: tile.car || [], foot: tile.foot || [] }); } catch { /* disco pieno o IndexedDB assente */ }
+}
+async function leggiTile(chiave: string): Promise<{ ts: number; car: number[][][]; foot: number[][][] } | null> {
+  try { return (await idbGet(STRADE_PREFISSO + chiave)) || null; } catch { return null; }
+}
+async function potaTile(): Promise<void> {
+  try {
+    const chiavi = (await idbKeys()).filter(k => typeof k === 'string' && (k as string).startsWith(STRADE_PREFISSO)) as string[];
+    if (chiavi.length <= STRADE_MAX) return;
+    const conEta: Array<[string, number]> = [];
+    for (const k of chiavi) { const v: any = await idbGet(k); conEta.push([k, Number(v?.ts) || 0]); }
+    conEta.sort((a, b) => a[1] - b[1]);
+    for (const [k] of conEta.slice(0, chiavi.length - STRADE_MAX)) await idbDel(k);
+  } catch { /* best-effort */ }
+}
+
+export interface EsitoStrade { totali: number; scaricate: number; giaPresenti: number; fallite: number }
+
+/**
+ * Scarica in anticipo le strade lungo un percorso. `punti` = [lat, lon] lungo
+ * il tracciato o le tappe (anche fitti: si riducono alle chiavi distinte; fra
+ * due punti lontani si riempie il tratto in mezzo). Salta quelle già salvate e
+ * fresche; se la rete cade si ferma. Non lancia mai.
+ */
+export async function prescaricaStrade(
+  punti: number[][],
+  opz: { auto?: boolean; max?: number; onProgress?: (fatte: number, totali: number) => void } = {},
+): Promise<EsitoStrade> {
+  const esito: EsitoStrade = { totali: 0, scaricate: 0, giaPresenti: 0, fallite: 0 };
+  try {
+    const centri = new Map<string, [number, number]>();
+    const aggiungi = (lat: number, lon: number) => {
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+      const cLat = Math.round(lat * 100) / 100, cLon = Math.round(lon * 100) / 100;
+      const k = chiaveTile(cLat, cLon);
+      if (!centri.has(k)) centri.set(k, [cLat, cLon]);
+    };
+    let prec: number[] | null = null;
+    for (const p of punti || []) {
+      if (!Array.isArray(p) || p.length < 2) continue;
+      // fra due punti lontani (due tappe senza tracciato) si riempie il tratto
+      if (prec) {
+        const d = metersBetween(prec[0], prec[1], p[0], p[1]);
+        const passi = Math.min(200, Math.floor(d / 400));
+        for (let i = 1; i <= passi; i++) aggiungi(prec[0] + ((p[0] - prec[0]) * i) / (passi + 1), prec[1] + ((p[1] - prec[1]) * i) / (passi + 1));
+      }
+      aggiungi(p[0], p[1]);
+      prec = p;
+    }
+    const lista = [...centri.entries()].slice(0, opz.max ?? 150);
+    esito.totali = lista.length;
+    const raggio = opz.auto ? RAGGIO_M.car : RAGGIO_M.walk;
+    let fatte = 0;
+    for (const [k, [lat, lon]] of lista) {
+      const gia = await leggiTile(k);
+      if (gia && Date.now() - gia.ts < STRADE_FRESCO_MS) esito.giaPresenti++;
+      else {
+        try {
+          const res = await fetch(getApiUrl(`/api/roads/tile?lat=${lat}&lon=${lon}&radius=${raggio}`));
+          const tile = res.ok ? await res.json() : null;
+          if (tile && (Array.isArray(tile.car) || Array.isArray(tile.foot))) { await salvaTile(k, tile); esito.scaricate++; }
+          else esito.fallite++;
+        } catch { esito.fallite += lista.length - fatte; break; } // rete assente: inutile insistere
+        await new Promise(ok => setTimeout(ok, 150));
+      }
+      opz.onProgress?.(++fatte, lista.length);
+    }
+    void potaTile();
+    // La stessa cosa nella cache del servizio nativo, che ha la sua strada e i suoi tempi.
+    void prescaricaStradeNativo(lista.map(([, c]) => c), !!opz.auto);
+  } catch { /* best-effort */ }
+  return esito;
+}
+
+/**
+ * Le strade di un'AREA (mappe offline: centro + raggio in km), dal centro verso
+ * l'esterno, fino a `max` chiavi: oltre, l'area è troppo grande e si coprono
+ * solo i chilometri centrali — il resto si scarica camminando, quando c'è rete.
+ */
+export async function prescaricaStradeArea(lat: number, lon: number, raggioKm: number, max = 150): Promise<EsitoStrade> {
+  const punti: Array<[number, number, number]> = [];
+  const nLat = Math.ceil((raggioKm * 1000) / 1113), nLon = Math.ceil((raggioKm * 1000) / (1113 * Math.max(0.2, Math.cos((lat * Math.PI) / 180))));
+  for (let i = -nLat; i <= nLat; i++) for (let j = -nLon; j <= nLon; j++) {
+    const pLat = lat + i * 0.01, pLon = lon + j * 0.01;
+    const d = metersBetween(lat, lon, pLat, pLon);
+    if (d <= raggioKm * 1000) punti.push([pLat, pLon, d]);
+  }
+  punti.sort((a, b) => a[2] - b[2]);
+  // Già una griglia a passo di chiave: il riempimento fra un punto e l'altro
+  // di prescaricaStrade aggiunge solo chiavi che ci sono già.
+  return prescaricaStrade(punti.slice(0, max).map(p => [p[0], p[1]]), { max });
+}
+
 /**
  * True se conviene (ri)scaricare il tile: mai fatto, oppure spostati oltre la
  * soglia del modo di trasporto. Durante l'attesa crescente post-errore torna
@@ -157,13 +328,28 @@ export async function refreshRoadTile(lat: number, lon: number, radius?: number)
   inFlight = true;
   const r = Number.isFinite(radius as number) ? (radius as number) : RAGGIO_M[modoStimato];
   let ok = false;
-  try {
-    const res = await fetch(getApiUrl(`/api/roads/tile?lat=${lat}&lon=${lon}&radius=${r}`));
-    if (!res.ok) return;
-    const tile = await res.json();
-    if (!tile || (!Array.isArray(tile.car) && !Array.isArray(tile.foot))) return;
+  const applica = (tile: any): boolean => {
+    if (!tile || (!Array.isArray(tile.car) && !Array.isArray(tile.foot))) return false;
+    if (!(tile.car?.length || tile.foot?.length)) return false;
     currentIndex = buildIndex({ car: tile.car || [], foot: tile.foot || [] });
-    ok = true;
+    currentTile = { car: tile.car || [], foot: tile.foot || [] };
+    grafi.car = null; grafi.foot = null;
+    return true;
+  };
+  try {
+    try {
+      const res = await fetch(getApiUrl(`/api/roads/tile?lat=${lat}&lon=${lon}&radius=${r}`));
+      if (res.ok) {
+        const tile = await res.json();
+        if (applica(tile)) { ok = true; void salvaTile(chiaveTile(lat, lon), tile); }
+      }
+    } catch { /* rete assente: si prova il disco qui sotto */ }
+    // SENZA RETE: il tile della zona scaricato in anticipo (prescaricaStrade) o
+    // in un passaggio precedente. Vale come riuscito.
+    if (!ok) {
+      const salvato = await leggiTile(chiaveTile(lat, lon));
+      if (salvato && applica(salvato)) ok = true;
+    }
   } catch {
     /* best-effort: senza tile si usa il GPS grezzo, in silenzio */
   } finally {

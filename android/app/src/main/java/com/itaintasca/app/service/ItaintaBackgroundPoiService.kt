@@ -19,14 +19,17 @@ import com.itaintasca.app.db.TriggerState
 import com.itaintasca.app.db.TriggerStateEntity
 import com.itaintasca.app.db.toPoiEntity
 import com.itaintasca.app.geofence.ActivityMonitor
+import com.itaintasca.app.geofence.Arbitrato
 import com.itaintasca.app.geofence.ArrivalWorker
 import com.itaintasca.app.geofence.BearingGate
 import com.itaintasca.app.geofence.CategoryMap
 import com.itaintasca.app.geofence.Footprints
 import com.itaintasca.app.geofence.GeofenceBroadcastReceiver
 import com.itaintasca.app.geofence.GeofenceManager
+import com.itaintasca.app.geofence.NotificationStrings
 import com.itaintasca.app.geofence.PredictiveTrigger
 import com.itaintasca.app.geofence.RaggiFiducia
+import com.itaintasca.app.geofence.RoadGraph
 import com.itaintasca.app.geofence.RoadSnap
 import com.itaintasca.app.geofence.TriggerTelemetry
 import com.itaintasca.app.widget.WipWidgetProvider
@@ -48,6 +51,8 @@ class ItaintaBackgroundPoiService : Service() {
     companion object {
         const val TAG = "ItaintaPoiService"
         const val CHANNEL_ID = "geofencing_channel"
+        /** Cruscotto del navigatore: importanza normale, silenzioso, visibile sulla lock screen. */
+        const val NAV_CHANNEL_ID = "wip_navigatore"
         const val ALERT_CHANNEL_ID = "itainta_alerts_channel"
         const val NOTIF_ID = 4004
         const val ACTION_STOP = "com.itaintasca.app.STOP"
@@ -72,6 +77,25 @@ class ItaintaBackgroundPoiService : Service() {
         // puo' scartare — li mostra al posto del testo del radar. Non nasce
         // MAI una seconda notifica: il banner "fisso" e' questa.
         const val ACTION_NAV_BANNER = "com.itaintasca.app.NAV_BANNER"
+        // (03/09/2026) I TASTI DEL CRUSCOTTO sulla notifica, gli stessi del
+        // controller in app (committente: «il banner live dovrebbe essere
+        // questo blu con gli stessi tasti del controller sotto»). Il tocco
+        // arriva al JS come evento `navBannerAction {action}` e tourService
+        // fa quello che farebbe il tasto (pausa/riprendi, salta, ricalcola,
+        // riascolta, termina). Android mostra al massimo TRE azioni: la
+        // terna cambia con lo stato (vedi buildNotification).
+        const val ACTION_NAV_PAUSE = "com.itaintasca.app.NAV_PAUSE"
+        const val ACTION_NAV_SKIP = "com.itaintasca.app.NAV_SKIP"
+        const val ACTION_NAV_REPLAY = "com.itaintasca.app.NAV_REPLAY"
+        const val ACTION_NAV_RECALC = "com.itaintasca.app.NAV_RECALC"
+        const val ACTION_NAV_END = "com.itaintasca.app.NAV_END"
+        // (21/09/2026, REVISIONE 2) «Riprendi» ha un'azione SUA: prima era lo
+        // stesso ACTION_NAV_PAUSE e il follower la eseguiva come interruttore,
+        // invertendo il proprio stato e non quello mostrato sul cruscotto.
+        const val ACTION_NAV_RESUME = "com.itaintasca.app.NAV_RESUME"
+        /** Tocco arrivato a WebView morta: si annota qui e lo consegna il plugin al suo load(). */
+        const val PREF_PENDING_NAV_ACTION = "pending_nav_action"
+        const val PREF_PENDING_NAV_ACTION_TS = "pending_nav_action_ts"
         // Notifica normale (non FGS) «permesso posizione negato».
         const val NOTIF_ID_PERMISSION = 4005
 
@@ -82,6 +106,24 @@ class ItaintaBackgroundPoiService : Service() {
          * refresh periodico. null quando il servizio non e' vivo.
          */
         @Volatile var onVoiceStateChanged: (() -> Unit)? = null
+        /**
+         * (18/09/2026) NAVIGATORE A SCHERMO SPENTO. Hook in-process invocato
+         * dal plugin quando il JS consegna o toglie un percorso (setNavRoute /
+         * clearNavRoute): il servizio adegua SUBITO la cadenza dei fix, senza
+         * aspettare il prossimo fix che a riposo puo' arrivare dopo 20-60 s.
+         * null quando il servizio non e' vivo: non serve altro, alla partenza
+         * applyLocationRate guarda NavFollower da solo.
+         */
+        @Volatile var onNavRouteChanged: (() -> Unit)? = null
+        /**
+         * (21/09/2026, REVISIONE 2) PAGINA RICREATA: il load() del plugin
+         * svuota il follower e, con questo hook, spegne anche il CRUSCOTTO.
+         * Prima la notifica restava per sempre ferma sull'ultima svolta
+         * (la pagina nuova non sa di averlo acceso e non lo spegne mai). Un
+         * giro ripreso da localStorage lo riaccende al suo primo stato.
+         * null quando il servizio non e' vivo: non si avvia niente da qui.
+         */
+        @Volatile var onPaginaNuova: (() -> Unit)? = null
         // Heartbeat letto da ServiceWatchdog: aggiornato a ogni fix GPS
         // processato, così il watchdog riavvia solo un servizio davvero
         // bloccato invece di farlo ciecamente ogni 15 min.
@@ -120,6 +162,28 @@ class ItaintaBackgroundPoiService : Service() {
          *  frequenza (ARMED). Più larga di T_LEAD per avere qualche fix di
          *  margine prima del momento dell'annuncio. */
         private const val ARM_WINDOW_S = 90.0
+
+        // ── (23/09/2026) REVISIONE 3 — batteria. Valori IDENTICI su iOS e in
+        // docs/nav-nativo-spec.md: cambiarne uno = cambiarlo nei tre posti. ──
+        /** R-FERMO: raggio dell'ancora e durata della sosta col percorso attivo. */
+        private const val NAV_FERMO_RAGGIO_M = 20f
+        private const val NAV_FERMO_DURATA_MS = 120_000L
+        /** R-FERMO: si entra sotto questa velocita'... */
+        private const val NAV_FERMO_VEL_INGRESSO_MS = 0.5f
+        /** ...e si esce subito sopra questa. */
+        private const val NAV_FERMO_VEL_USCITA_MS = 0.8f
+        /** R-FERMO: il profilo «fermo» (PRIORITY_BALANCED_POWER_ACCURACY). */
+        private const val NAV_FERMO_INTERVALLO_MS = 10_000L
+        /** R-SOSTA: raggio e durata della sosta a luoghi gia' raccontati. */
+        private const val SOSTA_RAGGIO_M = 25f
+        private const val SOSTA_DURATA_MS = 180_000L
+        /** Voce 12: il battito per il watchdog (che lo giudica vecchio dopo 3
+         *  min) si scrive al massimo ogni 20 s, o subito dopo 50 m. */
+        private const val BATTITO_INTERVALLO_MS = 20_000L
+        private const val BATTITO_SPOSTAMENTO_M = 50f
+        /** Voce 10: una gemma si notifica una volta sola in 24 h. */
+        private const val PREFS_GEMME_NOTIFICATE = "ItaintaGemmeNotificate"
+        private const val GEMMA_NOTIFICATA_TTL_MS = 24 * 60 * 60_000L
 
         // ── Soglie di accuratezza del fix (23/08/2026) ──
         /** «Sono nei paraggi»: soglia larga, usata per armare il GPS, per la
@@ -193,9 +257,81 @@ class ItaintaBackgroundPoiService : Service() {
     // "il palazzo di fronte", quindi solo lì si chiede al fornitore il fix più
     // caro possibile. Non tocca mai lo stato a RIPOSO.
     @Volatile private var isFine = false
+    // (18/09/2026) NAVIGATORE A SCHERMO SPENTO: `true` quando l'ultima
+    // requestLocationUpdates e' stata fatta con un percorso attivo in
+    // NavFollower (cadenza da navigatore). Serve solo a rendere idempotente
+    // syncNavRate: si ri-registra quando il percorso compare o sparisce, non a
+    // ogni fix. Lo scrive applyLocationRate, l'unico punto che fa la richiesta.
+    @Volatile private var navRateOn = false
+
+    // ── (23/09/2026) REVISIONE 3 — batteria (docs/nav-nativo-spec.md) ──────
+    // R-FERMO: col percorso attivo, fermi da 120 s entro 20 m e sotto 0,5 m/s
+    // → profilo «fermo» (BALANCED, 10 s). Si esce al primo fix a > 20 m
+    // dall'ancora o sopra 0,8 m/s. Scritto dal callback dei fix (main).
+    private val ancoraNav = AncoraFermo(NAV_FERMO_RAGGIO_M, NAV_FERMO_DURATA_MS)
+    @Volatile private var navFermo = false
+    // Il profilo «fermo» e' quello dell'ULTIMA requestLocationUpdates: rende
+    // idempotente syncNavRate come navRateOn.
+    @Volatile private var navFermoApplicato = false
+    // R-SOSTA: nello stato ARMATO, se TUTTI i candidati che armano sono gia'
+    // stati raccontati (ARRIVED_FIRED) e da 180 s ci si e' spostati < 25 m,
+    // si torna al RIPOSO esistente. `sostaFerma` = la misura (callback dei
+    // fix), `sostaAttiva` = il valutatore sta davvero tenendo a riposo un
+    // armamento (serve alla ripartenza da Activity Recognition).
+    private val ancoraSosta = AncoraFermo(SOSTA_RAGGIO_M, SOSTA_DURATA_MS)
+    @Volatile private var sostaFerma = false
+    @Volatile private var sostaAttiva = false
+    // (23/09/2026, voce 12) Ultima scrittura del battito/ultima posizione.
+    private var battitoScrittoAt = 0L
+    private var battitoLat = Double.NaN
+    private var battitoLon = Double.NaN
     // Guard: un solo giro di valutazione alla volta (i fix possono
     // sovrapporsi alle query su Room).
     private val predictiveBusy = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    // ── (05/10/2026) ARBITRATO fra i luoghi pronti (vedi runPredictiveEvaluation) ──
+    /** Un arrivo pronto a scattare, in attesa della scelta di fine giro. */
+    private class ArrivoPronto(
+        val poi: PoiEntity,
+        /** "arrivo" (cerchio attorno al punto d'arrivo) o "arrivo-muro" (30 m dal perimetro). */
+        val tipo: String,
+        /** I metri che ordinano l'arbitrato (strada, o muro se piu' vicino). */
+        val ordineM: Float,
+        /** Per il registro di collaudo: strada, linea d'aria, raggio. */
+        val stradaM: Float,
+        val ariaM: Double,
+        val raggioM: Float,
+        /** La distanza che va nell'evento `poiArrived`, come prima. */
+        val eventoM: Float,
+        /** Dentro il perimetro (0 m dal muro): non cede il passo a nessuno. */
+        val dentro: Boolean,
+        val pred: PredictiveTrigger.Result,
+        val raggioTelemetria: Float,
+        val extra: String = ""
+    )
+    // DA FERMI IL GPS PUO' TACERE (web 05/10/2026, collaudo a Firenze: fermo a
+    // 29 m dal Battistero, messo in attesa dal silenzio fra due guide, e poi
+    // muto per oltre due minuti). Chi aspetta il suo turno viene rivalutato da
+    // solo ogni 5 s sull'ULTIMO fix valutato, se nel frattempo non ne e'
+    // arrivato uno nuovo. Negli «ultimi metri» i fix arrivano anche da fermi
+    // (setMinUpdateDistanceMeters(0)): questa e' la rete di sicurezza, e la
+    // parita' con iOS dove il filtro di spostamento e' di 5 m.
+    private val manoArbitrato = Handler(Looper.getMainLooper())
+    @Volatile private var inAttesaArbitrato = false
+    @Volatile private var ultimaValLoc: Location? = null
+    @Volatile private var ultimaValGrezza: Location? = null
+    @Volatile private var ultimaValAt = 0L
+    private val battitoArbitrato = Runnable {
+        val loc = ultimaValLoc
+        if (inAttesaArbitrato && loc != null &&
+            System.currentTimeMillis() - ultimaValAt >= Arbitrato.BATTITO_ATTESA_MS - 500L
+        ) {
+            runPredictiveEvaluation(loc, ultimaValGrezza, daFermi = true)
+        }
+    }
+    // Registro di collaudo: una riga per attesa / per aggancio dubbio, non una per fix.
+    @Volatile private var ultimaAttesaAnnotata = ""
+    @Volatile private var ultimoAggancioDubbio = ""
 
     // (23/08/2026) Ultima lettura di getAllTriggerStates(), col suo istante.
     // Il valutatore predittivo la legge a ogni fix e la notifica di distanza
@@ -230,6 +366,15 @@ class ItaintaBackgroundPoiService : Service() {
         // (AUD-14) La voce nativa avvisa qui quando parte/finisce: si
         // ricostruisce la notifica con/senza i tasti della coda vocale.
         onVoiceStateChanged = { refreshNotificationForVoice() }
+        // (18/09/2026) Il plugin avvisa da un thread del bridge: la cadenza
+        // dei fix si tocca solo dal main, come fa tutto il resto del servizio.
+        onNavRouteChanged = { Handler(Looper.getMainLooper()).post { syncNavRate() } }
+        // (21/09/2026, REVISIONE 2) Pagina ricreata: via il cruscotto, dal main.
+        onPaginaNuova = { Handler(Looper.getMainLooper()).post { applicaNavBanner(null, null, false) } }
+        // (23/09/2026, REVISIONE 3) L'Activity Recognition dice «si cammina /
+        // si e' in auto»: si esce SUBITO dai profili da fermo, senza aspettare
+        // un fix che a riposo puo' arrivare dopo 10-60 s. Dal main.
+        ActivityMonitor.onMovimento = { Handler(Looper.getMainLooper()).post { ripartenzaDalSensore() } }
     }
 
     /**
@@ -306,7 +451,13 @@ class ItaintaBackgroundPoiService : Service() {
         // startForeground SUBITO e per OGNI percorso: il servizio può essere avviato
         // con startForegroundService da plugin/watchdog/boot/sync e ha pochi secondi
         // per promuoversi, pena ForegroundServiceDidNotStartInTimeException.
-        val notification = buildNotification("Audioguida attiva", "Acquisizione posizione...")
+        // (21/09/2026, REVISIONE 2) Con l'ULTIMO titolo/testo pubblicati, non
+        // con quelli fissi: startForeground ripubblica la notifica senza
+        // passare dalla chiave anti-duplicato, e dopo «Termina» o l'arrivo
+        // (cruscotto gia' spento) lo spegnimento del JS trovava la chiave
+        // uguale e la notifica restava su «Acquisizione posizione...». Al
+        // primo avvio i due valori SONO quelli fissi: nulla cambia.
+        val notification = buildNotification(ultimoTitolo, ultimoTesto)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
@@ -448,8 +599,34 @@ class ItaintaBackgroundPoiService : Service() {
             applicaNavBanner(
                 intent.getStringExtra("titolo"),
                 intent.getStringExtra("corpo"),
-                intent.getBooleanExtra("attivo", false)
+                intent.getBooleanExtra("attivo", false),
+                intent.getStringExtra("foto"),
+                // (03/09/2026) Pausa e modo per i tasti: assenti = si tiene
+                // quello che c'era (una build web vecchia non li manda).
+                inPausa = if (intent.hasExtra("inPausa")) intent.getBooleanExtra("inPausa", false) else null,
+                modo = intent.getStringExtra("modo")
             )
+            return START_STICKY
+        }
+
+        // (03/09/2026) Un tasto del cruscotto toccato sulla notifica.
+        val azioneNav = when (intent?.action) {
+            ACTION_NAV_PAUSE -> "pausa"
+            ACTION_NAV_RESUME -> "riprendi"
+            ACTION_NAV_SKIP -> "salta"
+            ACTION_NAV_REPLAY -> "riascolta"
+            ACTION_NAV_RECALC -> "ricalcola"
+            ACTION_NAV_END -> "termina"
+            else -> null
+        }
+        if (azioneNav != null) {
+            val dettoDalNativo = applicaAzioneNavAlFollower(azioneNav)
+            // (21/09/2026, REVISIONE 2) «Riascolta» gia' detto dal follower (al
+            // comando): al JS non si inoltra, al risveglio lo direbbe di nuovo
+            // (e magari la svolta di prima del congelamento).
+            if (!(azioneNav == "riascolta" && dettoDalNativo)) inoltraAzioneNav(azioneNav)
+            // (18/09/2026 notte) Dopo, non prima: vedi ridisegnaCruscottoDopoAzione.
+            ridisegnaCruscottoDopoAzione(azioneNav)
             return START_STICKY
         }
 
@@ -718,6 +895,12 @@ class ItaintaBackgroundPoiService : Service() {
                 val mergedPois = mergeWithItinerary(radarOnly)
                 currentPois = mergedPois
                 RadarState.updatePois(mergedPois)
+                // (23/09/2026, R-SOSTA, parità iOS esciDaSostaSubito) Tappe nuove
+                // = luoghi non ancora raccontati: se il GPS era a riposo per
+                // sosta torna armato SUBITO, senza aspettare un fix a lotti.
+                if (prioritizedPois.isNotEmpty()) {
+                    Handler(Looper.getMainLooper()).post { esciDaSostaSubito() }
+                }
 
                 if (prioritizedPois.isNotEmpty()) db.poiDao().insertPois(prioritizedPois)
                 if (mergedPois.isNotEmpty()) {
@@ -742,8 +925,19 @@ class ItaintaBackgroundPoiService : Service() {
         // Snap-to-path: ripristina il tile strade persistito (offline) e imposta
         // la cartella cache. Best-effort, mai bloccante per l'avvio.
         RoadSnap.cacheDir = filesDir
+        RegistroCollaudo.dir = filesDir
+        RegistroCollaudo.contesto = applicationContext
         RoadSnap.loadCached()
-        locationCallback = object : LocationCallback() {
+        // (21/09/2026, REVISIONE 2) SERVIZIO GIA' VIVO = MAI UN SECONDO
+        // CALLBACK. Qui si arriva a ogni onStartCommand «completo» (sync delle
+        // impostazioni, muto, chip, cambio piedi/auto, sentinella, watchdog):
+        // ogni volta nasceva un LocationCallback nuovo e il vecchio restava
+        // registrato al livello che aveva — anche HIGH_ACCURACY ogni 2 s da
+        // navigatore, per ore a schermo spento dopo la fine del giro, perche'
+        // applyLocationRate/syncNavRate/onDestroy vedono solo l'ultimo. Il
+        // corpo legge solo campi dell'istanza: riusarlo con le impostazioni
+        // appena rilette e' corretto. Si rifa' solo la richiesta, qui sotto.
+        if (locationCallback == null) locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val location = result.lastLocation ?: return
 
@@ -771,11 +965,30 @@ class ItaintaBackgroundPoiService : Service() {
                 // dentro tre valori a ogni fix significava riscrivere 50-200 KB
                 // ~3.600 volte l'ora sul percorso GPS caldo. Con tre sole
                 // chiavi il file pesa poche decine di byte.
-                // La cadenza NON cambia: si scrive a ogni fix come prima.
-                getSharedPreferences(PREFS_FIX, MODE_PRIVATE).edit {
-                    putLong(PREF_LAST_HEARTBEAT, System.currentTimeMillis())
-                    putFloat("lastFixLat", location.latitude.toFloat())
-                    putFloat("lastFixLon", location.longitude.toFloat())
+                // (23/09/2026, voce 12) Non piu' a OGNI fix: da armati o col
+                // navigatore erano ~1.800 scritture con fsync l'ora, per un
+                // battito che il watchdog giudica vecchio solo dopo 3 min
+                // (HEARTBEAT_STALE_MS). Si scrive al massimo ogni 20 s, oppure
+                // subito se la posizione si e' spostata di oltre 50 m (il
+                // widget resta aggiornato). A riposo (un fix ogni 20-60 s)
+                // non cambia nulla: si scrive a ogni fix come prima.
+                val adessoMs = System.currentTimeMillis()
+                val spostatoBattito = battitoLat.isNaN() || run {
+                    val d = FloatArray(1)
+                    Location.distanceBetween(battitoLat, battitoLon, location.latitude, location.longitude, d)
+                    d[0] > BATTITO_SPOSTAMENTO_M
+                }
+                if (spostatoBattito || adessoMs - battitoScrittoAt >= BATTITO_INTERVALLO_MS ||
+                    adessoMs < battitoScrittoAt
+                ) {
+                    getSharedPreferences(PREFS_FIX, MODE_PRIVATE).edit {
+                        putLong(PREF_LAST_HEARTBEAT, adessoMs)
+                        putFloat("lastFixLat", location.latitude.toFloat())
+                        putFloat("lastFixLon", location.longitude.toFloat())
+                    }
+                    battitoScrittoAt = adessoMs
+                    battitoLat = location.latitude
+                    battitoLon = location.longitude
                 }
 
                 // «Salute del viaggio»: aggiorna il bucket passi del giorno
@@ -788,6 +1001,19 @@ class ItaintaBackgroundPoiService : Service() {
                 // stato attività il gate non scatta mai.
                 if (isGpsTeleport(location)) return
 
+                // (23/09/2026, REVISIONE 3) Misura della sosta (R-FERMO,
+                // R-SOSTA) sui fix accettati. Prima di seguiNavigatore: il suo
+                // syncNavRate applica subito un cambio di profilo «fermo».
+                aggiornaSoste(location)
+
+                // (18/09/2026) NAVIGATORE A SCHERMO SPENTO: il fix va anche al
+                // follower delle svolte. Dopo i due gate qui sopra (fix
+                // simulati, teletrasporto): una svolta detta su una posizione
+                // finta e' peggio di una svolta in ritardo di un fix. Senza
+                // percorso costa un confronto e ritorna. Non tocca nulla di
+                // quello che segue (radar, predittore, recinti).
+                seguiNavigatore(location)
+
                 if (lastQueryLocation == null && currentPois.isEmpty()) {
                     updateNotificationAndStatus("Audioguida attiva", "Posizione acquisita. Caricamento radar...")
                 }
@@ -798,11 +1024,16 @@ class ItaintaBackgroundPoiService : Service() {
                 // marciapiede/strada più vicina; senza tile o strada vicina
                 // resta il GPS grezzo. Il tile si scarica sullo stesso "cambio
                 // area" dei POI, fuori dal main thread.
-                if (RoadSnap.shouldRefresh(location.latitude, location.longitude)) {
+                // (23/09/2026, voce 15) In modalita' navigatore senza tappe il
+                // tile non serve a nessuno (serve solo al valutatore dei POI).
+                if (!(radarSenzaCategorie() && itineraryPois.isEmpty()) && RoadSnap.shouldRefresh(location.latitude, location.longitude)) {
                     serviceScope.launch(Dispatchers.IO) {
                         RoadSnap.refresh(location.latitude, location.longitude)
                     }
                 }
+                // (04/10/2026) Traccia della passeggiata nel registro di collaudo:
+                // solo con la modalita' collaudo accesa, una riga ogni 4 secondi.
+                RegistroCollaudo.posizione(location.latitude, location.longitude, location.accuracy)
                 val evalLoc = RoadSnap.snap(location.latitude, location.longitude, location.accuracy, guideMode == "driving")
                     ?.let { Location(location).apply { latitude = it.first; longitude = it.second } }
                     ?: location
@@ -811,7 +1042,9 @@ class ItaintaBackgroundPoiService : Service() {
                 // valuta il CPA a ogni fix, senza attendere che l'OS
                 // consegni la transizione ENTER. La valutazione usa la posizione
                 // snappata; il refresh area e la notifica usano il GPS grezzo.
-                runPredictiveEvaluation(evalLoc)
+                // (05/10/2026, ARBITRATO) Anche il fix NON agganciato: l'aggancio
+                // alla strada non e' creduto da solo (vedi runPredictiveEvaluation).
+                runPredictiveEvaluation(evalLoc, grezza = location)
                 checkRefreshGeofences(location)
                 updateDistanceNotification(location)
             }
@@ -835,7 +1068,12 @@ class ItaintaBackgroundPoiService : Service() {
                 Log.d(TAG, "Instant location fix on start, fetching POIs...")
                 checkRefreshGeofences(location)
             }
-            applyLocationRate(armed = false)
+            // (21/09/2026, REVISIONE 2) Al livello GIA' deciso (armato/fine dal
+            // predittore, percorso del follower letto da applyLocationRate),
+            // non «a riposo»: a servizio gia' armato il predittore, idempotente,
+            // non ri-armerebbe e l'arrivo al POI sarebbe campionato ogni 20-60 s.
+            // Al primo avvio isArmed e isFine sono false: identico a prima.
+            applyLocationRate(isArmed, isFine)
         } catch (e: SecurityException) {
             // (MAP-01) Permesso revocato mentre il servizio era acceso.
             onLocationPermissionLost()
@@ -867,9 +1105,40 @@ class ItaintaBackgroundPoiService : Service() {
         // stesso, alla prima valutazione che ne ha bisogno), spento appena si
         // torna a IDLE. Un magnetometro acceso in mezzo alla campagna e' solo
         // batteria.
-        if (!armed) BearingGate.disattiva()
+        // (23/09/2026, R-BUSSOLA/R-SOSTA) Un riposo per SOSTA non chiude la
+        // finestra armata agli occhi del gate: senza la sosta si sarebbe
+        // rimasti armati, quindi il sensore si spegne ma la finestra resta
+        // «gia' chiesta» (preRiscalda la riaccende prima dell'arrivo dopo).
+        if (!armed) { if (sostaAttiva) BearingGate.decisa() else BearingGate.disattiva() }
         val cb = locationCallback ?: return
-        val request = if (armed) {
+        // (18/09/2026) NAVIGATORE A SCHERMO SPENTO. Con un percorso attivo in
+        // NavFollower il servizio deve ricevere un fix ogni ~2 s anche quando
+        // NON c'e' nessun POI in rotta — anzi soprattutto allora: in "modalita'
+        // navigatore" (categories=['gemme:off']) il radar e' vuoto, il
+        // predittore non arma mai e a RIPOSO arriverebbe un fix ogni 20-60 s,
+        // cioe' una svolta si' e tre no. Si riusa la richiesta ARMATA cosi'
+        // com'e' (HIGH_ACCURACY, 2 s a piedi / 1 s in auto, nessun filtro di
+        // spostamento): e' gia' dentro i limiti chiesti dal follower (≤ 2000
+        // ms, ≤ 5 m). Senza percorso `navAttivo` e' false e questa funzione si
+        // comporta ESATTAMENTE come prima: il RIPOSO non e' toccato. Tolto il
+        // percorso (clearNavRoute o arrivo finale) syncNavRate richiama qui e
+        // si torna al livello che il predittore aveva deciso (isArmed/isFine).
+        // Il gate di bussola qui sopra segue ancora il solo `armed` vero.
+        val navAttivo = NavFollower.haPercorsoAttivo()
+        navRateOn = navAttivo
+        // (23/09/2026, REVISIONE 3, R-FERMO) Percorso attivo ma utente fermo
+        // da 120 s entro 20 m: profilo «fermo». MAI quando il predittore ha
+        // armato per un POI (`armed`): li' la richiesta armata resta com'era.
+        val navFermoOra = navAttivo && !armed && navFermo
+        navFermoApplicato = navFermoOra
+        val request = if (navFermoOra) {
+            // BALANCED ogni 10 s, nessun lotto: il follower riceve ancora un
+            // fix ogni 10 s (conta le manovre come prima) e al primo passo
+            // aggiornaSoste/ripartenzaDalSensore riportano i 2 s.
+            LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, NAV_FERMO_INTERVALLO_MS)
+                .setMinUpdateIntervalMillis(NAV_FERMO_INTERVALLO_MS)
+                .build()
+        } else if (armed || navAttivo) {
             // Intervallo armato MODE-AWARE: in auto serve reattività (1 s); a piedi
             // 2 s dimezza il carico GNSS/CPU senza perdere trigger (a passo d'uomo
             // 2 s ≈ 3 m). Prima era 1 Hz pieno anche a piedi = il driver di calore #1.
@@ -921,7 +1190,7 @@ class ItaintaBackgroundPoiService : Service() {
         try {
             fusedClient.removeLocationUpdates(cb)
             fusedClient.requestLocationUpdates(request, cb, Looper.getMainLooper())
-            Log.d(TAG, "Location rate → ${if (armed) "ARMED (high accuracy, fine${if (fine) ", ultimi metri" else ""})" else "IDLE (20s, balanced)"}")
+            Log.d(TAG, "Location rate → ${if (armed) "ARMED (high accuracy, fine${if (fine) ", ultimi metri" else ""})" else if (navFermoOra) "NAV FERMO (10s, balanced)" else if (navAttivo) "NAV (high accuracy, percorso attivo)" else "IDLE (20s, balanced)"}")
         } catch (e: SecurityException) {
             // (MAP-01) Permesso revocato a servizio acceso: non si resta
             // "attivi" senza posizione.
@@ -945,6 +1214,265 @@ class ItaintaBackgroundPoiService : Service() {
     }
 
     /**
+     * (18/09/2026) NAVIGATORE A SCHERMO SPENTO: allinea la cadenza dei fix
+     * alla presenza di un percorso in NavFollower. Idempotente: rifa' la
+     * requestLocationUpdates solo quando il percorso compare o sparisce
+     * (consegna, clearNavRoute, arrivo finale), mantenendo il livello armato
+     * che il predittore ha deciso. Chiamata dal main: dall'hook del plugin
+     * (subito) e a ogni fix (rete di sicurezza: copre il percorso consegnato a
+     * servizio non ancora partito e quello che FINISCE dentro onFix).
+     */
+    private fun syncNavRate() {
+        if (locationCallback == null) return
+        val navAttivo = NavFollower.haPercorsoAttivo()
+        // (23/09/2026, REVISIONE 3) Anche l'ingresso/uscita dal profilo
+        // «fermo» (R-FERMO) rifa' la richiesta; altrimenti nulla.
+        if (navAttivo == navRateOn && (navAttivo && !isArmed && navFermo) == navFermoApplicato) return
+        applyLocationRate(isArmed, isFine)
+    }
+
+    /**
+     * (23/09/2026, REVISIONE 3 — batteria) Misura della sosta a ogni fix
+     * accettato (dopo i gate mock/teletrasporto), sul GPS grezzo.
+     *  - R-SOSTA: `sostaFerma` = da 180 s entro 25 m dall'ancora. La legge il
+     *    valutatore, che da solo decide se TUTTI i candidati sono raccontati.
+     *  - R-FERMO: solo col percorso attivo. Si entra fermi da 120 s entro 20 m
+     *    e con velocita' < 0,5 m/s; si esce al primo fix a > 20 m dall'ancora
+     *    o con velocita' > 0,8 m/s (nuova ancora). Il cambio lo applica
+     *    syncNavRate, chiamato subito dopo da seguiNavigatore.
+     * Fix senza velocita' dichiarata = velocita' 0 (a 10 s BALANCED spesso
+     * manca): l'uscita la da' comunque lo spostamento dall'ancora.
+     */
+    private fun aggiornaSoste(location: Location) {
+        try {
+            val oraMs = if (location.elapsedRealtimeNanos > 0L)
+                location.elapsedRealtimeNanos / 1_000_000L else SystemClock.elapsedRealtime()
+            sostaFerma = ancoraSosta.aggiorna(location.latitude, location.longitude, oraMs)
+            if (!NavFollower.haPercorsoAttivo()) {
+                ancoraNav.azzera()
+                navFermo = false
+                return
+            }
+            val vel = if (location.hasSpeed()) location.speed else 0f
+            val fermo = ancoraNav.aggiorna(
+                location.latitude, location.longitude, oraMs,
+                riparti = vel > NAV_FERMO_VEL_USCITA_MS
+            )
+            val prima = navFermo
+            navFermo = if (prima) fermo else fermo && vel < NAV_FERMO_VEL_INGRESSO_MS
+            if (navFermo != prima) Log.d(TAG, if (navFermo) "R-FERMO: percorso attivo, fermo da 120 s → GPS 10 s" else "R-FERMO: ripartenza → GPS da navigatore")
+        } catch (e: Exception) {
+            // Mai far cadere il giro dei fix: nel dubbio, ritmo pieno.
+            sostaFerma = false
+            navFermo = false
+        }
+    }
+
+    /**
+     * (23/09/2026, REVISIONE 3) L'Activity Recognition ha visto partire
+     * l'utente (WALKING / ON_FOOT / IN_VEHICLE): via le ancore e ritmo pieno
+     * SUBITO, senza aspettare un fix che nei profili da fermo arriva ogni
+     * 10-60 s. Solo un modo per uscire prima: non fa entrare in nessuna sosta.
+     * Dal main (hook ActivityMonitor.onMovimento).
+     */
+    /**
+     * (23/09/2026, R-SOSTA) Un evento che non e' un fix (tappe nuove) rende
+     * falso «tutti raccontati»: se il valutatore teneva a riposo un armamento,
+     * si torna armati adesso (senza «ultimi metri»); il prossimo fix rivaluta
+     * tutto come sempre. Dal main.
+     */
+    private fun esciDaSostaSubito() {
+        if (locationCallback == null || !sostaAttiva) return
+        ancoraSosta.azzera()
+        sostaFerma = false
+        sostaAttiva = false
+        isArmed = true
+        isFine = false
+        Log.d(TAG, "R-SOSTA: tappe nuove → ARMATO")
+        applyLocationRate(true, false)
+    }
+
+    private fun ripartenzaDalSensore() {
+        if (locationCallback == null) return
+        ancoraSosta.azzera()
+        ancoraNav.azzera()
+        sostaFerma = false
+        val eraFermoNav = navFermo
+        navFermo = false
+        if (sostaAttiva) {
+            // Il valutatore stava tenendo a riposo un armamento: si torna
+            // armati (senza «ultimi metri»); il prossimo fix rivaluta tutto
+            // normalmente e, se nessun POI arma piu', torna a riposo da se'.
+            sostaAttiva = false
+            isArmed = true
+            isFine = false
+            Log.d(TAG, "R-SOSTA: ripartenza (Activity Recognition) → ARMATO")
+            applyLocationRate(true, false)
+        } else if (eraFermoNav) {
+            Log.d(TAG, "R-FERMO: ripartenza (Activity Recognition) → GPS da navigatore")
+            syncNavRate()
+        }
+    }
+
+    /**
+     * (23/09/2026, voce 15) Modalita' navigatore: la sola sentinella
+     * "gemme:off" = nessuna categoria del radar puo' essere attiva
+     * (CategoryMap.isActive: gemme spente, nessuna chiave UI). Le tappe
+     * dell'itinerario restano attive comunque, ma non arrivano dal radar.
+     */
+    private fun radarSenzaCategorie(): Boolean {
+        val sel = selectedCategories
+        return sel.isNotEmpty() && sel.all { it == "gemme:off" }
+    }
+
+    /**
+     * (18/09/2026) NAVIGATORE A SCHERMO SPENTO: passa il fix al follower e, se
+     * ha una frase, la DICE. Il follower tiene il conto delle manovre a ogni
+     * fix ma ritorna una frase solo quando il battito del JS manca da piu' di
+     * 12 s (WebView congelata): finche' il JS e' vivo parla lui, qui si tace.
+     *
+     * La voce passa per la STESSA strada di speakText kind "nav" del plugin a
+     * servizio acceso: la coda sequenziale di GeofenceBroadcastReceiver
+     * (priority 0 = passa davanti ai teaser in attesa, mai sopra quello in
+     * corso; fuoco audio e pausa della guida JS li gestisce la coda). Nessun
+     * secondo motore TTS — la nota in testa al file resta vera: il servizio
+     * non parla, accoda.
+     *
+     * Posizione GREZZA, non quella snappata alla strada: le manovre e il
+     * tracciato arrivano dal motore di percorso del JS, non dal tile di RoadSnap.
+     * Orologio elapsedRealtime: lo stesso del plugin (battito), monotono.
+     */
+    private fun seguiNavigatore(location: Location) {
+        try {
+            // (21/09/2026, REVISIONE 2) Un fix VECCHIO (consegnato a lotti dopo
+            // un riposo del GPS, o arretrato) non guida nessuno: si scarta,
+            // come fa gia' iOS (oltre 15 s). Solo qui: radar e teaser restano
+            // com'erano.
+            val etaFixMs = (SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos) / 1_000_000L
+            if (etaFixMs > 15_000L) { syncNavRate(); return }
+            // Un fix senza accuratezza dichiarata non si puo' giudicare: si
+            // passa un valore oltre MAX_ACC_M cosi' il follower lo scarta.
+            val acc = if (location.hasAccuracy()) location.accuracy.toDouble() else 9999.0
+            val frase = NavFollower.onFix(
+                location.latitude, location.longitude, acc, SystemClock.elapsedRealtime(),
+                // (03/10/2026) La velocità del GPS, se c'è: i tempi delle svolte la seguono.
+                if (location.hasSpeed()) location.speed.toDouble() else Double.NaN
+            )
+            if (!frase.isNullOrBlank()) {
+                Log.d(TAG, "NavFollower al comando (JS muto): \"$frase\"")
+                diceNavigatore(frase)
+            }
+            // (18/09/2026 notte) IL CRUSCOTTO A SCHERMO SPENTO: DOPO la logica
+            // delle svolte, sullo stesso fix. Il follower ritorna qualcosa solo
+            // col nativo al comando, al massimo ogni 3 s e solo a firma
+            // cambiata; col JS vivo e' sempre null e la notifica resta sua.
+            NavFollower.cruscotto(
+                location.latitude, location.longitude, acc,
+                SystemClock.elapsedRealtime(), System.currentTimeMillis()
+            )?.let { ridisegnaCruscottoNativo(it) }
+        } catch (e: Exception) {
+            // Il navigatore non deve MAI far cadere il giro dei POI qui sotto.
+            Log.w(TAG, "NavFollower: ${e.message}")
+        }
+        syncNavRate()
+    }
+
+    /** La voce del navigatore: la stessa coda di `speakText` kind "nav". */
+    private fun diceNavigatore(frase: String) {
+        GeofenceBroadcastReceiver.enqueue(
+            this,
+            GeofenceBroadcastReceiver.Companion.SpeechItem(
+                text = frase,
+                isGem = false,
+                isItinerary = false,
+                poiId = null,
+                priority = 0,
+                kind = "nav",
+                // Una svolta vale 20 secondi: dopo, dirla sarebbe sbagliato.
+                scadenzaElapsedMs = SystemClock.elapsedRealtime() + 20_000L
+            )
+        )
+    }
+
+    /**
+     * (18/09/2026) I tasti del cruscotto premuti a SCHERMO SPENTO: il JS è
+     * congelato e l'azione inoltrata la vedrà solo al risveglio, ma intanto
+     * chi parla è il follower nativo — che quindi obbedisce subito da solo.
+     * Col JS vivo è innocuo (vedi NavFollower.impostaPausa).
+     * (21/09/2026, REVISIONE 2) Ritorna true solo se il follower ha DETTO
+     * qualcosa («riascolta» col nativo al comando): quell'azione non va
+     * inoltrata al JS, sarebbe detta due volte.
+     */
+    private fun applicaAzioneNavAlFollower(azione: String): Boolean {
+        try {
+            when (azione) {
+                // (21/09/2026, REVISIONE 2) Azioni ESPLICITE, mai un'alternanza;
+                // e il GPS segue la pausa (in pausa torna a riposo).
+                "pausa" -> { NavFollower.impostaPausa(true); syncNavRate() }
+                "riprendi" -> { NavFollower.impostaPausa(false); syncNavRate() }
+                "termina" -> {
+                    // (21/09/2026, REVISIONE 2) Con la FOTOGRAFIA del progresso:
+                    // al «Termina» in ritardo seguito da «no» il JS lo riprende.
+                    NavFollower.terminaDalBanner(); syncNavRate()
+                    // (18/09/2026 notte) «Termina» SPEGNE il cruscotto. Lo fa
+                    // gia' inoltraAzioneNav subito dopo: qui e' esplicito perche'
+                    // il follower non dipenda da quell'ordine (la chiave
+                    // anti-duplicato evita la doppia pubblicazione).
+                    ridisegnaCruscottoNativo(NavFollower.Cruscotto(spegni = true))
+                }
+                "riascolta" -> {
+                    val frase = NavFollower.ripeti(SystemClock.elapsedRealtime())
+                    if (frase != null) { diceNavigatore(frase); return true }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "NavFollower azione $azione: ${e.message}")
+        }
+        return false
+    }
+
+    /**
+     * (18/09/2026 notte) Tasto «pausa»/«riprendi» a SCHERMO SPENTO: ridisegno
+     * immediato del cruscotto con l'`inPausa` del follower. Va chiamata DOPO
+     * inoltraAzioneNav, non dentro applicaAzioneNavAlFollower: inoltraAzioneNav
+     * imposta navBannerInPausa, e un ridisegno fatto prima verrebbe coperto.
+     * Fatto dopo, l'ultima parola e' quella del follower, che a schermo spento
+     * e' chi comanda davvero. Col JS vivo cruscottoSubito e' null e resta
+     * tutto com'era. (21/09/2026) Per «pausa» E per «riprendi», ora distinti.
+     */
+    private fun ridisegnaCruscottoDopoAzione(azione: String) {
+        if (azione != "pausa" && azione != "riprendi") return
+        try {
+            NavFollower.cruscottoSubito(SystemClock.elapsedRealtime(), System.currentTimeMillis())
+                ?.let { ridisegnaCruscottoNativo(it) }
+        } catch (e: Exception) {
+            Log.w(TAG, "NavFollower cruscotto dopo $azione: ${e.message}")
+        }
+    }
+
+    /**
+     * (18/09/2026 notte) IL CRUSCOTTO A SCHERMO SPENTO. Committente: «anche il
+     * monitor, il banner deve funzionare sul display spento». Ridisegna la
+     * notifica per la STESSA strada interna di updateNavBanner
+     * (ACTION_NAV_BANNER → applicaNavBanner): stessa notifica persistente,
+     * stessa chiave anti-duplicato, stessi tasti. Il follower porta titolo,
+     * corpo e pausa ricalcolati sul fix; foto e modo restano quelli
+     * dell'ultimo stato mandato dal JS (la foto si ripassa uguale, cosi'
+     * applicaNavBanner non la butta e non la riscarica; modo=null = si tiene).
+     * `spegni` = come updateNavBanner con attivo:false.
+     */
+    private fun ridisegnaCruscottoNativo(c: NavFollower.Cruscotto) {
+        if (c.spegni) {
+            applicaNavBanner(null, null, false)
+            return
+        }
+        // Tappa cambiata a schermo spento: la foto ricordata è della tappa di
+        // prima → non si mostra (regola: nessuna foto è meglio di quella sbagliata).
+        val foto = if (c.tappaCambiata) "" else navBannerFotoUrl
+        applicaNavBanner(c.titolo, c.corpo, true, foto, inPausa = c.inPausa)
+    }
+
+    /**
      * Valutatore predittivo in-process (Blocchi 2 e 3).
      *
      * Fa tre cose che i geofence circolari dell'OS non possono fare:
@@ -955,7 +1483,7 @@ class ItaintaBackgroundPoiService : Service() {
      *      continuava a raccontare un monumento già alle spalle;
      *   3. REGOLA IL DUTY CYCLE in base a quanto è vicino il prossimo POI.
      */
-    private fun runPredictiveEvaluation(location: Location) {
+    private fun runPredictiveEvaluation(location: Location, grezza: Location? = null, daFermi: Boolean = false) {
         if (currentPois.isEmpty()) { disarmIfArmed(); return }
         // GATE ACCURATEZZA (fail-closed): senza un fix RECENTE e PRECISO ogni
         // trigger è sospetto. Indoor/seminterrato la posizione di RETE ha
@@ -977,12 +1505,18 @@ class ItaintaBackgroundPoiService : Service() {
         // spegnerebbe anche l'armamento, cioè proprio il meccanismo che serve a
         // ottenere il fix preciso. Il filtro a 50 m sta più in basso, davanti
         // alle sole chiamate che fanno partire la voce.
-        val maxFixAgeMs = 2 * 60_000L
+        // (05/10/2026, ARBITRATO) `daFermi` = rivalutazione dell'ULTIMO fix
+        // perche' qualcuno aspetta il suo turno (vedi battitoArbitrato): come
+        // sul web vale finche' quel fix non ha piu' di 10 minuti.
+        val maxFixAgeMs = if (daFermi) Arbitrato.FERMI_MAX_ETA_MS else 2 * 60_000L
         if (!location.hasAccuracy() || location.accuracy <= 0f || location.accuracy > ACCURACY_NEARBY_M ||
             System.currentTimeMillis() - location.time > maxFixAgeMs) {
             disarmIfArmed()
             return
         }
+        ultimaValLoc = location
+        ultimaValGrezza = grezza
+        ultimaValAt = System.currentTimeMillis()
         // Fix abbastanza preciso per far PARLARE l'app. Se è false si continua a
         // valutare tutto (stati, superamenti, duty cycle): si tace e basta, e al
         // fix successivo — che nel frattempo la finestra armata sta rendendo più
@@ -1008,10 +1542,27 @@ class ItaintaBackgroundPoiService : Service() {
                 var shouldFine = false
                 // Anti-spam: in una piazza densa parla solo il primo.
                 var spokenInBatch = false
+                // (03/10/2026) Notifica unica di avvicinamento: nuovo fix, nuovo batch; e scadenza a 10 min.
+                GeofenceBroadcastReceiver.nuovoBatchAvvicinamenti()
+                GeofenceBroadcastReceiver.scadenzaAvvicinamento(this@ItaintaBackgroundPoiService)
                 // (AUD-04) Stessa regola per gli arrivi decisi qui: nello
                 // stesso fix una sola guida completa (pass consumato una
                 // volta); gli altri POI scrivono lo stato e notificano.
-                var arrivalSpokenInBatch = false
+                // (05/10/2026, ARBITRATO) Gli altri non scrivono piu' lo stato:
+                // chi e' pronto entra in `pronti`, in fondo al giro parla UNO
+                // e gli altri restano in attesa (vedi «ARBITRATO» piu' sotto).
+                val pronti = ArrayList<ArrivoPronto>()
+                // I luoghi che pesano e stanno arrivando entro 100 m di strada.
+                val importanti = HashSet<String>()
+                // (23/09/2026, REVISIONE 3, R-SOSTA) true se almeno UN POI
+                // che arma non e' ancora stato raccontato (stato diverso da
+                // ARRIVED_FIRED all'inizio di questo giro): allora la sosta
+                // non si applica mai. Misura sola: non tocca nessun trigger.
+                var armaNonRaccontato = false
+                // (23/09/2026, R-BUSSOLA) true se resta un candidato (non
+                // tappa, non raccontato, non appena deciso dal gate) che
+                // potrebbe chiedere la bussola ai prossimi fix.
+                var bussolaServe = false
 
                 // Si valutano solo i candidati plausibili: oltre 3× il raggio
                 // di alert il CPA non può cadere nella finestra di anticipo.
@@ -1041,10 +1592,13 @@ class ItaintaBackgroundPoiService : Service() {
                         distBuf
                     )
                     val dIngresso = distBuf[0]
-                    val dMuro = Footprints.distanzaDalPerimetro(
+                    // (03/10/2026) I 30 m dal muro valgono solo per i luoghi
+                    // senza porta (piazze, parchi, ponti, panorami): per gli
+                    // edifici conta il punto d'arrivo. Vedi Footprints.senzaPorta.
+                    val dMuro = if (Footprints.senzaPorta(poi.poiType, poi.nome)) Footprints.distanzaDalPerimetro(
                         poi.id, poi.footprint, location.latitude, location.longitude,
                         entro = Footprints.TRIGGER_CAR_M
-                    )
+                    ) else Double.POSITIVE_INFINITY
                     // La distanza che ordina e' la MINORE fra ingresso e
                     // bordo del perimetro: in un centro storico a 30 m dal
                     // muro di tre chiese vince quella di cui si sfiora il
@@ -1063,6 +1617,35 @@ class ItaintaBackgroundPoiService : Service() {
                 )
                 val candidates = if (candidati.size > MAX_PREDICTIVE_CANDIDATES)
                     candidati.subList(0, MAX_PREDICTIVE_CANDIDATES) else candidati
+
+                // (03/10/2026) Le distanze di strada da QUI, calcolate una
+                // volta per fix e poi lette per ogni candidato. null = utente
+                // fuori rete o tile non ancora scaricata (→ linea d'aria).
+                val sorgenteStrada: RoadGraph.Sorgente? = if (candidates.isEmpty()) null else try {
+                    RoadSnap.grafo(isDriving)?.da(
+                        location.latitude, location.longitude, RoadGraph.ricercaM(isDriving)
+                    )
+                } catch (e: Exception) { null }
+
+                // (05/10/2026, ARBITRATO) L'AGGANCIO ALLA STRADA NON E' CREDUTO DA
+                // SOLO (web 04/10/2026, test a Roma: Palazzo Doria-Pamphili
+                // scattato a 99 m di strada). Accanto a un incrocio l'aggancio
+                // puo' posare il telefono sulla via parallela, e da li' il luogo
+                // risulta «a 30 m». Se ha spostato il fix di piu' di 5 m si
+                // misura ANCHE dal punto non agganciato e per l'ARRIVO vale la
+                // distanza PIU' LUNGA delle due: la guida parte solo se
+                // entrambe la danno nel raggio. Davanti alla porta coincidono.
+                // Serve solo a confermare un arrivo: la ricerca sul grafo si
+                // ferma poco oltre il raggio d'arrivo (100 m a piedi, 150 in auto).
+                val sorgenteLibera: RoadGraph.Sorgente? =
+                    if (grezza == null || candidates.isEmpty()) null else try {
+                        Location.distanceBetween(
+                            grezza.latitude, grezza.longitude, location.latitude, location.longitude, distBuf
+                        )
+                        if (distBuf[0] > Arbitrato.SNAP_DUBBIO_M) RoadSnap.grafo(isDriving)?.da(
+                            grezza.latitude, grezza.longitude, Arbitrato.ricercaLiberaM(isDriving)
+                        ) else null
+                    } catch (e: Exception) { null }
 
                 for ((poi, _, distPerimetro) in candidates) {
                     // RAGGIO IN BASE ALLA FIDUCIA DEL PUNTO (23/08/2026):
@@ -1085,7 +1668,18 @@ class ItaintaBackgroundPoiService : Service() {
                     val stateEntity = stateMap[poi.id]
                     val state = stateEntity?.state ?: TriggerState.PENDING
                     val prevDist = lastDistances[poi.id]
-                    val distNow = pred.distanceNowMeters.toFloat()
+                    // (03/10/2026, «tutto in strada reale, mai linea d'aria»)
+                    // METRI DI STRADA fino al punto d'arrivo: dalla via
+                    // parallela o dal retro dell'isolato il luogo e' «a 20 m»
+                    // solo sulla carta. Linea d'aria solo dove una strada da
+                    // misurare non c'e' (fuori rete, tile assente): vedi
+                    // RoadGraph.cheDecide.
+                    val distNow = RoadGraph.cheDecide(
+                        pred.distanceNowMeters,
+                        try {
+                            sorgenteStrada?.verso(poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon)
+                        } catch (e: Exception) { null }
+                    ).toFloat()
 
                     // A 30 M DAL PERIMETRO (22/08/2026): la misura che governa
                     // la guida quando il POI ha il poligono. 0 = dentro.
@@ -1093,11 +1687,42 @@ class ItaintaBackgroundPoiService : Service() {
                     // stessa chiamata che si faceva qui, fatta una volta sola.
                     val alPerimetro = distPerimetro <= sogliaPerimetro
 
+                    // (05/10/2026, ARBITRATO) La distanza che decide l'ARRIVO:
+                    // la piu' lunga fra quella dal fix agganciato e quella dal
+                    // fix libero (vedi sorgenteLibera). Solo per l'arrivo: stati,
+                    // superamento e duty cycle continuano a leggere `distNow`.
+                    var distArrivo = distNow
+                    if (sorgenteLibera != null && grezza != null && distNow <= arrivoPoi) {
+                        val pLat = poi.entranceLat ?: poi.lat
+                        val pLon = poi.entranceLon ?: poi.lon
+                        Location.distanceBetween(grezza.latitude, grezza.longitude, pLat, pLon, distBuf)
+                        val libera = RoadGraph.cheDecide(
+                            distBuf[0].toDouble(),
+                            try { sorgenteLibera.verso(pLat, pLon) } catch (e: Exception) { null }
+                        ).toFloat()
+                        if (libera > distArrivo) distArrivo = libera
+                    }
+
+                    // (05/10/2026, ARBITRATO) UN LUOGO CHE PESA STA ARRIVANDO: non
+                    // ancora nel raggio, in avvicinamento, entro 100 m di strada
+                    // e libero di parlare. Chi non pesa gli cedera' il passo.
+                    val etaStatoArb = stateEntity?.let { System.currentTimeMillis() - it.updatedAt } ?: Long.MAX_VALUE
+                    if (!alPerimetro && distNow > arrivoPoi && distNow <= Arbitrato.ATTESA_IMPORTANTE_M &&
+                        prevDist != null && distNow < prevDist - Arbitrato.AVVICINA_EPS_M &&
+                        state != TriggerState.PASSED && state != TriggerState.ARRIVED_FIRED &&
+                        !(state == TriggerState.EXITED && etaStatoArb < GeofenceBroadcastReceiver.ARRIVAL_AFTER_EXIT_COOLDOWN_MS) &&
+                        Arbitrato.pesa(poi)
+                    ) {
+                        importanti.add(poi.id)
+                    }
+
                     // Finestra di attenzione: se un POI è a meno di 90 s, si alza il rate.
                     if (!pred.tCpaSeconds.isNaN() && pred.tCpaSeconds > 0 && pred.tCpaSeconds <= ARM_WINDOW_S) {
                         shouldArm = true
+                        if (state != TriggerState.ARRIVED_FIRED) armaNonRaccontato = true
                     } else if (distNow <= alertPoi * 1.5f || alPerimetro) {
                         shouldArm = true
+                        if (state != TriggerState.ARRIVED_FIRED) armaNonRaccontato = true
                     }
 
                     // ULTIMI METRI: entro 2× il raggio di arrivo (~60 m a piedi,
@@ -1143,14 +1768,21 @@ class ItaintaBackgroundPoiService : Service() {
                             )
                         if (gate == BearingGate.Esito.RIMANDA) {
                             Log.d(TAG, "Arrivo rimandato per ${poi.nome}: e' alle spalle (gate di bussola)")
+                            bussolaServe = true
                             lastDistances[poi.id] = distNow
                             continue
                         }
-                        val fired = GeofenceBroadcastReceiver.firePerimeterArrival(
-                            this@ItaintaBackgroundPoiService, poi, isAutomaticMode, db,
-                            distanceM = distPerimetro.toFloat(), fullGuide = !arrivalSpokenInBatch
-                        )
-                        if (fired) arrivalSpokenInBatch = true
+                        // (05/10/2026, ARBITRATO) Pronto: non scatta qui, entra
+                        // in lista e si decide in fondo al giro (uno solo).
+                        // Bussola, registro e arrivo sono la' col vincitore.
+                        pronti.add(ArrivoPronto(
+                            poi = poi, tipo = "arrivo-muro",
+                            ordineM = minOf(distNow, distPerimetro.toFloat()),
+                            stradaM = distNow, ariaM = pred.distanceNowMeters,
+                            raggioM = sogliaPerimetro.toFloat(), eventoM = distPerimetro.toFloat(),
+                            dentro = distPerimetro <= 0.0, pred = pred, raggioTelemetria = arrivoPoi,
+                            extra = "muro=${distPerimetro.toInt()}"
+                        ))
                         lastDistances[poi.id] = distNow
                         continue
                     }
@@ -1174,8 +1806,27 @@ class ItaintaBackgroundPoiService : Service() {
                         state == TriggerState.ARRIVED_FIRED ||
                             (state == TriggerState.PASSED && distNow > arrivoPoi) ||
                             (state == TriggerState.EXITED && ageStato < GeofenceBroadcastReceiver.ARRIVAL_AFTER_EXIT_COOLDOWN_MS)
-                    if (poi.footprint.isNullOrBlank() && fixDaTrigger &&
-                        distNow <= arrivoPoi && !arrivoRadialeBloccato
+                    // (03/10/2026) Anche gli edifici COL perimetro arrivano da
+                    // qui: per loro la regola del muro non vale piu'.
+                    // (05/10/2026, ARBITRATO) `distArrivo`, non `distNow`: se
+                    // l'aggancio alla strada ha spostato il fix, l'arrivo deve
+                    // risultare anche dal punto non agganciato.
+                    if (!alPerimetro && distNow <= arrivoPoi && distArrivo > arrivoPoi) {
+                        // L'aggancio dava l'arrivo, il punto libero no: non si
+                        // arriva. Nessuno stato, nessun cooldown, nemmeno
+                        // l'avviso (come su iOS, dove dentro il raggio d'arrivo
+                        // l'avviso non si valuta): si riprova al fix dopo. Nel
+                        // registro di collaudo una volta per luogo.
+                        if (fixDaTrigger && ultimoAggancioDubbio != poi.id) {
+                            ultimoAggancioDubbio = poi.id
+                            annotaGuida("aggancio-dubbio", poi, distNow, pred.distanceNowMeters, arrivoPoi, location)
+                        }
+                        if (!poi.isFromItinerary && state != TriggerState.ARRIVED_FIRED) bussolaServe = true
+                        lastDistances[poi.id] = distNow
+                        continue
+                    }
+                    if ((poi.footprint.isNullOrBlank() || !Footprints.senzaPorta(poi.poiType, poi.nome)) && fixDaTrigger &&
+                        distArrivo <= arrivoPoi && !arrivoRadialeBloccato
                     ) {
                         val gate = if (poi.isFromItinerary) BearingGate.Esito.IGNORA_GATE
                             else BearingGate.valuta(
@@ -1185,18 +1836,18 @@ class ItaintaBackgroundPoiService : Service() {
                             )
                         if (gate == BearingGate.Esito.RIMANDA) {
                             Log.d(TAG, "Arrivo radiale rimandato per ${poi.nome}: e' alle spalle (gate di bussola)")
+                            bussolaServe = true
                             lastDistances[poi.id] = distNow
                             continue
                         }
-                        TriggerTelemetry.log(
-                            this@ItaintaBackgroundPoiService, poi.id, poi.nome,
-                            "arrival-radial", pred, location, isDriving, arrivoPoi
-                        )
-                        val fired = GeofenceBroadcastReceiver.firePerimeterArrival(
-                            this@ItaintaBackgroundPoiService, poi, isAutomaticMode, db,
-                            distanceM = distNow, fullGuide = !arrivalSpokenInBatch
-                        )
-                        if (fired) arrivalSpokenInBatch = true
+                        // (05/10/2026, ARBITRATO) Pronto: in lista, si decide in
+                        // fondo al giro. Bussola, telemetria e registro la'.
+                        pronti.add(ArrivoPronto(
+                            poi = poi, tipo = "arrivo",
+                            ordineM = distArrivo, stradaM = distArrivo, ariaM = pred.distanceNowMeters,
+                            raggioM = arrivoPoi, eventoM = distNow,
+                            dentro = false, pred = pred, raggioTelemetria = arrivoPoi
+                        ))
                         lastDistances[poi.id] = distNow
                         continue
                     }
@@ -1230,11 +1881,13 @@ class ItaintaBackgroundPoiService : Service() {
                             // massimo un fix (1-2 s nella finestra armata),
                             // perché l'approach nasce comunque con ~90 s di
                             // anticipo sul punto di massimo avvicinamento.
-                            if (fixDaTrigger && pred.decision == PredictiveTrigger.Decision.FIRE) {
+                            // `distNow <= alertPoi`: l'avviso scatta a 150/300 m DI STRADA.
+                            if (fixDaTrigger && pred.decision == PredictiveTrigger.Decision.FIRE && distNow <= alertPoi) {
                                 TriggerTelemetry.log(
                                     this@ItaintaBackgroundPoiService, poi.id, poi.nome,
                                     "approach-predictive", pred, location, isDriving, alertPoi
                                 )
+                                annotaGuida("avviso", poi, distNow, pred.distanceNowMeters, alertPoi, location)
                                 GeofenceBroadcastReceiver.firePredictedApproach(
                                     this@ItaintaBackgroundPoiService, poi.id, poi.nome,
                                     poi.guideDefault, poi.isGem, poi.isFromItinerary, db,
@@ -1252,11 +1905,12 @@ class ItaintaBackgroundPoiService : Service() {
                             // Stesso gate a 50 m del ramo PENDING: qui il rinvio
                             // è ancora più innocuo, il cooldown è già passato.
                             if (exitedAge > GeofenceBroadcastReceiver.APPROACH_RETRIGGER_COOLDOWN_MS &&
-                                fixDaTrigger && pred.decision == PredictiveTrigger.Decision.FIRE) {
+                                fixDaTrigger && pred.decision == PredictiveTrigger.Decision.FIRE && distNow <= alertPoi) {
                                 TriggerTelemetry.log(
                                     this@ItaintaBackgroundPoiService, poi.id, poi.nome,
                                     "approach-predictive", pred, location, isDriving, alertPoi
                                 )
+                                annotaGuida("avviso", poi, distNow, pred.distanceNowMeters, alertPoi, location)
                                 GeofenceBroadcastReceiver.firePredictedApproach(
                                     this@ItaintaBackgroundPoiService, poi.id, poi.nome,
                                     poi.guideDefault, poi.isGem, poi.isFromItinerary, db,
@@ -1269,19 +1923,123 @@ class ItaintaBackgroundPoiService : Service() {
                         TriggerState.PASSED -> { /* no-op */ }
                     }
 
+                    // (23/09/2026, R-BUSSOLA) Candidato ancora in gioco per il
+                    // gate: le tappe non lo usano, un POI raccontato non lo
+                    // chiede piu'.
+                    if (!poi.isFromItinerary && state != TriggerState.ARRIVED_FIRED) bussolaServe = true
+
                     lastDistances[poi.id] = distNow
                 }
 
+                // ── ARBITRATO: QUALE LUOGO PARLA (05/10/2026) ───────────────
+                // Port delle regole del motore web del 04–05/10/2026
+                // (foregroundTriggers.ts), identiche in BackgroundPoiManager
+                // .swift. Fin qui chi era pronto scattava nell'ordine dei
+                // candidati: il primo con la guida, gli altri con stato scritto
+                // e sola notifica (muti per 24 ore), e la coda li metteva in
+                // fila dietro la guida in corso. Ora:
+                //  1. MAI SOPRA UNA GUIDA: se una voce parla, sta per partire o
+                //     e' finita da meno di 20 s, nessuno scatta;
+                //  2. vince il piu' vicino in metri di strada, dove una gemma
+                //     vale 50 m e una fonte Wikipedia/Wikidata 25 (le tappe di
+                //     un giro restano davanti a tutti: le ha scelte l'utente);
+                //  3. un vincitore che non pesa cede il passo se un luogo che
+                //     pesa sta arrivando entro 100 m di strada;
+                //  4. parla UNO per giro. Gli altri — e chiunque sia stato
+                //     fermato qui — NON scrivono stato ne' cooldown: sono
+                //     ancora nel raggio, restano in attesa e si riprovano a
+                //     ogni fix (da fermi ci pensa battitoArbitrato). Uscendo
+                //     dal raggio non sono piu' fra i pronti: l'attesa cade.
+                // Doppioni e «stesso nome appena raccontato» stanno in
+                // GeofenceBroadcastReceiver.handleArrival, unico punto da cui
+                // passano sia questo giro sia i recinti di sistema.
+                Arbitrato.pubblicaImportanti(importanti)
+                // (08/10/2026) TARGHE E LAPIDI IN SILENZIO SE C'E' UN MONUMENTO
+                // VICINO: escono dai pronti senza scrivere stato ne' cooldown.
+                val targheMute = Arbitrato.targheConMonumentoVicino(candidati.map { it.first })
+                Arbitrato.pubblicaTargheMute(targheMute)
+                if (targheMute.isNotEmpty()) pronti.removeAll { it.poi.id in targheMute && !it.poi.isFromItinerary }
+                var qualcunoAspetta = false
+                val vincitore = pronti.minWithOrNull(
+                    compareByDescending<ArrivoPronto> { it.poi.isFromItinerary }
+                        .thenBy { Arbitrato.punteggio(it.poi, it.ordineM) }
+                )
+                if (vincitore != null) {
+                    val motivo = GeofenceBroadcastReceiver.motivoAttesaVoce(this@ItaintaBackgroundPoiService)
+                    val cede = motivo == null && !Arbitrato.pesa(vincitore.poi) && !vincitore.dentro &&
+                        !vincitore.poi.isFromItinerary && importanti.any { it != vincitore.poi.id }
+                    if (motivo != null || cede) {
+                        qualcunoAspetta = true
+                        val perche = motivo ?: "cede il passo a un luogo che pesa"
+                        Log.d(TAG, "Arrivo in attesa per ${vincitore.poi.nome}: $perche")
+                        // Nel registro una riga sola per attesa, non una per fix.
+                        val chiave = "${vincitore.poi.id}|$perche"
+                        if (chiave != ultimaAttesaAnnotata) {
+                            ultimaAttesaAnnotata = chiave
+                            annotaGuida("attesa", vincitore.poi, vincitore.stradaM, vincitore.ariaM, vincitore.raggioM, location, "motivo=\"$perche\"")
+                        }
+                    } else {
+                        ultimaAttesaAnnotata = ""
+                        // (23/09/2026, R-BUSSOLA) Il gate ha deciso per questo
+                        // candidato: la bussola si spegne subito (si riaccende
+                        // qui sotto se resta un altro candidato in attesa).
+                        BearingGate.decisa()
+                        if (vincitore.tipo == "arrivo") {
+                            TriggerTelemetry.log(
+                                this@ItaintaBackgroundPoiService, vincitore.poi.id, vincitore.poi.nome,
+                                "arrival-radial", vincitore.pred, location, isDriving, vincitore.raggioTelemetria
+                            )
+                        }
+                        annotaGuida(vincitore.tipo, vincitore.poi, vincitore.stradaM, vincitore.ariaM, vincitore.raggioM, location, vincitore.extra)
+                        GeofenceBroadcastReceiver.firePerimeterArrival(
+                            this@ItaintaBackgroundPoiService, vincitore.poi, isAutomaticMode, db,
+                            distanceM = vincitore.eventoM, fullGuide = true
+                        )
+                        if (pronti.size > 1) qualcunoAspetta = true
+                    }
+                    // Chi aspetta puo' chiedere ancora la bussola ai prossimi fix.
+                    if (qualcunoAspetta) bussolaServe = true
+                }
+                inAttesaArbitrato = qualcunoAspetta
+                if (qualcunoAspetta) {
+                    manoArbitrato.removeCallbacks(battitoArbitrato)
+                    manoArbitrato.postDelayed(battitoArbitrato, Arbitrato.BATTITO_ATTESA_MS)
+                }
+
+                // (23/09/2026, R-BUSSOLA) Accesa solo se era gia' stata chiesta
+                // in questa finestra armata (preRiscalda non la accende mai per
+                // primo: il primo arrivo resta identico a prima) e resta un
+                // candidato in attesa; senza candidati si spegne dopo 120 s.
+                if (bussolaServe) BearingGate.preRiscalda(this@ItaintaBackgroundPoiService)
+                else BearingGate.spegniSeInattiva()
+
+                // (23/09/2026, REVISIONE 3, R-SOSTA) Armati SOLO da POI gia'
+                // raccontati e fermi da 180 s entro 25 m: RIPOSO esistente. A
+                // queste condizioni nessun ramo qui sopra puo' piu' scattare
+                // per loro (l'arrivo e' bloccato da ARRIVED_FIRED); i fix
+                // continuano ad arrivare e a passare da questo stesso giro, solo
+                // piu' radi. Al primo fix a > 25 m dall'ancora sostaFerma torna
+                // false e questo stesso giro ri-arma come sempre.
+                val armaEffettivo = if (shouldArm && !armaNonRaccontato && sostaFerma) false else shouldArm
+                val sostaOra = shouldArm && !armaEffettivo
+                if (sostaOra != sostaAttiva) {
+                    Log.d(TAG, if (sostaOra) "R-SOSTA: fermi da 180 s fra luoghi gia' raccontati → RIPOSO" else "R-SOSTA: fine sosta")
+                    // Sosta finita SENZA ri-armare: la finestra armata si e'
+                    // chiusa davvero, come prima (vedi applyLocationRate).
+                    if (!sostaOra && !armaEffettivo) BearingGate.disattiva()
+                }
+                sostaAttiva = sostaOra
+
                 // "Fine" esiste solo dentro l'armato: se non si arma, decade.
-                val fine = shouldArm && shouldFine
+                val fine = armaEffettivo && shouldFine
                 // Si ri-registra quando cambia il livello armato OPPURE, restando
                 // armati, quando si entra/esce dagli "ultimi metri". Resta
                 // idempotente: senza cambi non si rifà nessuna
                 // requestLocationUpdates, e lo stato a RIPOSO non è toccato.
-                if (shouldArm != isArmed || fine != isFine) {
-                    isArmed = shouldArm
+                if (armaEffettivo != isArmed || fine != isFine) {
+                    isArmed = armaEffettivo
                     isFine = fine
-                    withContext(Dispatchers.Main) { applyLocationRate(shouldArm, fine) }
+                    withContext(Dispatchers.Main) { applyLocationRate(armaEffettivo, fine) }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Predictive evaluation failed: ${e.message}")
@@ -1310,6 +2068,8 @@ class ItaintaBackgroundPoiService : Service() {
         // Silenzio chirurgico: si spegne solo la voce di QUESTO POI —
         // superare A mentre suona la guida di B non deve uccidere B.
         GeofenceBroadcastReceiver.stopSpeakingForPoi(this, poi.id)
+        // (03/10/2026, regola 2) Superato: la riga «ti stai avvicinando» non vale più.
+        GeofenceBroadcastReceiver.cancellaNotificaAvvicinamento(this, poi.id)
 
         val intent = Intent("com.itaintasca.POI_EVENT")
         // (22/08/2026) Broadcast implicito senza setPackage: id e nome del POI
@@ -1328,6 +2088,30 @@ class ItaintaBackgroundPoiService : Service() {
      * la copia unica CategoryMap.MAP: una seconda copia della mappa qui si
      * sarebbe disallineata al primo cambio di categorie nella UI.
      */
+    /**
+     * (04/10/2026) Una riga nel registro di collaudo per ogni avviso o arrivo
+     * dell'audioguida: a quanti metri DI STRADA e in linea d'aria e' scattato,
+     * con quale raggio, con che precisione del GPS e dove si era. E' il dato
+     * che serve a verificare camminando i 30/50 e i 150/300 m.
+     * Formato: GUIDA <tipo> "<nome>" id=… strada=… aria=… raggio=… acc=… lat,lon [extra]
+     */
+    private fun annotaGuida(
+        tipo: String, poi: PoiEntity, stradaM: Float, ariaM: Double, raggioM: Float,
+        location: Location, extra: String = ""
+    ) {
+        try {
+            val strada = if (stradaM.isInfinite() || stradaM.isNaN()) "inf" else stradaM.toInt().toString()
+            val acc = if (location.hasAccuracy()) location.accuracy.toInt().toString() else "-"
+            RegistroCollaudo.scrivi(
+                "GUIDA $tipo \"${poi.nome}\" id=${poi.id} strada=$strada aria=${ariaM.toInt()} raggio=${raggioM.toInt()} acc=$acc " +
+                    String.format(java.util.Locale.US, "%.5f,%.5f", location.latitude, location.longitude) +
+                    // le coordinate del punto d'arrivo da cui si misura
+                    String.format(java.util.Locale.US, " punto=%.5f,%.5f", poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon) +
+                    (if (extra.isNotEmpty()) " $extra" else "")
+            )
+        } catch (_: Exception) { /* il registro non deve mai fermare un trigger */ }
+    }
+
     private fun isPoiCategorySelected(poi: PoiEntity): Boolean =
         GeofenceBroadcastReceiver.isCategoryActive(poi, selectedCategories)
 
@@ -1346,10 +2130,44 @@ class ItaintaBackgroundPoiService : Service() {
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(NotificationCompat.CATEGORY_EVENT)
             .setAutoCancel(true)
+            // (23/09/2026, voce 10) Stesso id = aggiornamento silenzioso,
+            // mai un secondo squillo/vibrazione per la stessa gemma.
+            .setOnlyAlertOnce(true)
             .setContentIntent(pOpen)
 
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(poi.id.hashCode() + 1, builder.build())
+        segnaGemmaNotificata(poi.id)
+    }
+
+    /**
+     * (23/09/2026, voce 10) Memoria delle gemme gia' notificate: id → istante,
+     * in un file di preferenze PICCOLO e dedicato (non ItaintaPrefs, che
+     * riscriverebbe decine di KB), con scadenza 24 h. Sopravvive ai riavvii
+     * del servizio; le voci scadute si potano a ogni scrittura.
+     */
+    private fun gemmeMaiNotificate(gemme: List<PoiEntity>): List<PoiEntity> {
+        if (gemme.isEmpty()) return gemme
+        return try {
+            val p = getSharedPreferences(PREFS_GEMME_NOTIFICATE, MODE_PRIVATE)
+            val ora = System.currentTimeMillis()
+            gemme.filter { ora - p.getLong(it.id, 0L) > GEMMA_NOTIFICATA_TTL_MS }
+        } catch (_: Exception) {
+            gemme
+        }
+    }
+
+    private fun segnaGemmaNotificata(poiId: String) {
+        try {
+            val p = getSharedPreferences(PREFS_GEMME_NOTIFICATE, MODE_PRIVATE)
+            val ora = System.currentTimeMillis()
+            p.edit {
+                for ((k, v) in p.all) {
+                    if (v !is Long || ora - v > GEMMA_NOTIFICATA_TTL_MS) remove(k)
+                }
+                putLong(poiId, ora)
+            }
+        } catch (_: Exception) { }
     }
 
     private fun isAppInForeground(): Boolean {
@@ -1472,6 +2290,19 @@ class ItaintaBackgroundPoiService : Service() {
         val radiusKm = if (isDriving) 10.0 else 5.0
         if (last != null && last.distanceTo(location) <= refreshThreshold) return
 
+        // (23/09/2026, voce 15) MODALITA' NAVIGATORE (categories=['gemme:off']):
+        // nessuna categoria puo' essere attiva (CategoryMap.isActive scarta
+        // tutto, gemme comprese), quindi il fetch tornava SEMPRE vuoto e ogni
+        // 200 m costava comunque probe + RPC nearby_pois. Si segna il punto e
+        // basta: e' esattamente l'esito di prima (lista vuota = currentPois e
+        // recinti intatti, lastQueryLocation aggiornato), senza rete. Le tappe
+        // di un itinerario non passano dal fetch (mergeWithItinerary).
+        if (radarSenzaCategorie()) {
+            lastQueryLocation = location
+            lastFetchFailedAt = 0L
+            return
+        }
+
         // Un solo fetch alla volta; dopo un errore aspettiamo il backoff prima
         // di riprovare (lastQueryLocation resta invariato, quindi il retry è
         // garantito al prossimo update GPS utile).
@@ -1508,7 +2339,33 @@ class ItaintaBackgroundPoiService : Service() {
                         return@launch
                     }
 
-                    val rawPois = supabase.fetchPoisNearby(location.latitude, location.longitude, radiusKm, selectedCategories, appLanguage)
+                    // (29/08/2026, collaudo sul Realme a Carrara) RAGGIO A
+                    // SCALARE. A 5 km la RPC nearby_pois supera i 3 s di
+                    // statement_timeout del ruolo anonimo (HTTP 500, codice
+                    // 57014) nelle zone dove i POI importati negli ultimi
+                    // giorni sono decine di migliaia; a 2 km risponde in 1,4 s,
+                    // a 500 m in 0,35 s. Prima il fallimento lasciava il
+                    // radar VUOTO per 30 s di backoff e poi ritentava lo stesso
+                    // raggio: «Ricerca POI in corso...» per sempre. Ora si
+                    // ripiega subito su un raggio piu' piccolo: in citta' 120
+                    // POI entro 2 km ci sono comunque; in campagna, dove il
+                    // raggio largo serve davvero, la query e' leggera e il
+                    // primo tentativo riesce.
+                    val raggi = listOf(radiusKm, radiusKm / 2.5, 1.0).distinct()
+                    var rawPois: List<PoiEntity> = emptyList()
+                    var ultimoErrore: Exception? = null
+                    for ((i, r) in raggi.withIndex()) {
+                        try {
+                            rawPois = supabase.fetchPoisNearby(location.latitude, location.longitude, r, selectedCategories, appLanguage)
+                            if (i > 0) Log.w(TAG, "Radar caricato con raggio ridotto a ${"%.1f".format(r)} km")
+                            ultimoErrore = null
+                            break
+                        } catch (e: Exception) {
+                            ultimoErrore = e
+                            Log.w(TAG, "Fetch a ${"%.1f".format(r)} km fallito (${e.message}), provo piu' stretto")
+                        }
+                    }
+                    ultimoErrore?.let { throw it }
 
                     // ✅ [DE-DUPLICAZIONE NATIVA] - Allineamento con App.tsx
                     val seenNames = mutableSetOf<String>()
@@ -1598,7 +2455,12 @@ class ItaintaBackgroundPoiService : Service() {
                         WipWidgetProvider.pushUpdate(this@ItaintaBackgroundPoiService)
                         
                         // ✅ [SCOPERTA GEMME] - Se troviamo una gemma vicina mai vista, inviamo notifica specifica
-                        val newGems = pois.filter { it.isGem }
+                        // (23/09/2026, voce 10) «Mai vista» davvero: prima
+                        // qualunque gemma del radar ri-notificava (canale HIGH,
+                        // vibrazione) a ogni refresh da 200 m, la stessa gemma
+                        // 20-25 volte l'ora a schermo spento. Ora solo le gemme
+                        // non notificate nelle ultime 24 h.
+                        val newGems = gemmeMaiNotificate(pois.filter { it.isGem })
                         if (newGems.isNotEmpty() && !isAppInForeground()) {
                             val closestGem = newGems.minByOrNull { 
                                 val poiLoc = Location("").apply { latitude = it.lat; longitude = it.lon }
@@ -1629,9 +2491,18 @@ class ItaintaBackgroundPoiService : Service() {
                             .map { it.first }
                         if (teaserTargets.isNotEmpty()) generateTeasersInBackground(teaserTargets)
 
-                        // ✅ [TEASER RADAR] - Avvisi teaser per i POI nel radar
-                        // che l'utente non ha ancora avvicinato
-                        showRadarTeaserNotifications(pois, location)
+                        // ✅ [TEASER RADAR] - DISATTIVATO (03/09/2026, committente
+                        // dal collaudo: notifiche a 248/396/499 m — «troppo
+                        // distante», «max e' 300 in auto e 150 a piedi»).
+                        // showRadarTeaserNotifications notificava apposta i 2 POI
+                        // piu' vicini OLTRE il raggio di alert, fino a un orizzonte
+                        // di 1200 m a piedi / 5000 m in auto — hardcoded,
+                        // indipendente dal raggio che l'utente ha impostato in
+                        // GeoControl. Il raggio di alert (walkAlert/carAlert,
+                        // 50-400 m / 100-600 m, default 150/300) resta l'UNICO
+                        // limite per qualunque notifica di prossimita': funzione
+                        // lasciata nel file (sotto), solo non piu' chiamata.
+                        // showRadarTeaserNotifications(pois, location)
                     }
                 } catch (e: Exception) {
                     // Rete "zombie" (validata ma inservibile) o server giù:
@@ -1794,9 +2665,15 @@ class ItaintaBackgroundPoiService : Service() {
                 // (23/08/2026) Stessi timeout, ma su newBuilder() del client
                 // condiviso (WipHttp): pool e dispatcher sono quelli di
                 // SupabaseClient, che ha appena parlato con lo stesso host.
+                // (29/08/2026, collaudo) 25 s non bastano: il server genera
+                // fino a 20 teaser con l'AI in parallelo e, quando Groq
+                // rallenta, risponde in 30-40 s. Qui nessuno aspetta (e' una
+                // coroutine di sfondo), e chiudere la connessione prima non
+                // ferma il server: si aspettava per niente e si loggava un
+                // errore per un lavoro che intanto andava a buon fine.
                 val client = WipHttp.client.newBuilder()
                     .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-                    .readTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(90, java.util.concurrent.TimeUnit.SECONDS)
                     .build()
                 val body = JSONObject().apply {
                     put("poiIds", JSONArray(poiIds))
@@ -1879,6 +2756,72 @@ class ItaintaBackgroundPoiService : Service() {
         }
     }
 
+    /** (03/09/2026) PendingIntent per un tasto del cruscotto: stessa forma delle azioni della voce. */
+    private fun navActionIntent(action: String, requestCode: Int): PendingIntent = speechActionIntent(action, requestCode)
+
+    /**
+     * (21/09/2026, REVISIONE 2) «Salta» e «Ricalcola» il nativo non li sa
+     * fare (non calcola percorsi): APRONO L'APP, con un PendingIntent di
+     * Activity verso MainActivity — dalla lock screen il sistema chiede lo
+     * sblocco da solo — e l'azione arriva al JS fresca (MainActivity la
+     * consegna col suo ts). Mai startActivity dal servizio: con target ≥ 31
+     * e' un «trampolino» di notifica e il sistema lo blocca. Prima questi due
+     * tasti, a schermo spento, non facevano nulla.
+     */
+    private fun navActivityIntent(action: String, requestCode: Int): PendingIntent =
+        PendingIntent.getActivity(
+            this, requestCode,
+            Intent(this, MainActivity::class.java).setAction(action)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+    /**
+     * (03/09/2026) UN TASTO DEL CRUSCOTTO TOCCATO SULLA NOTIFICA. Effetto
+     * visibile subito (pausa ↔ riprendi, o cruscotto via su «termina»), poi
+     * il tocco va al JS come `navBannerAction {action, ts}` — lo stesso
+     * evento dei tasti della Live Activity iOS — e tourService fa il resto.
+     * Se la WebView e' morta (processo ucciso, servizio riavviato da
+     * START_STICKY/boot senza Activity) il broadcast non troverebbe nessuno:
+     * si annota l'azione nelle prefs e si apre l'app; il plugin la consegna
+     * al suo load() (retainUntilConsumed) e tourService la applica dopo
+     * aver ripreso il giro da localStorage.
+     */
+    private fun inoltraAzioneNav(azione: String) {
+        when (azione) {
+            // (21/09/2026, REVISIONE 2) Il valore ESPLICITO del tasto, mai
+            // !navBannerInPausa: un'alternanza sullo stato mostrato poteva
+            // non corrispondere a quello del follower.
+            "pausa" -> applicaNavBanner(navBannerTitolo, navBannerCorpo, true, navBannerFotoUrl, inPausa = true)
+            "riprendi" -> applicaNavBanner(navBannerTitolo, navBannerCorpo, true, navBannerFotoUrl, inPausa = false)
+            "termina" -> applicaNavBanner(null, null, false)
+        }
+        val ts = System.currentTimeMillis()
+        val json = "{\"action\":\"$azione\",\"ts\":$ts}"
+        if (com.itaintasca.app.plugin.ItaintaBackgroundPoiPlugin.vivo) {
+            sendEventToPlugin("navBannerAction", json)
+            return
+        }
+        getSharedPreferences("ItaintaPrefs", MODE_PRIVATE).edit {
+            putString(PREF_PENDING_NAV_ACTION, azione)
+            putLong(PREF_PENDING_NAV_ACTION_TS, ts)
+        }
+        // (21/09/2026, REVISIONE 2) Da Android 12 (target ≥ 31, qui 36) aprire
+        // un'Activity da un servizio avviato dal tasto di una notifica e' un
+        // «trampolino»: il sistema lo blocca in silenzio (niente eccezione).
+        // Li' non si prova nemmeno: l'azione resta annotata e la consegna il
+        // plugin al prossimo load(). Sotto la 31 resta com'era.
+        if (Build.VERSION.SDK_INT >= 31) return
+        try {
+            // Consentito sotto Android 12: l'app ha appena ricevuto un tocco su
+            // un suo PendingIntent (eccezione «pochi secondi» del background
+            // activity launch per service/receiver).
+            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        } catch (e: Exception) {
+            Log.w(TAG, "Apertura dell'app per il tasto «$azione» fallita: ${e.message}")
+        }
+    }
+
     /** Stato della voce nativa, parte della chiave anti-duplicato della notifica. */
     private fun voiceStateKey(): String = when {
         !GeofenceBroadcastReceiver.isVoiceActive() -> "muta"
@@ -1894,22 +2837,92 @@ class ItaintaBackgroundPoiService : Service() {
     // corso...") non cancella il cruscotto dal display spento.
     @Volatile private var navBannerTitolo: String? = null
     @Volatile private var navBannerCorpo: String? = null
+    // (03/09/2026) Per i tasti: in pausa la notifica mostra «Riprendi»; il
+    // modo ("giro" | "percorso" | "singola") decide quali tasti hanno senso.
+    @Volatile private var navBannerInPausa: Boolean = false
+    @Volatile private var navBannerModo: String = "giro"
 
     /** Parte della chiave anti-duplicato: senza, cambiando solo il banner la
      *  notifica non verrebbe ripubblicata. */
-    private fun navBannerKey(): String = "${navBannerTitolo.orEmpty()}|${navBannerCorpo.orEmpty()}"
+    // (29/08/2026) LA FOTO DELLA TAPPA NEL CRUSCOTTO («la foto al cruscotto
+    // ok»). Sulla lock screen la notifica mostra l'icona grande accanto al
+    // testo: e' la foto del luogo verso cui si cammina — lo stesso effetto
+    // dei loghi delle squadre nel banner di SofaScore. Si scarica UNA volta
+    // per URL (fuori dal main thread, timeout corti, ridotta a 256 px) e si
+    // ripubblica la notifica quando arriva; finche' non c'e', o se non
+    // arriva, il cruscotto e' identico a prima. Mai una foto di un'altra
+    // tappa: se l'URL cambia la vecchia bitmap si butta subito.
+    @Volatile private var navBannerFotoUrl: String? = null
+    @Volatile private var navBannerFoto: android.graphics.Bitmap? = null
+    private val fotoHttp by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+
+    private fun navBannerKey(): String =
+        "${navBannerTitolo.orEmpty()}|${navBannerCorpo.orEmpty()}|${if (navBannerFoto != null) navBannerFotoUrl.orEmpty() else ""}|${if (navBannerInPausa) "P" else ""}|$navBannerModo"
+
+    /** Scarica e riduce la foto della tappa, poi ripubblica la notifica. */
+    private fun caricaFotoBanner(url: String) {
+        serviceScope.launch {
+            try {
+                val bytes = fotoHttp.newCall(Request.Builder().url(url).build()).execute().use { r ->
+                    if (!r.isSuccessful) return@launch
+                    r.body?.bytes() ?: return@launch
+                }
+                // Decodifica a dimensione ridotta: una foto da 4 MB non deve
+                // finire intera in memoria per una miniatura da 256 px.
+                val misura = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, misura)
+                var scala = 1
+                while (misura.outWidth / scala > 512 || misura.outHeight / scala > 512) scala *= 2
+                val opzioni = android.graphics.BitmapFactory.Options().apply { inSampleSize = scala }
+                val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opzioni) ?: return@launch
+                // Quadrata, centrata: e' cosi' che la lock screen la ritaglia.
+                val lato = minOf(bmp.width, bmp.height)
+                val quadrata = android.graphics.Bitmap.createBitmap(bmp, (bmp.width - lato) / 2, (bmp.height - lato) / 2, lato, lato)
+                val finale = if (lato > 256) android.graphics.Bitmap.createScaledBitmap(quadrata, 256, 256, true) else quadrata
+                // Nel frattempo la tappa puo' essere cambiata: la foto e'
+                // di quella di prima, si scarta.
+                if (navBannerFotoUrl != url || navBannerTitolo == null) return@launch
+                navBannerFoto = finale
+                applicaNavBanner(navBannerTitolo, navBannerCorpo, true, url)
+            } catch (e: Exception) {
+                Log.w(TAG, "Foto del cruscotto non scaricata: ${e.message}")
+            }
+        }
+    }
 
     /**
      * Accende/spegne il cruscotto e ripubblica subito la notifica persistente.
      * Con `attivo=false` si torna all'ultimo titolo/testo del radar.
      */
-    private fun applicaNavBanner(titolo: String?, corpo: String?, attivo: Boolean) {
+    private fun applicaNavBanner(
+        titolo: String?, corpo: String?, attivo: Boolean, foto: String? = null,
+        // (03/09/2026) Nullable apposta: caricaFotoBanner richiama questa
+        // funzione a foto scaricata e non deve azzerare pausa e modo.
+        inPausa: Boolean? = null, modo: String? = null
+    ) {
         if (attivo) {
             navBannerTitolo = titolo?.trim()?.takeIf { it.isNotEmpty() }
             navBannerCorpo = corpo?.trim()
+            inPausa?.let { navBannerInPausa = it }
+            modo?.trim()?.takeIf { it.isNotEmpty() }?.let { navBannerModo = it }
+            val url = foto?.trim()?.takeIf { it.startsWith("http") }
+            if (url != navBannerFotoUrl) {
+                navBannerFotoUrl = url
+                navBannerFoto = null
+                if (url != null) caricaFotoBanner(url)
+            }
         } else {
             navBannerTitolo = null
             navBannerCorpo = null
+            navBannerFotoUrl = null
+            navBannerFoto = null
+            navBannerInPausa = false
+            navBannerModo = "giro"
         }
         try {
             val suffix = dayPassSuffix()
@@ -1940,13 +2953,57 @@ class ItaintaBackgroundPoiService : Service() {
         val bannerAttivo = !bannerTitolo.isNullOrBlank()
         val titoloFinale = if (bannerAttivo) bannerTitolo!! else title
         val testoFinale = if (bannerAttivo) navBannerCorpo.orEmpty() else (text + suffix)
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(R.mipmap.ic_launcher).setContentTitle(titoloFinale).setContentText(testoFinale)
-            .setPriority(NotificationCompat.PRIORITY_LOW).setOngoing(true).setContentIntent(pOpen)
+        // Col cruscotto acceso la notifica passa sul canale del navigatore
+        // (importanza normale → resta sulla lock screen; silenzioso). Lo
+        // stesso NOTIF_ID cambia canale senza problemi: e' sempre la
+        // notifica del foreground service.
+        val builder = NotificationCompat.Builder(this, if (bannerAttivo) NAV_CHANNEL_ID else CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher).setContentTitle(titoloFinale).setContentText(testoFinale)
+            .setPriority(if (bannerAttivo) NotificationCompat.PRIORITY_DEFAULT else NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true).setContentIntent(pOpen)
+            // Mai un suono o una vibrazione da questa notifica: si aggiorna
+            // ogni pochi secondi. Il silenzio lo danno i CANALI (senza suono
+            // ne' vibrazione) e setOnlyAlertOnce — NON setSilent: quello
+            // marca la notifica «silenziosa» (groupKey=silent) e Realme UI le
+            // tiene fuori dalla lock screen. Visto col telefono: canale giusto,
+            // notifiche consentite, e il cruscotto a display spento non c'era.
+            .setOnlyAlertOnce(true)
         if (bannerAttivo) {
             builder.setStyle(NotificationCompat.BigTextStyle().bigText(testoFinale))
-            // Il cruscotto ha senso solo nell'ordine in cui e' arrivato:
-            // niente suono/vibrazione, e in cima al gruppo delle "in corso".
-            builder.setOnlyAlertOnce(true)
+            // La foto della tappa, se e' gia' arrivata (vedi caricaFotoBanner).
+            navBannerFoto?.let { builder.setLargeIcon(it) }
+            // Sulla lock screen si legge tutto (tappa e svolta): e' il suo scopo.
+            builder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
+        }
+        // (03/09/2026) COL CRUSCOTTO ACCESO I TASTI SONO QUELLI DEL GIRO, al
+        // posto di quelli della voce e dello Stop del servizio: Android ne
+        // mostra al massimo tre, quindi la terna dipende dallo stato —
+        // in cammino [Pausa][Salta][Termina], in pausa [Riprendi][Ricalcola]
+        // [Termina], a tappa singola [Riascolta][Ricalcola][Termina] (21/09,
+        // come la Live Activity iOS: il follower sa ripetere la manovra).
+        // «Termina» chiede lo sblocco del telefono (API 31+): e' l'unico
+        // distruttivo, e in app chiede conferma. (21/09/2026) «Salta» e
+        // «Ricalcola» aprono l'app (vedi navActivityIntent); «Riprendi» ha
+        // un'azione sua (ACTION_NAV_RESUME), non piu' la stessa di «Pausa».
+        if (bannerAttivo) {
+            val lang = NotificationStrings.lang(this)
+            val termina = NotificationCompat.Action.Builder(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                NotificationStrings.get(lang, "nav_termina"),
+                navActionIntent(ACTION_NAV_END, 25)
+            ).setAuthenticationRequired(true).build()
+            if (navBannerModo == "singola") {
+                builder.addAction(android.R.drawable.ic_media_previous, NotificationStrings.get(lang, "nav_riascolta"), navActionIntent(ACTION_NAV_REPLAY, 23))
+                builder.addAction(android.R.drawable.ic_menu_rotate, NotificationStrings.get(lang, "nav_ricalcola"), navActivityIntent(ACTION_NAV_RECALC, 24))
+            } else if (navBannerInPausa) {
+                builder.addAction(android.R.drawable.ic_media_play, NotificationStrings.get(lang, "nav_riprendi"), navActionIntent(ACTION_NAV_RESUME, 26))
+                builder.addAction(android.R.drawable.ic_menu_rotate, NotificationStrings.get(lang, "nav_ricalcola"), navActivityIntent(ACTION_NAV_RECALC, 24))
+            } else {
+                builder.addAction(android.R.drawable.ic_media_pause, NotificationStrings.get(lang, "nav_pausa"), navActionIntent(ACTION_NAV_PAUSE, 21))
+                builder.addAction(android.R.drawable.ic_media_next, NotificationStrings.get(lang, "nav_salta"), navActivityIntent(ACTION_NAV_SKIP, 22))
+            }
+            return builder.addAction(termina).build()
         }
         // (AUD-14) Con la voce nativa in corso (teaser o guida del Day Pass
         // nel MediaPlayer del receiver, senza MediaSession) l'unico comando
@@ -1998,8 +3055,18 @@ class ItaintaBackgroundPoiService : Service() {
             nm.notify(NOTIF_ID, buildNotification(title, text, suffix))
         }
         RadarState.updateStatus(text)
-        sendEventToPlugin("statusUpdate", text)
+        // (29/08/2026, collaudo) L'evento al JS SOLO quando il testo cambia.
+        // updateDistanceNotification arriva qui ogni 5 s con lo stesso «41
+        // luoghi monitorati», e il JS lo mostrava come banner sulla mappa a
+        // ogni arrivo: un toast blu ogni cinque secondi, per sempre.
+        // RadarState (stato, idempotente) si aggiorna comunque.
+        if (text != ultimoStatoInviatoAlJs) {
+            ultimoStatoInviatoAlJs = text
+            sendEventToPlugin("statusUpdate", text)
+        }
     }
+
+    @Volatile private var ultimoStatoInviatoAlJs: String? = null
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -2007,6 +3074,24 @@ class ItaintaBackgroundPoiService : Service() {
             
             val chan = NotificationChannel(CHANNEL_ID, "Audioguida Background", NotificationManager.IMPORTANCE_LOW)
             nm.createNotificationChannel(chan)
+
+            // (29/08/2026, collaudo sul Realme) CANALE DEL CRUSCOTTO. Con
+            // IMPORTANCE_LOW Realme UI marca la notifica «non importante»
+            // (mUnimportant=true nel dumpsys) e sulla lock screen non la
+            // mostra: a display spento il cruscotto spariva. Importanza
+            // NORMALE, ma senza suono ne' vibrazione (e la notifica e'
+            // posted con setSilent/setOnlyAlertOnce): resta fissa sul
+            // display bloccato, non disturba. Un canale nuovo perche'
+            // l'importanza di un canale esistente non si puo' alzare da codice.
+            val navChan = NotificationChannel(NAV_CHANNEL_ID, "Navigatore del giro", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Tappa, svolta e distanza mentre cammini, anche a schermo bloccato"
+                setSound(null, null)
+                enableVibration(false)
+                enableLights(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setShowBadge(false)
+            }
+            nm.createNotificationChannel(navChan)
 
             val alertChan = NotificationChannel(ALERT_CHANNEL_ID, "Avvisi Arrivo POI", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Notifiche quando arrivi vicino a un punto di interesse"
@@ -2028,8 +3113,16 @@ class ItaintaBackgroundPoiService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        // (03/10/2026) Servizio spento: nessun «ti stai avvicinando» resta appeso.
+        try { GeofenceBroadcastReceiver.cancellaNotificaAvvicinamento(this, null) } catch (_: Exception) { }
         // Pulizia rigorosa per evitare memory leaks
         onVoiceStateChanged = null
+        onNavRouteChanged = null
+        onPaginaNuova = null
+        ActivityMonitor.onMovimento = null
+        // (05/10/2026) Servizio spento: nessuno aspetta piu' il suo turno.
+        inAttesaArbitrato = false
+        manoArbitrato.removeCallbacks(battitoArbitrato)
         serviceScope.cancel()
         locationCallback?.let {
             try {

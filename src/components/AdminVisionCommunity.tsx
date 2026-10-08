@@ -57,7 +57,7 @@ const Badge = ({ cls, title, children }: { cls: string; title?: string; children
 
 /**
  * Tab admin "WIP Community": coda di revisione delle schede Vision.
- * Le foto arrivano ANONIME (il server non espone mai user_id). Azioni:
+ * Ogni scheda mostra chi l'ha inviata (`autore`: nome, email, quante foto) — solo qui, in admin. Azioni:
  * pulizia foto con AI (volti/targhe), approva → nuovo POI community,
  * allega a un POI ufficiale (galleria), rifiuta (resta ricordo privato).
  * All'approvazione l'autore riceve +10 crediti (idempotente lato server).
@@ -801,6 +801,12 @@ export default function AdminVisionCommunity() {
                         )}
                       </p>
                     )}
+                    {/* Chi ha inviato la foto: dato visibile solo all'admin */}
+                    <p className="text-[10px] text-gray-600 font-bold mt-0.5 break-all">
+                      Inviata da: {card.autore
+                        ? <>{card.autore.nome || card.autore.email || 'utente senza profilo'}{card.autore.nome && card.autore.email && <span className="font-medium text-gray-500"> · {card.autore.email}</span>}{card.autore.inviate > 0 && <span className="font-medium text-gray-400"> · {card.autore.inviate} foto inviate</span>}</>
+                        : <span className="font-medium text-gray-400">utente non noto</span>}
+                    </p>
                     {/* Badge v2: confidenza, lingua, filtro/privacy, origine foto, nome confermato, zona nuova, crediti */}
                     <div className="flex flex-wrap gap-1 mt-1">
                       {conf != null && !Number.isNaN(conf) && (

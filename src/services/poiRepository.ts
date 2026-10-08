@@ -7,6 +7,9 @@
 
 import { supabase } from '../lib/supabase';
 import { haversineMeters } from '../lib/geo';
+// (03/10/2026, «tutto in strada reale») La distanza mostrata negli elenchi è in
+// metri di strada quando la rete attorno è nota (entro 450 m), diretta altrimenti.
+import { metriDiStradaDaMostrare } from '../lib/roadSnap';
 import { db } from '../lib/db';
 import { Network } from '@capacitor/network';
 import { supabaseCircuitBreaker } from '../lib/circuitBreaker';
@@ -131,6 +134,56 @@ export async function getPoisByIds(ids: string[]): Promise<Map<string, NearbyPoi
   return result;
 }
 
+/**
+ * LE GEMME INTORNO A UN PUNTO, le migliori prima (07/09/2026, «Giro veloce»:
+ * un tap e il percorso su misura si riempie da solo con le gemme della zona).
+ *
+ * Select diretta su shared_pois per riquadro, NON la RPC nearby_pois: quella
+ * taglia ai 400 luoghi piu' vicini di QUALSIASI categoria, e in un centro
+ * storico denso le gemme a 2 km restano fuori. Gemma = solo `is_gem` (mai
+ * category='gemme', regola del 03/09). Ordine: prima chi ha foto E testo
+ * (una tappa muta e senza immagine e' una tappa povera), poi la distanza.
+ * Porta e punto d'arrivo vengono letti perche' e' li' che il navigatore deve
+ * portare. Raggio in metri (bbox approssimata), tetto `max`.
+ */
+export async function getGemmeVicine(
+  lat: number,
+  lon: number,
+  raggioMetri = 2500,
+  max = 8,
+): Promise<NearbyPoi[]> {
+  if (!hasRpc()) return [];
+  try {
+    const dLat = raggioMetri / 111_320;
+    const dLon = raggioMetri / (111_320 * Math.max(0.2, Math.cos((lat * Math.PI) / 180)));
+    const { data, error } = await supabase
+      .from('shared_pois')
+      .select('id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, photo_url, status, is_hidden, country, city, is_gem, entrance_lat, entrance_lon, arrival_lat, arrival_lon')
+      .eq('is_gem', true)
+      .gte('lat', lat - dLat).lte('lat', lat + dLat)
+      .gte('lon', lon - dLon).lte('lon', lon + dLon)
+      .limit(300);
+    if (error) throw error;
+    const punteggio = (p: any) => (p.image_url || p.photo_url ? 2 : 0) + (p.description_ai || p.description_short ? 1 : 0);
+    return (data || [])
+      .filter((p: any) => isVisiblePoiStatus(p) && p.name && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon)))
+      .map((p: any) => ({
+        ...p,
+        lat: Number(p.lat), lon: Number(p.lon),
+        premium: true,
+        photo_url: p.photo_url || p.image_url,
+        image_url: p.image_url || p.photo_url,
+        distance_meters: metriDiStradaDaMostrare(lat, lon, Number(p.lat), Number(p.lon)),
+      }))
+      .filter((p: any) => p.distance_meters <= raggioMetri)
+      .sort((a: any, b: any) => (punteggio(b) - punteggio(a)) || (a.distance_meters - b.distance_meters))
+      .slice(0, max) as NearbyPoi[];
+  } catch (e) {
+    console.warn('[poiRepository] gemme vicine non lette', e);
+    return [];
+  }
+}
+
 export async function getNearbyPois(
   lat: number,
   lon: number,
@@ -147,7 +200,7 @@ export async function getNearbyPois(
         .filter(p => haversineMeters(lat, lon, p.lat, p.lon) <= radiusMeters)
         .map(p => ({
           ...p,
-          distance_meters: haversineMeters(lat, lon, p.lat, p.lon),
+          distance_meters: metriDiStradaDaMostrare(lat, lon, p.lat, p.lon),
           id: p.id,
         }));
       return filtered as any[];
@@ -158,41 +211,46 @@ export async function getNearbyPois(
 
   // Primary: RPC nearby_pois (legge da shared_pois con PostGIS) e get_utility_pois
   if (hasRpc()) {
-    // Dentro il CIRCUIT BREAKER (ITI-14): fino al 28/08/2026 solo
-    // get_geofence_pois ci passava, e con Supabase giu' il radar rifaceva le
-    // due RPC ogni 15 s fino al timeout di 20 s ciascuna. Con il breaker
-    // aperto si legge subito da Dexie, come offline.
+    // NIENTE CIRCUIT BREAKER SUI LUOGHI (30/08/2026, decisione del
+    // committente: «il nostro database non deve bloccare la chiamata anche se
+    // dura 10 secondi — la pausa di sicurezza non deve esistere»).
+    //
+    // Qui il breaker si apriva dopo qualche risposta lenta e da quel momento
+    // RIFIUTAVA le chiamate senza provarle, facendo leggere solo Dexie: il
+    // radar e la mappa restavano senza POI, e senza foto, mostrando
+    // «Impossibile aggiornare i luoghi vicini». Ma il database e' lento, non
+    // irraggiungibile: una risposta lenta e' comunque una risposta, e va
+    // aspettata. Dexie resta il ripiego per quando la chiamata fallisce
+    // davvero — non piu' per quando qualcuno ha deciso di non provarci.
     let sharedRes: any;
     let utilityRes: any;
     try {
-      [sharedRes, utilityRes] = await supabaseCircuitBreaker.execute(async () => {
-        const risultati = await Promise.all([
-          supabase.rpc('nearby_pois', {
-            p_lat: lat,
-            p_lon: lon,
-            radius_m: radiusMeters,
-            limit_num: 400
-          }),
-          supabase.rpc('get_utility_pois', {
-            user_lat: lat,
-            user_lon: lon,
-            radius_meters: radiusMeters,
-            limit_num: 400
-          }),
-        ]);
-        // Entrambe fallite = problema di rete/DB, conta per il breaker. Una
-        // sola fallita (funzione mancante, timeout isolato) NO: l'altra basta.
-        if (risultati[0].error && risultati[1].error) throw new Error(risultati[0].error.message || 'rpc failed');
-        return risultati;
-      });
+      const risultati = await Promise.all([
+        supabase.rpc('nearby_pois', {
+          p_lat: lat,
+          p_lon: lon,
+          radius_m: radiusMeters,
+          limit_num: 400
+        }),
+        supabase.rpc('get_utility_pois', {
+          user_lat: lat,
+          user_lon: lon,
+          radius_meters: radiusMeters,
+          limit_num: 400
+        }),
+      ]);
+      // Entrambe fallite: si passa a Dexie. Una sola fallita (funzione
+      // mancante, timeout isolato) no: l'altra basta.
+      if (risultati[0].error && risultati[1].error) throw new Error(risultati[0].error.message || 'rpc failed');
+      [sharedRes, utilityRes] = risultati;
     } catch (e) {
-      console.warn('[poiRepository] nearby RPC non disponibili (breaker/rete): leggo da Dexie', e);
+      console.warn('[poiRepository] entrambe le RPC dei luoghi fallite: leggo da Dexie', e);
       try {
         const localPois = await db.pois.toArray();
         return localPois
           .filter(isVisiblePoiStatus)
           .filter(p => haversineMeters(lat, lon, p.lat, p.lon) <= radiusMeters)
-          .map(p => ({ ...p, distance_meters: haversineMeters(lat, lon, p.lat, p.lon), id: p.id })) as any[];
+          .map(p => ({ ...p, distance_meters: metriDiStradaDaMostrare(lat, lon, p.lat, p.lon), id: p.id })) as any[];
       } catch {
         return [];
       }
@@ -313,7 +371,7 @@ export async function getNearbyPois(
           category: p.category || 'monumenti',
           is_gem: p.is_gem ?? false,
           premium: p.is_gem ?? false,
-          distance_meters: haversineMeters(lat, lon, p.lat, p.lon),
+          distance_meters: metriDiStradaDaMostrare(lat, lon, p.lat, p.lon),
           status: p.status,
           description_ai: p.description_ai,
           photo_url: p.photo_url || p.image_url,
@@ -334,7 +392,7 @@ export async function getNearbyPois(
       .filter(p => haversineMeters(lat, lon, p.lat, p.lon) <= radiusMeters)
       .map(p => ({
         ...p,
-        distance_meters: haversineMeters(lat, lon, p.lat, p.lon),
+        distance_meters: metriDiStradaDaMostrare(lat, lon, p.lat, p.lon),
       }));
     if (filtered.length > 0) {
       console.log(`[poiRepository] Fallback offline finale: ${filtered.length} POI da Dexie`);
@@ -442,11 +500,16 @@ async function getGeofencePoisFromDexie(
         // questi puntoArrivo() ricadrebbe sul centroide anche a bundle scaricato.
         entrance_lat: p.entrance_lat ?? null,
         entrance_lon: p.entrance_lon ?? null,
+        // Il punto d'arrivo (marciapiede davanti alla porta, v3.1): dal
+        // pacchetto offline dal 05/09/2026; null nei pacchetti piu' vecchi.
+        arrival_lat: p.arrival_lat ?? null,
+        arrival_lon: p.arrival_lon ?? null,
+        arrival_method: p.arrival_method ?? null,
         address: p.address ?? null,
         address_source: p.address_source ?? null,
         alert_enabled: true,
         audio_enabled: true,
-        distance_meters: haversineMeters(lat, lon, p.lat, p.lon),
+        distance_meters: metriDiStradaDaMostrare(lat, lon, p.lat, p.lon),
       })) as GeofencePoi[];
     if (result.length > 0) {
       console.log(`[poiRepository] getGeofencePois fallback Dexie: ${result.length} POI offline`);
@@ -478,16 +541,28 @@ export async function getGeofencePois(
 
   if (!hasRpc()) return getGeofencePoisFromDexie(lat, lon, radiusMeters);
   try {
-    const data = await supabaseCircuitBreaker.execute(async () => {
+    const chiedi = (raggio: number) => supabaseCircuitBreaker.execute(async () => {
       const { data, error } = await supabase.rpc('get_geofence_pois', {
         user_lat: lat,
         user_lon: lon,
         p_user_id: userId,
-        radius_meters: radiusMeters,
+        radius_meters: raggio,
       });
       if (error) throw new Error(error.message);
       return data;
     });
+    let data = await chiedi(radiusMeters);
+    // IL TETTO DELLE 1.000 RIGHE (05/10/2026, prova a New York: il Chrysler Building,
+    // riga buona a 22 m, è rimasto muto). La risposta è troncata a 1.000 righe senza
+    // un ordine: a Midtown entro 1 km ce ne sono di più e i luoghi vicini potevano
+    // restare fuori. Se la risposta è al tetto si richiede con metà raggio (fino a
+    // 400 m: chi chiama ricarica ogni 300 m di spostamento) — meglio tutti i vicini
+    // che un campione a caso dei lontani.
+    let raggioUsato = radiusMeters;
+    while (Array.isArray(data) && data.length >= 1000 && raggioUsato > 400) {
+      raggioUsato = Math.max(400, Math.round(raggioUsato / 2));
+      data = await chiedi(raggioUsato);
+    }
     // NORMALIZZAZIONE DELLE COLONNE NUOVE (migration 20260823140000).
     // Finche' quella migration non e' applicata la RPC non le restituisce
     // affatto: qui diventano esplicitamente `null`, cosi' i consumatori
@@ -510,6 +585,11 @@ export async function getGeofencePois(
       ...p,
       entrance_lat: coord(p?.entrance_lat),
       entrance_lon: coord(p?.entrance_lon),
+      // Migration 20260905130000: il punto d'arrivo. Prima di quella la RPC
+      // non lo restituisce e qui e' null, come per l'ingresso.
+      arrival_lat: coord(p?.arrival_lat),
+      arrival_lon: coord(p?.arrival_lon),
+      arrival_method: str(p?.arrival_method),
       address: str(p?.address),
       address_source: str(p?.address_source),
       city: str(p?.city),
@@ -766,13 +846,61 @@ export interface AutoPoiInput {
 export function mapItineraryCategoryToMapCategory(aiType: string = ""): Poi['category'] {
   const t = aiType.toLowerCase();
   if (t.match(/museo|galleria|arte|museum|gallery/)) return 'musei';
-  if (t.match(/ristorante|cena|pranzo|colazione|degustazione|pub|caff|bar|food/)) return 'locali';
-  if (t.match(/monumento|statua|storico|castello|rovina|monument/)) return 'monumenti';
-  if (t.match(/chiesa|basilica|cattedrale|duomo|abbazia/)) return 'chiese';
-  if (t.match(/parco|giardino|natura|spiaggia|panoramic|viewpoint|park/)) return 'panorami';
-  if (t.match(/evento/)) return 'eventi';
+  // Vocabolario ampliato il 30/08/2026: l'AI degli itinerari non scrive
+  // «ristorante», scrive «pranzo» (56 volte sui 93 itinerari salvati), «cena»
+  // (36), «colazione», «aperitivo», «enoteca», «catering»… Prima finivano
+  // tutti nel fallback 'monumenti', cioe' una cena diventava un monumento.
+  if (t.match(/ristorante|osteria|trattoria|pizzeria|cena|pranzo|colazione|brunch|merenda|aperitivo|degustazione|enogastronom|gastronom|enoteca|pub|caff|bar|food|cibo|catering|agriturismo/)) return 'locali';
+  // Esperienze e attività commerciali (VR, laboratori, shopping, terme, crociere…) sono locali: visibili sotta la
+  // chip Locali e muti, non monumenti (Lione 06/10/2026: «ECLIPSO – Esperienza VR» era un monumento che parla).
+  if (t.match(/esperienz|experience|attivit|activity|realt. virtuale|\bvr\b|laboratorio|workshop|spettacolo|show|shopping|negozio|shop|mercato|market|boutique|terme|spa\b|crociera|cruise|escursione|intrattenimento|entertainment|divertimento|parco giochi|svago/)) return 'locali';
+  if (t.match(/monumento|statua|storico|castello|castle|rovina|rocca|fortezza|torre|palazzo|monument|archeolog|nuraghe/)) return 'monumenti';
+  if (t.match(/chiesa|basilica|cattedrale|duomo|abbazia|santuario|cappella|church|monastero/)) return 'chiese';
+  // «panoram» e non «panoramic»: l'AI scrive «panorama», che con la vecchia
+  // espressione NON veniva riconosciuto e cadeva nel fallback 'monumenti'
+  // (30/08/2026 — sette Monte/Poggio finiti fra i monumenti).
+  if (t.match(/parco|giardino|natura|spiaggia|panoram|viewpoint|park|isola|lago|monte|vetta|cascata|mare|paesaggio|vista/)) return 'panorami';
+  // NIENTE 'eventi' (30/08/2026). Esiste la chip Eventi, ma si alimenta da
+  // un'altra fonte (Ticketmaster/Viator), non da shared_pois: 'eventi' non
+  // compare in nessuna lista di resolvePoiTaxonomy, quindi un POI con quella
+  // categoria esce con `macro: null` e la mappa lo scarta — invisibile sotto
+  // OGNI chip. Una tappa «Evento: concerto in piazza» e' comunque un luogo:
+  // finisce nel fallback 'monumenti', dove almeno si vede.
+  // Stazioni, porti, aeroporti: sono luoghi veri, ma di servizio — categoria
+  // 'utilita', non 'monumenti' (30/08/2026, «ogni tappa la sua categoria»).
+  if (t.match(/stazione|aeroporto|porto|trasporto|traghetto|metro/)) return 'utilita';
   // 'esperienze_locali' non esiste più come categoria mappa: fallback neutro
   return 'monumenti';
+}
+
+/**
+ * Questa tappa è un LUOGO, e quindi diventa un POI in shared_pois? (30/08/2026)
+ *
+ * Regola: ogni tappa va nella sua categoria — i pasti in 'locali', le stazioni
+ * in 'utilita', i musei in 'musei'. Non si esclude nulla per il timore che
+ * «parli»: il presidio contro le audioguide fuori posto sta già al livello
+ * giusto, in AUDIOGUIDABLE_CATEGORIES (qui sotto), dove 'locali' e 'utilita'
+ * NON compaiono. Una cena finisce sulla mappa fra i locali e non parla.
+ *
+ * Restano fuori SOLO le tappe che non sono un posto:
+ *  • 'trasferimento' e 'spostamento' — nel roadtrip sono le coordinate del
+ *    centro della città di arrivo, non un luogo visitabile: come POI il
+ *    servizio nativo scatterebbe passando vicino alla città;
+ *  • 'pausa' — non ha un luogo per definizione.
+ */
+const TAPPE_NON_LUOGO = /pausa|spostamento|trasferimento/;
+/**
+ * Un PRODOTTO non è un luogo (07/10/2026, Los Angeles): la tappa «Tour privato in autobus di Hollywood» (tipo
+ * esperienze) era diventata un POI `monumenti`, arricchito con la voce Wikipedia di Hollywood, la foto della scritta
+ * e un'audioguida — e il navigatore ci «arrivava» come a un monumento. Tour, escursioni, biglietti, noleggi,
+ * crociere, lezioni sono cose che si comprano, con un punto di ritrovo dell'operatore: niente pin, niente scheda.
+ */
+export const NOME_PRODOTTO_NON_LUOGO = /^(tour|visita guidata|escursione|gita|crociera|bigliett[oi]|ticket|noleggio|degustazione|lezione|corso|workshop|laboratorio|esperienza|experience|day trip|walking tour|food tour|bike tour|private tour)\b|\btour (privato|guidato|in autobus|in bici|a piedi|gastronomico|panoramico|hop-on)\b|\bhop-on hop-off\b/i;
+
+export function tappaDiventaPoi(aiType: string = "", nome: string = ""): boolean {
+  if (TAPPE_NON_LUOGO.test(String(aiType).toLowerCase())) return false;
+  if (nome && NOME_PRODOTTO_NON_LUOGO.test(String(nome).trim())) return false;
+  return true;
 }
 
 /** Inserisce POI auto-popolati (source=overpass_auto/foursquare, status=auto). */

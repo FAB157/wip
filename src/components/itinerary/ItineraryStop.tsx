@@ -9,6 +9,8 @@ import { getTranslation, Language } from '../../lib/i18n';
 import { ensureAffiliateUrl } from '../../lib/affiliates';
 import { locationService } from '../../services/locationService';
 import { gramsForLeg, formatCo2, extractKmFromText } from '../../lib/carbonFootprint';
+import { guidePerTappe, apriGuidaMuseo, GuidaPerTappa } from '../../lib/museumVisit';
+import { linkMezzi, trattaLunga } from '../../lib/mezziPubblici';
 
 interface ItineraryStopProps {
   key?: React.Key;
@@ -30,7 +32,7 @@ interface ItineraryStopProps {
   /** Costo in crediti quando le gratuite sono esaurite. */
   replaceCost?: number;
   /** Tratta reale verso la tappa successiva (OSRM): calcolata in PlanScreen. */
-  legToNext?: { walkMin: number; carMin: number; km: number; taxiEur: number } | null;
+  legToNext?: { walkMin: number; carMin: number; km: number; taxiEur: number; da?: { lat: number; lon: number }; a?: { lat: number; lon: number } } | null;
 }
 
 export default function ItineraryStop({
@@ -53,6 +55,24 @@ export default function ItineraryStop({
 }: ItineraryStopProps) {
   // Il pulsante deve dire in anticipo se la sostituzione è gratis o costa:
   // prima l'unico segnale era il modale crediti che compariva a sorpresa.
+  // GUIDA CON LE OPERE (12/09/2026, committente): sulle tappe-museo un
+  // piccolo pulsante «Guida con audioguide delle opere · Pass Museo» che
+  // apre Visite già su quel museo. SOLO se la guida esiste davvero in
+  // libreria, SOLO a tappa aperta, e senza toccare nient'altro della card:
+  // la logica e la grafica degli itinerari restano quelle di oggi.
+  const [guidaMuseo, setGuidaMuseo] = React.useState<GuidaPerTappa | null>(null);
+  React.useEffect(() => {
+    if (!expanded) return;
+    const id = String(tappa?.poi_id || '').trim();
+    const nome = String(tappa?.titolo_tappa || tappa?.nome || '').trim();
+    const sembraMuseo = /museo|museum|musée|museu|galleria|gallery|pinacoteca|palazzo|palace|castello|castle|basilica|cattedrale|cathedral|duomo/i.test(`${nome} ${tappa?.categoria || ''} ${tappa?.tipo || ''}`);
+    if (!id && !nome) return;
+    if (!id && !sembraMuseo) return;
+    let vivo = true;
+    guidePerTappe([{ id: id || null, nome }]).then(m => { if (!vivo) return; setGuidaMuseo((id && m.get(id)) || m.get(nome) || null); }).catch(() => {});
+    return () => { vivo = false; };
+  }, [expanded, tappa?.poi_id, tappa?.titolo_tappa]);
+
   const replaceIsFree = (freeReplacementsLeft ?? 0) > 0;
   const replaceLabel = replaceIsFree
     ? `${getTranslation("replace_action", language)} — ${getTranslation("free_label", language)} (${freeReplacementsLeft})`
@@ -62,6 +82,9 @@ export default function ItineraryStop({
   // Tratta verso la prossima tappa: CO₂ della sola variante in auto, sui km
   // reali OSRM. Se i km mancano non si mostra nulla.
   const legCo2Grams = legToNext ? gramsForLeg('car', legToNext.km) : null;
+  // Mezzi pubblici solo sulle tratte lunghe, e solo se gli estremi sono noti.
+  const urlMezzi = legToNext && trattaLunga(legToNext.km * 1000) && legToNext.da && legToNext.a
+    ? linkMezzi(legToNext.da, legToNext.a) : null;
   // Tappa "trasferimento" (roadtrip): i km vivono solo nel testo dell'AI
   // ("~250 km"), quindi si estraggono da lì; il confronto col treno è un
   // suggerimento curioso, mai un rimprovero.
@@ -130,8 +153,8 @@ export default function ItineraryStop({
             <button
               onClick={onToggleLock}
               aria-pressed={isLocked}
-              aria-label={getTranslation("lock_stop", language)}
-              title={getTranslation("lock_stop", language)}
+              aria-label={getTranslation(isLocked ? "unlock_stop" : "lock_stop", language)}
+              title={getTranslation(isLocked ? "unlock_stop" : "lock_stop", language)}
               className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full transition-colors ${isLocked ? 'bg-secondary/10 text-secondary' : 'bg-gray-50 text-on-surface-variant/60 hover:text-secondary'}`}
             >
               {isLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
@@ -213,6 +236,14 @@ export default function ItineraryStop({
                     {getTranslation("movement", language)}: {tappa.spostamento_precedente}
                   </div>
                 )}
+                {/* Riga dei mezzi pubblici scritta dal server (Transitous) sulle
+                    tratte lunghe (06/10/2026): già tradotta, si stampa com'è. */}
+                {tappa.mezzi_precedente && (
+                  <div className="flex items-start gap-2 mb-3 text-xs font-bold text-blue-700/80 bg-blue-50 px-3 py-1.5 rounded-xl w-fit">
+                    <span>🚇</span>
+                    <span>{tappa.mezzi_precedente}</span>
+                  </div>
+                )}
                 <p className="text-sm text-on-surface-variant font-bold leading-relaxed mb-4">{tappa.attivita}</p>
 
                 {tappa.nota_verifica && (
@@ -277,6 +308,16 @@ export default function ItineraryStop({
                     </button>
                   )}
 
+                  {guidaMuseo && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); apriGuidaMuseo({ poiId: guidaMuseo.poiId, venueKey: guidaMuseo.venueKey, venueName: guidaMuseo.venueName, lat: guidaMuseo.lat, lon: guidaMuseo.lon }); }}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-primary/10 hover:bg-primary/20 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest transition-all hover:scale-105 active:scale-95"
+                      title={`${guidaMuseo.venueName}: ${guidaMuseo.stopsCount} opere`}
+                    >
+                      🎧 {getTranslation("mv_badge_guida", language)}
+                    </button>
+                  )}
+
                   {(tappa.link_info || (tappa as any).url) && (
                     <a
                       href={ensureAffiliateUrl(tappa.link_info || (tappa as any).url)}
@@ -330,7 +371,24 @@ export default function ItineraryStop({
               taxi ~{legToNext.taxiEur}€
             </>
           )}
+          {/* Tratta lunga (≥ 1,5 km): «Mezzi» apre Google Maps in modalità
+              trasporto pubblico fra questa tappa e la prossima (06/10/2026). */}
+          {urlMezzi && (
+            <a
+              href={urlMezzi}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={e => e.stopPropagation()}
+              className="ml-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 normal-case tracking-normal font-bold"
+            >
+              🚇 {getTranslation('mezzi_tasto', language)}
+            </a>
+          )}
         </div>
+      )}
+      {/* La legenda del tasto: cosa succede quando lo si preme. */}
+      {!isLast && urlMezzi && (
+        <p className="mt-1 ml-6 text-[10px] text-gray-400 print:hidden">{getTranslation('mezzi_legenda', language)}</p>
       )}
     </div>
   );

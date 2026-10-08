@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Download, Trash2, MapPin, Search, Loader2, RefreshCw, Radar } from 'lucide-react';
 import { OfflineMapArea, saveOfflineMapArea, getOfflineMapAreasList, deleteOfflineMapArea, updateOfflineMapAreaMeta } from '../lib/offlineStorage';
 import { prefetchTilesForArea, removeTilesForArea, planTilesForArea, stimaDownloadArea } from '../lib/offlineTiles';
+import { prescaricaStradeArea } from '../lib/roadSnap';
 import { getApiUrl, apiFetch } from '../lib/api';
 import { notify } from '../lib/toast';
 import { supabase } from '../lib/supabase';
@@ -191,6 +192,9 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       const result = await prefetchTilesForArea(lat, lon, radiusKm, (p) => {
         setDownloadProgress(t('pf_om_sfondo_n', { n: p.done, x: p.total }));
       });
+      // (03/10/2026) Con la mappa anche le strade dell'area: senza rete le
+      // distanze dai luoghi restano in metri di strada. In background.
+      void prescaricaStradeArea(lat, lon, radiusKm);
       return result;
     } catch (e) {
       console.warn('Prefetch tile fallito (la mappa offline mostrerà solo i pin):', e);
@@ -528,6 +532,7 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       const tiles = await prefetchTilesForArea(area.center.lat, area.center.lon, area.radiusKm, (p) => {
         setDownloadProgress(t('pf_om_sfondo_n', { n: p.done, x: p.total }));
       });
+      void prescaricaStradeArea(area.center.lat, area.center.lon, area.radiusKm);
       await updateOfflineMapAreaMeta(area.id, { tiles });
       await loadAreas();
       notify(tiles.failed > 0

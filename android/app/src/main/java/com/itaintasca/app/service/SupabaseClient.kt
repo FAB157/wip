@@ -228,13 +228,19 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
         lang: String,
         character: String,
         accessToken: String? = null,
-        ritenta: Boolean = true
+        ritenta: Boolean = true,
+        // (18/09/2026) Pre-scarico in blocco di un giro: il server risponde solo
+        // col testo GIA` scritto (204 se manca → Fallito qui sotto), senza far
+        // partire una generazione AI per ogni tappa. Default false: l'arrivo e
+        // il prefetch all'avvicinamento restano get-or-create come sempre.
+        soloCache: Boolean = false
     ): AudioguideResult = withContext(Dispatchers.IO) {
         try {
             val body = JSONObject().apply {
                 put("poiId", poiId)
                 put("lang", lang)
                 put("character", character)
+                if (soloCache) put("soloCache", true)
             }.toString().toRequestBody("application/json".toMediaType())
             val requestBuilder = Request.Builder()
                 // (SEC-09) Dominio unico in WipApi.BASE.
@@ -274,7 +280,7 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
                             } catch (_: Exception) { "" }
                             if (nuovo.isNotBlank() && nuovo != accessToken) {
                                 Log.d(TAG, "Audioguida $poiId: 401, ritento con il token rinnovato")
-                                return@withContext fetchAudioguide(poiId, lang, character, nuovo, ritenta = false)
+                                return@withContext fetchAudioguide(poiId, lang, character, nuovo, ritenta = false, soloCache = soloCache)
                             }
                         }
                         // Ripiego sui campi grezzi di shared_pois (fetchPoiAudioText),
@@ -309,8 +315,9 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
         poiId: String,
         lang: String,
         character: String,
-        accessToken: String? = null
-    ): String? = (fetchAudioguide(poiId, lang, character, accessToken) as? AudioguideResult.Testo)?.text
+        accessToken: String? = null,
+        soloCache: Boolean = false
+    ): String? = (fetchAudioguide(poiId, lang, character, accessToken, soloCache = soloCache) as? AudioguideResult.Testo)?.text
 
     /**
      * Fallback mono-lingua dai campi grezzi di shared_pois (tipicamente
@@ -318,7 +325,9 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
      */
     suspend fun fetchPoiAudioText(poiId: String): String? = withContext(Dispatchers.IO) {
         val url = "${BuildConfig.SUPABASE_URL}/rest/v1/shared_pois?id=eq.$poiId" +
-            "&select=audio_script,description_long,description_ai,description"
+            // (20/09/2026) `description` NON esiste su shared_pois: con quella
+            // colonna la query dava 400 e questo ripiego tornava SEMPRE null.
+            "&select=audio_script,description_long,description_ai,description_short"
         val request = Request.Builder()
             .url(url)
             .get()
@@ -331,7 +340,7 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
                 val arr = JSONArray(response.body?.string() ?: "[]")
                 if (arr.length() == 0) return@withContext null
                 val row = arr.getJSONObject(0)
-                for (key in listOf("audio_script", "description_long", "description_ai", "description")) {
+                for (key in listOf("audio_script", "description_long", "description_ai", "description_short")) {
                     if (!row.isNull(key)) {
                         val v = row.optString(key, "")
                         if (v.isNotBlank()) return@withContext v
@@ -543,13 +552,26 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
                 ?: map["teaser_text_en"]?.toString()
                 ?: map["teaser_text"]?.toString()
 
+            // IL PUNTO D'ARRIVO PRIMA DELLA PORTA (05/09/2026, committente: «il
+            // punto d'arrivo sara' quello da cui partono i trigger dei 150 m /
+            // 300 m in auto e l'avviso del teaser»). `arrival_lat/lon` (matcher
+            // v3.1, migration 20260905130000) e' la porta proiettata sul
+            // marciapiede davanti, gia' sulla rete percorribile. Si posa nel
+            // campo entranceLat/Lon cosi' tutti i consumatori (recinti,
+            // predittivo, bussola, radar Auto, widget) lo usano senza una
+            // colonna Room in piu'; con una RPC vecchia resta la porta. La
+            // coppia si prende intera: mai una lat d'arrivo con la lon della porta.
+            val arrivalLat = (map["arrival_lat"] as? Number)?.toDouble()
+            val arrivalLon = (map["arrival_lon"] as? Number)?.toDouble()
+            val haArrivo = arrivalLat != null && arrivalLon != null && (arrivalLat != 0.0 || arrivalLon != 0.0)
+
             PoiEntity(
                 id = map["id"]?.toString() ?: "",
                 nome = map["nome"]?.toString() ?: map["name"]?.toString() ?: "Punto di interesse",
                 lat = (map["lat"] as? Number)?.toDouble() ?: 0.0,
                 lon = (map["lon"] as? Number)?.toDouble() ?: 0.0,
-                entranceLat = (map["entrance_lat"] as? Number)?.toDouble(),
-                entranceLon = (map["entrance_lon"] as? Number)?.toDouble(),
+                entranceLat = if (haArrivo) arrivalLat else (map["entrance_lat"] as? Number)?.toDouble(),
+                entranceLon = if (haArrivo) arrivalLon else (map["entrance_lon"] as? Number)?.toDouble(),
                 poiType = catFromDb,
                 guideDefault = map["guide_default"]?.toString() ?: "nicky",
                 isGem = isGem,
@@ -573,7 +595,17 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
                 // comportamento è quello di prima (centroide).
                 addressPointLat = (map["address_point_lat"] as? Number)?.toDouble(),
                 addressPointLon = (map["address_point_lon"] as? Number)?.toDouble(),
-                addressPointSource = map["address_point_source"]?.toString()
+                addressPointSource = map["address_point_source"]?.toString(),
+                // LA FONTE della scheda (05/10/2026), per l'arbitrato fra luoghi
+                // vicini (Arbitrato.pesa). nearby_pois la restituisce come
+                // `source` = coalesce(enrichment_source, 'official'): lo stesso
+                // valore che il web riceve da get_geofence_pois. Con `select=*`
+                // (fetchPoiById) la riga porta invece la colonna grezza
+                // `enrichment_source`: si legge quella, per dare lo stesso
+                // significato nei due casi (null = nessuna fonte = non pesa).
+                // Stessa regola in WipSupabaseClient.swift.
+                source = if (map.containsKey("enrichment_source")) map["enrichment_source"]?.toString()
+                    else map["source"]?.toString()
             )
         }
 

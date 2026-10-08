@@ -1,0 +1,4 @@
+file 'pa1_it.mp4'
+file 'pa2_it.mp4'
+file 'pa2b_it.mp4'
+file 'pa3_it.mp4'

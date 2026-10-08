@@ -304,6 +304,42 @@ export const TRAD_VARI: Record<string, Partial<Record<Language, string>>> = {
     RU: "Войти по Face ID / отпечатку",
     ZH: "使用 Face ID / 指纹登录",
   },
+  vr_a_err_google_disabled: {
+    IT: "Accesso con Google non ancora attivo. Usa email e password.",
+    EN: "Google sign-in isn't available yet. Use email and password.",
+    FR: "La connexion Google n'est pas encore disponible. Utilisez e-mail et mot de passe.",
+    ES: "El acceso con Google aún no está disponible. Usa correo y contraseña.",
+    DE: "Google-Anmeldung noch nicht verfügbar. Nutze E-Mail und Passwort.",
+    RU: "Вход через Google пока недоступен. Используйте email и пароль.",
+    ZH: "Google 登录暂未启用，请使用邮箱和密码。",
+  },
+  vr_a_login_google: {
+    IT: "Continua con Google",
+    EN: "Continue with Google",
+    FR: "Continuer avec Google",
+    ES: "Continuar con Google",
+    DE: "Mit Google fortfahren",
+    RU: "Продолжить через Google",
+    ZH: "使用 Google 继续",
+  },
+  vr_a_login_apple: {
+    IT: "Continua con Apple",
+    EN: "Continue with Apple",
+    FR: "Continuer avec Apple",
+    ES: "Continuar con Apple",
+    DE: "Mit Apple fortfahren",
+    RU: "Продолжить через Apple",
+    ZH: "使用 Apple 继续",
+  },
+  vr_a_login_or: {
+    IT: "oppure",
+    EN: "or",
+    FR: "ou",
+    ES: "o",
+    DE: "oder",
+    RU: "или",
+    ZH: "或",
+  },
   vr_a_login_have_account: {
     IT: "Hai già un account? ",
     EN: "Already have an account? ",
@@ -554,6 +590,38 @@ export const TRAD_VARI: Record<string, Partial<Record<Language, string>>> = {
     RU: "В радиусе 5 км не найдено точек интереса",
     ZH: "5公里范围内未找到兴趣点",
   },
+  // Titolo dell'elenco sotto il radar dall'alto, quando la fotocamera non c'è.
+  vr_a_ar_nearest: {
+    IT: "I più vicini", EN: "Closest to you", FR: "Les plus proches", ES: "Los más cercanos", DE: "Am nächsten", RU: "Ближайшие", ZH: "距离最近",
+  },
+  // La vista «lista + radar 2D» come opzione, anche con la fotocamera accesa (12/09/2026).
+  vr_a_ar_view_radar: {
+    IT: "Lista e radar 2D", EN: "List and 2D radar", FR: "Liste et radar 2D", ES: "Lista y radar 2D", DE: "Liste und 2D-Radar", RU: "Список и 2D-радар", ZH: "列表与 2D 雷达",
+  },
+  vr_a_ar_view_camera: {
+    IT: "Passa alla vista con fotocamera", EN: "Switch to the camera view", FR: "Passer à la vue caméra", ES: "Pasar a la vista con cámara", DE: "Zur Kameraansicht wechseln", RU: "Перейти к виду с камерой", ZH: "切换到相机视图",
+  },
+  vr_a_ar_camera_waiting: {
+    IT: "Fotocamera in attesa del permesso. Il radar funziona lo stesso.", EN: "Camera waiting for permission. The radar works anyway.",
+    FR: "Caméra en attente d'autorisation. Le radar fonctionne quand même.", ES: "Cámara a la espera del permiso. El radar funciona igual.",
+    DE: "Kamera wartet auf die Berechtigung. Das Radar funktioniert trotzdem.", RU: "Камера ждёт разрешения. Радар работает и так.", ZH: "相机等待权限中。雷达照常工作。",
+  },
+  vr_a_ar_retry: { IT: "Riprova", EN: "Retry", FR: "Réessayer", ES: "Reintentar", DE: "Erneut versuchen", RU: "Повторить", ZH: "重试" },
+  vr_a_ar_camera_waiting_short: { IT: "Fotocamera in attesa", EN: "Camera waiting", FR: "Caméra en attente", ES: "Cámara en espera", DE: "Kamera wartet", RU: "Камера ожидает", ZH: "相机等待中" },
+  vr_a_ar_radar_2d: { IT: "Radar 2D", EN: "2D radar", FR: "Radar 2D", ES: "Radar 2D", DE: "2D-Radar", RU: "2D-радар", ZH: "2D 雷达" },
+  vr_a_ar_compass_on: { IT: "bussola attiva", EN: "compass on", FR: "boussole active", ES: "brújula activa", DE: "Kompass aktiv", RU: "компас включён", ZH: "指南针已开启" },
+  vr_a_ar_compass_off: { IT: "bussola assente", EN: "no compass", FR: "pas de boussole", ES: "sin brújula", DE: "kein Kompass", RU: "нет компаса", ZH: "无指南针" },
+  vr_a_ar_within: { IT: "{n} luoghi entro 5 km", EN: "{n} places within 5 km", FR: "{n} lieux à moins de 5 km", ES: "{n} lugares en 5 km", DE: "{n} Orte im Umkreis von 5 km", RU: "{n} мест в радиусе 5 км", ZH: "5 公里内 {n} 个地点" },
+  vr_a_ar_audio_ready: { IT: "audioguida pronta", EN: "audio guide ready", FR: "audioguide prêt", ES: "audioguía lista", DE: "Audioguide bereit", RU: "аудиогид готов", ZH: "语音导览已就绪" },
+  // Gli otto punti cardinali, in minuscolo: «Chiesa · nord-est».
+  vr_a_dir_n: { IT: "nord", EN: "north", FR: "nord", ES: "norte", DE: "Norden", RU: "север", ZH: "北" },
+  vr_a_dir_ne: { IT: "nord-est", EN: "north-east", FR: "nord-est", ES: "noreste", DE: "Nordosten", RU: "северо-восток", ZH: "东北" },
+  vr_a_dir_e: { IT: "est", EN: "east", FR: "est", ES: "este", DE: "Osten", RU: "восток", ZH: "东" },
+  vr_a_dir_se: { IT: "sud-est", EN: "south-east", FR: "sud-est", ES: "sureste", DE: "Südosten", RU: "юго-восток", ZH: "东南" },
+  vr_a_dir_s: { IT: "sud", EN: "south", FR: "sud", ES: "sur", DE: "Süden", RU: "юг", ZH: "南" },
+  vr_a_dir_sw: { IT: "sud-ovest", EN: "south-west", FR: "sud-ouest", ES: "suroeste", DE: "Südwesten", RU: "юго-запад", ZH: "西南" },
+  vr_a_dir_w: { IT: "ovest", EN: "west", FR: "ouest", ES: "oeste", DE: "Westen", RU: "запад", ZH: "西" },
+  vr_a_dir_nw: { IT: "nord-ovest", EN: "north-west", FR: "nord-ouest", ES: "noroeste", DE: "Nordwesten", RU: "северо-запад", ZH: "西北" },
 
   // ── LiveTourPanel ──────────────────────────────────────────────────────────
   vr_a_lt_leader_title: {
@@ -594,6 +662,42 @@ export const TRAD_VARI: Record<string, Partial<Record<Language, string>>> = {
   },
   vr_a_lt_participants: {
     IT: "partecipanti connessi", EN: "participants connected", FR: "participants connectés", ES: "participantes conectados", DE: "Teilnehmer verbunden", RU: "участников подключено", ZH: "位参与者在线",
+  },
+  vr_a_lt_in_gruppo: {
+    IT: "Nel gruppo", EN: "In the group", FR: "Dans le groupe", ES: "En el grupo", DE: "In der Gruppe", RU: "В группе", ZH: "群组成员",
+  },
+  vr_a_lt_tu: {
+    IT: "tu", EN: "you", FR: "vous", ES: "tú", DE: "du", RU: "вы", ZH: "你",
+  },
+  vr_a_lt_ruolo_guida: {
+    IT: "Guida", EN: "Guide", FR: "Guide", ES: "Guía", DE: "Guide", RU: "Гид", ZH: "导览者",
+  },
+  vr_a_lt_gate_muto: {
+    IT: "L'audioguida è in muto",
+    EN: "The audio guide is muted",
+    FR: "L'audioguide est en sourdine",
+    ES: "La audioguía está silenciada",
+    DE: "Der Audioguide ist stummgeschaltet",
+    RU: "Аудиогид выключен",
+    ZH: "语音导览已静音",
+  },
+  vr_a_lt_gate_bloccato: {
+    IT: "Il leader ha sbloccato un luogo",
+    EN: "The leader unlocked a place",
+    FR: "Le leader a débloqué un lieu",
+    ES: "El líder ha desbloqueado un lugar",
+    DE: "Der Leader hat einen Ort freigeschaltet",
+    RU: "Лидер открыл место",
+    ZH: "领队解锁了一个地点",
+  },
+  vr_a_lt_gate_tocca: {
+    IT: "Tocca per ascoltare dall'altoparlante",
+    EN: "Tap to listen on the speaker",
+    FR: "Touchez pour écouter sur le haut-parleur",
+    ES: "Toca para escuchar por el altavoz",
+    DE: "Tippen, um über den Lautsprecher zu hören",
+    RU: "Нажмите, чтобы слушать через динамик",
+    ZH: "点击用扬声器收听",
   },
   vr_a_lt_leader_note: {
     IT: "Puoi navigare liberamente nell'app: il tour resta attivo e ogni audioguida che avvii arriva a tutto il gruppo.",
@@ -1252,7 +1356,7 @@ export const TRAD_VARI: Record<string, Partial<Record<Language, string>>> = {
     IT: "Crediti, WIP Shop & Voucher", EN: "Credits, WIP Shop & Vouchers", FR: "Crédits, WIP Shop et bons", ES: "Créditos, WIP Shop y vales", DE: "Credits, WIP Shop & Gutscheine", RU: "Кредиты, WIP Shop и ваучеры", ZH: "积分、WIP 商店与优惠券",
   },
   vr_a_guide_sec_settings: {
-    IT: "Impostazioni — voce per voce", EN: "Settings — item by item", FR: "Réglages — poste par poste", ES: "Ajustes — punto por punto", DE: "Einstellungen — Punkt für Punkt", RU: "Настройки — пункт за пунктом", ZH: "设置——逐项说明",
+    IT: 'Setup e impostazioni — voce per voce', EN: 'Setup & settings — item by item', FR: 'Setup et réglages — poste par poste', ES: 'Setup y ajustes — punto por punto', DE: 'Setup & Einstellungen — Punkt für Punkt', RU: 'Настройки (Setup) — пункт за пунктом', ZH: '设置（Setup）——逐项说明',
   },
   vr_a_guide_sec_support: {
     IT: "Assistenza, Contatti & Privacy", EN: "Support, Contacts & Privacy", FR: "Assistance, contacts et confidentialité", ES: "Asistencia, contactos y privacidad", DE: "Support, Kontakte & Datenschutz", RU: "Поддержка, контакты и приватность", ZH: "支持、联系方式与隐私",
@@ -1364,6 +1468,7 @@ export const TRAD_VARI: Record<string, Partial<Record<Language, string>>> = {
   vr_b_unit_per_scan: { IT: "per scansione", EN: "per scan", FR: "par scan", ES: "por escaneo", DE: "pro Scan", RU: "за скан", ZH: "每次扫描" },
   vr_b_unit_per_day: { IT: "al giorno", EN: "per day", FR: "par jour", ES: "al día", DE: "pro Tag", RU: "в день", ZH: "每天" },
   vr_b_unit_24h: { IT: "24 ore", EN: "24 hours", FR: "24 heures", ES: "24 horas", DE: "24 Stunden", RU: "24 часа", ZH: "24 小时" },
+  vr_b_unit_4h: { IT: "4 ore, 40 audioguide", EN: "4 hours, 40 audio guides", FR: "4 heures, 40 audioguides", ES: "4 horas, 40 audioguías", DE: "4 Stunden, 40 Audioguides", RU: "4 часа, 40 аудиогидов", ZH: "4 小时，40 段语音导览" },
 
   // ── PriceList.tsx ──────────────────────────────────────────────────────
   vr_b_pl_title: { IT: "Listino Servizi", EN: "Service Prices", FR: "Tarifs des services", ES: "Lista de precios", DE: "Preisliste", RU: "Прайс услуг", ZH: "服务价目表" },
@@ -1380,7 +1485,7 @@ export const TRAD_VARI: Record<string, Partial<Record<Language, string>>> = {
   vr_b_pl_podcast_desc: { IT: "Sintesi vocale completa di tutto il tuo itinerario giornaliero.", EN: "Full voice summary of your entire daily itinerary.", FR: "Synthèse vocale complète de tout ton itinéraire quotidien.", ES: "Síntesis de voz completa de todo tu itinerario diario.", DE: "Vollständige Sprachzusammenfassung deiner Tagesroute.", RU: "Полное голосовое изложение вашего дневного маршрута.", ZH: "整日行程的完整语音摘要。" },
   vr_b_pl_pdf_desc: { IT: "Generazione di una guida editoriale in alta qualità scaricabile.", EN: "Generation of a high-quality downloadable editorial guide.", FR: "Génération d'un guide éditorial de haute qualité téléchargeable.", ES: "Generación de una guía editorial de alta calidad descargable.", DE: "Erstellung eines hochwertigen, herunterladbaren Reiseführers.", RU: "Создание качественного гида для скачивания.", ZH: "生成可下载的高品质编辑指南。" },
   vr_b_pl_free_title: { IT: "Servizi Gratuiti", EN: "Free Services", FR: "Services gratuits", ES: "Servicios gratuitos", DE: "Kostenlose Dienste", RU: "Бесплатные услуги", ZH: "免费服务" },
-  vr_b_pl_free_desc: { IT: "La visualizzazione della mappa, la navigazione GPS e i suggerimenti di utilità (farmacie, fontanelle, parcheggi) sono sempre gratuiti e illimitati.", EN: "Map viewing, GPS navigation, and utility suggestions (pharmacies, water fountains, parking) are always free and unlimited.", FR: "L'affichage de la carte, la navigation GPS et les suggestions utiles (pharmacies, fontaines, parkings) sont toujours gratuits et illimités.", ES: "La visualización del mapa, la navegación GPS y las sugerencias útiles (farmacias, fuentes, aparcamientos) son siempre gratuitas e ilimitadas.", DE: "Kartenansicht, GPS-Navigation und praktische Hinweise (Apotheken, Trinkbrunnen, Parkplätze) sind immer kostenlos und unbegrenzt.", RU: "Просмотр карты, GPS-навигация и полезные подсказки (аптеки, фонтанчики, парковки) всегда бесплатны и без ограничений.", ZH: "地图浏览、GPS 导航和实用建议（药店、饮水点、停车场）始终免费且不限次数。" },
+  vr_b_pl_free_desc: { IT: 'Mappa, navigazione GPS, suggerimenti di utilità (farmacie, fontanelle, parcheggi), schede dei luoghi con testo e foto, Libreria di itinerari, mappe offline e WIP Community sono sempre gratuiti e illimitati.', EN: 'Map viewing, GPS navigation, utility suggestions (pharmacies, water fountains, parking), place cards with text and photos, the itinerary Library, offline maps and WIP Community are always free and unlimited.', FR: 'L’affichage de la carte, la navigation GPS, les suggestions utiles (pharmacies, fontaines, parkings), les fiches des lieux avec texte et photos, la Bibliothèque d’itinéraires, les cartes hors ligne et WIP Community sont toujours gratuits et illimités.', ES: 'La visualización del mapa, la navegación GPS, las sugerencias útiles (farmacias, fuentes, aparcamientos), las fichas de los lugares con texto y fotos, la Biblioteca de itinerarios, los mapas sin conexión y WIP Community son siempre gratuitos e ilimitados.', DE: 'Kartenansicht, GPS-Navigation, praktische Hinweise (Apotheken, Trinkbrunnen, Parkplätze), Orts-Karten mit Text und Fotos, die Routen-Bibliothek, Offline-Karten und WIP Community sind immer kostenlos und unbegrenzt.', RU: 'Просмотр карты, GPS-навигация, полезные подсказки (аптеки, фонтанчики, парковки), карточки мест с текстом и фото, Библиотека маршрутов, офлайн-карты и WIP Community всегда бесплатны и без ограничений.', ZH: '地图浏览、GPS 导航、实用建议（药店、饮水点、停车场）、带文字和照片的地点卡片、行程库、离线地图和 WIP Community 始终免费且不限次数。' },
   vr_b_pl_footer: { IT: "Crediti protetti e senza scadenza", EN: "Credits protected & never expire", FR: "Crédits protégés et sans expiration", ES: "Créditos protegidos y sin caducidad", DE: "Credits geschützt & ohne Verfall", RU: "Кредиты защищены и не сгорают", ZH: "积分受保护且永不过期" },
 
   // ── RainGuaranteeCard ──────────────────────────────────────────────────

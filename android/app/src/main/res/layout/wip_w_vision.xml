@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget «Cosa vedo?» (23/09/2026): 1x1 statico, apre la fotocamera in
+     modalita' riconoscimento. La scritta si spegne quando e' largo una cella. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_vs_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/wip_widget_bg"
+    android:padding="4dp">
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:gravity="center">
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/wip_w_fotocamera"
+            android:textSize="26sp" android:gravity="center" />
+        <TextView android:id="@+id/w_vs_testo" android:layout_width="wrap_content" android:layout_height="wrap_content" android:singleLine="true" android:ellipsize="end"
+            android:text="@string/wip_w_vision_breve" android:textColor="#FFFFFF" android:textSize="9sp" android:textStyle="bold" android:gravity="center" />
+    </LinearLayout>
+</FrameLayout>

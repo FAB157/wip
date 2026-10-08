@@ -131,7 +131,7 @@ export function ensureAffiliateUrl(url: string): string {
 // pannello admin "Statistiche Affiliazione"). Best-effort: NON deve mai
 // bloccare o ritardare l'apertura del link — chiamare senza await.
 
-export type AffiliateProvider = 'gyg' | 'viator' | 'tiqets' | 'ticketmaster' | 'other';
+export type AffiliateProvider = 'gyg' | 'viator' | 'tiqets' | 'ticketmaster' | 'klook' | 'tripcom' | 'other';
 
 /** Deduce il provider dall'URL di destinazione. */
 export function providerFromUrl(url: string): AffiliateProvider {
@@ -140,6 +140,9 @@ export function providerFromUrl(url: string): AffiliateProvider {
   if (u.includes('viator') || u.includes('vi.me')) return 'viator';
   if (u.includes('tiqets.')) return 'tiqets';
   if (u.includes('ticketmaster.')) return 'ticketmaster';
+  // Affiliazioni aggiunte il 07/09/2026 (aid Klook, Allianceid/SID Trip.com).
+  if (u.includes('klook.com')) return 'klook';
+  if (u.includes('trip.com')) return 'tripcom';
   return 'other';
 }
 

@@ -1,6 +1,7 @@
 import Foundation
 import Capacitor
 import CoreLocation
+import CoreMotion
 import AVFoundation
 import UserNotifications
 import UIKit
@@ -22,6 +23,18 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
     public let jsName = "ItaintaBackgroundPoiPlugin"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "checkAndRequestPermissions", returnType: CAPPluginReturnPromise),
+        // (30/08/2026) Permessi granulari della schermata unica: DEVONO
+        // esistere anche qui. Su iOS un metodo non dichiarato non viene
+        // rifiutato — il bridge logga e basta (CapacitorBridge.swift, "No
+        // method found") — quindi la promise del JS non si risolve MAI: il
+        // tasto «Attiva» restava disabilitato e il ripiego nel catch non
+        // partiva. Risultato: su iOS le notifiche non venivano piu' chieste
+        // da nessuno. Vedi PermissionsModal.tsx.
+        CAPPluginMethod(name: "getPermissionsStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "requestLocationPermissions", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "requestNotificationPermission", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "requestBatteryOptimization", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "requestActivityRecognition", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startBackgroundPoiService", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "syncManualSelection", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearManualSelection", returnType: CAPPluginReturnPromise),
@@ -40,6 +53,8 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         CAPPluginMethod(name: "checkOfflineTtsVoice", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openTtsVoiceInstall", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "speakText", returnType: CAPPluginReturnPromise),
+        // (29/08/2026) Ferma la voce diretta di speakText(force:true)
+        CAPPluginMethod(name: "stopSpeakText", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setUserContext", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setWalletBalance", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setSilentMode", returnType: CAPPluginReturnPromise),
@@ -55,7 +70,28 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         CAPPluginMethod(name: "openAppSettings", returnType: CAPPluginReturnPromise),
         // (28/08/2026) Cruscotto del navigatore: Live Activity su iOS,
         // notifica del foreground service su Android. Stessa API per il JS.
-        CAPPluginMethod(name: "updateNavBanner", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "updateNavBanner", returnType: CAPPluginReturnPromise),
+        // (18/09/2026) Navigatore a schermo spento: il JS consegna il percorso
+        // al follower nativo (NavFollower, in fondo a BackgroundPoiManager
+        // .swift) e gli manda il battito. Dichiarati QUI o dal JS restano
+        // promise appese per sempre (vedi la nota del 30/08 qui sopra).
+        CAPPluginMethod(name: "setNavRoute", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearNavRoute", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "navHeartbeat", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getNavProgress", returnType: CAPPluginReturnPromise),
+        // (03/10/2026) Registro di collaudo del navigatore (una riga per fix).
+        CAPPluginMethod(name: "getNavLog", returnType: CAPPluginReturnPromise),
+        // (18/09/2026) Pre-scarico delle audioguide di un giro nella cache
+        // NATIVA (il JS le mette nell'IndexedDB della WebView, che a schermo
+        // spento dorme). Dichiarato QUI o dal JS la promise resta appesa.
+        CAPPluginMethod(name: "prefetchGuides", returnType: CAPPluginReturnPromise),
+        // (03/10/2026) Pre-scarico delle strade lungo un percorso (RoadSnap.prescarica).
+        CAPPluginMethod(name: "prefetchRoads", returnType: CAPPluginReturnPromise),
+        // (04/10/2026) Svuota il registro di collaudo dopo l'invio.
+        CAPPluginMethod(name: "clearNavLog", returnType: CAPPluginReturnPromise),
+        // (04/10/2026) Modalità collaudo e segno «qui ha sbagliato».
+        CAPPluginMethod(name: "setCollaudo", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "addNavLogNote", returnType: CAPPluginReturnPromise)
     ]
 
     private let prefs = UserDefaults.standard
@@ -63,9 +99,37 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
     private let packageManager = WipPackageDownloadManager()
     private var permissionManager: CLLocationManager?
     private var pendingPermissionCall: CAPPluginCall?
+    /// Chiamata appesa di requestLocationPermissions (tasto «Attiva» della
+    /// posizione): risponde { location }, non gli `status` della catena unica,
+    /// quindi ha una casella sua e non si mescola con pendingPermissionCall.
+    private var pendingLocationOnlyCall: CAPPluginCall?
+    /// Lo stato posizione al momento della richiesta: il delegate risponde
+    /// solo quando cambia davvero (vedi locationManagerDidChangeAuthorization).
+    private var statoPosizionePartenza: CLAuthorizationStatus?
+    /// Vivo solo per la durata della query che fa comparire il prompt Motion.
+    private var motionPermissionManager: CMMotionActivityManager?
+
+    // (29/08/2026) Voce di sistema DIRETTA, fuori dalla coda dei teaser: il
+    // ripiego che non muore mai quando Azure/Google non rispondono e il
+    // servizio in background è spento (la coda in quel caso scarta tutto).
+    // Port di speakDirect Android. Fine lettura → evento directSpeechFinished.
+    private let directSynth = AVSpeechSynthesizer()
+    private let directDelegate = DirectSpeechDelegate()
+    private var directSpeechId: String?
+    private var directUtterance: AVSpeechUtterance?
 
     override public func load() {
         super.load()
+        // (18/09/2026 notte, dalla revisione) PAGINA NUOVA = PERCORSO VECCHIO
+        // DA BUTTARE. Se la WebView viene ricaricata il JS riparte senza
+        // sapere di aver consegnato un percorso al follower, e non lo
+        // ritirerebbe mai: GPS da navigatore per sempre e un follower «al
+        // comando» che parla sopra al JS nuovo. Il giro in corso si
+        // riconsegna da solo al primo fix. Uguale nel plugin Android.
+        NavFollower.shared.clear()
+        BackgroundPoiManager.shared.aggiornaProfiloNavigatore()
+        directDelegate.onFinished = { [weak self] utterance in self?.directFinished(utterance) }
+        directSynth.delegate = directDelegate
         // Ponte eventi nativo → JS, equivalente del BroadcastReceiver Android.
         // retainUntilConsumed=true: se la WebView si sta ancora svegliando,
         // l'evento viene consegnato appena il listener JS si registra.
@@ -90,6 +154,41 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
                 "data": self?.jsonString(["packageId": packageId, "done": done, "total": total, "phase": phase]) ?? "",
                 "packageId": packageId, "done": done, "total": total, "phase": phase
             ], retainUntilConsumed: true)
+        }
+        // (03/09/2026) I TASTI DELLA LIVE ACTIVITY (WipNavIntents.swift): il
+        // perform() dell'intent gira in questo processo e posta una notifica;
+        // qui diventa l'evento JS `navBannerAction {action}`, lo stesso che
+        // manda Android dalle azioni della notifica del servizio. La chiave
+        // nell'App Group copre il tocco arrivato PRIMA che il plugin fosse
+        // in ascolto (app appena rilanciata dal sistema).
+        // (21/09/2026, REVISIONE 2) Con l'azione viaggia `ts`, l'istante del
+        // TOCCO (ms dal 1970, scritto da WipNavConsegna), come su Android:
+        // senza, la regola dei 60 s di App.tsx non valeva mai su iOS — un
+        // «Termina» toccato a schermo spento chiudeva il percorso pagato senza
+        // conferma al risveglio, e «Salta»/«Ricalcola» partivano in ritardo.
+        NotificationCenter.default.addObserver(forName: WipNavAzione.notifica, object: nil, queue: .main) { [weak self] n in
+            let azione = (n.userInfo?["azione"] as? String) ?? ""
+            // Ripiego sull'adesso: l'osservatore gira al momento del tocco.
+            let ts = (n.userInfo?["ts"] as? Double) ?? Date().timeIntervalSince1970 * 1000
+            let gruppo = UserDefaults(suiteName: WipNavAppGroup.id)
+            gruppo?.removeObject(forKey: WipNavAzione.chiavePendente)
+            gruppo?.removeObject(forKey: WipNavAzione.chiavePendenteTs)
+            guard !azione.isEmpty else { return }
+            // (18/09/2026) A schermo spento il JS è sospeso: il follower
+            // nativo del navigatore obbedisce subito al tasto, il JS al risveglio.
+            BackgroundPoiManager.shared.azioneNavDalBanner(azione)
+            self?.notifyListeners("navBannerAction", data: ["action": azione, "ts": ts], retainUntilConsumed: true)
+        }
+        let gruppoNav = UserDefaults(suiteName: WipNavAppGroup.id)
+        if let pendente = gruppoNav?.string(forKey: WipNavAzione.chiavePendente), !pendente.isEmpty {
+            // Il ts salvato insieme all'azione; 0 = chiave scritta da una build
+            // di prima (App.tsx la tratta come fresca, come prima).
+            let ts = gruppoNav?.double(forKey: WipNavAzione.chiavePendenteTs) ?? 0
+            gruppoNav?.removeObject(forKey: WipNavAzione.chiavePendente)
+            gruppoNav?.removeObject(forKey: WipNavAzione.chiavePendenteTs)
+            var dati: [String: Any] = ["action": pendente]
+            if ts > 0 { dati["ts"] = ts }
+            notifyListeners("navBannerAction", data: dati, retainUntilConsumed: true)
         }
     }
 
@@ -160,12 +259,30 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
     /// solo a chiamata già risolta: mai mentre il prompt di sistema è aperto,
     /// o si perde il callback di autorizzazione.
     private func rilasciaPermissionManager() {
-        guard pendingPermissionCall == nil else { return }
+        guard pendingPermissionCall == nil, pendingLocationOnlyCall == nil else { return }
         permissionManager?.delegate = nil
         permissionManager = nil
     }
 
     public func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        // Tasto «Attiva» della posizione (requestLocationPermissions): risposta
+        // nel suo vocabolario, appena il prompt si chiude. `.notDetermined` e'
+        // il prompt ancora aperto: si aspetta.
+        if let solaPosizione = pendingLocationOnlyCall {
+            let stato: CLAuthorizationStatus
+            if #available(iOS 14.0, *) { stato = manager.authorizationStatus }
+            else { stato = CLLocationManager.authorizationStatus() }
+            // Solo un cambio VERO risponde. Da iOS 14 il delegate viene
+            // chiamato una prima volta appena lo si assegna, con lo stato che
+            // c'era gia': senza questo confronto la promise si chiudeva con
+            // «whileInUse» mentre il prompt «Sempre» era ancora sullo schermo.
+            if stato != statoPosizionePartenza {
+                pendingLocationOnlyCall = nil
+                solaPosizione.resolve(["location": statoPosizioneCorrente(manager)])
+                rilasciaPermissionManager()
+            }
+            return
+        }
         guard let call = pendingPermissionCall else { return }
         let status: CLAuthorizationStatus
         if #available(iOS 14.0, *) { status = manager.authorizationStatus }
@@ -188,6 +305,203 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         // Risposta data (o prompt ancora aperto: allora è un no-op, la guardia
         // controlla pendingPermissionCall): il manager dei permessi si rilascia.
         rilasciaPermissionManager()
+    }
+
+    // ── PERMESSI GRANULARI (30/08/2026) ─────────────────────────────────────
+    // Port di getPermissionsStatus / requestLocationPermissions /
+    // requestNotificationPermission / requestBatteryOptimization /
+    // requestActivityRecognition (ItaintaBackgroundPoiPlugin.kt): la schermata
+    // permessi unica (PermissionsModal.tsx) ha UNA riga per permesso con il
+    // suo tasto «Attiva», e ogni tasto chiama uno di questi metodi.
+    //
+    // Erano solo Android, e il JS contava su un rifiuto UNIMPLEMENTED per
+    // ripiegare sulla catena unica. Su iOS quel rifiuto NON arriva: il bridge
+    // scarta in silenzio le chiamate a metodi non dichiarati (CapacitorBridge
+    // .swift, "No method found"), la promise resta appesa per sempre e il
+    // tasto non torna mai disponibile — con la conseguenza che il permesso
+    // NOTIFICHE su iOS non veniva piu' chiesto da nessuno. Implementati qui,
+    // l'esperienza e' la stessa delle due piattaforme.
+
+    /// Stato di tutto in una lettura sola: le spunte della schermata.
+    /// Stesso payload di Android; `battery` non esiste su iOS (nessuna
+    /// esenzione da chiedere) e vale sempre true, cosi' la riga — che il JS
+    /// mostra solo su Android — non risulta mai "da fare".
+    @objc func getPermissionsStatus(_ call: CAPPluginCall) {
+        // CLLocationManager si crea e si interroga sul main (non e'
+        // thread-safe e i metodi del plugin NON arrivano sul main).
+        DispatchQueue.main.async {
+            let manager = self.permissionManager ?? CLLocationManager()
+            let status: CLAuthorizationStatus
+            if #available(iOS 14.0, *) { status = manager.authorizationStatus }
+            else { status = CLLocationManager.authorizationStatus() }
+            let posizione: String
+            switch status {
+            case .authorizedAlways: posizione = "always"
+            case .authorizedWhenInUse: posizione = "whileInUse"
+            // «Mai chiesto» non e' «negato»: il JS lo tiene come `unknown` e
+            // non mostra ne' la spunta ne' il messaggio di rifiuto.
+            case .notDetermined: posizione = "unknown"
+            default: posizione = "denied"
+            }
+
+            var attivita = false
+            if CMMotionActivityManager.isActivityAvailable() {
+                if #available(iOS 11.0, *) {
+                    attivita = CMMotionActivityManager.authorizationStatus() == .authorized
+                }
+            }
+
+            // Le notifiche si leggono in asincrono: la risposta parte da li'.
+            UNUserNotificationCenter.current().getNotificationSettings { settings in
+                // Su iOS non c'e' l'interruttore di sistema separato di Android
+                // (permesso concesso + notifiche spente dall'app): le due voci
+                // coincidono, e restano entrambe nel payload per avere un
+                // contratto solo con il JS.
+                let concesse = settings.authorizationStatus == .authorized ||
+                    settings.authorizationStatus == .provisional ||
+                    settings.authorizationStatus == .ephemeral
+                call.resolve([
+                    "location": posizione,
+                    "notifications": concesse,
+                    "notificationsPermission": concesse,
+                    "notificationsEnabled": concesse,
+                    "battery": true,
+                    "activity": attivita
+                ])
+            }
+        }
+    }
+
+    /// Tasto «Attiva» della posizione: il prompt di sistema e, da «Mentre usi
+    /// l'app», la richiesta di «Sempre». Risponde con lo stato finale
+    /// (always / whileInUse / denied), come locationOnlyCallback su Android.
+    @objc func requestLocationPermissions(_ call: CAPPluginCall) {
+        // Tutto sul main, come la catena unica (requestLocation): i metodi di
+        // CLLocationManager lo pretendono, e il delegate risponde li'.
+        DispatchQueue.main.async { self.richiediPosizioneGranulare(call) }
+    }
+
+    private func richiediPosizioneGranulare(_ call: CAPPluginCall) {
+        let manager = permissionManager ?? CLLocationManager()
+        manager.delegate = self
+        permissionManager = manager
+
+        let status: CLAuthorizationStatus
+        if #available(iOS 14.0, *) { status = manager.authorizationStatus }
+        else { status = CLLocationManager.authorizationStatus() }
+
+        switch status {
+        case .authorizedAlways:
+            call.resolve(["location": "always"])
+            rilasciaPermissionManager()
+        case .authorizedWhenInUse where prefs.bool(forKey: "wip_always_gia_chiesto"):
+            // L'upgrade a «Sempre» iOS lo propone UNA volta sola: al secondo
+            // tocco il prompt non comparirebbe e il tasto sembrerebbe rotto.
+            // Si apre la scheda dell'app, com'e' su Android quando il permesso
+            // va concesso a mano. Lo stato resta whileInUse: la spunta la
+            // aggiorna `rileggi()` al rientro nell'app.
+            apriImpostazioniApp()
+            call.resolve(["location": "whileInUse", "opened": true])
+            rilasciaPermissionManager()
+        case .authorizedWhenInUse, .notDetermined:
+            // Stessa scala della catena unica: da notDetermined iOS mostra il
+            // prompt, da whileInUse chiede l'upgrade a «Sempre». Il flag si
+            // scrive SOLO nel secondo caso: da notDetermined il prompt di
+            // «Sempre» non e' ancora stato speso, e segnarlo qui manderebbe il
+            // tocco successivo nelle Impostazioni invece che sul dialogo.
+            if status == .authorizedWhenInUse { prefs.set(true, forKey: "wip_always_gia_chiesto") }
+            pendingLocationOnlyCall = call
+            statoPosizionePartenza = status
+            manager.requestAlwaysAuthorization()
+            // Rete di sicurezza: se il prompt non compare (gia' chiesto in
+            // passato: iOS lo mostra una volta sola) il delegate non scatta e
+            // la promise resterebbe appesa — l'esatto difetto che stiamo
+            // chiudendo. 8 s: il tempo di leggere il dialogo e rispondere,
+            // altrimenti il tasto tornava attivo mentre il prompt era ancora
+            // aperto. Se l'utente risponde dopo, `rileggi()` aggiorna la
+            // spunta al rientro nell'app.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+                guard let self = self, let pending = self.pendingLocationOnlyCall else { return }
+                self.pendingLocationOnlyCall = nil
+                pending.resolve(["location": self.statoPosizioneCorrente(manager)])
+                self.rilasciaPermissionManager()
+            }
+        default:
+            call.resolve(["location": "denied"])
+            rilasciaPermissionManager()
+        }
+    }
+
+    /// Tasto «Attiva» delle notifiche. Risponde { granted, enabled, opened }
+    /// come Android; `opened` = si e' aperta la pagina di sistema, che qui
+    /// serve quando l'utente aveva gia' negato (iOS non ripropone il prompt).
+    @objc func requestNotificationPermission(_ call: CAPPluginCall) {
+        let centro = UNUserNotificationCenter.current()
+        centro.getNotificationSettings { settings in
+            if settings.authorizationStatus == .denied {
+                DispatchQueue.main.async {
+                    self.apriImpostazioniApp()
+                    call.resolve(["granted": false, "enabled": false, "opened": true])
+                }
+                return
+            }
+            centro.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+                call.resolve(["granted": granted, "enabled": granted, "opened": false])
+            }
+        }
+    }
+
+    /// Su iOS non esistono le esenzioni dal risparmio energetico: niente da
+    /// chiedere. Si risponde come una catena gia' completa, cosi' il JS non
+    /// resta appeso (la riga batteria la mostra comunque solo su Android).
+    @objc func requestBatteryOptimization(_ call: CAPPluginCall) {
+        call.resolve(["status": "all_granted"])
+    }
+
+    /// Attivita' fisica (Motion & Fitness): il gate anti-teletrasporto GPS.
+    /// Facoltativo su entrambe le piattaforme — negato, il gate resta inerte.
+    @objc func requestActivityRecognition(_ call: CAPPluginCall) {
+        guard CMMotionActivityManager.isActivityAvailable() else {
+            call.resolve(["granted": false])
+            return
+        }
+        if #available(iOS 11.0, *) {
+            if CMMotionActivityManager.authorizationStatus() == .authorized {
+                call.resolve(["granted": true])
+                return
+            }
+        }
+        // Il prompt di sistema (NSMotionUsageDescription) lo mostra la prima
+        // query: un'interrogazione cortissima basta a farlo comparire. Il
+        // manager sta in una proprieta' e non in una locale: rilasciato
+        // dall'ARC prima della risposta, il callback non arriverebbe mai.
+        let manager = motionPermissionManager ?? CMMotionActivityManager()
+        motionPermissionManager = manager
+        let ora = Date()
+        manager.queryActivityStarting(from: ora.addingTimeInterval(-60), to: ora, to: .main) { [weak self] _, _ in
+            var concesso = false
+            if #available(iOS 11.0, *) {
+                concesso = CMMotionActivityManager.authorizationStatus() == .authorized
+            }
+            self?.motionPermissionManager = nil
+            call.resolve(["granted": concesso])
+        }
+    }
+
+    /// Lo stato posizione nel vocabolario della schermata permessi.
+    private func statoPosizioneCorrente(_ manager: CLLocationManager) -> String {
+        let status: CLAuthorizationStatus
+        if #available(iOS 14.0, *) { status = manager.authorizationStatus }
+        else { status = CLLocationManager.authorizationStatus() }
+        switch status {
+        case .authorizedAlways: return "always"
+        case .authorizedWhenInUse: return "whileInUse"
+        // Prompt ancora aperto quando scade la rete di sicurezza: «non lo so»,
+        // non «negato» — il JS mostrerebbe «permesso rifiutato» a un utente
+        // che sta ancora leggendo il dialogo.
+        case .notDetermined: return "unknown"
+        default: return "denied"
+        }
     }
 
     // MARK: - Servizio
@@ -288,7 +602,8 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         // Audioguida spenta = niente cruscotto: se il giro non ha fatto in
         // tempo a mandare `attivo: false`, la Live Activity resterebbe sulla
         // lock screen fino alle 8 ore di scadenza di sistema.
-        LiveActivityNav.shared.termina()
+        // (21/09/2026) Sul main, come updateNavBanner: stessa coda dell'avvio.
+        DispatchQueue.main.async { LiveActivityNav.shared.termina() }
         call.resolve()
     }
 
@@ -315,8 +630,18 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
     @objc func updateNavBanner(_ call: CAPPluginCall) {
         let attivo = call.getBool("attivo") ?? false
         if !attivo {
-            LiveActivityNav.shared.termina()
-            call.resolve(["ok": true])
+            // (21/09/2026, REVISIONE 2) Il cruscotto del JS è spento: il suo
+            // ultimo stato non vale più per il follower (come Android).
+            NavFollower.shared.dimenticaCruscottoJs()
+            // (21/09/2026) Anche la CHIUSURA sul main, come l'avvio qui sotto:
+            // sulla coda del bridge poteva passare DAVANTI a un avvio già
+            // accodato sul main (true poi false in pochi ms al risveglio), e
+            // l'avvio creava una Live Activity nuova a navigazione finita.
+            // Una coda sola, in ordine, e niente corse sul riferimento statico.
+            DispatchQueue.main.async {
+                LiveActivityNav.shared.termina()
+                call.resolve(["ok": true])
+            }
             return
         }
         guard LiveActivityNav.shared.disponibili else {
@@ -338,13 +663,157 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
             "metriAllaSvolta": call.getDouble("metriAllaSvolta") ?? -1,
             "metriRimanenti": call.getDouble("metriRimanenti") ?? 0,
             "eta": call.getString("eta") ?? "",
-            "nomeProssima": call.getString("nomeProssima") ?? ""
+            "nomeProssima": call.getString("nomeProssima") ?? "",
+            // (29/08/2026) URL della foto della tappa: la scarica
+            // LiveActivityNav nell'App Group, il widget la legge da li'.
+            "foto": call.getString("foto") ?? "",
+            // (03/09/2026) La card blu sulla lock screen: manovra per la
+            // freccia, avanzamento per la barra, pausa e modo per i tasti.
+            "manovraTipo": call.getString("manovraTipo") ?? "",
+            "manovraVerso": call.getString("manovraVerso") ?? "",
+            "progresso": call.getDouble("progresso") ?? -1,
+            "metriTotali": call.getDouble("metriTotali") ?? 0,
+            "inPausa": call.getBool("inPausa") ?? false,
+            "modo": call.getString("modo") ?? "giro",
+            "minutiRimanenti": call.getDouble("minutiRimanenti") ?? -1
         ]
+        // (18/09/2026) Il follower nativo RICORDA l'ultimo stato del cruscotto
+        // mandato dal JS: a schermo spento i numeri li rifà lui, ma
+        // indiceTappa, tappeTotali, foto, modo, metriTotali, nomeProssima e
+        // il passo al minuto li prende da qui (NavFollower.cruscotto). Prima
+        // del controllo `disponibili` non serve: senza Live Activity non c'è
+        // nulla da ridisegnare.
+        NavFollower.shared.ricordaCruscottoJs(stato)
         // Le API di ActivityKit vogliono il main thread.
         DispatchQueue.main.async {
             let ok = LiveActivityNav.shared.avviaOAggiorna(titoloGiro: titoloGiro, stato: stato)
             call.resolve(ok ? ["ok": true] : ["ok": false, "reason": "live_activity_request_failed"])
         }
+    }
+
+    // MARK: - Navigatore a schermo spento (18/09/2026)
+    //
+    // Ordine del committente: «il navigatore, sia nell'audioguida che nei
+    // percorsi, deve funzionare anche a schermo spento». A schermo spento la
+    // WebView è congelata e le svolte, che calcola e dice il JS, tacevano. Il
+    // JS consegna qui il percorso GIÀ pronto (manovre tradotte + tracciato) e
+    // finché è vivo manda un battito; se il battito manca da più di 12 s le
+    // frasi le dice il nativo, dalla stessa coda di speakText kind "nav"
+    // (BackgroundPoiManager.consegnaFixAlNavigatore). Stessi quattro metodi e
+    // stesso algoritmo di Android — specifica: docs/nav-nativo-spec.md.
+    // Mai un reject: il JS chiama e va avanti.
+
+    /// `{ routeJson }` → `{ ok }`. Sostituisce il percorso e, se il manager è
+    /// già avviato, porta SUBITO il GPS sul profilo da navigatore; se non lo
+    /// è, il profilo si applica quando parte.
+    @objc func setNavRoute(_ call: CAPPluginCall) {
+        let ok = NavFollower.shared.setRoute(json: call.getString("routeJson") ?? "")
+        // Anche con ok=false: il percorso di prima è stato tolto, il GPS
+        // torna al tier normale.
+        BackgroundPoiManager.shared.aggiornaProfiloNavigatore()
+        call.resolve(["ok": ok])
+    }
+
+    /// Toglie il percorso e ripristina la frequenza dei fix di prima.
+    @objc func clearNavRoute(_ call: CAPPluginCall) {
+        NavFollower.shared.clear()
+        BackgroundPoiManager.shared.aggiornaProfiloNavigatore()
+        call.resolve()
+    }
+
+    /// `{ indice, dettiVicino?, dettiLontano?, inPausa? }`: il JS è vivo e
+    /// parla lui. Gli array si leggono come NSNumber: un `as? [Int]` secco
+    /// fallirebbe in blocco al primo valore non intero arrivato dal ponte.
+    /// (21/09/2026, REVISIONE 2) Il battito PORTA la pausa del JS (assente =
+    /// false): se cambia, il GPS va subito sul profilo giusto (a riposo in
+    /// pausa, da navigatore alla ripresa), senza aspettare il fix dopo.
+    @objc func navHeartbeat(_ call: CAPPluginCall) {
+        let vicinoGrezzo: JSArray = call.getArray("dettiVicino") ?? []
+        let lontanoGrezzo: JSArray = call.getArray("dettiLontano") ?? []
+        let vicino: [Int] = vicinoGrezzo.compactMap { ($0 as? NSNumber)?.intValue }
+        let lontano: [Int] = lontanoGrezzo.compactMap { ($0 as? NSNumber)?.intValue }
+        let pausaCambiata = NavFollower.shared.heartbeat(
+            indice: call.getInt("indice") ?? 0,
+            dettiVicino: vicino,
+            dettiLontano: lontano,
+            inPausa: call.getBool("inPausa") ?? false
+        )
+        if pausaCambiata { BackgroundPoiManager.shared.aggiornaProfiloNavigatore() }
+        call.resolve()
+    }
+
+    /// `{ attivo, id, indice, dettiVicino, dettiLontano, nativoAlComando,
+    /// ultimoTestoVicino, ultimoTestoLontano, finito, terminato }`: al
+    /// risveglio il JS riprende da qui senza ripetere ciò che il nativo ha già
+    /// detto. `terminato` (21/09/2026): svuotato dal «Termina» del cruscotto,
+    /// i dati sono la fotografia di quel momento (NavFollower.terminaDalBanner).
+    @objc func getNavProgress(_ call: CAPPluginCall) {
+        call.resolve(NavFollower.shared.progress())
+    }
+
+    /// (03/10/2026) REGISTRO DI COLLAUDO del navigatore: una riga per fix col
+    /// percorso attivo. Lo scarica il pannello admin dopo un giro di prova.
+    @objc func getNavLog(_ call: CAPPluginCall) {
+        call.resolve(["righe": NavFollower.shared.registroCollaudo()])
+    }
+
+    /// (04/10/2026) Modalità collaudo: accesa, il registro tiene anche la
+    /// traccia della passeggiata. Senza `attivo` risponde soltanto lo stato.
+    @objc func setCollaudo(_ call: CAPPluginCall) {
+        if let on = call.getBool("attivo") { RegistroCollaudo.shared.imposta(on) }
+        call.resolve(["attivo": RegistroCollaudo.shared.attivo])
+    }
+
+    /// (04/10/2026) Il segno di chi collauda: «qui ha sbagliato», con nota e posizione.
+    @objc func addNavLogNote(_ call: CAPPluginCall) {
+        RegistroCollaudo.shared.segno(call.getString("text") ?? "", lat: call.getDouble("lat"), lon: call.getDouble("lon"))
+        call.resolve()
+    }
+
+    /// (04/10/2026) Svuota il registro di collaudo (dopo un invio riuscito, o a mano).
+    @objc func clearNavLog(_ call: CAPPluginCall) {
+        RegistroCollaudo.shared.svuota()
+        call.resolve()
+    }
+
+    /// (18/09/2026, committente: «fai che sia scaricato sempre in nativo
+    /// anche») Pre-scarico delle audioguide di un giro nella cache NATIVA: il
+    /// JS le mette nell'IndexedDB della WebView, che a schermo spento dorme.
+    /// Vedi BackgroundPoiManager.prescaricaGuide. NESSUN ADDEBITO possibile:
+    /// la richiesta del testo non porta `charge` (lo decide il server: senza
+    /// diritto risponde 402 con l'anteprima, e qui vale «niente MP3»). L'MP3
+    /// di norma è un colpo di cache di /api/tts/smart (non consuma nulla); sul
+    /// cache miss vale la stessa regola del prefetch all'avvicinamento che
+    /// c'era già: una sintesi a nostre spese, mai un addebito all'utente.
+    /// Risponde subito: lo scarico è in background, mai un reject.
+    @objc func prefetchGuides(_ call: CAPPluginCall) {
+        let grezzi: JSArray = call.getArray("poiIds") ?? []
+        let ids = grezzi.compactMap { $0 as? String }
+        let linguaGrezza = (call.getString("lang") ?? "it").lowercased()
+        let lang = linguaGrezza.isEmpty ? "it" : String(linguaGrezza.prefix(2))
+        let n = BackgroundPoiManager.shared.prescaricaGuide(poiIds: ids, lang: lang, character: call.getString("character"))
+        call.resolve(["ok": true, "accodati": n])
+    }
+
+    /// (03/10/2026, committente: «le tiles devono essere scaricate quando si
+    /// crea un percorso, con o senza audioguida, e nelle funzioni offline»)
+    /// Pre-scarico delle strade lungo un percorso nella cache nativa: a schermo
+    /// spento e senza rete le distanze di strada devono avere i loro dati.
+    /// `points` = [[lat, lon], ...]. Risponde subito, lo scarico è in background.
+    /// Parità con ItaintaBackgroundPoiPlugin.kt::prefetchRoads.
+    @objc func prefetchRoads(_ call: CAPPluginCall) {
+        let grezzi: JSArray = call.getArray("points") ?? []
+        var punti: [(Double, Double)] = []
+        for g in grezzi {
+            if let p = g as? [Any], p.count >= 2,
+               let la = (p[0] as? NSNumber)?.doubleValue, let lo = (p[1] as? NSNumber)?.doubleValue,
+               la.isFinite, lo.isFinite {
+                punti.append((la, lo))
+            }
+        }
+        let raggio = (call.getBool("car") ?? false) ? 1500 : 700
+        if !punti.isEmpty { RoadSnap.shared.prescarica(punti: punti, radius: raggio) }
+        call.resolve(["ok": true, "punti": punti.count])
     }
 
     // MARK: - Teaser / deep link
@@ -386,8 +855,14 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         // sensi unici ignorati (verificato il 22/08/2026). Stesso parametro del
         // plugin Android.
         let driving = (call.getString("mode") ?? "walking").lowercased().hasPrefix("driv")
+        // `app`: "apple" apre SEMPRE Mappe di Apple (12/09/2026, App Review,
+        // Guideline 4: «give users the option to launch the native Apple Maps
+        // app» — prima, con Google Maps installata, Mappe non era mai
+        // raggiungibile). "google" o assente: Google Maps se c'è, altrimenti Mappe.
+        let app = (call.getString("app") ?? "").lowercased()
         DispatchQueue.main.async {
-            if let gmaps = URL(string: "comgooglemaps://?daddr=\(lat),\(lon)&directionsmode=\(driving ? "driving" : "walking")"),
+            if app != "apple",
+               let gmaps = URL(string: "comgooglemaps://?daddr=\(lat),\(lon)&directionsmode=\(driving ? "driving" : "walking")"),
                UIApplication.shared.canOpenURL(gmaps) {
                 UIApplication.shared.open(gmaps)
             } else {
@@ -482,7 +957,24 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         let text = (call.getString("text") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return call.reject("Missing text") }
         guard prefs.bool(forKey: "isServiceActive") else {
+            // force (29/08/2026): a servizio spento si parla comunque, col
+            // sintetizzatore del plugin — vedi speakDirect.
+            if call.getBool("force") == true { return speakDirect(text, call: call) }
             return call.resolve(["ok": false, "reason": "service_inactive"])
+        }
+        // (21/09/2026, REVISIONE 2) `ttlMs` facoltativo: > 0 = la frase scade
+        // in coda dopo quel tempo (stesso campo delle frasi del follower). Il
+        // JS lo manda SOLO per le svolte del navigatore: dietro un teaser o
+        // una guida, un «gira a destra» detto minuti dopo è un'indicazione
+        // sbagliata. Assente = non scade mai, cioè teaser, arrivi e guide
+        // restano come prima.
+        let ttlMs = call.getDouble("ttlMs") ?? 0
+        // (22/09/2026) Svolta del navigatore senza la voce della lingua
+        // installata: la coda la scarterebbe, e con ok:true il JS non
+        // ripiegava sulla sua voce. Come Android: ok:false, il JS ripiega.
+        let kind = call.getString("kind") ?? "nav"
+        if kind == "nav" && !SpeechQueue.isVoiceAvailable(prefs.string(forKey: "language") ?? "it") {
+            return call.resolve(["ok": false, "reason": "voice_not_installed"])
         }
         SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
             text: text,
@@ -490,9 +982,65 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
             isItinerary: false,
             poiId: call.getString("poiId"),
             priority: call.getInt("priority") ?? 0,
-            kind: call.getString("kind") ?? "nav"
+            kind: call.getString("kind") ?? "nav",
+            scadenzaMs: ttlMs > 0 ? nowMs() + ttlMs : nil
         ))
         call.resolve(["ok": true])
+    }
+
+    /**
+     * Parla subito con AVSpeechSynthesizer del plugin, stessa voce/genere
+     * della coda (SpeechQueue.voiceForLanguage/installedVoice) e stessa
+     * sessione audio del navigatore (.voicePrompt + duckOthers). Risponde
+     * {ok, direct:true, id}; a fine lettura il JS riceve directSpeechFinished.
+     * Senza una voce installata per la lingua: ok=false, il JS ripiega.
+     */
+    private func speakDirect(_ text: String, call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            let spoken = SpeechQueue.speakableText(text)
+            let lang = self.prefs.string(forKey: "language") ?? "it"
+            guard !spoken.isEmpty, let base = SpeechQueue.installedVoice(for: lang) else {
+                return call.resolve(["ok": false, "reason": "voice_not_installed"])
+            }
+            do {
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers])
+                try session.setActive(true)
+            } catch {
+                // Sessione già configurata da altri (player JS): si parla comunque.
+            }
+            let utterance = AVSpeechUtterance(string: spoken)
+            let scelta = SpeechQueue.voiceForLanguage(lang, character: self.prefs.string(forKey: "guideCharacter"))
+            let prefisso = String(SpeechQueue.regionalCode(for: lang).prefix(2))
+            utterance.voice = (scelta?.language.hasPrefix(prefisso) == true) ? scelta : base
+            utterance.volume = 1.0
+            let id = "direct_\(Int(Date().timeIntervalSince1970 * 1000))"
+            // Id giù prima dello stop: il didCancel della lettura precedente
+            // non deve avvisare il JS come se fosse una fine.
+            self.directSpeechId = nil
+            self.directUtterance = nil
+            self.directSynth.stopSpeaking(at: .immediate)
+            self.directSpeechId = id
+            self.directUtterance = utterance
+            self.directSynth.speak(utterance)
+            call.resolve(["ok": true, "direct": true, "id": id])
+        }
+    }
+
+    fileprivate func directFinished(_ utterance: AVSpeechUtterance) {
+        guard utterance === directUtterance, let id = directSpeechId else { return }
+        directSpeechId = nil
+        directUtterance = nil
+        notifyListeners("directSpeechFinished", data: ["id": id], retainUntilConsumed: true)
+    }
+
+    @objc func stopSpeakText(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            self.directSpeechId = nil
+            self.directUtterance = nil
+            self.directSynth.stopSpeaking(at: .immediate)
+            call.resolve()
+        }
     }
 
     // MARK: - Billing offline (stesse chiavi prefs di Android)
@@ -548,6 +1096,14 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
                 call.resolve(["opened": ok])
             }
         }
+    }
+
+    /// La scheda dell'app nelle Impostazioni, senza una chiamata JS di mezzo
+    /// (la usa requestNotificationPermission quando iOS non ripropone il
+    /// prompt). Da chiamare sul main thread.
+    private func apriImpostazioniApp() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
     }
 
     @objc func setWalletBalance(_ call: CAPPluginCall) {
@@ -699,5 +1255,21 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         HealthStats.shared.fetch { result in
             call.resolve(result)
         }
+    }
+}
+
+/**
+ * Delegate del sintetizzatore della voce diretta (speakDirect). Classe a sé
+ * perché il plugin è già CLLocationManagerDelegate: un oggetto piccolo con una
+ * closure è più chiaro di una seconda conformance. didCancel (stop voluto)
+ * arriva con gli id già azzerati e non produce eventi.
+ */
+private final class DirectSpeechDelegate: NSObject, AVSpeechSynthesizerDelegate {
+    var onFinished: ((AVSpeechUtterance) -> Void)?
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        onFinished?(utterance)
+    }
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        onFinished?(utterance)
     }
 }

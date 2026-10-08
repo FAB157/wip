@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.media.audiofx.Equalizer;
 import android.media.audiofx.LoudnessEnhancer;
+import android.net.Uri;
 import android.os.Binder;
 import android.os.Build;
 import android.os.Handler;
@@ -21,6 +22,7 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.app.ServiceCompat;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
+import androidx.media3.common.ForwardingPlayer;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.PlaybackException;
@@ -48,9 +50,32 @@ public class WipBackgroundAudioService extends Service {
         void onPlaybackError(String message);
         void onPlaybackStateChanged(boolean isPlaying);
         void onPlaybackProgress(long positionMs, long durationMs);
+        /**
+         * Gli audiofx di sistema non ci sono su questo dispositivo/ROM: il
+         * megafono non si puo' applicare. Il JS spegne il tasto invece di
+         * lasciarlo acceso a vuoto (01/09/2026).
+         */
+        void onMegaphoneUnavailable();
+        /**
+         * (12/09/2026, visita museo) Tasti «successiva»/«precedente» della
+         * notifica media, della schermata di blocco e delle cuffie, e «play»
+         * premuto a traccia finita: decide il JS (sa qual e' l'opera dopo).
+         */
+        void onRemoteNext();
+        void onRemotePrevious();
+        void onRemotePlay();
     }
 
     private static final String TAG = "WipAudio";
+    public static final String ACTION_NEXT = "com.itaintasca.audio.NEXT";
+    public static final String ACTION_PREVIOUS = "com.itaintasca.audio.PREVIOUS";
+    /**
+     * (12/09/2026, visita museo — «stesso banner» di iOS) Con i comandi di
+     * traccia accesi dal JS: «successiva/precedente» al posto dei salti di
+     * 15 s, il banner resta a fine opera (in pausa, col nome della prossima)
+     * e il play a traccia finita va al JS che fa partire l'opera dopo.
+     */
+    private volatile boolean trackCommandsEnabled = false;
     private static final String CHANNEL_ID = "wip_audio_channel";
     private static final int NOTIFICATION_ID = 101;
     private static final long PROGRESS_INTERVAL_MS = 500L;
@@ -167,9 +192,18 @@ public class WipBackgroundAudioService extends Service {
         if (ACTION_PAUSE.equals(action)) {
             pause();
         } else if (ACTION_RESUME.equals(action)) {
-            resume();
+            // A traccia finita, in visita museo, «riprendi» = prossima opera.
+            if (trackCommandsEnabled && exoPlayer != null && exoPlayer.getPlaybackState() == Player.STATE_ENDED && callback != null) {
+                callback.onRemotePlay();
+            } else {
+                resume();
+            }
         } else if (ACTION_STOP.equals(action)) {
             stop();
+        } else if (ACTION_NEXT.equals(action)) {
+            if (callback != null) callback.onRemoteNext();
+        } else if (ACTION_PREVIOUS.equals(action)) {
+            if (callback != null) callback.onRemotePrevious();
         }
         return START_STICKY;
     }
@@ -254,6 +288,47 @@ public class WipBackgroundAudioService extends Service {
         this.callback = cb;
     }
 
+    /** Visita museo: accende/spegne «successiva/precedente» e il banner persistente. */
+    public void setTrackCommands(boolean enabled) {
+        trackCommandsEnabled = enabled;
+        if (!enabled && exoPlayer != null && exoPlayer.getPlaybackState() == Player.STATE_ENDED) {
+            // Visita chiusa a traccia finita: il banner rimasto acceso si spegne.
+            releaseForeground();
+            stopSelfIfIdle();
+        } else {
+            updateNotification();
+        }
+    }
+
+    /**
+     * Titolo/sottotitolo/copertina del banner senza rifar partire l'audio,
+     * anche a traccia finita (a fine opera dice «Prossima: X»). Il MediaItem
+     * viene sostituito con gli stessi dati e i nuovi metadati: e' da li' che
+     * la schermata di blocco (Android 13+) e l'auto leggono titolo e foto.
+     */
+    public void updateNowPlaying(@Nullable String title, @Nullable String subtitle, @Nullable String imageUri) {
+        if (title != null && !title.isEmpty()) currentTitle = title;
+        if (subtitle != null) currentSubtitle = subtitle;
+        try {
+            if (exoPlayer != null && exoPlayer.getMediaItemCount() > 0) {
+                MediaItem corrente = exoPlayer.getCurrentMediaItem();
+                if (corrente != null) {
+                    MediaMetadata.Builder mb = corrente.mediaMetadata.buildUpon()
+                            .setTitle(currentTitle)
+                            .setArtist(currentSubtitle);
+                    if (imageUri != null && !imageUri.isEmpty()) {
+                        try { mb.setArtworkUri(Uri.parse(imageUri)); } catch (Exception ignored) { }
+                    }
+                    exoPlayer.replaceMediaItem(exoPlayer.getCurrentMediaItemIndex(),
+                            corrente.buildUpon().setMediaMetadata(mb.build()).build());
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Aggiornamento metadati non riuscito, resta la notifica: " + e.getMessage());
+        }
+        updateNotification();
+    }
+
     private void ensurePlayer() {
         if (exoPlayer != null) return;
 
@@ -271,9 +346,22 @@ public class WipBackgroundAudioService extends Service {
                 .build();
 
         exoPlayer = new ExoPlayer.Builder(this)
-                // true => ExoPlayer richiede/abbandona l'audio focus da solo in base
-                // agli AudioAttributes sopra: duck (non pausa) la musica di altre app.
-                .setAudioAttributes(attrs, true)
+                // false => IL FOCUS SE LO GESTISCE L'APP (29/08/2026).
+                //
+                // Con `true` media3 solleva IllegalArgumentException in fase di
+                // costruzione: «Automatic handling of audio focus is only
+                // available for USAGE_MEDIA and USAGE_GAME» — e con
+                // ASSISTANCE_NAVIGATION_GUIDANCE (scelta voluta, vedi sopra)
+                // non lo e'. Finche' il servizio nasceva solo alla prima
+                // riproduzione il difetto restava latente; da quando il plugin
+                // lo avvia insieme all'app (correzione AUD-02), l'eccezione
+                // arriva in onCreate e l'APP NON SI APRE PIU'.
+                //
+                // Il focus lo si chiede a mano in play() con
+                // AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK: e' esattamente cio' che
+                // ExoPlayer avrebbe fatto da solo, ed e' la stessa richiesta
+                // gia' usata dalla voce nativa in GeofenceBroadcastReceiver.
+                .setAudioAttributes(attrs, false)
                 // false => cuffie staccate: la guida CONTINUA dall'altoparlante
                 // (decisione di prodotto 28/08/2026, stessa regola della voce
                 // nativa del 23/08). Con true ExoPlayer si metteva in pausa da
@@ -289,16 +377,36 @@ public class WipBackgroundAudioService extends Service {
             @Override
             public void onPlaybackStateChanged(int state) {
                 if (state == Player.STATE_ENDED) {
+                    // A fine guida playWhenReady resta true: il focus va
+                    // reso qui, o la musica dell'utente resta abbassata.
+                    rilasciaFocusAudio();
                     stopProgressTicker();
                     if (callback != null) {
                         callback.onPlaybackProgress(exoPlayer.getDuration(), exoPlayer.getDuration());
                         callback.onPlaybackEnded();
                     }
                     pausedByNativeVoice = false;
-                    releaseForeground();
-                    // (AUD-02) Guida finita e nessuno legato: si spegne.
-                    stopSelfIfIdle();
+                    if (trackCommandsEnabled) {
+                        // Visita museo: il banner resta, in pausa, coi tasti
+                        // successiva/precedente (il JS ci scrive «Prossima: X»).
+                        updateNotification();
+                    } else {
+                        releaseForeground();
+                        // (AUD-02) Guida finita e nessuno legato: si spegne.
+                        stopSelfIfIdle();
+                    }
                 }
+            }
+
+            // IL FOCUS SEGUE playWhenReady, non isPlaying (che va a false anche
+            // durante il buffering): copre la pausa da qualunque parte arrivi —
+            // JS, schermo di blocco, cuffie, voce nativa — e la ripresa dallo
+            // schermo di blocco, che non passa da resume(). rilasciaFocusAudio
+            // esisteva ma non la chiamava nessuno.
+            @Override
+            public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
+                if (playWhenReady) richiediFocusAudio();
+                else rilasciaFocusAudio();
             }
 
             @Override
@@ -324,6 +432,7 @@ public class WipBackgroundAudioService extends Service {
             @Override
             public void onPlayerError(PlaybackException error) {
                 Log.e(TAG, "Playback error: " + error.getMessage(), error);
+                rilasciaFocusAudio();
                 stopProgressTicker();
                 if (callback != null) callback.onPlaybackError(error.getMessage());
                 pausedByNativeVoice = false;
@@ -333,7 +442,51 @@ public class WipBackgroundAudioService extends Service {
         });
 
         try {
-            mediaSession = new MediaSession.Builder(this, exoPlayer)
+            // (12/09/2026) Il player visto dalla MediaSession dichiara SEMPRE
+            // «successiva/precedente»: in visita museo vanno al JS (opera
+            // dopo/prima), altrimenti valgono come salto di 15 s. A traccia
+            // finita, in visita, il play chiede al JS la prossima invece di
+            // ripartire da capo.
+            Player playerPerSessione = new ForwardingPlayer(exoPlayer) {
+                @Override
+                public Player.Commands getAvailableCommands() {
+                    return super.getAvailableCommands().buildUpon()
+                            .add(Player.COMMAND_SEEK_TO_NEXT)
+                            .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                            .build();
+                }
+
+                @Override
+                public boolean isCommandAvailable(int command) {
+                    if (command == Player.COMMAND_SEEK_TO_NEXT || command == Player.COMMAND_SEEK_TO_PREVIOUS) return true;
+                    return super.isCommandAvailable(command);
+                }
+
+                @Override
+                public void seekToNext() {
+                    if (trackCommandsEnabled) { if (callback != null) callback.onRemoteNext(); }
+                    else super.seekForward();
+                }
+
+                @Override
+                public void seekToPrevious() {
+                    if (trackCommandsEnabled) { if (callback != null) callback.onRemotePrevious(); }
+                    else super.seekBack();
+                }
+
+                @Override
+                public void play() {
+                    if (trackCommandsEnabled && getPlaybackState() == Player.STATE_ENDED && callback != null) callback.onRemotePlay();
+                    else super.play();
+                }
+
+                @Override
+                public void setPlayWhenReady(boolean playWhenReady) {
+                    if (playWhenReady && trackCommandsEnabled && getPlaybackState() == Player.STATE_ENDED && callback != null) callback.onRemotePlay();
+                    else super.setPlayWhenReady(playWhenReady);
+                }
+            };
+            mediaSession = new MediaSession.Builder(this, playerPerSessione)
                     .setId("wip_audio_session")
                     .setSessionActivity(buildContentIntent())
                     .build();
@@ -345,9 +498,71 @@ public class WipBackgroundAudioService extends Service {
         }
     }
 
-    public void play(String url, String title, String subtitle) {
+    /**
+     * IL FOCUS AUDIO, CHIESTO A MANO (29/08/2026).
+     *
+     * ExoPlayer non puo' gestirlo da solo con USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
+     * (vedi ensurePlayer). Si chiede quindi qui, con la stessa richiesta che
+     * avrebbe fatto lui e che usa gia' la voce nativa: GAIN_TRANSIENT_MAY_DUCK,
+     * cioe' «abbassate, non fermatevi» — la musica di sottofondo dell'utente
+     * cala mentre la guida racconta e torna su alla fine.
+     *
+     * Se il sistema nega il focus (una telefonata in corso) si riproduce
+     * comunque: la telefonata ha gia' la sua priorita' a livello di sistema, e
+     * un'audioguida che tace senza dire perche' sembra un'app rotta.
+     */
+    private Object focusRequest; // AudioFocusRequest (API 26+), tenuto come Object per l'SDK minimo
+
+    private void richiediFocusAudio() {
+        try {
+            // Gia' nostro: ogni AudioFocusRequest nuovo e' una voce in piu'
+            // nella pila del sistema, e quelle vecchie non le rilasciava
+            // nessuno (la musica dell'utente restava abbassata).
+            if (focusRequest != null) return;
+            android.media.AudioManager am = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+            if (am == null) return;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                android.media.AudioAttributes a = new android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build();
+                android.media.AudioFocusRequest req = new android.media.AudioFocusRequest.Builder(
+                        android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                        .setAudioAttributes(a)
+                        .setWillPauseWhenDucked(false)
+                        .build();
+                focusRequest = req;
+                am.requestAudioFocus(req);
+            } else {
+                am.requestAudioFocus(null, android.media.AudioManager.STREAM_MUSIC,
+                        android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Richiesta focus audio fallita: " + e.getMessage());
+        }
+    }
+
+    private void rilasciaFocusAudio() {
+        try {
+            android.media.AudioManager am = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+            if (am == null) return;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (focusRequest instanceof android.media.AudioFocusRequest) {
+                    am.abandonAudioFocusRequest((android.media.AudioFocusRequest) focusRequest);
+                }
+                focusRequest = null;
+            } else {
+                am.abandonAudioFocus(null);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Rilascio focus audio fallito: " + e.getMessage());
+        }
+    }
+
+    public void play(String url, String title, String subtitle, String imageUri) {
         try {
             ensurePlayer();
+            richiediFocusAudio();
             currentTitle = title != null ? title : "WIP";
             currentSubtitle = subtitle != null ? subtitle : "Audioguida";
 
@@ -367,12 +582,25 @@ public class WipBackgroundAudioService extends Service {
 
             Log.d(TAG, "Preparazione riproduzione URL: " + url);
 
+            // (31/08/2026) Copertina: Media3 la risolve da solo in modo
+            // asincrono per la notifica MediaStyle e la MediaSession — la
+            // stessa che qualunque auto collegata via Bluetooth legge come
+            // "album art" del brano. Nessuna foto (POI senza immagine, o
+            // trigger dal navigatore/podcast che non ne passa una): il
+            // titolo resta comunque il nome del POI, come prima.
+            MediaMetadata.Builder metadataBuilder = new MediaMetadata.Builder()
+                    .setTitle(currentTitle)
+                    .setArtist(currentSubtitle);
+            if (imageUri != null && !imageUri.isEmpty()) {
+                try {
+                    metadataBuilder.setArtworkUri(Uri.parse(imageUri));
+                } catch (Exception e) {
+                    Log.w(TAG, "Copertina non valida, si prosegue senza: " + e.getMessage());
+                }
+            }
             MediaItem mediaItem = new MediaItem.Builder()
-                    .setUri(android.net.Uri.parse(url))
-                    .setMediaMetadata(new MediaMetadata.Builder()
-                            .setTitle(currentTitle)
-                            .setArtist(currentSubtitle)
-                            .build())
+                    .setUri(Uri.parse(url))
+                    .setMediaMetadata(metadataBuilder.build())
                     .build();
 
             // Il foreground va avviato prima della riproduzione: se il sistema lo nega
@@ -399,10 +627,15 @@ public class WipBackgroundAudioService extends Service {
         if (exoPlayer == null) return;
         if (exoPlayer.getPlaybackState() == Player.STATE_IDLE) return;
         startForegroundSafe();
+        // Il focus era stato rilasciato mettendo in pausa: si richiede, altrimenti
+        // si riprende a raccontare sopra la musica di un'altra app invece di
+        // abbassarla.
+        richiediFocusAudio();
         exoPlayer.play();
     }
 
     public void stop() {
+        rilasciaFocusAudio();
         stopProgressTicker();
         pausedByNativeVoice = false;
         if (exoPlayer != null) {
@@ -459,6 +692,14 @@ public class WipBackgroundAudioService extends Service {
         }
     }
 
+    /**
+     * Aggancia gli effetti alla sessione audio corrente. Non e' un errore non
+     * riuscirci subito: finche' l'ExoPlayer non ha aperto una sessione audio
+     * non c'e' niente a cui agganciarsi, e ci ripensa `onAudioSessionIdChanged`.
+     * E' un errore invece se gli audiofx non esistono proprio: in quel caso il
+     * megafono si spegne da solo e il JS lo sa (onMegaphoneUnavailable), cosi'
+     * il tasto non resta acceso su un effetto che non c'e'.
+     */
     private void applyMegaphone() {
         releaseMegaphone();
         if (!megaphoneEnabled || exoPlayer == null) return;
@@ -480,9 +721,16 @@ public class WipBackgroundAudioService extends Service {
             megaphoneBoost.setEnabled(true);
         } catch (Exception e) {
             // Alcuni device/ROM non espongono gli audiofx: il megafono resta
-            // senza effetto ma la riproduzione non deve risentirne.
+            // senza effetto ma la riproduzione non deve risentirne. Il tasto
+            // pero' non deve mentire — si spegne, di qua e nella scheda.
             Log.w(TAG, "Effetto megafono non disponibile: " + e.getMessage());
             releaseMegaphone();
+            megaphoneEnabled = false;
+            if (callback != null) {
+                mainHandler.post(() -> {
+                    if (callback != null) callback.onMegaphoneUnavailable();
+                });
+            }
         }
     }
 
@@ -566,6 +814,7 @@ public class WipBackgroundAudioService extends Service {
 
     private Notification buildNotification() {
         boolean playing = isPlaying();
+        boolean museo = trackCommandsEnabled;
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle(currentTitle)
@@ -574,22 +823,30 @@ public class WipBackgroundAudioService extends Service {
                 .setContentIntent(buildContentIntent())
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setOnlyAlertOnce(true)
-                .setOngoing(playing)
-                .addAction(
-                        playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
-                        playing ? "Pausa" : "Riprendi",
-                        buildActionIntent(playing ? ACTION_PAUSE : ACTION_RESUME, playing ? 1 : 2)
-                )
-                .addAction(
-                        android.R.drawable.ic_menu_close_clear_cancel,
-                        "Stop",
-                        buildActionIntent(ACTION_STOP, 3)
-                );
+                .setOngoing(playing);
+        // Visita museo: ‹ precedente · play/pausa · successiva › · stop.
+        if (museo) {
+            builder.addAction(android.R.drawable.ic_media_previous, "Precedente", buildActionIntent(ACTION_PREVIOUS, 4));
+        }
+        builder.addAction(
+                playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
+                playing ? "Pausa" : "Riprendi",
+                buildActionIntent(playing ? ACTION_PAUSE : ACTION_RESUME, playing ? 1 : 2)
+        );
+        if (museo) {
+            builder.addAction(android.R.drawable.ic_media_next, "Successiva", buildActionIntent(ACTION_NEXT, 5));
+        }
+        builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "Stop",
+                buildActionIntent(ACTION_STOP, 3)
+        );
 
         if (mediaSession != null) {
             try {
-                builder.setStyle(new MediaStyleNotificationHelper.MediaStyle(mediaSession)
-                        .setShowActionsInCompactView(0, 1));
+                MediaStyleNotificationHelper.MediaStyle stile = new MediaStyleNotificationHelper.MediaStyle(mediaSession);
+                if (museo) stile.setShowActionsInCompactView(0, 1, 2); else stile.setShowActionsInCompactView(0, 1);
+                builder.setStyle(stile);
             } catch (Exception e) {
                 Log.w(TAG, "MediaStyle non applicabile: " + e.getMessage());
             }
@@ -618,6 +875,7 @@ public class WipBackgroundAudioService extends Service {
         if (instance == this) instance = null;
         playingNow = false;
         pausedByNativeVoice = false;
+        rilasciaFocusAudio();
         stopProgressTicker();
         releaseMegaphone();
         callback = null;

@@ -29,6 +29,8 @@ interface CalendarExportButtonProps {
   language?: Language | string;
   /** Coordinate della destinazione: servono a scegliere il fuso orario degli eventi. */
   destCoords?: { lat: number; lon: number } | null;
+  /** Data scelta nella modalina (YYYY-MM-DD), a export riuscito: il piano la salva come data_inizio. */
+  onDataScelta?: (data: string) => void;
 }
 
 /** Domani a mezzanotte locale. */
@@ -53,6 +55,7 @@ export default function CalendarExportButton({
   buttonLabel,
   language = 'IT',
   destCoords,
+  onDataScelta,
 }: CalendarExportButtonProps) {
   const [open, setOpen] = useState(false);
   const [dateValue, setDateValue] = useState('');
@@ -90,6 +93,7 @@ export default function CalendarExportButton({
         // Toast SOLO a consegna reale: deliverIcsFile torna false anche se
         // l'utente annulla la condivisione (AbortError).
         notify(t('ready'), 'success');
+        if (dateValue) onDataScelta?.(dateValue);
         setOpen(false);
       } else {
         notify(t('download_failed'), 'error');

@@ -3,8 +3,14 @@
 import { Mic, Trash2, User, History, Landmark, Check, MapPin, Calendar, Compass, Sparkles, Plus, X, RotateCcw, Save, Loader2, ListChecks, Map as MapIcon, Heart, Printer, Navigation, ChevronDown, ChevronUp, Download, Lock, Unlock, Headphones, ArrowUp, ArrowDown, Clock, Church, Utensils, Trees, AlertTriangle, ShieldAlert, Lightbulb, ThumbsUp, Ticket, Bus, Coffee, Wine, Wallet, LocateFixed, ArrowLeft, ExternalLink, Star, Radio, Square, Info, Eye, Play, Pause, SkipBack, RefreshCw, Globe, Music } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { saveOfflineItinerary, getOfflineItinerariesList, getOfflineItinerary, deleteOfflineItinerary } from '../lib/offlineStorage';
+import { saveOfflineItinerary, getOfflineItinerary } from '../lib/offlineStorage';
+import { scaricaPacchettoOffline } from '../lib/pacchettoOffline';
+import { registraDownload } from '../lib/downloadsRegistry';
+import DownloadsScreen from './DownloadsScreen';
 import { tourService, MAX_TAPPE } from '../services/tourService';
+import { getDayPassState } from '../services/dayPassService';
+import { salvaPianoPerWidget, scegliGiornoPerWidget } from '../lib/widgetDati';
+import { apriCassaDayPass } from '../lib/tour/passRichiesto';
 import NavChoiceSheet from './NavChoiceSheet';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
@@ -13,9 +19,10 @@ import { useCreditConfirmation } from '../hooks/useCreditConfirmation';
 import CreditConfirmationModal from './CreditConfirmationModal';
 import { consumeCredits, PRICING_LIST, getWalletBalance, refundCredits, notifyCreditsChanged } from '../lib/pricing';
 import { printScoped } from '../lib/printScoped';
-import { getApiUrl, apiFetch } from '../lib/api';
-import { OSRM_FOOT_BASE } from '../services/osrmService';
+import { getApiUrl, apiFetch, bearerHeaders } from '../lib/api';
+import { chiediConsensoAi } from '../lib/aiConsent';
 import { notify as sharedNotify } from '../lib/toast';
+import { Capacitor } from '@capacitor/core';
 import { ensureAffiliateUrl, trackAffiliateClick } from '../lib/affiliates';
 import QuotaLimitToast, { useQuotaToast } from './QuotaLimitToast';
 import { Language, getTranslation, linguaCorrente } from '../lib/i18n';
@@ -23,6 +30,7 @@ import PrintView from './PrintView';
 import { FAVORITES_EVENT } from '../lib/favorites';
 import { useWalkingNavigation } from '../hooks/useWalkingNavigation';
 import NavigationOverlay from './NavigationOverlay';
+import ClimaReportSheet from './ClimaReportSheet';
 import PlanMap from './PlanMap';
 import PremiumGuideModal from './PremiumGuideModal';
 import AgentControls from './AgentControls';
@@ -44,8 +52,9 @@ import GroupPlanPanel, { type MergedGroupPrefs } from './GroupPlanPanel';
 import DayPassCard from './DayPassCard';
 import ShopScreen from './ShopScreen';
 import LoadingQuiz from './LoadingQuiz';
-import { downloadGuideAsPdf } from '../services/premiumGuideService';
-import { mapItineraryCategoryToMapCategory } from '../services/poiRepository';
+import { downloadGuideAsPdf, getLocalGuide } from '../services/premiumGuideService';
+import { mapItineraryCategoryToMapCategory, tappaDiventaPoi } from '../services/poiRepository';
+import { mieGenerazioni, type Generazione } from '../services/generazioniService';
 import BudgetTable from './itinerary/BudgetTable';
 import CalendarExportButton from './CalendarExportButton';
 import ItineraryStop from './itinerary/ItineraryStop';
@@ -203,6 +212,7 @@ const PLAN_ERROR_KEYS: Record<string, string> = {
   STREAM_UNSUPPORTED: 'err_ai_empty',
   INVALID_RESPONSE: 'err_ai_invalid_response',
   UNAUTHORIZED: 'err_login_required',
+  CONSENSO_AI_NEGATO: 'err_ai_consent_declined',
 };
 
 /** Messaggio utente per un errore di generazione/sostituzione/suggerimento. */
@@ -210,7 +220,8 @@ function describePlanError(err: unknown, language: Language): string {
   const code = (err as any)?.code || (err instanceof Error ? err.message : String(err || ''));
   const key = PLAN_ERROR_KEYS[code];
   if (key) return getTranslation(key, language);
-  if ((err as any)?.name === 'AbortError') return getTranslation('err_ai_timeout', language);
+  // apiFetch interrompe con TimeoutError (non AbortError): senza, il timeout finiva nel messaggio generico.
+  if ((err as any)?.name === 'AbortError' || (err as any)?.name === 'TimeoutError') return getTranslation('err_ai_timeout', language);
   const detail = (err as any)?.detail || (err instanceof Error ? err.message : '');
   return detail
     ? `${getTranslation('err_generation_failed', language)} (${String(detail).slice(0, 120)})`
@@ -234,6 +245,11 @@ async function processItineraryStream(
   body: any,
   onPartialData: (data: any) => void
 ): Promise<any> {
+  // App Store 5.1.2(i) (18/09/2026): qui passa OGNI generazione/rigenerazione
+  // di itinerario, ed è un'AI di terze parti (Groq e a cascata). Il consenso
+  // si chiede una volta sola (chiediConsensoAi ricorda il sì); un no qui
+  // arriva come errore gestito, non come crash della UI.
+  if (!(await chiediConsensoAi())) throw new PlanError('CONSENSO_AI_NEGATO');
   const controller = new AbortController();
   // 30s per il primo byte: prima dello stream il server fa quota + RAG +
   // retrieval ristoranti (fino a ~6s) — con 20s i margini erano stretti.
@@ -276,12 +292,22 @@ async function processItineraryStream(
   let hasError = false;
   let errorMessage = "";
   let billing: { credits_paid?: number; credits_paid_earned?: number; days?: number; ts?: number } | null = null;
+  // Versione VERIFICATA dal server (evento `verified`, 05/09/2026): stesso
+  // itinerario, con le tappe agganciate ai POI del database (coordinate del
+  // punto d'arrivo, poi_id, indirizzo, telefono) e le note del revisore
+  // anti-allucinazioni (verifica/nota_verifica). Il server la manda dal
+  // 14/08, ma qui non veniva letta: tutto quel lavoro andava perso.
+  let verificato: any = null;
 
   // Timeout di sicurezza sul loop di lettura: se lo stream si blocca (es. DeepSeek idle)
   // non lasciamo la lambda e il browser appesi per sempre.
   // 120s: con 40s gli itinerari lunghi (4-5 giorni, 8+ tappe/giorno) venivano
   // troncati a metà streaming — il JSON riparato perdeva giorni interi.
-  const streamTimeout = 120000;
+  // Oltre i 3 giorni il server genera i blocchi successivi DOPO lo stream
+  // (05/09/2026, tetto 8192 token di DeepSeek): ~90 s per blocco da 3
+  // giorni, piu' aggancio e revisore. Il tetto cresce con i giorni.
+  const giorniRichiesti = Math.max(1, Math.floor(Number(body?.days)) || 1);
+  const streamTimeout = 120000 + Math.max(0, Math.ceil((giorniRichiesti - 2) / 2)) * 90000 + 60000;
   const streamStart = Date.now();
 
   // BUFFER DI RIGA: il server emette un evento SSE per token, ma i confini dei
@@ -299,7 +325,18 @@ async function processItineraryStream(
       throw new PlanError('STREAM_TIMEOUT');
     }
 
-    const { done, value } = await reader.read();
+    // TIMEOUT SUL SINGOLO CHUNK (10/09/2026): il controllo sopra si rivaluta
+    // solo tra un giro e l'altro del while. Se lo stream si blocca DENTRO
+    // questa await senza mai chiudersi (né emettere byte, né errore), il
+    // guardiano di sopra non viene mai richiamato e la lettura resta appesa
+    // per sempre. 45s per il singolo chunk, non per l'intero streaming.
+    const { done, value } = await new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
+      const chunkTimer = setTimeout(() => {
+        reader.cancel().catch(() => {});
+        reject(new PlanError('STREAM_TIMEOUT'));
+      }, 45000);
+      reader.read().then((r) => { clearTimeout(chunkTimer); resolve(r); }, (e) => { clearTimeout(chunkTimer); reject(e); });
+    });
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
@@ -323,6 +360,8 @@ async function processItineraryStream(
             // (dati_itinerario.credits_paid) e la Garanzia pioggia rimborsa
             // solo quelli, mai un itinerario gratuito.
             billing = parsed.billing;
+          } else if (parsed.verified && Array.isArray(parsed.verified.giorni)) {
+            verificato = parsed.verified;
           } else if (parsed.text) {
             fullJson += parsed.text;
             const partialObj = parsePartialJSON(fullJson);
@@ -379,6 +418,17 @@ async function processItineraryStream(
     throw new PlanError('INVALID_RESPONSE');
   }
 
+  // La versione verificata dal server vince: e' lo stesso JSON con le tappe
+  // agganciate al database e le note del revisore. Si accetta solo se ha
+  // lo stesso numero di giorni (mai perdere giorni per un evento parziale).
+  // Oltre i 3 giorni lo stream porta solo il primo blocco e i giorni
+  // successivi arrivano ricuciti dal server dentro `verified`: per questo
+  // la versione verificata puo' avere PIU' giorni, mai meno.
+  if (verificato && Array.isArray(result?.giorni) && verificato.giorni.length >= result.giorni.length) {
+    result = verificato;
+  }
+
+  // (id del POI di una tappa: vedi idPoiDaTappa a livello di modulo)
   // NORMALIZZAZIONE DELLE TAPPE (ITI-01, 28/08/2026): lo schema AI del server
   // non produce `id_tappa`, ma tutto il resto della schermata lo da' per
   // scontato (lock, check-in, navigazione). Un id sintetico stabile
@@ -425,12 +475,35 @@ async function processItineraryStream(
  * della tappa: così eventuali modifiche fatte nel frattempo dall'utente
  * (spostamenti, cancellazioni) non vengono sovrascritte.
  */
+/**
+ * Riporta i marchi di verifica nella RIGA SALVATA (07/10/2026): prima restavano solo a schermo e un
+ * itinerario riaperto mostrava ancora gli allarmi vecchi («a 2.000 km dalla destinazione»). Si rilegge
+ * la riga e si fonde per titolo, senza toccare il resto (podcast, modifiche fatte nel frattempo).
+ */
+async function salvaMarchiVerifica(planId: string, verified: any): Promise<void> {
+  try {
+    if (!planId || !verified?.giorni) return;
+    const { data: sess } = await supabase.auth.getSession();
+    const uid = sess?.session?.user?.id;
+    if (!uid) return;
+    const { data: riga } = await supabase.from('user_itineraries').select('dati_itinerario').eq('id', planId).eq('user_id', uid).maybeSingle();
+    const dati = (riga as any)?.dati_itinerario;
+    if (!dati?.giorni) return;
+    const fuso = mergeVerificationMarks(dati, verified);
+    if (fuso === dati) return;
+    await supabase.from('user_itineraries').update({ dati_itinerario: fuso, updated_at: new Date().toISOString() }).eq('id', planId).eq('user_id', uid);
+  } catch { /* fail-open: i marchi restano a schermo */ }
+}
+
 function mergeVerificationMarks(current: any, verified: any): any {
   if (!current?.giorni || !verified?.giorni) return current;
   const marks = new Map<string, any>();
   verified.giorni.forEach((g: any) => (g?.tappe || []).forEach((t: any) => {
     const k = (t?.titolo_tappa || '').trim().toLowerCase();
-    if (k && (t.verifica || t.nota_verifica)) marks.set(k, t);
+    // Anche una tappa SENZA marchio entra nella mappa (07/10/2026): il server riceve i marchi correnti e
+    // li toglie quando una riverifica li smentisce (l'allarme «a 2.000 km» del riferimento omonimo); se si
+    // copiassero solo quelli presenti, un allarme vecchio non sparirebbe mai.
+    if (k) marks.set(k, t);
   }));
   if (marks.size === 0) return current;
   return {
@@ -507,6 +580,7 @@ interface ItineraryDay {
     consiglio_guida: string;
     tempo_necessario?: string;
     spostamento_precedente?: string | null;
+    mezzi_precedente?: string | null;
     tipo: string;
     coordinate: { lat: number; lng: number };
   }>;
@@ -530,6 +604,10 @@ interface GeneratedItinerary {
   id?: string;
   titolo: string;
   giorni: ItineraryDay[];
+  /** Mese del viaggio scelto nel form ('Gennaio'…): salvato nel piano per il clima dei giorni (24/09/2026). */
+  mese?: string;
+  /** Data di partenza YYYY-MM-DD, se nota (form o modalina del calendario). Non va al generatore. */
+  data_inizio?: string;
   info_viaggio?: {
     zone_da_evitare?: string[];
     raccomandazioni?: string[];
@@ -674,6 +752,48 @@ const ExperienceCard = ({ exp, onAdd, color }: { key?: React.Key, exp: any, onAd
   </div>
 );
 
+/**
+ * L'ID DEL POI DI UNA TAPPA — un posto solo (05/09/2026).
+ *
+ * Fino a oggi una tappa diventava POI in TRE punti con TRE id diversi:
+ * l'effetto post-generazione (`iti-nome-coordinate`), il salvataggio del piano
+ * (`id_tappa`, cioe' «t1_0» dal 28/08: UNA riga per tutto il mondo riscritta
+ * da ogni itinerario di chiunque) e il giro nel radar (`iti-…` di nuovo).
+ * Geofencing, audioguida e scheda cercavano righe diverse per lo stesso luogo.
+ *
+ * Regola unica:
+ *  - tappa agganciata dal server a un POI VERO di shared_pois (`poi_id`,
+ *    agganciaTappeAlDatabase): l'id e' quello, e la riga NON si riscrive;
+ *  - locale di locali_pois (`ov-…`) o tappa senza riscontro: `iti-<slug del
+ *    nome>-<lat>_<lon>` a 3 decimali (~100 m), stabile per lo stesso luogo,
+ *    diverso per gli omonimi di altre citta'.
+ */
+function idPoiDaTappa(t: any, lat: number, lon: number): string {
+  const p = String(t?.poi_id || '');
+  if (p && !p.startsWith('ov-')) return p;
+  const slug = String(t?.titolo_tappa || t?.titolo || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  return `iti-${slug}-${lat.toFixed(3)}_${lon.toFixed(3)}`.replace(/\./g, 'p');
+}
+
+/**
+ * Il numero di giorni nel titolo («Bologna in 2 giorni», «3 Days in Rome», «Рим за 2 дня», «北京3天»)
+ * portato a `n`. Se il titolo non ha il numero di giorni resta com'e'. Il singolare passa al plurale.
+ */
+const PLURALE_GIORNI: Record<string, string> = { giorno: 'giorni', day: 'days', jour: 'jours', 'día': 'días', dia: 'dias', tag: 'Tage', 'день': 'дня' };
+function titoloConGiorni(titolo: string, n: number): string {
+  const re = /(\d+)(\s*)(giorni|giorno|days|day|jours|jour|días|día|dias|dia|tage|tag|дней|дня|день|天)(?![\p{L}])/iu;
+  const m = titolo.match(re);
+  if (!m) return titolo;
+  let unita = m[3];
+  const chiave = unita.toLowerCase();
+  if (n > 1 && PLURALE_GIORNI[chiave]) {
+    const pl = PLURALE_GIORNI[chiave];
+    unita = unita[0] === unita[0].toUpperCase() && unita[0] !== unita[0].toLowerCase() ? pl[0].toUpperCase() + pl.slice(1) : pl;
+  }
+  if (/^(дня|дней)$/i.test(unita)) unita = n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'дня' : 'дней';
+  return titolo.replace(re, `${n}${m[2]}${unita}`);
+}
+
 export default function PlanScreen({
   resetCounter,
   guideMode,
@@ -688,7 +808,12 @@ export default function PlanScreen({
   setExternalPlan
 }: PlanScreenProps & { externalPlan?: any, setExternalPlan?: (p: any) => void }) {
   const isOnline = useNetworkStatus();
-  const [plannerMode, setPlannerMode] = useState<'selection' | 'form_a' | 'form_b' | 'form_c' | 'tinder_form' | 'tinder_swipe' | 'tinder_review' | 'alternatives_view' | 'view' | 'offline_list' | 'my_itineraries' | 'group_plan' | 'wip_agent'>(isOnline ? 'selection' : 'offline_list');
+  const [plannerMode, setPlannerMode] = useState<'selection' | 'form_a' | 'form_b' | 'form_c' | 'tinder_form' | 'tinder_swipe' | 'tinder_review' | 'alternatives_view' | 'view' | 'offline_list' | 'my_itineraries' | 'group_plan' | 'wip_agent' | 'quando_andare'>(isOnline ? 'selection' : 'offline_list');
+  // «QUANDO ANDARE» (24/09/2026): la scheda Anno/Mese del clima, aperta su
+  // una città cercata qui o sulla destinazione del pianificatore.
+  const [quandoAndare, setQuandoAndare] = useState<{ lat: number; lon: number; nome: string; mese?: number | null } | null>(null);
+  const [quandoAndareTesto, setQuandoAndareTesto] = useState('');
+  const [quandoAndareCerca, setQuandoAndareCerca] = useState<'idle' | 'cerco' | 'non_trovata'>('idle');
   // L'agente WIP ha consegnato i parametri: il form è stato riempito con
   // setState e la generazione deve partire al render SUCCESSIVO, quando gli
   // stati sono davvero aggiornati (handleGenerateAutomatic legge
@@ -709,6 +834,23 @@ export default function PlanScreen({
     (text: string, tone: 'error' | 'info' | 'success' = 'error') => sharedNotify(text, tone),
     []
   );
+  // AVVISO GIORNI MANCANTI (10/09/2026): il server può consegnare un itinerario
+  // con meno giorni di quelli richiesti (blocco troncato, revisore
+  // anti-allucinazione che scarta un giorno intero...) e già ne conguaglia i
+  // crediti lato server — ma prima l'utente non ne aveva alcun segnale e si
+  // trovava semplicemente un itinerario più corto. Richiamata da ogni punto
+  // che riceve una risposta di generazione, col numero di giorni richiesti.
+  const warnIfFewerDays = useCallback((data: any, giorniRichiesti: number) => {
+    const ricevuti = Array.isArray(data?.giorni) ? data.giorni.length : 0;
+    if (ricevuti > 0 && ricevuti < giorniRichiesti) {
+      notify(
+        language === 'IT'
+          ? `Generati ${ricevuti} giorni su ${giorniRichiesti} richiesti (i crediti sono già stati conguagliati).`
+          : `Generated ${ricevuti} of ${giorniRichiesti} requested days (credits have already been adjusted).`,
+        'error'
+      );
+    }
+  }, [notify, language]);
   // Acquisizione GPS (Form C): può durare parecchi secondi e prima non dava
   // alcun segnale, il bottone sembrava semplicemente non funzionare.
   const [gpsLoading, setGpsLoading] = useState(false);
@@ -743,7 +885,10 @@ export default function PlanScreen({
    * da preparare.
    */
   const assicuraContenutiTappe = useCallback(async (poi: any[]) => {
-    const daFare = (poi || []).filter((p) => p && !p.senzaGuida && p.id && Number.isFinite(p.lat) && Number.isFinite(p.lon));
+    // Le tappe agganciate a un POI vero (`agganciato`) hanno gia' riga, scheda
+    // e foto: un upsert qui sovrascriverebbe nome, coordinate e status del
+    // POI verificato con i dati della tappa AI.
+    const daFare = (poi || []).filter((p) => p && !p.senzaGuida && !p.agganciato && p.id && Number.isFinite(p.lat) && Number.isFinite(p.lon));
     if (daFare.length === 0) return;
     try {
       await supabase.from('shared_pois').upsert(
@@ -770,10 +915,16 @@ export default function PlanScreen({
         await apiFetch(getApiUrl('/api/poi/enrich'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          // 75 s, non 30 (Lione 06/10/2026): il modo `full` di un POI nuovo (Wikipedia + sito + web + foto
+          // + modello) arriva a 50 s; a 30 s il client interrompeva e richiedeva lo stesso POI al giro dopo.
           body: JSON.stringify({ id: String(p.id), name: p.name, lat: p.lat, lon: p.lon, category: p.category, city: p.city, lang: language, mode: 'full' }),
-        }, 30000);
+        }, 75000);
         enrichedPoiIdsRef.current.add(String(p.id));
-      } catch { /* la scheda si arricchira` all'apertura: non blocca il giro */ }
+      } catch (e: any) {
+        // Scaduto il tempo il server sta comunque finendo e salvando: non si richiede.
+        if (String(e?.name || '') === 'TimeoutError' || /interrotta/i.test(String(e?.message || ''))) enrichedPoiIdsRef.current.add(String(p.id));
+        /* la scheda si arricchira` all'apertura: non blocca il giro */
+      }
       await new Promise((r) => setTimeout(r, 600));
     }
   }, [language]);
@@ -783,6 +934,11 @@ export default function PlanScreen({
   // al server arrivava solo il nome come testo libero e l'AI "reinterpretava"
   // la città (Giza→Milano, Tallinn→Olbia). Si azzera se l'utente ridigita.
   const [destCoords, setDestCoords] = useState<{ lat: number; lon: number; label: string } | null>(null);
+  /** Ora dell'ultima scelta dalla tendina degli indirizzi (vedi pickSuggestion). */
+  const sceltaSuggerimentoRef = useRef(0);
+  // Avviso sul clima del mese scelto (livello Clima della mappa, stesse medie
+  // NASA POWER): l'effetto sta più sotto, dopo la dichiarazione di `mese`.
+  const [climaAvviso, setClimaAvviso] = useState<{ tipo: 'migliore' | 'peggiore' | 'medio'; testo: string } | null>(null);
   const [focusedDestIdx, setFocusedDestIdx] = useState<number | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [suggestions, setSuggestions] = useState<any[]>([]);
@@ -822,6 +978,49 @@ export default function PlanScreen({
   const [ritmo, setRitmo] = useState<'rilassato' | 'standard' | 'intenso'>(() => loadPlanPref('ritmo', 'standard' as const));
   const [guida, setGuida] = useState<'NICKY' | 'DANTE' | 'ENTRAMBI'>(() => loadPlanPref('guida', 'NICKY' as const));
   const [mese, setMese] = useState('');
+  // Data di partenza facoltativa (24/09/2026): se scelta, imposta anche il mese. Resta nel client: al
+  // generatore continua ad andare solo il mese; la data finisce nel piano come data_inizio.
+  const [dataPartenza, setDataPartenza] = useState('');
+  // Mese e data del form scritti nel piano appena generato (mai sopra quelli che il piano ha già).
+  const timbraViaggio = (p: any, precedente?: any) => {
+    if (!p || typeof p !== 'object') return p;
+    const m = p.mese || precedente?.mese || mese || '';
+    const d = p.data_inizio || precedente?.data_inizio || dataPartenza || '';
+    if (m) p.mese = m;
+    if (d) p.data_inizio = d;
+    // La città del form (25/09/2026): la garanzia pioggia diceva «dati meteo reali di <titolo>».
+    // Sostituendo una tappa resta quella del piano, mai il form (che può essere già un altro viaggio).
+    const dest = p.destinazione || precedente?.destinazione
+      || (precedente ? '' : String(destinations.find((x) => String(x || '').trim()) || '').split(',')[0].trim());
+    if (dest) p.destinazione = dest;
+    return p;
+  };
+  // Voce della conferma crediti nella lingua dell'utente e al singolare con 1 giorno (era «1 giorni» in italiano fisso).
+  const etichettaItinerarioPro = (n: number) =>
+    `${getTranslation('itinerary', language)} AI PRO (${n} ${getTranslation(n === 1 ? 'giorno' : 'giorni', language)})`;
+  // Clima del mese scelto per la destinazione risolta (24/09/2026): medie
+  // NASA POWER 2001-2020 dal livello Clima, per non scoprire ad agosto che
+  // erano 38°. Nessuna AI, nessun costo: solo la cache delle statistiche.
+  useEffect(() => {
+    const idx = MONTH_VALUES.indexOf(mese as (typeof MONTH_VALUES)[number]);
+    if (idx < 0 || !destCoords) { setClimaAvviso(null); return; }
+    let vivo = true;
+    import('../lib/climaIndex').then(async (c) => {
+      // Solo numeri (niente Bearer): l'avviso non mostra l'analisi AI, generarla qui costerebbe per nulla.
+      const d = await c.fetchDatiClima(destCoords.lat, destCoords.lon, language, true);
+      if (!vivo || !d) { if (vivo) setClimaAvviso(null); return; }
+      const m = idx + 1;
+      const x = d.mesi.find((y) => y.m === m);
+      if (!x) { setClimaAvviso(null); return; }
+      const tipo = c.giudizioMese(d, m);
+      const testo = getTranslation(tipo === 'peggiore' ? 'mp_clima_avviso_peggiore' : tipo === 'migliore' ? 'mp_clima_avviso_migliore' : 'mp_clima_avviso_medio', language)
+        .replace('{mese}', c.nomeMese(m, language, true)).replace('{citta}', destCoords.label.split(',')[0].trim())
+        .replace('{tmax}', String(x.tmax == null ? '?' : Math.round(x.tmax))).replace('{tmin}', String(x.tmin == null ? '?' : Math.round(x.tmin)))
+        .replace('{mm}', String(x.mm ?? '?')).replace('{migliori}', c.testoPeriodi(d.migliori, language) || '—');
+      setClimaAvviso({ tipo, testo });
+    }).catch(() => { if (vivo) setClimaAvviso(null); });
+    return () => { vivo = false; };
+  }, [mese, destCoords?.lat, destCoords?.lon, language]);
   const [radius, setRadius] = useState(() => loadPlanPref('radius', '300'));
   // ── Tinder mode ──
   const [likedCandidates, setLikedCandidates] = useState<any[]>([]);
@@ -845,6 +1044,12 @@ export default function PlanScreen({
   const [selectedFavoriteIds, setSelectedFavoriteIds] = useState<string[]>([]);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [generatedPlan, setGeneratedPlanState] = useState<GeneratedItinerary | null>(null);
+  // (20/09/2026) Vero appena QUALCUNO ha messo un piano a schermo (l'utente da
+  // «I miei itinerari», un download, una generazione). fetchCurrentPlan — il
+  // ripristino dell'ultimo piano all'apertura del tab — lo guarda prima di
+  // scrivere: arriva dalla rete in ritardo e non deve coprire una scelta fatta
+  // nel frattempo (si apriva sempre l'ultimo modificato, «Savona»).
+  const pianoApertoRef = useRef(false);
   // Selettore giorno sulla mappa dell'itinerario: 'tutti' resta il default
   // (mappa completa coi colori per giorno come prima), un numero filtra
   // mappa E stampa a quel solo giorno. Si azzera a ogni nuovo piano
@@ -898,14 +1103,19 @@ export default function PlanScreen({
   ) => {
     setGeneratedPlanState((prev) => {
       const next = typeof p === 'function' ? (p as any)(prev) : p;
+      if (next) pianoApertoRef.current = true;
       const deduped = dedupTappaIds(next);
       if (setExternalPlan) setExternalPlan(deduped);
+      // (14/09/2026) Il widget «Itinerario di oggi» legge una copia leggera del piano.
+      salvaPianoPerWidget(deduped);
       return deduped;
     });
   };
+  useEffect(() => { scegliGiornoPerWidget(validMapSelectedDay); }, [validMapSelectedDay]);
 
   useEffect(() => {
     if (externalPlan && !generatedPlan) {
+      pianoApertoRef.current = true;
       setGeneratedPlanState(dedupTappaIds(externalPlan));
       setPlannerMode('view');
     }
@@ -920,6 +1130,8 @@ export default function PlanScreen({
       const verified = e?.detail;
       if (!verified?.giorni) return;
       setGeneratedPlanState((prev: any) => mergeVerificationMarks(prev, verified));
+      // Anche nella riga salvata, se il piano verificato è quello salvato (stesso id).
+      if (verified?.id) salvaMarchiVerifica(String(verified.id), verified);
     };
     window.addEventListener('wip-itinerary-verified', handler);
     return () => window.removeEventListener('wip-itinerary-verified', handler);
@@ -953,7 +1165,7 @@ export default function PlanScreen({
   // ── Trasporti per tratta (ondata 6): durate REALI dalla rete stradale ──
   // Una chiamata OSRM multi-waypoint per giorno; a piedi = distanza/4,5 km/h,
   // taxi ≈ 3,50€ + 1,35€/km. Se OSRM non risponde l'itinerario resta intatto.
-  const [dayLegs, setDayLegs] = useState<Record<number, Record<number, { walkMin: number; carMin: number; km: number; taxiEur: number }>>>({});
+  const [dayLegs, setDayLegs] = useState<Record<number, Record<number, { walkMin: number; carMin: number; km: number; taxiEur: number; da?: { lat: number; lon: number }; a?: { lat: number; lon: number } }>>>({});
   const legsSigRef = useRef('');
   useEffect(() => {
     const plan = generatedPlan;
@@ -971,6 +1183,7 @@ export default function PlanScreen({
     if (sig === legsSigRef.current) return;
     legsSigRef.current = sig;
     let cancelled = false;
+    let fatto = false;
     (async () => {
       const out: Record<number, Record<number, any>> = {};
       for (let g = 0; g < plan.giorni.length; g++) {
@@ -988,10 +1201,24 @@ export default function PlanScreen({
           // da quello auto (marciapiedi, ZTL, scorciatoie). Richiesta foot separata
           // sulla base condivisa (stesso fix del routing pedonale). Best-effort: se
           // fallisce si ricade sulla stima dalla distanza auto.
+          // (21/09/2026) Prima andava a /api/route/foot con TUTTE le tappe del
+          // giorno: quella rotta accetta due punti soli (400) e dal 10/09 vuole
+          // anche il Bearer (401), quindi il tempo a piedi era SEMPRE la stima
+          // dall'auto. Il giro in anteprima fa esattamente questo: una leg per
+          // tratta, nell'ordine dato (ordina=false), senza istruzioni, gratis
+          // ma col login. Ospite → niente chiamata (e niente modale di login
+          // all'apertura di un itinerario): resta la stima. Una tratta che il
+          // server ha dovuto tirare in linea d'aria non e' un tempo vero.
           let footLegs: any[] = [];
           try {
-            const rf = await fetch(`${OSRM_FOOT_BASE}${coordStr}?overview=false&steps=false`, { signal: AbortSignal.timeout(6000) });
-            if (rf.ok) { const df = await rf.json(); footLegs = df?.routes?.[0]?.legs || []; }
+            const auth = await bearerHeaders();
+            if (auth.Authorization) {
+              const rf = await fetch(getApiUrl(`/api/tour/foot/${coordStr}?ordina=false&anello=false&anteprima=true`), { headers: auth, signal: AbortSignal.timeout(20000) });
+              if (rf.ok) {
+                const df = await rf.json();
+                footLegs = (df?.routes?.[0]?.legs || []).map((l: any) => (l?.wip_irraggiungibile ? null : l));
+              }
+            }
           } catch { /* foot giù: fallback alla stima dalla distanza auto */ }
           out[g] = {};
           for (let j = 0; j < validIdx.length - 1; j++) {
@@ -1016,20 +1243,29 @@ export default function PlanScreen({
                 : Math.max(1, Math.round((leg.distance || 0) / 1.25 / 60)),
               km,
               taxiEur: km >= 0.8 ? Math.round(3.5 + km * 1.35) : 0,
+              // Estremi della tratta: servono al tasto «Mezzi» (Google Maps in
+              // modalità trasporto pubblico) sulle tratte lunghe (06/10/2026).
+              da: pts[validIdx[j]]!,
+              a: pts[validIdx[j + 1]]!,
             };
           }
         } catch { /* OSRM giù: niente tratte per questo giorno */ }
         if (cancelled) return;
       }
-      if (!cancelled) setDayLegs(out);
+      if (!cancelled) { fatto = true; setDayLegs(out); }
     })();
-    return () => { cancelled = true; };
+    // Il piano cambia identità (marchi di verifica, arricchimento) mentre il
+    // calcolo è in corso: se la firma restasse, il nuovo giro uscirebbe subito
+    // e le tratte non comparirebbero mai.
+    return () => { cancelled = true; if (!fatto && legsSigRef.current === sig) legsSigRef.current = ''; };
   }, [generatedPlan, loading]);
 
   // ── Piano B pioggia (ondata 6) ─────────────────────────────────────────
-  // Previsioni Open-Meteo (gratuite): badge sul giorno con probabilità di
-  // pioggia ≥50%, assumendo Giorno 1 = oggi (la data è mostrata nel badge).
-  const [rainByDay, setRainByDay] = useState<Record<number, { prob: number; dateLabel: string }>>({});
+  // Previsioni MET Norway via /api/meteo/punto (24/09/2026: prima Open-Meteo dal
+  // client, piano gratuito vietato all'uso commerciale): badge sul giorno con
+  // almeno 1 mm previsto o un codice di pioggia. Con la data di partenza del
+  // piano vale la data vera; senza, Giorno 1 = oggi (la data è nel badge).
+  const [rainByDay, setRainByDay] = useState<Record<number, { mm: number; dateLabel: string }>>({});
   const [rainLoadingDay, setRainLoadingDay] = useState<number | null>(null);
   const [rainPreview, setRainPreview] = useState<{ gIdx: number; giornoNum: number; tappe: any[] } | null>(null);
   useEffect(() => {
@@ -1038,25 +1274,89 @@ export default function PlanScreen({
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=precipitation_probability_max&timezone=auto&forecast_days=14`);
-        if (!r.ok) return;
-        const data = await r.json();
-        const probs: number[] = data?.daily?.precipitation_probability_max || [];
-        const dates: string[] = data?.daily?.time || [];
-        if (cancelled) return;
-        const out: Record<number, { prob: number; dateLabel: string }> = {};
+        const c = await import('../lib/climaIndex');
+        const prev = await c.previsioneGiorni(lat as number, lon as number);
+        if (cancelled || !prev?.length) { if (!cancelled) setRainByDay({}); return; }
+        const dataInizio = /^\d{4}-\d{2}-\d{2}$/.test(String(generatedPlan.data_inizio || '')) ? String(generatedPlan.data_inizio) : '';
+        const out: Record<number, { mm: number; dateLabel: string }> = {};
         (generatedPlan.giorni || []).forEach((g: any, i: number) => {
-          const p = probs[i];
-          if (typeof p === 'number' && p >= 50) {
-            const d = dates[i] ? new Date(dates[i]) : null;
-            out[g.giorno] = { prob: p, dateLabel: d ? d.toLocaleDateString(localeForLanguage(language), { weekday: 'short', day: '2-digit', month: '2-digit' }) : '' };
+          let p = prev[i];
+          if (dataInizio) {
+            const d = new Date(`${dataInizio}T00:00:00Z`);
+            d.setUTCDate(d.getUTCDate() + i);
+            p = prev.find((x) => x.data === d.toISOString().slice(0, 10)) as any;
+          }
+          if (p && ((p.mm || 0) >= 1 || c.codicePioggia(p.code))) {
+            out[g.giorno] = { mm: Math.round((p.mm || 0) * 10) / 10, dateLabel: new Date(`${p.data}T12:00:00Z`).toLocaleDateString(localeForLanguage(language), { weekday: 'short', day: '2-digit', month: '2-digit' }) };
           }
         });
         setRainByDay(out);
       } catch { /* meteo irraggiungibile: nessun badge */ }
     })();
     return () => { cancelled = true; };
-  }, [generatedPlan?.id, generatedPlan?.giorni?.length, destCoords?.lat, destCoords?.lon, language]);
+  }, [generatedPlan?.id, generatedPlan?.giorni?.length, generatedPlan?.data_inizio, destCoords?.lat, destCoords?.lon, language]);
+
+  // ── Meteo/clima sotto ogni giorno (24/09/2026) ──────────────────────────
+  // Con la data di partenza del piano: il giorno N che cade nei 7 giorni di MET
+  // Norway mostra la PREVISIONE; gli altri il clima tipico del loro mese (NASA
+  // POWER 2001-2020). Senza data, il mese del piano o del form; senza mese,
+  // niente. Nessuna data inventata. Poche chiamate: cache per cella in climaIndex.
+  const [climaGiorni, setClimaGiorni] = useState<Record<number, { lat: number; lon: number; nome: string; m: number; testo: string; consiglio: string | null; fonte: string }>>({});
+  useEffect(() => {
+    const giorni = generatedPlan?.giorni || [];
+    const dataInizio = /^\d{4}-\d{2}-\d{2}$/.test(String(generatedPlan?.data_inizio || '')) ? String(generatedPlan!.data_inizio) : '';
+    const meseBase = MONTH_VALUES.indexOf((generatedPlan?.mese || mese) as (typeof MONTH_VALUES)[number]) + 1;
+    const coordTappa = (t: any) => {
+      const la = Number(t?.coordinate?.lat ?? t?.lat), lo = Number(t?.coordinate?.lng ?? t?.coordinate?.lon ?? t?.lon);
+      return Number.isFinite(la) && Number.isFinite(lo) && la !== 0 ? { lat: la, lon: lo } : null;
+    };
+    const primaDelPiano = giorni.flatMap((g: any) => g?.tappe || []).map(coordTappa).find(Boolean) || null;
+    const base = destCoords ? { lat: destCoords.lat, lon: destCoords.lon } : primaDelPiano;
+    if (!giorni.length || !base || (!dataInizio && meseBase < 1)) { setClimaGiorni({}); return; }
+    const nome = destCoords?.label?.split(',')[0].trim() || generatedPlan?.titolo || '';
+    let vivo = true;
+    import('../lib/climaIndex').then(async (c) => {
+      const out: Record<number, { lat: number; lon: number; nome: string; m: number; testo: string; consiglio: string | null; fonte: string }> = {};
+      for (let i = 0; i < giorni.length; i++) {
+        const g: any = giorni[i];
+        const pos = (g?.tappe || []).map(coordTappa).find(Boolean) || base;
+        // Data del giorno N (UTC, così l'ora legale non sposta il giorno)
+        let dataG = '';
+        if (dataInizio) {
+          const d = new Date(`${dataInizio}T00:00:00Z`);
+          d.setUTCDate(d.getUTCDate() + i);
+          dataG = d.toISOString().slice(0, 10);
+        }
+        const m = dataG ? Number(dataG.slice(5, 7)) : meseBase;
+        if (dataG) {
+          const prev = await c.previsioneGiorni(pos.lat, pos.lon);
+          const p = prev?.find((x) => x.data === dataG);
+          if (p) {
+            const etichetta = new Date(`${dataG}T12:00:00Z`).toLocaleDateString(localeForLanguage(language), { weekday: 'short', day: '2-digit', month: '2-digit' });
+            const testo = `${c.iconaMeteo(p.code)} ` + getTranslation('mp_clima_giorno_previsione', language)
+              .replace('{data}', etichetta)
+              .replace('{tmin}', String(p.tmin == null ? '?' : Math.round(p.tmin))).replace('{tmax}', String(p.tmax == null ? '?' : Math.round(p.tmax)))
+              .replace('{mm}', String(Math.round((p.mm || 0) * 10) / 10));
+            const k = c.consiglioPrevisione(p);
+            out[g.giorno] = { lat: pos.lat, lon: pos.lon, nome, m, testo, consiglio: k ? getTranslation(k, language) : null, fonte: 'MET Norway' };
+            continue;
+          }
+        }
+        if (m < 1 || m > 12) continue;
+        const d = await c.fetchDatiClima(pos.lat, pos.lon, language, true);
+        const x = d?.mesi.find((y) => y.m === m);
+        if (!x) continue;
+        const testo = '📅 ' + getTranslation('mp_clima_giorno_solito', language)
+          .replace('{mese}', c.nomeMese(m, language, true))
+          .replace('{tmin}', String(x.tmin == null ? '?' : Math.round(x.tmin))).replace('{tmax}', String(x.tmax == null ? '?' : Math.round(x.tmax)))
+          .replace('{mm}', String(x.mm ?? '?'));
+        const k = c.consiglioMese(x);
+        out[g.giorno] = { lat: pos.lat, lon: pos.lon, nome, m, testo, consiglio: k ? getTranslation(k, language) : null, fonte: 'NASA POWER 2001-2020' };
+      }
+      if (vivo) setClimaGiorni(out);
+    }).catch(() => { if (vivo) setClimaGiorni({}); });
+    return () => { vivo = false; };
+  }, [mese, generatedPlan?.id, generatedPlan?.giorni?.length, generatedPlan?.mese, generatedPlan?.data_inizio, destCoords?.lat, destCoords?.lon, language]);
 
   const handleRainPlan = async (gIdx: number) => {
     const giorno = generatedPlan?.giorni?.[gIdx];
@@ -1322,6 +1622,7 @@ export default function PlanScreen({
 
   // Premium Guide Archive
   const [savedPremiumGuides, setSavedPremiumGuides] = useState<any[]>([]);
+  const [generazioniInCorso, setGenerazioniInCorso] = useState<Generazione[]>([]);
 
   // Offline Audio Bundle Modal
   const [showOfflineBundleModal, setShowOfflineBundleModal] = useState(false);
@@ -1332,7 +1633,8 @@ export default function PlanScreen({
       setGeneratedPlan(null);
     }
   }, [resetCounter]);
-  const [planMyItinerariesTab, setPlanMyItinerariesTab] = useState<'ai' | 'premium'>('ai');
+  // Cartella con cui si apre l'archivio unico (DownloadsScreen) da «I miei itinerari».
+  const [archivioCartella, setArchivioCartella] = useState<'itinerari' | 'guide'>('itinerari');
   const [guideToRender, setGuideToRender] = useState<{content: any, media: any, hash: string} | null>(null);
 
   // ── Viator Experiences per day ──
@@ -1352,6 +1654,22 @@ export default function PlanScreen({
   const [tiqetsByDay, setTiqetsByDay] = useState<Record<number, any[]>>({});
   const [tiqetsLoadingDay, setTiqetsLoadingDay] = useState<number | null>(null);
   const [tiqetsExpandedDay, setTiqetsExpandedDay] = useState<number | null>(null);
+
+  // ── Klook + Trip.com (affiliati, 07/09/2026) per day ──
+  // Un solo blocco per i due partner forti in Asia: /api/klook e
+  // /api/tripcom, con i link gia' affiliati (aid Klook, Allianceid/SID Trip.com).
+  const [asiaByDay, setAsiaByDay] = useState<Record<number, any[]>>({});
+  const [asiaLoadingDay, setAsiaLoadingDay] = useState<number | null>(null);
+  const [asiaExpandedDay, setAsiaExpandedDay] = useState<number | null>(null);
+
+  // ── Mostre reali per giorno (07/09/2026) ────────────────────────────────
+  // /api/mostre sui musei vicini alla tappa: mostre lette dai siti dei
+  // musei, non inventate. Niente data puntuale per il giorno (il piano non
+  // la registra): si mostra la mostra se e' aperta nella FINESTRA DEL
+  // VIAGGIO (getTripDateWindow), stessa logica gia' usata per Ticketmaster.
+  const [mostreByDay, setMostreByDay] = useState<Record<number, any[]>>({});
+  const [mostreLoadingDay, setMostreLoadingDay] = useState<number | null>(null);
+  const [mostreExpandedDay, setMostreExpandedDay] = useState<number | null>(null);
 
   // ── Podcast state ──
   const [playingDay, setPlayingDay] = useState<number | string | null>(null);
@@ -1402,6 +1720,7 @@ export default function PlanScreen({
     setSuggestions([]);
     setDays(2);
     setMese('');
+    setDataPartenza('');
     setStartTime('09:00');
     setEndTime('20:00');
     setSelectedInterests([]);
@@ -1602,6 +1921,113 @@ export default function PlanScreen({
     }
   };
 
+  const loadAsiaForDay = async (dayIdx: number) => {
+    if (asiaByDay[dayIdx]) {
+      setAsiaExpandedDay(prev => prev === dayIdx ? null : dayIdx);
+      return;
+    }
+    setAsiaLoadingDay(dayIdx);
+    setAsiaExpandedDay(dayIdx);
+    try {
+      let lat = 0, lon = 0;
+      if (generatedPlan) {
+        const g = generatedPlan.giorni[dayIdx === 999 ? 0 : dayIdx];
+        const firstStop = g?.tappe?.[0];
+        lat = firstStop?.coordinate?.lat || 0;
+        lon = firstStop?.coordinate?.lng || (firstStop?.coordinate as any)?.lon || 0;
+      } else if (likedCandidates.length > 0) {
+        const first = likedCandidates[0];
+        lat = first.coordinate?.lat || 0;
+        lon = first.coordinate?.lng || 0;
+      }
+      if (!lat || !lon) { setAsiaByDay(prev => ({ ...prev, [dayIdx]: [] })); return; }
+      const lang = (language || 'IT').toLowerCase();
+      const [k, t] = await Promise.allSettled([
+        fetch(getApiUrl(`/api/klook?lat=${lat}&lon=${lon}&lang=${lang}`), { signal: AbortSignal.timeout(15000) }).then(r => r.ok ? r.json() : []),
+        fetch(getApiUrl(`/api/tripcom?lat=${lat}&lon=${lon}&lang=${lang}`), { signal: AbortSignal.timeout(20000) }).then(r => r.ok ? r.json() : []),
+      ]);
+      const lista = [
+        ...(k.status === 'fulfilled' && Array.isArray(k.value) ? k.value : []),
+        ...(t.status === 'fulfilled' && Array.isArray(t.value) ? t.value : []),
+      ].map((a: any) => ({
+        ...a,
+        name: a.isSearch ? `${a.source === 'klook' ? 'Klook' : 'Trip.com'} · ${a.name}` : a.name,
+        description: a.isSearch ? getTranslation('events_search_on_partner_desc', language) : a.description,
+        duration: a.source === 'klook' ? 'Klook' : 'Trip.com',
+        price: a.price || '',
+        lat, lon,
+      }));
+      // I link arrivano gia' affiliati dal server: non si riscrivono.
+      setAsiaByDay(prev => ({ ...prev, [dayIdx]: lista }));
+    } catch (err) {
+      console.error("[Klook/Trip.com] Error loading for day", dayIdx, err);
+      setAsiaByDay(prev => ({ ...prev, [dayIdx]: [] }));
+    } finally {
+      setAsiaLoadingDay(null);
+    }
+  };
+
+  const loadMostreForDay = async (dayIdx: number) => {
+    if (mostreByDay[dayIdx]) {
+      setMostreExpandedDay(prev => prev === dayIdx ? null : dayIdx);
+      return;
+    }
+    setMostreLoadingDay(dayIdx);
+    setMostreExpandedDay(dayIdx);
+    try {
+      let lat = 0, lon = 0;
+      if (generatedPlan) {
+        const g = generatedPlan.giorni[dayIdx === 999 ? 0 : dayIdx];
+        const firstStop = g?.tappe?.[0];
+        lat = firstStop?.coordinate?.lat || 0;
+        lon = firstStop?.coordinate?.lng || (firstStop?.coordinate as any)?.lon || 0;
+      } else if (likedCandidates.length > 0) {
+        const first = likedCandidates[0];
+        lat = first.coordinate?.lat || 0;
+        lon = first.coordinate?.lng || 0;
+      }
+      if (!lat || !lon) { setMostreByDay(prev => ({ ...prev, [dayIdx]: [] })); return; }
+      const lang = (language || 'IT').toLowerCase();
+      const res = await fetch(getApiUrl(`/api/mostre?lat=${lat}&lon=${lon}&radius_km=30&language=${lang}`), { signal: AbortSignal.timeout(90000) });
+      if (!res.ok) throw new Error("Errore api mostre");
+      const data = await res.json();
+      const tutte: any[] = Array.isArray(data?.mostre) ? data.mostre : [];
+      // Aperta nella FINESTRA DEL VIAGGIO (il mese scelto): senza, si
+      // proporrebbero mostre chiuse ormai o non ancora aperte a quel viaggio.
+      // Senza un mese scelto passano tutte (nessuna finestra da rispettare).
+      const win = getTripDateWindow();
+      const aperta = (m: any) => {
+        if (!win) return true;
+        const dal = m.dal ? new Date(`${m.dal}T00:00:00`) : null;
+        const al = m.al ? new Date(`${m.al}T23:59:59`) : null;
+        return (!dal || dal <= win.end) && (!al || al >= win.start);
+      };
+      const lista = tutte.filter(aperta).slice(0, 8).map((m: any) => {
+        const periodo = m.al
+          ? `${getTranslation('events_until', language)} ${m.al.slice(8, 10)}/${m.al.slice(5, 7)}`
+          : (m.dal ? `${getTranslation('events_from', language)} ${m.dal.slice(8, 10)}/${m.dal.slice(5, 7)}` : '');
+        return {
+          id: m.id,
+          name: m.artista && !String(m.titolo || '').toLowerCase().includes(String(m.artista).toLowerCase()) ? `${m.titolo} — ${m.artista}` : m.titolo,
+          description: [m.sottotitolo, m.descrizione].filter(Boolean).join(' · '),
+          duration: [m.luogo, periodo].filter(Boolean).join(' · '),
+          price: m.prezzo || '',
+          rating: '',
+          imageUrl: m.immagine || '',
+          url: m.sito || '',
+          lat: Number(m.lat) || lat, lon: Number(m.lon) || lon,
+          dal: m.dal, al: m.al, luogo: m.luogo,
+        };
+      }).filter((x: any) => x.name && x.url);
+      setMostreByDay(prev => ({ ...prev, [dayIdx]: lista }));
+    } catch (err) {
+      console.error("[Mostre] Error loading for day", dayIdx, err);
+      setMostreByDay(prev => ({ ...prev, [dayIdx]: [] }));
+    } finally {
+      setMostreLoadingDay(null);
+    }
+  };
+
   const loadTicketmasterForDay = async (dayIdx: number) => {
     if (ticketmasterByDay[dayIdx]) {
       setTicketmasterExpandedDay(prev => prev === dayIdx ? null : dayIdx);
@@ -1633,7 +2059,15 @@ export default function PlanScreen({
         return;
       }
 
-      const res = await fetch(getApiUrl(`/api/ticketmaster?lat=${lat}&lon=${lon}&radius=50`));
+      // Finestra del VIAGGIO (il mese scelto nel form), non "da oggi in poi":
+      // senza, un viaggio a dicembre mostrava i concerti di oggi, non quelli
+      // del mese in cui si parte. Nessuna data inventata: se il mese non è
+      // stato scelto (o non dà una finestra), si resta senza filtro come prima.
+      const win = getTripDateWindow();
+      const finestra = win
+        ? `&startDateTime=${win.start.toISOString().split('.')[0]}Z&endDateTime=${new Date(win.end.getTime() + 86400000).toISOString().split('.')[0]}Z`
+        : '';
+      const res = await fetch(getApiUrl(`/api/ticketmaster?lat=${lat}&lon=${lon}&radius=50${finestra}`));
       if (!res.ok) throw new Error("Errore api Ticketmaster");
       const data = await res.json();
 
@@ -1711,9 +2145,8 @@ export default function PlanScreen({
         // ciò che PoiDetailSheet userà per LEGGERE (poi.id). Prima il bundle
         // salvava con `iti-<slug>` mentre la scheda leggeva `id_tappa`/`ai_...`:
         // audio e testo pagati (20 crediti/tappa) restavano introvabili.
-        const stableId = tappa.id_tappa && !tappa.id_tappa.startsWith('custom-')
-          ? tappa.id_tappa
-          : `ai_${lat.toFixed(5)}_${lon.toFixed(5)}`.replace(/\./g, '_');
+        // 25/09/2026: stesso id del luogo della scheda (idPoiDaTappa), non `id_tappa`.
+        const stableId = idPoiDaTappa(tappa, lat, lon);
 
         // 1. Otteniamo il testo
         // Per gli itinerari salviamo il POI in shared_pois, quindi simuliamo lo stesso fetch di PoiDetailSheet
@@ -1724,7 +2157,7 @@ export default function PlanScreen({
         // bundle locale invece che al server.
         // apiFetch: col Bearer /api/poi/details risponde completo (all'anonimo
         // in forma degradata con auth_required: true).
-        const res = await apiFetch(getApiUrl(`/api/poi/details?id=${poiId}&lat=${lat}&lon=${lon}&name=${encodeURIComponent(tappa.titolo_tappa)}`), undefined, 20000);
+        const res = await apiFetch(getApiUrl(`/api/poi/details?id=${encodeURIComponent(stableId)}&lat=${lat}&lon=${lon}&name=${encodeURIComponent(tappa.titolo_tappa)}`), undefined, 20000);
         if (!res.ok) continue;
         const details = await res.json();
         
@@ -1807,6 +2240,17 @@ export default function PlanScreen({
         setOfflineStatus(okCount < selectedPoiIds.length ? `${ready} (${okCount}/${selectedPoiIds.length})` : ready);
         setTimeout(() => setOfflineStatus(null), 4000);
       }
+
+      // "I MIEI DOWNLOAD" (08/09/2026): il conteggio audioguide dell'itinerario
+      // nel registro (stesso id offline di handleSaveOffline).
+      try {
+        const titleSlug = (generatedPlan?.titolo || 'itinerario').replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+        const offlineId = generatedPlan?.id ? `${titleSlug}_${String(generatedPlan.id).slice(0, 8)}` : titleSlug;
+        await registraDownload('itinerario', offlineId, {
+          nome: generatedPlan?.titolo || 'Itinerario',
+          parti: { audioguide: { fatte: okCount, totali: selectedPoiIds.length } },
+        });
+      } catch { /* registro best-effort */ }
       
     } catch (error) {
       console.error("Bundle download error:", error);
@@ -1827,36 +2271,56 @@ export default function PlanScreen({
   useEffect(() => {
     // Durante lo streaming il piano cambia a ogni chunk: aspettiamo la fine della generazione
     if (loading) return;
+    // SOLO UN PIANO DEFINITIVO DIVENTA POI (06/10/2026, prova Madrid): quando lo stream
+    // cadeva in timeout nella fase silenziosa del server (aggancio + revisore), il
+    // catch metteva `form_a` e questo effetto partiva lo stesso sul piano PARZIALE
+    // non verificato — 15 POI con i nomi dell'AI (un «Museo Reina Sofía» doppione
+    // della riga Wikidata, una «Plaza de la Villa» che nel piano finale non c'è).
+    // Il piano verificato ha l'id del server e si vede in `view`: solo lì si scrive.
+    if (plannerMode !== 'view' || !generatedPlan?.id) return;
     if (generatedPlan && generatedPlan.giorni) {
       const allPoisToUpsert: any[] = [];
       generatedPlan.giorni.forEach(giorno => {
-        giorno.tappe.forEach(tappa => {
+        // (giorno.tappe || []): un giorno salvato prima del fix server che
+        // garantisce sempre l'array non deve poter far esplodere questo
+        // effetto in background (10/09/2026).
+        (giorno.tappe || []).forEach(tappa => {
           const lat = tappa.coordinate?.lat || 0;
           const lon = tappa.coordinate?.lng || (tappa.coordinate as any)?.lon || 0;
-          // 'trasferimento' (roadtrip, ondata 7): coordinate del centro della
-          // città di arrivo, non un luogo visitabile — non deve diventare un
-          // POI geofenceable, altrimenti il servizio nativo lo attiverebbe
-          // semplicemente passando vicino alla città, leggendo il racconto
-          // del viaggio come se fosse l'audioguida di un luogo reale.
-          if (lat !== 0 && lon !== 0 && tappa.tipo !== 'ristorante' && tappa.tipo !== 'pausa' && tappa.tipo !== 'spostamento' && tappa.tipo !== 'trasferimento') {
+          // Ogni tappa nella sua categoria (30/08/2026): i pasti in 'locali',
+          // le stazioni in 'utilita', i musei in 'musei'. Restano fuori solo
+          // le tappe che non sono un posto — 'trasferimento'/'spostamento'
+          // (nel roadtrip sono le coordinate del centro della città di
+          // arrivo, non un luogo visitabile: come POI il servizio nativo
+          // scatterebbe solo passando vicino alla città) e 'pausa'.
+          // La regola sta in tappaDiventaPoi, un posto solo; che una cena non
+          // «parli» lo garantisce AUDIOGUIDABLE_CATEGORIES, non un'esclusione
+          // qui: 'locali' e 'utilita' non ne fanno parte.
+          // Tappa agganciata dal server a un POI VERO (poi_id di shared_pois,
+          // 05/09/2026): la riga esiste gia', con scheda e foto verificate.
+          // Non si riscrive con la prosa AI. I locali (`ov-…`) stanno in
+          // locali_pois e diventano POI come prima.
+          const agganciata = !!tappa.poi_id && !String(tappa.poi_id).startsWith('ov-');
+          if (lat !== 0 && lon !== 0 && !agganciata && tappaDiventaPoi(tappa.tipo || '', tappa.titolo_tappa || '')) {
             // L'id porta anche le coordinate (22/08/2026): con il solo slug
             // del titolo, «iti-duomo» era UNA riga condivisa da tutte le
             // città con un Duomo, e teneva la foto e il testo della prima.
             // A 3 decimali (~100 m) due tappe omonime in città diverse non
             // collidono più; la stessa tappa dello stesso itinerario sì.
-            const stableId = `iti-${tappa.titolo_tappa.replace(/[^a-zA-Z0-9]/g, '').toLowerCase()}-${lat.toFixed(3)}_${lon.toFixed(3)}`.replace(/\./g, 'p');
+            const stableId = idPoiDaTappa(tappa, lat, lon);
             allPoisToUpsert.push({
               id: stableId,
               name: tappa.titolo_tappa,
               category: mapItineraryCategoryToMapCategory(tappa.tipo || 'monumenti'),
               lat: lat,
               lon: lon,
-              description_ai: tappa.attivita || '',
+              // Niente prosa dell'itinerario come descrizione (06/10/2026): il server la scarta comunque.
               source: 'itinerary',
-              // status: 'auto' (27/08/2026) — mancava, e isDownloadablePoiStatus
-              // tratta i record senza status come non scaricabili: queste POI
-              // "per il GPS tracking" restavano escluse proprio dal trigger
-              // offline/background per cui esistono.
+              // Lo status lo decide il SERVER (30/08/2026): serve comunque —
+              // isDownloadablePoiStatus scarta i record senza status, e queste
+              // POI nascono proprio per il trigger offline/background — ma
+              // quale valore sia ammesso dipende dal vincolo della tabella,
+              // che solo la rotta sa gestire. Qui resta a titolo indicativo.
               status: 'auto',
               created_at: new Date().toISOString()
             });
@@ -1865,10 +2329,41 @@ export default function PlanScreen({
       });
 
       if (allPoisToUpsert.length > 0) {
-        supabase.from('shared_pois').upsert(allPoisToUpsert, { onConflict: "id" })
-          .then(({ error }) => {
-            if (error) console.warn("[PlanScreen] Bulk upsert error:", error);
-          });
+        // DAL SERVER, NON PIU` DAL CLIENT (30/08/2026). Questa scrittura e`
+        // l'unico punto in cui le tappe di un itinerario diventano POI: se
+        // fallisce, niente pin sulla mappa, niente foto, niente descrizione,
+        // niente audioguida in cache. Ed e` fallita in silenzio per giorni,
+        // per DUE motivi che si sommavano:
+        //  1) `status: 'auto'` non e` ammesso dal vincolo CHECK di shared_pois
+        //     (23514) — in tabella ci sono ZERO righe 'auto' su 7,8 milioni;
+        //  2) anche senza quello, la RLS ammette in INSERT solo
+        //     `coalesce(status,'auto') = 'auto'`: dal client, con la chiave
+        //     anon, era comunque un vicolo cieco.
+        // La rotta scrive con la chiave di servizio (niente RLS), ripiega su
+        // uno status ammesso finche' la migration non e` applicata, ritenta i
+        // timeout di Postgres (57014) e RIPORTA l'esito, che ora finisce nel
+        // registro errori invece che in un console.warn che nessuno guarda.
+        (async () => {
+          try {
+            const risposta = await apiFetch(getApiUrl('/api/poi/from-itinerary'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ pois: allPoisToUpsert }),
+            }, 45000);
+            const esito = await risposta.json().catch(() => ({}));
+            if (!risposta.ok || esito?.falliti > 0) {
+              throw new Error(esito?.errori?.[0]?.messaggio || esito?.error || `HTTP ${risposta.status}`);
+            }
+          } catch (e: any) {
+            console.warn('[PlanScreen] tappe non diventate POI:', e?.message || e);
+            import('../lib/errorLogger').then(({ logSystemError }) => {
+              logSystemError(`Tappe itinerario non salvate come POI: ${e?.message || 'errore sconosciuto'}`, {
+                level: 'error',
+                context: { tappe: allPoisToUpsert.length, primo_id: allPoisToUpsert[0]?.id },
+              });
+            }).catch(() => { /* logger non disponibile: resta il warn */ });
+          }
+        })();
       }
     }
     // `loading` nelle dipendenze: l'upsert parte quando la generazione termina (loading -> false)
@@ -1961,6 +2456,55 @@ export default function PlanScreen({
       )
     };
 
+    setGeneratedPlan(updatedPlan);
+    savePlanToSupabase(updatedPlan);
+    notify(`${getTranslation('experience_added', language)} — ${getTranslation('day', language)} ${dayIdx + 1}`, 'success');
+  };
+
+  const handleAddAsiaToDay = (dayIdx: number, exp: any) => {
+    if (!generatedPlan) return;
+    const partner = exp.source === 'klook' ? 'Klook' : 'Trip.com';
+    const newTappa = {
+      id_tappa: `${exp.source === 'klook' ? 'klook' : 'tripcom'}_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      ora: "TBD",
+      titolo_tappa: exp.name || `Esperienza ${partner}`,
+      attivita: (exp.description || `Attività prenotabile su ${partner}.`),
+      consiglio_guida: `✨ Nicky: prenotabile su ${partner}${exp.price ? `: ${exp.price}` : ''}`,
+      tipo: "esperienza",
+      coordinate: { lat: exp.lat || 0, lng: exp.lon || 0 },
+      // URL gia' affiliata (aid Klook / Allianceid+SID Trip.com): intatta.
+      link_info: exp.url
+    };
+    const updatedPlan = {
+      ...generatedPlan,
+      giorni: generatedPlan.giorni.map((g, idx) =>
+        idx === dayIdx ? { ...g, tappe: [...g.tappe, newTappa] } : g
+      )
+    };
+    setGeneratedPlan(updatedPlan);
+    savePlanToSupabase(updatedPlan);
+    notify(`${getTranslation('experience_added', language)} — ${getTranslation('day', language)} ${dayIdx + 1}`, 'success');
+  };
+
+  const handleAddMostraToDay = (dayIdx: number, exp: any) => {
+    if (!generatedPlan) return;
+    const periodo = exp.al ? `fino al ${exp.al}` : (exp.dal ? `dal ${exp.dal}` : 'periodo in corso');
+    const newTappa = {
+      id_tappa: `mostra_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      ora: "Da definire",
+      titolo_tappa: exp.name,
+      attivita: `Mostra in corso (${periodo})${exp.luogo ? ` presso ${exp.luogo}` : ''}. ${exp.description || ''}`.trim(),
+      consiglio_guida: `✨ Nicky: mostra vera, letta dal sito del museo — verifica gli orari prima di andare.`,
+      tipo: "cultura",
+      coordinate: { lat: exp.lat || 0, lng: exp.lon || 0 },
+      link_info: exp.url,
+    };
+    const updatedPlan = {
+      ...generatedPlan,
+      giorni: generatedPlan.giorni.map((g, idx) =>
+        idx === dayIdx ? { ...g, tappe: [...g.tappe, newTappa] } : g
+      )
+    };
     setGeneratedPlan(updatedPlan);
     savePlanToSupabase(updatedPlan);
     notify(`${getTranslation('experience_added', language)} — ${getTranslation('day', language)} ${dayIdx + 1}`, 'success');
@@ -2070,7 +2614,20 @@ export default function PlanScreen({
     startNavigation,
     stopNavigation,
     repeatInstruction,
+    recalculateRoute,
+    recalculating: navRecalculating,
+    routeSummary: navRouteSummary,
+    gemmaVicina: navGemmaVicina,
+    deviaVersoGemma: navDeviaVersoGemma,
+    ignoraGemma: navIgnoraGemma,
+    metaDaRiprendere: navMetaDaRiprendere,
+    riprendiMeta: navRiprendiMeta,
   } = useWalkingNavigation(language);
+  // Copia in ref di navState (10/09/2026): serve al cleanup dell'effetto di
+  // check-in qui sotto, registrato con deps [generatedPlan?.id] e quindi con
+  // una closure che vedrebbe solo lo stato al montaggio, non quello attuale.
+  const navStateRef = useRef(navState);
+  useEffect(() => { navStateRef.current = navState; }, [navState]);
 
   // Avvio WIP Nav dal modal "Rotta Intelligente" (bottone per tappa in
   // ItineraryStop → App → qui): destinazione, origine (GPS o indirizzo
@@ -2083,7 +2640,7 @@ export default function PlanScreen({
       // Senza, chi avviava la navigazione dalla mappa prima di aver mai aperto
       // questa tab (montata lazy) sparava l'evento nel vuoto.
       if (e.detail) e.detail.handled = true;
-      const { endCoords, destinationName, origin, pois, poiId } = e.detail || {};
+      const { endCoords, destinationName, origin, pois, poiId, country } = e.detail || {};
       if (!endCoords?.lat) return;
       startNavigation(
         {
@@ -2093,6 +2650,8 @@ export default function PlanScreen({
           // e avvia l'audioguida. Sintetico solo per gli indirizzi liberi.
           poiId: poiId ? String(poiId) : `wipnav_${String(destinationName || '').slice(0, 40)}`,
           poiName: destinationName || '',
+          // Paese della meta: pronuncia locale dei nomi delle vie (08/09/2026).
+          country: country ?? null,
         },
         origin || undefined,
         Array.isArray(pois) ? pois : []
@@ -2101,6 +2660,17 @@ export default function PlanScreen({
     window.addEventListener('wip-internal-nav-start', handleInternalNavStart);
     return () => window.removeEventListener('wip-internal-nav-start', handleInternalNavStart);
   }, [startNavigation]);
+
+  // UNA NAVIGAZIONE PER VOLTA (03/09/2026, revisione della mappa): quando
+  // parte un giro Dieci Tappe / percorso su misura, la navigazione a tappa
+  // singola che fosse rimasta accesa va spenta — altrimenti due card blu
+  // sovrapposte, due voci, la linea gialla accanto ai puntini blu, e i tasti
+  // della lock screen che non sanno a chi rispondere.
+  useEffect(() => {
+    const h = () => { stopNavigation(); setNavDayIndex(null); setNavStopIndex(null); };
+    window.addEventListener('wip-giro-avviato', h);
+    return () => window.removeEventListener('wip-giro-avviato', h);
+  }, [stopNavigation]);
 
   // Non usiamo più l'auto-avanzamento, ma un avanzo manuale tramite bottone "onNextStop"
   const handleNextStop = () => {
@@ -2112,17 +2682,37 @@ export default function PlanScreen({
       while (giorno && nextIdx < giorno.tappe.length && !haCoordinateValide(giorno.tappe[nextIdx])) nextIdx += 1;
       if (giorno && nextIdx < giorno.tappe.length) {
          const nextStop = giorno.tappe[nextIdx];
-         setNavStopIndex(nextIdx);
-         startNavigation({
-           lat: nextStop.coordinate.lat,
-           lon: nextStop.coordinate.lng,
-           // L'id della tappa COM'E' (ITI-01): `parseInt(id.replace(/\D/g,''))`
-           // esplodeva se id_tappa mancava (lo schema AI non lo produce) e
-           // trasformava "lib_1_2_ab12cd" in 12, cioe' un POI a caso.
-           poiId: nextStop.id_tappa || undefined,
-           poiName: nextStop.titolo_tappa,
-           dayIndex: navDayIndex,
-           stopIndex: nextIdx,
+         // IL CANCELLO DEL DAY PASS (10/09/2026, collaudo). Il tasto "Navigatore
+         // interno" e questo avanzo manuale non passano MAI da tourService.avvia()
+         // né dal cancello server passValido di /api/tour/foot (usano fetchWalkingRoute
+         // → /api/route/foot, la singola rotta libera): senza controllo qui, si
+         // avanzava di tappa in tappa all'infinito aggirando il Day Pass — esattamente
+         // l'aggiramento già chiuso per il tondo verde in App.tsx (righe ~1884-1889:
+         // mai visibile insieme ad «Avvia la navigazione», mai più di una tappa senza
+         // pass). Qui si replica lo stesso principio con l'equivalente client-side.
+         getDayPassState().then((pass) => {
+           if (!pass?.active) {
+             notify(getTranslation('gr_pass_richiesto', language));
+             apriCassaDayPass(undefined, getTranslation('gr_dp_gate_navigazione', language));
+             return;
+           }
+           setNavStopIndex(nextIdx);
+           startNavigation({
+             lat: nextStop.coordinate.lat,
+             lon: nextStop.coordinate.lng,
+             // L'id della tappa COM'E' (ITI-01): `parseInt(id.replace(/\D/g,''))`
+             // esplodeva se id_tappa mancava (lo schema AI non lo produce) e
+             // trasformava "lib_1_2_ab12cd" in 12, cioe' un POI a caso.
+             // 25/09/2026: id del luogo (idPoiDaTappa), non la posizione «t1_0»: la frase
+             // d'arrivo nativa ci cerca il teaser. Il check-in resta su giorno/indice.
+             poiId: idPoiDaTappa(nextStop, nextStop.coordinate.lat, nextStop.coordinate.lng),
+             poiName: nextStop.titolo_tappa,
+             dayIndex: navDayIndex,
+             stopIndex: nextIdx,
+           });
+         }).catch(() => {
+           // In dubbio si nega, come passValido lato server.
+           apriCassaDayPass(undefined, getTranslation('gr_dp_gate_navigazione', language));
          });
       } else {
          // Fine itinerario per il giorno
@@ -2180,7 +2770,7 @@ export default function PlanScreen({
     // 10 crediti/giorno per la pianificazione; le audioguide si pagano a
     // parte (per luogo a prezzo pieno, oppure Day Pass 24h).
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
-    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
+    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, etichettaItinerarioPro(numDaysForPricing), bal.total);
     if (!confirmed) {
        return;
     }
@@ -2232,6 +2822,8 @@ export default function PlanScreen({
       });
       
       if (data && data.giorni) {
+        warnIfFewerDays(data, numDaysForPricing);
+        timbraViaggio(data);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         notifyCreditsChanged({ userId: currentUserId }); // addebito/conguaglio server-side: si riallinea il saldo
@@ -2351,10 +2943,18 @@ export default function PlanScreen({
     { id: 'fotografia', label: INTERESTS_TRANSLATIONS.fotografia[language] }
   ];
 
+  // SOLO AL MONTAGGIO (20/09/2026). Stava nell'effetto qui sotto, che ha per
+  // dipendenza generatedPlan?.id: a ogni itinerario aperto l'id cambiava,
+  // l'effetto ripartiva e fetchCurrentPlan rimetteva a schermo l'ULTIMO
+  // modificato — qualsiasi itinerario si toccasse (anche dai download) si
+  // apriva sempre lo stesso.
   useEffect(() => {
     fetchSavedPois();
     fetchCurrentPlan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  useEffect(() => {
     const handleFavoritesUpdate = () => {
       fetchSavedPois();
     };
@@ -2369,6 +2969,15 @@ export default function PlanScreen({
     // t1/t10/t11/t21 → una tappa raggiunta ne marcava mezzo itinerario.
     const handleCheckin = (e: any) => {
       const { poiId, poiName } = e.detail || {};
+      // SENTINELLA "reel to plan" (10/09/2026): questo stesso evento arriva
+      // anche da CameraScreen.tsx/ThematicSheet.tsx con poiId 'reel-to-plan'
+      // per aggiungere un POI all'itinerario (gestito altrove, vedi
+      // `onReelCheckin`/`consumeReelToPlan` sopra) — NON e' un vero check-in
+      // di navigazione. Senza questo ritorno, il fallback qui sotto sugli
+      // indici della navigazione corrente (navIdxRef) marcava "visited" la
+      // tappa che si stava navigando in quel momento, che con questo evento
+      // non ha nulla a che fare.
+      if (poiId === 'reel-to-plan') return;
       // MATCH PER INDICE quando c'e' (ITI-12): 'wip-nav-arrived' porta
       // dayIndex/stopIndex della tappa navigata; in mancanza si usano gli
       // indici correnti della navigazione. Il nome resta SOLO come ultima
@@ -2385,11 +2994,14 @@ export default function PlanScreen({
           ...prev,
           giorni: prev.giorni.map((g, gi) => ({
             ...g,
-            tappe: g.tappe.map((t, ti) => {
+            // (g.tappe || []): un giorno senza array tappe (itinerario vecchio,
+            // pre fix server) non deve far esplodere il check-in (10/09/2026).
+            tappe: (g.tappe || []).map((t, ti) => {
               let isMatch = false;
               if (dayIdx != null && stopIdx != null) {
                 isMatch = gi === dayIdx && ti === stopIdx;
-              } else if (poiId != null && String(t.id_tappa) === String(poiId)) {
+              } else if (poiId != null && (String(t.id_tappa) === String(poiId)
+                || (t.coordinate && String(idPoiDaTappa(t, t.coordinate.lat, t.coordinate.lng ?? (t.coordinate as any).lon)) === String(poiId)))) {
                 isMatch = true;
               } else if (poiName && t.titolo_tappa === poiName) {
                 isMatch = dayIdx == null || gi === dayIdx;
@@ -2414,7 +3026,13 @@ export default function PlanScreen({
       window.removeEventListener('wip-nav-arrived', handleCheckin);
       // Issue 19: Interrompe qualsiasi podcast in corso quando si cambia tab
       // per evitare che la voce continui a parlare in background.
-      window.speechSynthesis?.cancel();
+      // ECCETTO durante una navigazione WIP Nav attiva (10/09/2026): questo
+      // effetto si ri-registra a ogni cambio di generatedPlan?.id (e allo
+      // smontaggio del componente), e cancel() azzerava anche un'istruzione
+      // di svolta a meta' frase. Se la navigazione e' in corso ('routing' |
+      // 'navigating' | 'arrived') si lascia che sia lei a gestire la propria
+      // sintesi vocale (stopNavigation la interrompe quando serve davvero).
+      if (navStateRef.current === 'idle') window.speechSynthesis?.cancel();
     };
   }, [generatedPlan?.id]); // Re-bind if plan changes to ensure correct closure scope
 
@@ -2494,6 +3112,7 @@ export default function PlanScreen({
       try {
         const local: any = await idbGet('wip_last_plan');
         if (local && Array.isArray(local.giorni) && local.giorni.length > 0) {
+          if (pianoApertoRef.current) return true; // l'utente ha gia' aperto altro
           setGeneratedPlan(local);
           setPlannerMode('view');
           return true;
@@ -2517,6 +3136,9 @@ export default function PlanScreen({
         .limit(1)
         .single();
 
+      // La risposta arriva dopo secondi: se nel frattempo e' stato aperto un
+      // itinerario (download, «I miei itinerari», generazione) non lo si copre.
+      if (pianoApertoRef.current) return;
       if (!error && data && data.dati_itinerario && Array.isArray(data.dati_itinerario.giorni)) {
         setGeneratedPlan(data.dati_itinerario);
         setPlannerMode('view');
@@ -2530,6 +3152,7 @@ export default function PlanScreen({
       if (await ripiegaSuCopiaLocale()) return;
     }
 
+    if (pianoApertoRef.current) return;
     // Fallback to local storage
     try {
       const localData = JSON.parse(localStorage.getItem('mock_db_user_itineraries') || '[]');
@@ -2600,7 +3223,130 @@ export default function PlanScreen({
     } catch (e) {
       console.error(e);
     }
+    void fetchGenerazioni();
   };
+
+  // Generazioni in differita (06/09/2026): le voci «in preparazione» e
+  // «fallita» dell'Archivio. Finche' ce n'e' una in coda si ricontrolla ogni
+  // 30 s; quando una diventa pronta si ricaricano guide/itinerari.
+  const fetchGenerazioni = async () => {
+    try {
+      const lista = await mieGenerazioni();
+      const recenti = lista.filter(g => g.stato === 'in_coda' || g.stato === 'in_corso'
+        || (g.stato === 'fallita' && Date.now() - new Date(g.created_at).getTime() < 24 * 3600 * 1000));
+      const eranoInCorso = generazioniInCorso.filter(g => g.stato !== 'fallita').length;
+      setGenerazioniInCorso(recenti);
+      const oraInCorso = recenti.filter(g => g.stato !== 'fallita').length;
+      if (eranoInCorso > 0 && oraInCorso < eranoInCorso) {
+        // Qualcosa e' diventato pronto: riallinea l'archivio.
+        void (async () => {
+          try {
+            const { data: sessionData } = await supabase.auth.getSession();
+            const uid = sessionData?.session?.user?.id;
+            if (!uid) return;
+            const { data } = await supabase.from('itinerary_guides').select('*').eq('user_id', uid).order('created_at', { ascending: false });
+            if (data) setSavedPremiumGuides(data);
+          } catch { /* niente */ }
+        })();
+        void fetchMyItineraries();
+        // L'archivio a schermo (DownloadsScreen) rilegge l'account.
+        try { window.dispatchEvent(new CustomEvent('wip-downloads-updated')); } catch { /* niente */ }
+      }
+    } catch { /* offline: resta com'e' */ }
+  };
+  useEffect(() => {
+    if (plannerMode !== 'my_itineraries') return;
+    const inCorso = generazioniInCorso.some(g => g.stato === 'in_coda' || g.stato === 'in_corso');
+    if (!inCorso) return;
+    const t = setInterval(() => { void fetchGenerazioni(); }, 30000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plannerMode, generazioniInCorso.length]);
+  useEffect(() => {
+    const h = () => { void fetchGenerazioni(); };
+    window.addEventListener('wip-generazioni-aggiornate', h);
+    // Apertura dell'Archivio dal tocco su una notifica (App.tsx) o dal link
+    // dell'email (?archivio=guide|itinerari).
+    const apri = () => {
+      // La cartella d'ingresso: «guide» dal link dell'email di una Guida
+      // Premium, altrimenti gli itinerari.
+      let dove = '';
+      try { dove = new URLSearchParams(window.location.search).get('archivio') || sessionStorage.getItem('wip_apri_archivio') || ''; } catch { /* niente */ }
+      setArchivioCartella(/guid/i.test(dove) ? 'guide' : 'itinerari');
+      setPlannerMode('my_itineraries'); void fetchGenerazioni();
+      try { sessionStorage.removeItem('wip_apri_archivio'); } catch { /* niente */ }
+    };
+    window.addEventListener('wip-apri-archivio', apri);
+    // "I MIEI DOWNLOAD" (08/09/2026): un tocco su un itinerario scaricato lo
+    // apre direttamente — stesso percorso del tasto "Apri" della lista
+    // offline, ma pilotato da fuori (App.tsx porta al tab Piano, qui si carica).
+    const apriOffline = async (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      if (d) d.handled = true; // ricevuta: App.tsx ridispatcha finche' il tab non e' montato
+      const id = d?.id;
+      if (!id) return;
+      let data: any = await getOfflineItinerary(String(id)).catch(() => null);
+      // (20/09/2026) Un itinerario che sta SOLO sull'account (mai scaricato su
+      // questo telefono) si apre lo stesso, dalla sua riga: prima il tocco
+      // portava alla lista, e da li' si ricominciava a cercarlo.
+      if (!data) {
+        try {
+          const { data: sessionData } = await supabase.auth.getSession();
+          const uid = sessionData?.session?.user?.id;
+          if (uid) {
+            const { data: riga } = await supabase.from('user_itineraries').select('dati_itinerario').eq('id', String(id)).eq('user_id', uid).maybeSingle();
+            const dati = typeof riga?.dati_itinerario === 'string' ? JSON.parse(riga.dati_itinerario) : riga?.dati_itinerario;
+            if (dati) data = dati;
+          }
+        } catch { /* sotto: mirror locale */ }
+      }
+      if (!data) {
+        try {
+          const locale = JSON.parse(localStorage.getItem('mock_db_user_itineraries') || '[]').find((i: any) => String(i.id) === String(id));
+          if (locale?.dati_itinerario) data = locale.dati_itinerario;
+        } catch { /* niente */ }
+      }
+      if (!data) { notify(getTranslation('dl_non_aperto', language)); return; }
+      const giorniRaw = data.giorni || [];
+      setGeneratedPlan({ ...data, giorni: Array.isArray(giorniRaw) ? giorniRaw : Object.values(giorniRaw) });
+      setDbItineraryId(null);
+      setLockedStops({});
+      setExpandedStops({});
+      setPodcastCache(data.podcast_cache && typeof data.podcast_cache === 'object' ? data.podcast_cache : {});
+      setPlannerMode('view');
+    };
+    window.addEventListener('wip-apri-itinerario-offline', apriOffline);
+    // Una Guida Premium dall'archivio: copia locale (funziona senza rete),
+    // altrimenti la riga dell'account. Si apre nel visualizzatore qui sotto.
+    const apriGuida = async (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      if (d) d.handled = true;
+      const hash = String(d?.hash || '');
+      if (!hash) return;
+      try {
+        const locale = await getLocalGuide(hash);
+        if (locale?.content) { setGuideToRender({ content: locale.content, media: (locale as any).media_manifest || {}, hash }); return; }
+      } catch { /* si prova l'account */ }
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const uid = sessionData?.session?.user?.id;
+        if (uid) {
+          const { data: riga } = await supabase.from('itinerary_guides').select('content_data, media_manifest, itinerary_hash').eq('user_id', uid).eq('itinerary_hash', hash).limit(1).maybeSingle();
+          if (riga?.content_data) { setGuideToRender({ content: riga.content_data, media: riga.media_manifest, hash }); return; }
+        }
+      } catch { /* niente */ }
+      notify(getTranslation('dl_non_aperto', language));
+    };
+    window.addEventListener('wip-apri-guida-premium', apriGuida);
+    try {
+      // Dal link dell'email: App.tsx mette la destinazione in sessionStorage
+      // (sopravvive al login), qui si consuma.
+      const p = new URLSearchParams(window.location.search).get('archivio') || sessionStorage.getItem('wip_apri_archivio');
+      if (p) { apri(); window.history.replaceState({}, '', window.location.pathname); }
+    } catch { /* niente */ }
+    return () => { window.removeEventListener('wip-generazioni-aggiornate', h); window.removeEventListener('wip-apri-archivio', apri); window.removeEventListener('wip-apri-itinerario-offline', apriOffline); window.removeEventListener('wip-apri-guida-premium', apriGuida); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const deleteMyItinerary = async (id: string) => {
     if (!confirm(getTranslation('vr_b_confirm_delete_itinerary', language))) return;
@@ -2668,6 +3414,26 @@ export default function PlanScreen({
     ).join('|');
 
     return `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destStr}${waypoints ? `&waypoints=${waypoints}` : ''}&travelmode=walking`;
+  };
+
+  /**
+   * Alternativa Mappe di Apple (13/09/2026, App Review Guideline 4: offrire
+   * SEMPRE Mappe di sistema accanto a Google Maps su iPhone/iPad, l'utente
+   * deve poter scegliere). Limite reale, non aggirabile: lo schema URL di
+   * Apple Maps non accetta waypoint intermedi come Google — solo un
+   * `daddr`. Con più tappe si porta a destinazione l'ULTIMA, le fermate di
+   * mezzo restano solo nel percorso Google: si dice nell'etichetta del
+   * tasto (vedi open_apple_maps_solo_arrivo), mai in silenzio.
+   */
+  const buildAppleMapsUrl = (gIdx: number) => {
+    if (!generatedPlan) return '#';
+    const tappe = generatedPlan.giorni[gIdx]?.tappe || [];
+    if (tappe.length === 0) return '#';
+    const destination = tappe[tappe.length - 1];
+    const daddr = destination.coordinate?.lat && destination.coordinate.lat !== 0
+      ? `${destination.coordinate.lat},${destination.coordinate.lng || (destination.coordinate as any).lon}`
+      : encodeURIComponent(destination.titolo_tappa);
+    return `https://maps.apple.com/?daddr=${daddr}&dirflg=w`;
   };
 
   /**
@@ -2743,7 +3509,7 @@ export default function PlanScreen({
     // 10 crediti/giorno per la pianificazione; le audioguide si pagano a
     // parte (per luogo a prezzo pieno, oppure Day Pass 24h).
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
-    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
+    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, etichettaItinerarioPro(numDaysForPricing), bal.total);
     if (!confirmed) {
        return;
     }
@@ -2894,6 +3660,8 @@ export default function PlanScreen({
       });
 
       if (data && data.giorni) {
+        warnIfFewerDays(data, numDaysForPricing);
+        timbraViaggio(data);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         notifyCreditsChanged({ userId: currentUserId }); // addebito/conguaglio server-side: si riallinea il saldo
@@ -2903,7 +3671,12 @@ export default function PlanScreen({
         // Salva in background l'itinerario appena generato nella cache condivisa
         // (senza l'id personale: la cache è condivisa tra utenti)
         if (cacheUsable) try {
-          const { id: _omit, ...cachePayload } = data;
+          // ESCLUSI ANCHE I CAMPI DI ADDEBITO (10/09/2026): oltre all'id,
+          // credits_paid/credits_paid_earned/credits_paid_ts (scritti sopra,
+          // righe ~427-431) sono personali di CHI ha generato il piano —
+          // salvarli nella cache condivisa li regalava a chiunque leggesse
+          // lo stesso cache-hit dopo di lui.
+          const { id: _omit, credits_paid: _cp, credits_paid_earned: _cpe, credits_paid_ts: _cpts, ...cachePayload } = data;
           await supabase.from("shared_itinerary_cache").upsert({
             id: cacheId,
             destination: destination.trim(),
@@ -2945,6 +3718,15 @@ export default function PlanScreen({
     // Coordinate della base già risolte nel passo precedente (handleGenerateRadius):
     // ancorano anche l'alternativa alla zona giusta.
     const coords = destCoords && destCoords.label === baseLocation ? destCoords : null;
+    // Guardia INCONDIZIONATA (10/09/2026): senza coordinate valide questo
+    // flusso arrivava fino all'addebito (fino a 300 crediti) senza mai
+    // ancorare l'alternativa a una zona geografica, come già evitato negli
+    // altri due percorsi di generazione (handleGenerateAutomatic, riga ~3101,
+    // e handleGenerateTinderItinerary, riga ~4180).
+    if (!coords) {
+      alertDestNotFound();
+      return;
+    }
 
     const { data: sessionData } = await supabase.auth.getSession();
     const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
@@ -2953,7 +3735,7 @@ export default function PlanScreen({
     setCurrentBalance(bal.total);
     const numDaysForPricing = clampDays(alt?.dati_itinerario?.giorni?.length || days);
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
-    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
+    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, etichettaItinerarioPro(numDaysForPricing), bal.total);
     if (!confirmed) return;
     // Addebito SERVER-SIDE (14/08/2026): /api/groq/itinerary-stream pre-addebita
     // e fa il conguaglio sui giorni consegnati. Il gate di saldo qui sotto è solo
@@ -2998,6 +3780,8 @@ export default function PlanScreen({
       });
 
       if (data && data.giorni) {
+        warnIfFewerDays(data, numDaysForPricing);
+        timbraViaggio(data);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         notifyCreditsChanged({ userId: currentUserId }); // addebito/conguaglio server-side: si riallinea il saldo
@@ -3183,24 +3967,25 @@ export default function PlanScreen({
       let podcastText = podcastCache[cacheKey];
 
       if (!podcastText) {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
-        const numDaysPodcast = dayNum === "Intero Itinerario" && generatedPlan ? generatedPlan.giorni.length : 1;
-        const podcastCost = PRICING_LIST.podcast_daily * numDaysPodcast;
-        
-        // Saldo passato al modale: senza, mostrava sempre "0 crediti disponibili"
-        const balPodcast = await getWalletBalance(currentUserId);
-        const confirmed = await creditConfirm.requestConfirmation(podcastCost, `Podcast AI (${numDaysPodcast} giorni)`, balPodcast.total);
-        if (!confirmed) {
+        // PRIMA dell'addebito: il podcast parla solo con la sintesi del
+        // browser, che sulla WebView Android spesso manca. Il controllo stava
+        // dopo la generazione: 15 crediti scalati e poi «non supportato».
+        if (!('speechSynthesis' in window)) {
+          notify(getTranslation('err_tts_unsupported', language));
           setIsGeneratingPodcast(null);
           return;
         }
-        
+        const { data: sessionData } = await supabase.auth.getSession();
+        const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
+        // Un episodio = un giorno = un addebito (il server scala 1 unità).
+        const numDaysPodcast = 1;
+        const podcastCost = PRICING_LIST.podcast_daily * numDaysPodcast;
+
         // ADDEBITO E RIMBORSO ORA SERVER-SIDE: la rotta scala 15 crediti in
         // modo atomico (cache-first: niente addebito se già generato) e li
         // restituisce se la generazione fallisce. Il client non addebita più
         // (niente slot podcastChargeRef unico e niente crediti persi al
-        // refresh); passa solo il token. La modale di conferma sopra resta.
+        // refresh); passa solo il token.
         // Normalizza tappe per diversi formati salvati
         const tappaFallback = getTranslation('vr_b_stop_fallback', language);
         const tappeNorm = tappe.map(t => ({
@@ -3209,23 +3994,48 @@ export default function PlanScreen({
         })).filter(t => t.name !== tappaFallback || t.description);
 
         const destination = generatedPlan?.titolo || generatedPlan?.citta || 'la tua destinazione';
-        console.log(`[Podcast] Genero per "${destination}" Day ${dayNum} (${tappeNorm.length} tappe)`);
-
+        const corpoPodcast = {
+          destination,
+          dayNum,
+          tappe: tappeNorm.length > 0 ? tappeNorm : tappe.map(t => ({ name: t.titolo_tappa || t.name || 'Visita', description: '' })),
+          language: language || 'IT',
+          isLastDay,
+        };
         const { data: podSess } = await supabase.auth.getSession();
-        const res = await fetch('/api/generate-daily-podcast', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${podSess?.session?.access_token || ''}`,
-          },
-          body: JSON.stringify({
-            destination,
-            dayNum,
-            tappe: tappeNorm.length > 0 ? tappeNorm : tappe.map(t => ({ name: t.titolo_tappa || t.name || 'Visita', description: '' })),
-            language: language || 'IT',
-            isLastDay
-          })
-        });
+        const intestazioniPodcast = {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${podSess?.session?.access_token || ''}`,
+        };
+
+        // Riascolto (25/09/2026, collaudo: chiedeva «15 crediti» anche quando il podcast era già pronto):
+        // prima si chiede al server se è in cache — gratis, niente conferma. 204 = va generato.
+        let giaPronto: string | null = null;
+        try {
+          const probe = await fetch(getApiUrl('/api/generate-daily-podcast'), {
+            method: 'POST', headers: intestazioniPodcast, body: JSON.stringify({ ...corpoPodcast, soloCache: true }),
+          });
+          if (probe.status === 200) giaPronto = String((await probe.json())?.text || '').trim() || null;
+        } catch { /* rete: si procede come prima, con la conferma */ }
+
+        let res: Response;
+        if (giaPronto) {
+          res = new Response(JSON.stringify({ text: giaPronto, cached: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        } else {
+          // Saldo passato al modale: senza, mostrava sempre "0 crediti disponibili"
+          const balPodcast = await getWalletBalance(currentUserId);
+          const confirmed = await creditConfirm.requestConfirmation(podcastCost, `Podcast AI (${numDaysPodcast} giorni)`, balPodcast.total);
+          if (!confirmed) {
+            setIsGeneratingPodcast(null);
+            return;
+          }
+          console.log(`[Podcast] Genero per "${destination}" Day ${dayNum} (${tappeNorm.length} tappe)`);
+          // getApiUrl: con un percorso relativo l'app nativa non arrivava al server (25/09/2026).
+          res = await fetch(getApiUrl('/api/generate-daily-podcast'), {
+            method: 'POST',
+            headers: intestazioniPodcast,
+            body: JSON.stringify(corpoPodcast),
+          });
+        }
 
         if (res.status === 402) {
           notify(getTranslation('err_insufficient_credits', language));
@@ -3403,7 +4213,13 @@ export default function PlanScreen({
       }
     }
 
-    if (destCoords && destCoords.label === dest) return destCoords;
+    // (07/10/2026, Los Angeles) Il suggerimento scelto porta l'etichetta lunga («Los Angeles, California, Stati
+    // Uniti d'America») mentre nel campo resta quello che si è scritto («Los Angeles»): il confronto esatto
+    // falliva, si ri-geocodificava il nome nudo e il primo risultato era Los Angeles in TEXAS — tutte le undici
+    // tappe «a 2.000 km dalla destinazione, da verificare». Le coordinate scelte dalla persona valgono se il
+    // testo del campo è l'inizio dell'etichetta (o l'etichetta inizia col testo).
+    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (destCoords && (destCoords.label === dest || norm(destCoords.label).startsWith(norm(dest)) || norm(dest).startsWith(norm(destCoords.label)))) return destCoords;
     try {
       // Geocoding rigoroso via proxy server (solo località amministrative).
       const res = await fetch(getApiUrl(
@@ -3533,7 +4349,13 @@ export default function PlanScreen({
     setShowSuggestions(false);
     setFocusedDestIdx(null);
     setActiveSuggestIdx(-1);
+    // Scelta fatta = campo lasciato (25/09/2026, collaudo Raggio: la tendina restava aperta sotto
+    // l'indirizzo scelto). Il fuoco restava nel campo e un onFocus successivo la riapriva; col blur
+    // si chiude anche la tastiera sul telefono, e per mezzo secondo l'onFocus non riapre nulla.
+    sceltaSuggerimentoRef.current = Date.now();
+    try { (document.activeElement as HTMLElement | null)?.blur?.(); } catch { /* niente fuoco */ }
   };
+  const appenaScelto = () => Date.now() - sceltaSuggerimentoRef.current < 500;
 
   /**
    * Navigazione da tastiera del combobox: prima non esisteva (né frecce, né
@@ -3814,7 +4636,7 @@ export default function PlanScreen({
     // 10 crediti/giorno per la pianificazione; le audioguide si pagano a
     // parte (per luogo a prezzo pieno, oppure Day Pass 24h).
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
-    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
+    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, etichettaItinerarioPro(numDaysForPricing), bal.total);
     if (!confirmed) {
       return;
     }
@@ -3894,6 +4716,7 @@ export default function PlanScreen({
       });
 
       if (data && data.giorni) {
+        warnIfFewerDays(data, numDaysForPricing);
         // Reinnesta i link affiliato che il modello non riporta nel JSON:
         // il match è sul titolo della tappa, senza toccare il resto.
         const linkByName = new Map(
@@ -3907,6 +4730,7 @@ export default function PlanScreen({
             }
           }
         }
+        timbraViaggio(data);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         setPlannerMode('view');
@@ -3986,7 +4810,7 @@ export default function PlanScreen({
     // 10 crediti/giorno per la pianificazione; le audioguide si pagano a
     // parte (per luogo a prezzo pieno, oppure Day Pass 24h).
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
-    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
+    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, etichettaItinerarioPro(numDaysForPricing), bal.total);
     if (!confirmed) {
        return;
     }
@@ -4039,6 +4863,8 @@ export default function PlanScreen({
       });
 
       if (data && data.giorni) {
+        warnIfFewerDays(data, numDaysForPricing);
+        timbraViaggio(data);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         setPlannerMode('view');
@@ -4080,13 +4906,31 @@ export default function PlanScreen({
           // del centro della città di arrivo: non sono luoghi visitabili e non
           // devono diventare POI in shared_pois.
           .filter(t => String((t as any).tipo || '').toLowerCase() !== 'trasferimento')
+          // Un prodotto (tour, biglietto, noleggio…) non è un luogo: stessa regola di tappaDiventaPoi (07/10/2026).
+          .filter(t => tappaDiventaPoi(String((t as any).tipo || ''), String(t.titolo_tappa || '')))
           .filter(t => t.coordinate && t.coordinate.lat !== 0)
+          // Tappa già agganciata dal server a un POI VERO di shared_pois
+          // (05/09/2026, agganciaTappeAlDatabase): il POI esiste, con la sua
+          // scheda verificata. Ricrearlo qui vorrebbe dire un doppione con la
+          // prosa AI sopra al luogo vero. I locali (`ov-…`, tabella
+          // locali_pois) non stanno in shared_pois e seguono il percorso di prima.
+          .filter(t => { const p = String((t as any).poi_id || ''); return !p || p.startsWith('ov-'); })
           .map(tappa => {
             const lat = parseFloat(String(tappa.coordinate.lat));
             const lon = parseFloat(String(tappa.coordinate.lng || (tappa.coordinate as any).lon));
-            const poiId = tappa.id_tappa && !tappa.id_tappa.startsWith('custom-')
-              ? tappa.id_tappa
-              : `ai_${lat.toFixed(5)}_${lon.toFixed(5)}`.replace(/\./g, '_');
+            // L'id del POI deve identificare IL LUOGO, non la posizione della
+            // tappa nel piano. Dal 28/08 (ITI-01) id_tappa e' sintetico
+            // («t1_0» = prima tappa del primo giorno) e finiva qui come id di
+            // shared_pois: una sola riga «t1_0» per tutto il mondo, riscritta
+            // da ogni itinerario salvato da chiunque (verificato il 05/09: le
+            // 16 righe t1_0..t2_7 erano tutte l'ultimo piano salvato, Greve).
+            // Gli id sintetici e quelli delle esperienze prenotabili
+            // (viator_/gyg_/tm_/tq_, non luoghi stabili) prendono l'id
+            // «iti-nome-coordinate»: LO STESSO con cui la tappa entra nel
+            // radar (idPoiDaTappa), cosi' salvataggio, giro, geofencing e
+            // audioguida parlano della stessa riga.
+            const idSintetico = !tappa.id_tappa || /^(t\d+_\d+|custom-|viator_|gyg_|tm_|tq_)/.test(tappa.id_tappa);
+            const poiId = idSintetico ? idPoiDaTappa(tappa, lat, lon) : tappa.id_tappa;
 
             const descriptionFull = tappa.attivita || "";
             const descLong = descriptionFull;
@@ -4103,9 +4947,9 @@ export default function PlanScreen({
               // decidere se il POI è "già arricchito" (existing.description_short,
               // server.ts) — riempirli subito con la prosa AI non verificata
               // faceva SALTARE per sempre la vera messa a terra su Wikipedia,
-              // anche quando esiste. description_ai resta per la UI (che fa
-              // fallback su di lei finché description_long non arriva).
-              description_ai: descLong + (tappa.consiglio_guida ? "\n\n💡 " + tappa.consiglio_guida : ""),
+              // anche quando esiste. (06/10/2026) NEMMENO description_ai: è prosa di
+              // DeepSeek a memoria e, essendo il testo salvato più lungo, diventava il
+              // materiale dell'audioguida (Lione, Anversa). La scheda la riempie l'enrich.
               status: 'auto', // generati dall'AI: non marcarli come verificati
               created_at: new Date().toISOString()
             };
@@ -4250,13 +5094,6 @@ export default function PlanScreen({
   };
 
   const [offlineStatus, setOfflineStatus] = useState<string | null>(null);
-  const [offlinePlans, setOfflinePlans] = useState<any[]>([]);
-
-  useEffect(() => {
-    if (plannerMode === 'offline_list') {
-      getOfflineItinerariesList().then(list => setOfflinePlans(list));
-    }
-  }, [plannerMode]);
 
   const handleSaveOffline = async () => {
     if (!generatedPlan) return;
@@ -4280,8 +5117,23 @@ export default function PlanScreen({
       const titleSlug = (generatedPlan.titolo || 'itinerario').replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
       const id = generatedPlan.id ? `${titleSlug}_${String(generatedPlan.id).slice(0, 8)}` : titleSlug;
       await saveOfflineItinerary(id, salvataggio);
-      
-      setOfflineStatus("Disponibile Offline ✓");
+
+      // PACCHETTO OFFLINE (08/09/2026): insieme al piano si scaricano la mappa
+      // della zona del percorso e le celle stradali per la navigazione senza
+      // rete, e tutto finisce in "I miei download". Best-effort: il piano e'
+      // gia' salvato, una parte che manca si vede nel registro e si completa
+      // da li'.
+      setOfflineStatus(getTranslation('dl_in_corso', language));
+      try {
+        const esito = await scaricaPacchettoOffline(salvataggio, id, { mappa: true, strade: true }, (fase, fr) => {
+          setOfflineStatus(`${getTranslation(fase === 'mappa' ? 'dl_mappa' : 'dl_navigazione', language)} ${Math.round(fr * 100)}%`);
+        });
+        if (esito.strade && esito.strade.mancanti > 0) notify(getTranslation('dl_strade_fuori_copertura', language), 'info');
+      } catch (e) {
+        console.warn('[offline] pacchetto non completo', e);
+      }
+
+      setOfflineStatus(getTranslation('dl_fatto', language) + ' ✓');
       setTimeout(() => setOfflineStatus(null), 3000);
     } catch (e) {
       console.error(e);
@@ -4374,7 +5226,12 @@ export default function PlanScreen({
     setReplacingId(tappaId);
     try {
       const token = sessionData?.session?.access_token;
-      const res = await fetch(getApiUrl('/api/groq/replace'), {
+      // apiFetch, non fetch() nuda (10/09/2026): senza timeout, una risposta
+      // che non arriva mai lasciava setReplacingId(tappaId) impostato per
+      // sempre — rilasciato solo nel finally — con lo spinner sulla tappa
+      // bloccato a tempo indefinito. apiFetch ha un timeout di default
+      // (src/lib/api.ts).
+      const res = await apiFetch(getApiUrl('/api/groq/replace'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -4389,7 +5246,9 @@ export default function PlanScreen({
           giornoNum: Number(dayKey),
           language
         })
-      });
+      // 90 s (25/09/2026): con il default di 20 s il client abbandonava una
+      // sostituzione che il server completava in ~28 s.
+      }, 90000);
       if (!res.ok) throw await planErrorFromResponse(res);
       const data = await res.json();
       if (data?.error && PLAN_ERROR_KEYS[data.error]) throw new PlanError(data.error);
@@ -4409,6 +5268,8 @@ export default function PlanScreen({
         } else {
           data.free_replacements = (generatedPlan as any).free_replacements;
         }
+        // Sostituzione di una tappa: mese e data restano quelli del piano, non del form.
+        timbraViaggio(data, generatedPlan);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         // L'addebito (solo a pagamento) è già avvenuto sul server: qui si
@@ -4581,8 +5442,11 @@ export default function PlanScreen({
       });
       const data = await res.json();
       if (res.ok && data?.giorno) {
+        const nGiorni = generatedPlan.giorni.length + 1;
         const newPlan = {
           ...generatedPlan,
+          // Il titolo dice «2 Giorni» anche dopo il terzo (collaudo 25/09/2026): si aggiorna il numero se c'è.
+          ...(generatedPlan.titolo ? { titolo: titoloConGiorni(generatedPlan.titolo, nGiorni) } : {}),
           giorni: [...generatedPlan.giorni, data.giorno],
           totale_viaggio: data.totale_viaggio || (generatedPlan as any).totale_viaggio,
         };
@@ -4624,22 +5488,24 @@ export default function PlanScreen({
     // shared_pois e savePlanToSupabase, evitando duplicati non deterministici.
     const lat = tappa.coordinate?.lat || 0;
     const lon = tappa.coordinate?.lng || (tappa.coordinate as any)?.lon || 0;
-    const stableId = tappa.id_tappa && !tappa.id_tappa.startsWith('custom-')
-      ? tappa.id_tappa
-      : `ai_${lat.toFixed(5)}_${lon.toFixed(5)}`.replace(/\./g, '_');
+    // 25/09/2026: l'id del LUOGO (idPoiDaTappa), mai `id_tappa`. «t1_0» era un id
+    // di posizione: la prima tappa di ogni itinerario apriva (e riscriveva) la
+    // stessa riga di shared_pois — Piazza Maggiore mostrava Greve in Chianti.
+    const stableId = idPoiDaTappa(tappa, lat, lon);
 
     const category = mapItineraryCategoryToMapCategory(tappa.tipo || 'monumenti');
     const desc = tappa.attivita || '';
 
-    // Silently upsert to Supabase to make it a real POI for audio guide support
-    if (lat !== 0 && lon !== 0) {
+    // Riga propria solo per le tappe senza POI vero (`iti-…`): un poi_id agganciato
+    // è una riga del catalogo e non si sovrascrive dal client.
+    if (lat !== 0 && lon !== 0 && stableId.startsWith('iti-')) {
       await supabase.from('shared_pois').upsert({
         id: stableId,
         name: tappa.titolo_tappa,
         category: category,
         lat: lat,
         lon: lon,
-        description_ai: desc,
+        // (06/10/2026) niente description_ai: prosa a memoria, finiva nell'audioguida.
         source: 'itinerary',
         status: 'auto',
         created_at: new Date().toISOString()
@@ -4679,7 +5545,11 @@ export default function PlanScreen({
       <select
         id="wip-month"
         value={mese}
-        onChange={(e) => setMese(e.target.value)}
+        onChange={(e) => {
+          setMese(e.target.value);
+          // Un mese diverso da quello della data scelta annulla la data (non restano in contraddizione).
+          if (dataPartenza && MONTH_VALUES[Number(dataPartenza.slice(5, 7)) - 1] !== e.target.value) setDataPartenza('');
+        }}
         className={`w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm ${focusRing} focus:ring-2 outline-none font-bold text-on-surface text-sm appearance-none`}
       >
         <option value="">{getTranslation('month_any', language)}</option>
@@ -4687,6 +5557,41 @@ export default function PlanScreen({
           <option key={m} value={m}>{getTranslation(`month_${i + 1}`, language)}</option>
         ))}
       </select>
+      {/* Data di partenza FACOLTATIVA (24/09/2026): imposta anche il mese; serve al meteo dei giorni. */}
+      <label htmlFor="wip-data-partenza" className="block text-[11px] font-bold text-gray-500 pl-1">
+        {getTranslation('mp_clima_data_partenza', language)}
+      </label>
+      <input
+        id="wip-data-partenza"
+        type="date"
+        value={dataPartenza}
+        min={new Date().toISOString().slice(0, 10)}
+        onChange={(e) => {
+          const v = e.target.value;
+          setDataPartenza(v);
+          const m = Number(v.slice(5, 7));
+          if (v && m >= 1 && m <= 12) setMese(MONTH_VALUES[m - 1]);
+        }}
+        className={`w-full px-4 py-3 bg-white rounded-2xl border border-outline-variant/10 shadow-sm ${focusRing} focus:ring-2 outline-none font-bold text-on-surface text-sm`}
+      />
+      {/* Clima del mese scelto (24/09/2026): le medie di vent'anni della
+          destinazione, per non scoprire ad agosto che erano 38°. Compare solo
+          con una destinazione risolta e un mese scelto. */}
+      {climaAvviso && (
+        <div className={`mt-2 text-[12px] leading-snug rounded-xl px-3 py-2 ${climaAvviso.tipo === 'peggiore' ? 'bg-orange-50 text-orange-800' : climaAvviso.tipo === 'migliore' ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-50 text-slate-700'}`}>
+          📅 {climaAvviso.testo}
+          {destCoords && (
+            <button type="button" className="block mt-1 font-black underline"
+              onClick={() => setQuandoAndare({ lat: destCoords.lat, lon: destCoords.lon, nome: destCoords.label.split(',')[0].trim(), mese: MONTH_VALUES.indexOf(mese as (typeof MONTH_VALUES)[number]) + 1 || null })}>
+              {getTranslation('mp_clima_vedi_scheda', language).replace('{mese}', new Intl.DateTimeFormat(language.toLowerCase(), { month: 'long' }).format(new Date(2000, Math.max(0, MONTH_VALUES.indexOf(mese as (typeof MONTH_VALUES)[number])), 1)))}
+            </button>
+          )}
+        </div>
+      )}
+      {/* Invito (06/10/2026, committente): chi lascia «Indifferente» non sa che esiste il clima del mese. */}
+      {!climaAvviso && destCoords && (
+        <p className="mt-2 text-[11px] leading-snug text-slate-500 px-1">📅 {getTranslation('mp_clima_invito', language)}</p>
+      )}
     </div>
   );
 
@@ -4988,6 +5893,19 @@ export default function PlanScreen({
                 <Mic className="w-5 h-5 text-amber-600 shrink-0" />
               </button>
 
+              {/* QUANDO ANDARE (24/09/2026): scegliere il periodo è pianificazione,
+                  non mappa. Stessa scheda Anno/Mese del livello Clima. */}
+              <button
+                onClick={() => setPlannerMode('quando_andare')}
+                className="w-full p-4 bg-gradient-to-br from-teal-50 to-cyan-50 rounded-2xl border border-teal-200/70 shadow-sm flex items-center gap-3 group hover:shadow-md hover:border-teal-400/60 focus-visible:ring-2 focus-visible:ring-teal-400/40 outline-none transition-all"
+              >
+                <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center text-2xl shrink-0 group-hover:scale-110 transition-transform shadow-sm">📅</div>
+                <div className="text-left flex-1 min-w-0">
+                  <h3 className="text-sm font-black text-gray-900 leading-tight">{getTranslation('mp_clima_quando_andare', language)}</h3>
+                  <p className="text-[11px] text-gray-600 font-bold leading-snug">{getTranslation('mp_clima_quando_andare_desc', language)}</p>
+                </div>
+              </button>
+
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 items-stretch">
                 {/* Form A: Itinerario su Misura */}
                 <button
@@ -5079,7 +5997,7 @@ export default function PlanScreen({
               {/* I Miei Itinerari (tasto lungo) + Offline */}
               <div className="flex gap-3">
                 <button
-                  onClick={() => { setPlannerMode('my_itineraries'); fetchMyItineraries(); fetchSavedPremiumGuides(); }}
+                  onClick={() => { setArchivioCartella('itinerari'); setPlannerMode('my_itineraries'); void fetchGenerazioni(); }}
                   className="flex-1 p-4 bg-blue-50 rounded-2xl border border-blue-100 shadow-sm flex items-center gap-3 group hover:bg-blue-100 hover:border-blue-300 transition-all"
                 >
                   <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
@@ -5098,7 +6016,7 @@ export default function PlanScreen({
                     <Download className="w-5 h-5 text-white" />
                   </div>
                   <div className="text-left">
-                    <h3 className="text-xs font-black text-white">{getTranslation("offline_mode", language)}</h3>
+                    <h3 className="text-xs font-black text-white">{getTranslation("dl_titolo", language)}</h3>
                     <p className="text-[10px] text-white/70 font-bold">{getTranslation('no_internet', language)}</p>
                   </div>
                 </button>
@@ -5707,6 +6625,7 @@ export default function PlanScreen({
                           setShowSuggestions(true);
                         }}
                         onFocus={() => {
+                          if (appenaScelto()) return;
                           setFocusedDestIdx(0);
                           setShowSuggestions(true);
                         }}
@@ -6010,7 +6929,7 @@ export default function PlanScreen({
 
               {/* Giorni */}
               <div>
-                <label className="block text-xs font-black text-primary uppercase tracking-widest mb-3">{getTranslation('days', language)}</label>
+                <label className="block text-xs font-black text-primary uppercase tracking-widest mb-3">{getTranslation('giorni', language)}</label>
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {[1,2,3,4,5,6,7].map(d => (
                     <button key={d} onClick={() => setDays(d)} className={`flex-1 min-w-[40px] py-3 rounded-2xl font-black text-sm transition-all ${days === d ? 'bg-primary text-white shadow-lg' : 'text-primary/40 hover:bg-primary/5'}`}>{d}</button>
@@ -6522,269 +7441,84 @@ export default function PlanScreen({
             </motion.div>
           )}
 
-          {/* ── I MIEI ITINERARI ── */}
-          {plannerMode === 'my_itineraries' && (
-            <motion.div
-              key="my_itineraries"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="space-y-6 pt-4"
-            >
-              <div className="flex justify-between items-center px-1">
-                <h3 className="text-xl font-black text-primary">
-                  {getTranslation('my_itineraries', language)}
-                </h3>
-                <span className="text-[10px] font-black text-on-surface-variant/40 uppercase tracking-widest bg-white px-3 py-1 rounded-full border border-outline-variant/10 shadow-sm">
-                  {planMyItinerariesTab === 'ai' ? myItineraries.length : savedPremiumGuides.length} {getTranslation('saved_count', language)}
-                </span>
-              </div>
-
-              {/* Toggles */}
-              <div className="flex bg-white/50 p-1 rounded-2xl mb-4 border border-outline-variant/10 shadow-sm">
-                <button
-                  onClick={() => setPlanMyItinerariesTab('ai')}
-                  className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${planMyItinerariesTab === 'ai' ? 'bg-primary text-white shadow-md' : 'text-gray-500 hover:bg-white/50'}`}
-                >
-                  {getTranslation('ai_itineraries', language)}
-                </button>
-                <button
-                  onClick={() => setPlanMyItinerariesTab('premium')}
-                  className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${planMyItinerariesTab === 'premium' ? 'bg-primary text-white shadow-md' : 'text-gray-500 hover:bg-white/50'}`}
-                >
-                  {getTranslation('premium_guides_tab', language)}
+          {/* ── I MIEI ITINERARI / OFFLINE: UN SOLO ARCHIVIO (20/09/2026) ──
+              Erano due liste diverse (qui «Riprendi» e cestino, nei download
+              naviga/elimina, nel Profilo racconto/calendario): ora e' lo
+              stesso componente di «I miei download», a cartelle, con le voci
+              tutte nella stessa forma. Da «I miei itinerari» si entra gia'
+              nella cartella Itinerari. La X sta IN ALTO A DESTRA e resta
+              visibile scorrendo (era in fondo alla lista: con venti itinerari
+              non si trovava). */}
+          {plannerMode === 'quando_andare' && (
+            <motion.div key="quando_andare" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+              <div className="sticky top-0 z-30 -mx-6 px-6 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 bg-[#f8f5f0]/95 backdrop-blur flex justify-between items-center gap-3">
+                <h3 className="text-xl font-black text-primary truncate">📅 {getTranslation('mp_clima_quando_andare', language)}</h3>
+                <button onClick={() => setPlannerMode('selection')} aria-label="Chiudi" className="shrink-0 w-11 h-11 rounded-2xl bg-white border border-outline-variant/10 flex items-center justify-center text-primary/60 hover:text-red-500 transition-colors shadow-sm">
+                  <X className="w-5 h-5" />
                 </button>
               </div>
-
-              {planMyItinerariesTab === 'ai' ? (
-                <div className="grid grid-cols-1 gap-4 max-h-[60dvh] overflow-y-auto pr-2 no-scrollbar">
-                  {myItinerariesLoading ? (
-                    <div className="flex items-center justify-center py-16">
-                      <Loader2 className="w-8 h-8 animate-spin text-primary/40" />
-                    </div>
-                  ) : myItineraries.length === 0 ? (
-                    <div className="p-12 border-2 border-dashed border-outline-variant/30 rounded-[2.5rem] flex flex-col items-center text-center opacity-40">
-                      <History className="w-12 h-12 mb-4" />
-                      <p className="text-sm font-bold">
-                        {getTranslation('no_saved_itineraries', language)}
-                      </p>
-                      <p className="text-[10px] uppercase font-black tracking-widest mt-2 px-6">
-                        {getTranslation('generate_first', language)}
-                      </p>
-                    </div>
-                  ) : (
-                    [...myItineraries].sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime()).map((item: any) => {
-                      // JSON.parse PROTETTO: prima una sola riga corrotta (save
-                      // parziale) faceva crashare l'INTERA lista in render, e
-                      // l'utente non poteva nemmeno cancellarla. Ora la riga
-                      // corrotta mostra solo il cestino.
-                      let parsedDati: any = null;
-                      try {
-                        parsedDati = typeof item.dati_itinerario === 'string' ? JSON.parse(item.dati_itinerario) : item.dati_itinerario;
-                      } catch { parsedDati = null; }
-                      if (!parsedDati) {
-                        return (
-                          <div key={item.id} className="p-5 rounded-[2rem] bg-white border border-red-100 shadow-sm flex justify-between items-center">
-                            <span className="text-xs font-bold text-red-400">{item.titolo || 'Itinerario'} — dati non leggibili</span>
-                            <button onClick={() => deleteMyItinerary(item.id)} className="w-9 h-9 rounded-full bg-red-50 text-red-400 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center shrink-0">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        );
-                      }
-                      const giorniRaw = parsedDati?.giorni || [];
-                      const giorni = Array.isArray(giorniRaw) ? giorniRaw : Object.values(giorniRaw);
-                      const tappeTotal = giorni.reduce((acc: number, g: any) => acc + (g.tappe?.length || 0), 0);
-                      const date = item.updated_at ? new Date(item.updated_at).toLocaleDateString('it-IT', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
-                      return (
-                        <div
-                          key={item.id}
-                          className="p-5 rounded-[2rem] bg-white border border-outline-variant/10 shadow-sm group relative overflow-hidden"
-                        >
-                          <div className="flex justify-between items-start mb-3">
-                            <div className="flex-1 pr-2">
-                              <h4 className="font-black text-primary text-base leading-tight mb-1">{item.titolo || 'Itinerario'}</h4>
-                              <div className="flex gap-2 flex-wrap">
-                                <span className="text-[10px] font-black bg-primary/5 text-primary px-2 py-0.5 rounded-full">
-                                  📅 {giorni.length} {getTranslation('days_count', language)}
-                                </span>
-                                <span className="text-[10px] font-black bg-primary/5 text-primary px-2 py-0.5 rounded-full">
-                                  📍 {tappeTotal} {getTranslation('stops_count', language)}
-                                </span>
-                                {date && <span className="text-[10px] font-bold text-gray-500">{date}</span>}
-                              </div>
-                            </div>
-                            <button
-                              onClick={() => deleteMyItinerary(item.id)}
-                              className="w-9 h-9 rounded-full bg-red-50 text-red-400 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center shrink-0"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                          <button
-                            onClick={() => {
-                              // Normalizza giorni (a volte oggetto invece di array)
-                              // così la vista non resta bianca senza uscita.
-                              setGeneratedPlan({ ...parsedDati, giorni });
-                              // Aggancia la riga DB reale: senza, il primo edit
-                              // creava un itinerario duplicato e l'agente AI non
-                              // era disponibile finché non si salvava.
-                              setDbItineraryId(item.itinerary_id || null);
-                              // Stato blocchi/espansioni appartiene al vecchio itinerario: azzeriamo
-                              setLockedStops({});
-                              setExpandedStops({});
-                              // Ripristina podcast cache da Supabase
-                              if (parsedDati?.podcast_cache) {
-                                setPodcastCache(parsedDati.podcast_cache);
-                              } else {
-                                setPodcastCache({});
-                              }
-                              setPlannerMode('view');
-                            }}
-                            className="w-full py-3 bg-primary/5 text-primary rounded-xl font-bold text-sm border border-primary/10 hover:bg-primary hover:text-white transition-colors"
-                          >
-                            {getTranslation('resume_btn', language)}
-                          </button>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 gap-4 max-h-[60dvh] overflow-y-auto pr-2 no-scrollbar">
-                  {savedPremiumGuides.length === 0 ? (
-                    <div className="py-12 flex flex-col items-center justify-center text-center">
-                      <div className="w-20 h-20 bg-primary/5 rounded-[2rem] flex items-center justify-center mb-6">
-                        <Download className="w-10 h-10 text-primary/20" />
-                      </div>
-                      <h3 className="font-black text-primary mb-2">Guide Premium</h3>
-                      <p className="text-sm text-on-surface-variant font-bold max-w-xs opacity-70">
-                        {getTranslation('no_pdf_generated', language)}
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {savedPremiumGuides.map((guide) => (
-                        <div key={guide.id} className="p-5 bg-white rounded-3xl border border-outline-variant/10 shadow-sm flex flex-col gap-3">
-                          <div className="flex justify-between items-start">
-                            <div className="flex flex-col gap-1.5">
-                              <h4 className="font-black text-primary text-lg leading-tight">
-                                {guide.content_data?.guida_titolo || "Guida Premium"}
-                              </h4>
-                              <span className="text-[10px] bg-amber-100 text-amber-800 self-start px-2 py-0.5 rounded font-black tracking-widest uppercase">
-                                {guide.stile_guida || 'essential'}
-                              </span>
-                            </div>
-                          </div>
-                          <p className="text-sm font-bold text-on-surface-variant opacity-70">
-                             {new Date(guide.created_at || Date.now()).toLocaleDateString('it-IT')}
-                          </p>
-                          <div className="flex gap-2 mt-2">
-                            <button
-                              onClick={() => setGuideToRender({ content: guide.content_data, media: guide.media_manifest, hash: guide.itinerary_hash })}
-                              className="flex-1 text-center py-3 bg-primary text-white font-black text-xs rounded-xl shadow-md hover:bg-primary/90 transition-all flex items-center justify-center gap-2"
-                            >
-                              <Download className="w-4 h-4" /> {getTranslation('download_pdf_btn', language)}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+              <p className="text-sm text-on-surface-variant/80 font-bold">{getTranslation('mp_clima_quando_andare_desc', language)}</p>
+              <form className="flex gap-2" onSubmit={async (e) => {
+                e.preventDefault();
+                setQuandoAndareCerca('cerco');
+                const { cercaCitta } = await import('../lib/climaIndex');
+                const c = await cercaCitta(quandoAndareTesto, language);
+                if (!c) { setQuandoAndareCerca('non_trovata'); return; }
+                setQuandoAndareCerca('idle');
+                setQuandoAndare({ lat: c.lat, lon: c.lon, nome: c.label });
+              }}>
+                <input value={quandoAndareTesto} onChange={(e) => setQuandoAndareTesto(e.target.value)} placeholder={getTranslation('mp_clima_confronta_cerca', language)}
+                  className="flex-1 px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/30 outline-none font-bold text-on-surface text-sm" />
+                <button type="submit" disabled={quandoAndareCerca === 'cerco'} className="px-5 rounded-2xl bg-primary text-white font-black text-sm disabled:opacity-60">
+                  {quandoAndareCerca === 'cerco' ? <Loader2 className="w-4 h-4 animate-spin" /> : 'OK'}
+                </button>
+              </form>
+              {quandoAndareCerca === 'non_trovata' && <p className="text-xs font-bold text-orange-700">{getTranslation('mp_clima_confronta_non_trovata', language)}</p>}
+              {destCoords && (
+                <button type="button" onClick={() => setQuandoAndare({ lat: destCoords.lat, lon: destCoords.lon, nome: destCoords.label.split(',')[0].trim(), mese: MONTH_VALUES.indexOf(mese as (typeof MONTH_VALUES)[number]) + 1 || null })}
+                  className="w-full p-4 bg-white rounded-2xl border border-outline-variant/30 shadow-sm text-left">
+                  <p className="text-[11px] font-bold uppercase text-gray-400">{getTranslation('destination', language)}</p>
+                  <p className="text-sm font-black text-gray-900">{destCoords.label}</p>
+                </button>
               )}
-
-              <button
-                onClick={() => setPlannerMode('selection')}
-                className="w-16 h-16 rounded-3xl bg-white border border-outline-variant/10 flex items-center justify-center text-primary/40 hover:text-red-500 transition-colors shadow-sm"
-              >
-                <X className="w-6 h-6" />
-              </button>
             </motion.div>
           )}
 
-          {plannerMode === 'offline_list' && (
-            <motion.div 
-              key="offline_list"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="space-y-6 pt-4"
+          {(plannerMode === 'my_itineraries' || plannerMode === 'offline_list') && (
+            <motion.div
+              key={plannerMode}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="space-y-4"
             >
-              <div className="flex justify-between items-center mb-4 px-1">
-                <h3 className="text-xl font-black text-primary">{getTranslation('offline_itineraries_title', language)}</h3>
-                <span className="text-[10px] font-black text-on-surface-variant/40 uppercase tracking-widest bg-white px-3 py-1 rounded-full border border-outline-variant/10 shadow-sm">
-                  {offlinePlans.length} {getTranslation('offline_saved_count', language)}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 max-h-[60dvh] overflow-y-auto pr-2 no-scrollbar">
-                {offlinePlans.length === 0 ? (
-                   <div className="p-12 border-2 border-dashed border-outline-variant/30 rounded-[2.5rem] flex flex-col items-center text-center opacity-40">
-                      <Download className="w-12 h-12 mb-4" />
-                      <p className="text-sm font-bold">{getTranslation('offline_none', language)}</p>
-                      <p className="text-[10px] uppercase font-black tracking-widest mt-2 px-6">{getTranslation('offline_none_hint', language)}</p>
-                   </div>
-                ) : (
-                  offlinePlans.map((plan: any, i: number) => (
-                    <div 
-                      key={plan.id || i}
-                      className="p-5 rounded-[2rem] bg-white border border-outline-variant/10 shadow-sm flex flex-col gap-3 group relative overflow-hidden"
-                    >
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h4 className="font-black text-on-surface text-lg leading-tight mb-1">{plan.title || plan.titolo}</h4>
-                          <h5 className="text-[11px] font-bold text-primary uppercase tracking-widest bg-primary/5 inline-flex px-2 py-0.5 rounded-lg mb-2">
-                            Offline
-                          </h5>
-                          <p className="text-[10px] text-on-surface-variant/60 font-bold mt-2">
-                            {getTranslation('offline_saved_on', language)} {new Date(plan.date || plan.data_salvataggio).toLocaleDateString(language.toLowerCase())}
-                          </p>
-                        </div>
-                        <button
-                           onClick={async (e) => {
-                             e.stopPropagation();
-                             if (plan.id) {
-                               await deleteOfflineItinerary(plan.id);
-                             }
-                             const newPlans = await getOfflineItinerariesList();
-                             setOfflinePlans(newPlans);
-                           }}
-                           className="w-10 h-10 rounded-full bg-red-50 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center shrink-0 border border-red-100"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                      <button
-                        onClick={async () => {
-                          const data = await getOfflineItinerary(plan.id);
-                          if (data) {
-                            setGeneratedPlan(data);
-                            // Stato blocchi/espansioni appartiene al vecchio itinerario: azzeriamo
-                            setLockedStops({});
-                            setExpandedStops({});
-                            // Ripristina podcast cache salvata localmente
-                            if (data.podcast_cache && typeof data.podcast_cache === 'object') {
-                              setPodcastCache(data.podcast_cache);
-                            }
-                            setPlannerMode('view');
-                          }
-                        }}
-                        className="w-full mt-2 py-3 bg-primary/5 text-primary rounded-xl font-bold text-sm border border-primary/10 hover:bg-primary hover:text-white transition-colors"
-                      >
-                        {getTranslation('offline_open', language)}
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <div className="flex gap-4 pt-4">
-                <button 
+              <div className="sticky top-0 z-30 -mx-6 px-6 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 bg-[#f8f5f0]/95 backdrop-blur flex justify-between items-center gap-3">
+                <h3 className="text-xl font-black text-primary truncate">
+                  {plannerMode === 'my_itineraries' ? getTranslation('my_itineraries', language) : getTranslation('dl_titolo', language)}
+                </h3>
+                <button
                   onClick={() => setPlannerMode('selection')}
-                  className="w-16 h-16 rounded-3xl bg-white border border-outline-variant/10 flex items-center justify-center text-primary/40 hover:text-red-500 transition-colors shadow-sm"
+                  aria-label="Chiudi"
+                  className="shrink-0 w-11 h-11 rounded-2xl bg-white border border-outline-variant/10 flex items-center justify-center text-primary/60 hover:text-red-500 transition-colors shadow-sm"
                 >
-                  <X className="w-6 h-6" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
+
+              {/* Generazioni in differita (06/09/2026): in coda/in corso o fallite. */}
+              {generazioniInCorso.map(g => (
+                <div key={g.id} className={`p-5 rounded-3xl border shadow-sm flex items-center gap-4 ${g.stato === 'fallita' ? 'bg-red-50 border-red-100' : 'bg-amber-50 border-amber-100'}`}>
+                  {g.stato === 'fallita' ? <AlertTriangle className="w-6 h-6 text-red-500 shrink-0" /> : <Loader2 className="w-6 h-6 text-amber-600 animate-spin shrink-0" />}
+                  <div className="min-w-0">
+                    <h4 className="font-black text-primary leading-tight truncate">{g.titolo || (g.tipo === 'guida' ? 'Guida Premium' : 'Itinerario')}</h4>
+                    <p className="text-xs font-bold text-on-surface-variant/70 mt-0.5">
+                      {g.stato === 'fallita' ? getTranslation('gen_fallita', language) : getTranslation('gen_in_preparazione', language)}
+                      {g.stato !== 'fallita' && <> · {getTranslation('gen_in_coda_nota', language)}</>}
+                    </p>
+                  </div>
+                </div>
+              ))}
+
+              <DownloadsScreen language={language} cartellaIniziale={plannerMode === 'my_itineraries' ? archivioCartella : undefined} />
             </motion.div>
           )}
 
@@ -6826,6 +7560,7 @@ export default function PlanScreen({
                       // Primo giorno del mese scelto nel form (anno prossimo se
                       // il mese è già passato); la modalina ripiega su domani
                       // quando la data non è futura.
+                      if (generatedPlan?.data_inizio) return new Date(`${generatedPlan.data_inizio}T00:00:00`);
                       const idx = MONTH_VALUES.indexOf(mese as (typeof MONTH_VALUES)[number]);
                       if (idx < 0) return null;
                       const now = new Date();
@@ -6834,16 +7569,92 @@ export default function PlanScreen({
                     })()}
                     language={language}
                     destCoords={destCoords ? { lat: destCoords.lat, lon: destCoords.lon } : null}
+                    onDataScelta={(d) => {
+                      // La data del calendario diventa la partenza del piano, se il piano non ne ha una.
+                      if (!generatedPlan || generatedPlan.data_inizio) return;
+                      const agg = { ...generatedPlan, data_inizio: d };
+                      setGeneratedPlan(agg);
+                      savePlanToSupabase(agg);
+                    }}
                   />
                   <button
-                    onClick={() => {
-                      const oldTitle = document.title;
+                    onClick={async () => {
                       const d = new Date();
                       const gg = String(d.getDate()).padStart(2, '0');
                       const mm = String(d.getMonth() + 1).padStart(2, '0');
                       const aa = String(d.getFullYear()).slice(-2);
                       const t = generatedPlan?.titolo || getTranslation('itinerary', language);
-                      document.title = `WIP - ${t.substring(0, 30)} - ${gg}${mm}${aa}.pdf`;
+                      const nomeFile = `WIP - ${t.substring(0, 30)} - ${gg}${mm}${aa}.pdf`;
+
+                      // IL PDF E' UN LIBRO, NON UNA STAMPA (05/09/2026). Prima
+                      // si fotografava la vista di stampa (html2pdf) o si
+                      // passava dalla stampa del browser: titolo a un quarto
+                      // di pagina, riquadri con mezza pagina bianca sotto,
+                      // testo minuscolo e rasterizzato. Ora l'itinerario si
+                      // impagina con @react-pdf/renderer (src/lib/pdf), su
+                      // web e su telefono allo stesso modo; le vecchie vie
+                      // restano come ripiego se il motore non ce la fa.
+                      if (printPlan) {
+                        try {
+                          notify(getTranslation('pf_pdf_in_corso', language));
+                          const { generaPdfItinerario } = await import('../lib/pdf/generaPdf');
+                          const blob = await generaPdfItinerario(printPlan, language);
+                          if (blob) {
+                            const { saveBlobAsFile } = await import('../services/premiumGuideService');
+                            const ok = await saveBlobAsFile(blob, nomeFile, { tipo: 'itinerario', nome: t });
+                            notify(getTranslation(ok ? (Capacitor.isNativePlatform() ? 'pf_pdf_salvato' : 'pf_pdf_salvato_web') : 'pf_pdf_non_riuscito', language));
+                            return;
+                          }
+                        } catch (e) {
+                          console.error('[PlanScreen] PDF itinerario (react-pdf) non riuscito, ripiego', e);
+                        }
+                      }
+
+                      // SUL TELEFONO NON ESISTE window.print() (29/08/2026,
+                      // collaudo sul Realme: il tasto non faceva NULLA, senza
+                      // nemmeno un errore in console). Il WebView Android non
+                      // implementa la stampa: si genera il PDF con html2pdf
+                      // dalla vista di stampa e lo si salva nei Documenti,
+                      // come fa gia' il manuale (AppGuide) e la Guida Premium.
+                      if (Capacitor.isNativePlatform()) {
+                        const elemento = document.getElementById('itinerary-print-view');
+                        if (!elemento) { notify(getTranslation('pf_pdf_non_riuscito', language)); return; }
+                        try {
+                          notify(getTranslation('pf_pdf_in_corso', language));
+                          const mod: any = await import('html2pdf.js');
+                          const html2pdf = mod.default || mod;
+                          const blob: Blob = await html2pdf().set({
+                            margin: [10, 12, 15, 12],
+                            filename: nomeFile,
+                            image: { type: 'jpeg', quality: 0.95 },
+                            // Larghezza del FOGLIO (794 px = 210 mm a 96 dpi),
+                            // non dello schermo: dal telefono `scrollWidth`
+                            // valeva ~360 px e il PDF usciva come una colonna
+                            // da telefono ingrandita ad A4, diversa da quella
+                            // fatta dal computer. Vedi premiumGuideService.
+                            html2canvas: {
+                              scale: 2, useCORS: true, logging: false, allowTaint: true, scrollY: 0,
+                              windowWidth: 794,
+                              onclone: (doc: Document) => {
+                                const clone = doc.getElementById('itinerary-print-view') as HTMLElement | null;
+                                if (clone) { clone.style.width = '794px'; clone.style.maxWidth = 'none'; }
+                              },
+                            },
+                            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+                            pagebreak: { mode: ['css', 'legacy'] },
+                          }).from(elemento).outputPdf('blob');
+                          const { saveBlobAsFile } = await import('../services/premiumGuideService');
+                          const ok = await saveBlobAsFile(blob, nomeFile, { tipo: 'itinerario', nome: t });
+                          notify(getTranslation(ok ? (Capacitor.isNativePlatform() ? 'pf_pdf_salvato' : 'pf_pdf_salvato_web') : 'pf_pdf_non_riuscito', language));
+                        } catch (e) {
+                          console.error('[PlanScreen] PDF itinerario non riuscito', e);
+                          notify(getTranslation('pf_pdf_non_riuscito', language));
+                        }
+                        return;
+                      }
+
+                      const oldTitle = document.title;
+                      document.title = nomeFile;
                       // Il titolo torna quello vecchio ad anteprima chiusa
                       // ('afterprint'); ma l'evento non arriva su tutti i
                       // browser (annulla su iOS/WebView) e il titolo restava
@@ -6922,7 +7733,7 @@ export default function PlanScreen({
                       {/* Piano B pioggia (ondata 6): previsioni reali sul giorno */}
                       {rainByDay[giorno.giorno] && (
                         <span className="shrink-0 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-sky-50 border border-sky-200 text-sky-700 text-[9px] font-black uppercase tracking-widest print:hidden">
-                          🌧 {rainByDay[giorno.giorno].prob}%{rainByDay[giorno.giorno].dateLabel ? ` ${rainByDay[giorno.giorno].dateLabel}` : ''}
+                          🌧 {rainByDay[giorno.giorno].mm} mm{rainByDay[giorno.giorno].dateLabel ? ` ${rainByDay[giorno.giorno].dateLabel}` : ''}
                           <button
                             onClick={() => handleRainPlan(gIdx)}
                             disabled={rainLoadingDay === giorno.giorno}
@@ -6965,13 +7776,23 @@ export default function PlanScreen({
                               });
                               const poi = tappe.map((t: any) => {
                                 const la = Number(t.coordinate.lat), lo = Number(t.coordinate.lng ?? t.coordinate.lon);
-                                const stableId = `iti-${String(t.titolo_tappa || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase()}-${la.toFixed(3)}_${lo.toFixed(3)}`.replace(/\./g, 'p');
+                                // Tappa agganciata dal server a un POI vero: entra nel
+                                // giro CON L'ID DEL POI (scheda, foto, audioguida gia'
+                                // sue) e con le coordinate del suo punto d'arrivo, che
+                                // il server ha gia' messo in `coordinate`. Le altre
+                                // prendono l'id «iti-…», lo stesso del salvataggio.
+                                const stableId = idPoiDaTappa(t, la, lo);
+                                const agganciato = stableId === String(t.poi_id || '');
                                 const tipo = String(t?.tipo || '').toLowerCase();
                                 return {
                                   id: stableId, name: t.titolo_tappa, lat: la, lon: lo,
+                                  agganciato,
+                                  address: t.indirizzo || null,
                                   category: mapItineraryCategoryToMapCategory(t.tipo || 'monumenti'),
                                   city: (generatedPlan as any)?.destinazione || (generatedPlan as any)?.destination || null,
                                   senzaGuida: SENZA_RACCONTO.some((s) => tipo.includes(s)) || undefined,
+                                  // La foto della tappa, se il piano la porta: va nel cruscotto a display spento.
+                                  image_url: t.image_url || t.foto || t.immagine || t.photo_url || null,
                                 };
                               });
                               if (poi.length === 0) return;
@@ -7032,9 +7853,25 @@ export default function PlanScreen({
                       </div>
                     </div>
 
+                    {/* Meteo del giorno (24/09/2026): previsione se la data è vicina, altrimenti com'è di solito il mese. Tocco = scheda del mese. */}
+                    {climaGiorni[giorno.giorno] && (() => {
+                      const cg = climaGiorni[giorno.giorno];
+                      return (
+                        <button type="button"
+                          onClick={() => setQuandoAndare({ lat: cg.lat, lon: cg.lon, nome: cg.nome, mese: cg.m })}
+                          className="-mt-3 w-full text-left flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-sky-800 print:hidden">
+                          <span className="font-bold">{cg.testo}</span>
+                          {cg.consiglio && <span className="text-amber-700 font-bold">· {cg.consiglio}</span>}
+                          <span className="text-gray-400">· {cg.fonte}</span>
+                        </button>
+                      );
+                    })()}
 
                     <div className="space-y-8 pl-5 relative border-l border-dashed border-primary/20">
-                      {giorno.tappe.map((tappa, tIdx) => (
+                      {/* (giorno.tappe || []): schermata bianca su un itinerario
+                          vecchio salvato prima del fix server, senza array
+                          tappe (10/09/2026). */}
+                      {(giorno.tappe || []).map((tappa, tIdx) => (
                         <div key={tappa.id_tappa} className="relative" aria-busy={replacingId === tappa.id_tappa}>
                         {/* Spinner locale della sostituzione: la card resta
                             al suo posto, niente overlay a tutto schermo. */}
@@ -7047,7 +7884,7 @@ export default function PlanScreen({
                           tappa={tappa}
                           tIdx={tIdx}
                           gIdx={gIdx}
-                          isLast={tIdx === giorno.tappe.length - 1}
+                          isLast={tIdx === (giorno.tappe || []).length - 1}
                           expanded={!!expandedStops[tappa.id_tappa]}
                           isLocked={!!lockedStops[tappa.id_tappa]}
                           language={language}
@@ -7218,6 +8055,50 @@ export default function PlanScreen({
                               : <ChevronDown className="w-5 h-5 text-violet-400" />
                             }
                           </button>
+
+                          <button
+                            onClick={() => loadAsiaForDay(gIdx)}
+                            disabled={asiaLoadingDay === gIdx}
+                            className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-orange-50 to-amber-50 rounded-2xl border border-orange-200 hover:border-orange-400 transition-all group"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center group-hover:scale-110 transition-transform">
+                                {asiaLoadingDay === gIdx
+                                  ? <Loader2 className="w-5 h-5 text-orange-600 animate-spin" />
+                                  : <Globe className="w-5 h-5 text-orange-600" />
+                                }
+                              </div>
+                              <div className="text-left">
+                                <p className="text-sm font-black text-orange-600">🌏 Klook · Trip.com</p>
+                              </div>
+                            </div>
+                            {asiaExpandedDay === gIdx
+                              ? <ChevronUp className="w-5 h-5 text-orange-400" />
+                              : <ChevronDown className="w-5 h-5 text-orange-400" />
+                            }
+                          </button>
+
+                          <button
+                            onClick={() => loadMostreForDay(gIdx)}
+                            disabled={mostreLoadingDay === gIdx}
+                            className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-rose-50 to-pink-50 rounded-2xl border border-rose-200 hover:border-rose-400 transition-all group"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-rose-100 flex items-center justify-center group-hover:scale-110 transition-transform">
+                                {mostreLoadingDay === gIdx
+                                  ? <Loader2 className="w-5 h-5 text-rose-600 animate-spin" />
+                                  : <Globe className="w-5 h-5 text-rose-600" />
+                                }
+                              </div>
+                              <div className="text-left">
+                                <p className="text-sm font-black text-rose-600">🖼️ Mostre in corso</p>
+                              </div>
+                            </div>
+                            {mostreExpandedDay === gIdx
+                              ? <ChevronUp className="w-5 h-5 text-rose-400" />
+                              : <ChevronDown className="w-5 h-5 text-rose-400" />
+                            }
+                          </button>
                         </div>
                       )}
 
@@ -7267,6 +8148,30 @@ export default function PlanScreen({
                                 ))}
                               </div>
                             ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">{getTranslation('no_tickets_tiqets', language)}</div>}
+                          </motion.div>
+                        )}
+
+                        {asiaExpandedDay === gIdx && (
+                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                            {asiaByDay[gIdx] && asiaByDay[gIdx].length > 0 ? (
+                              <div className="space-y-3 mt-4">
+                                {asiaByDay[gIdx].map((exp: any, eIdx: number) => (
+                                  <ExperienceCard key={`asia-${gIdx}-${eIdx}`} exp={exp} onAdd={() => handleAddAsiaToDay(gIdx, exp)} color={exp.source === 'klook' ? '#ff5b00' : '#2b7cff'} />
+                                ))}
+                              </div>
+                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">{getTranslation('no_tours_gyg', language)}</div>}
+                          </motion.div>
+                        )}
+
+                        {mostreExpandedDay === gIdx && (
+                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                            {mostreByDay[gIdx] && mostreByDay[gIdx].length > 0 ? (
+                              <div className="space-y-3 mt-4">
+                                {mostreByDay[gIdx].map((exp: any, eIdx: number) => (
+                                  <ExperienceCard key={`mostra-${gIdx}-${eIdx}`} exp={exp} onAdd={() => handleAddMostraToDay(gIdx, exp)} color="#e11d48" />
+                                ))}
+                              </div>
+                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">{getTranslation('events_exhibitions_none', language)}</div>}
                           </motion.div>
                         )}
                       </AnimatePresence>
@@ -7569,8 +8474,8 @@ export default function PlanScreen({
                           startNavigation({
                             lat: firstStop.coordinate.lat,
                             lon: firstStop.coordinate.lng,
-                            // Id com'e' (ITI-01): niente parseInt su un id che puo' mancare.
-                            poiId: firstStop.id_tappa || undefined,
+                            // Id del luogo (idPoiDaTappa, 25/09/2026), non la posizione «t1_0».
+                            poiId: idPoiDaTappa(firstStop, firstStop.coordinate.lat, firstStop.coordinate.lng),
                             poiName: firstStop.titolo_tappa,
                             dayIndex: gIdx,
                             stopIndex: firstIdx,
@@ -7582,7 +8487,10 @@ export default function PlanScreen({
                   className="flex items-center justify-center gap-2 w-full py-4 bg-amber-500 text-white font-black rounded-2xl text-sm shadow-lg hover:bg-amber-600 transition-colors active:scale-95"
                 >
                   <Compass className="w-5 h-5" />
-                  {getTranslation('internal_nav_beta', language)}
+                  <span className="flex flex-col leading-tight">
+                    <span>{getTranslation('internal_nav_beta', language)}</span>
+                    <span className="text-[10px] font-bold opacity-80">{getTranslation('wipnav_solo_piedi', language)}</span>
+                  </span>
                 </button>
 
                 <a
@@ -7595,6 +8503,28 @@ export default function PlanScreen({
                   <Navigation className="w-5 h-5" />
                   {getTranslation('open_gmaps', language)}
                 </a>
+
+                {/* Mappe di Apple accanto a Google Maps, SOLO su iOS (App
+                    Review Guideline 4: l'utente deve poter scegliere anche
+                    la mappa di sistema, non solo Google). Su più tappe porta
+                    solo all'ultima: Apple Maps non accetta waypoint intermedi. */}
+                {Capacitor.getPlatform() === 'ios' && (
+                  <a
+                    href={buildAppleMapsUrl(navModal.gIdx)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setNavModal({ open: false, gIdx: null })}
+                    className="flex items-center justify-center gap-2 w-full py-4 bg-white text-primary border-2 border-primary font-black rounded-2xl text-sm shadow-sm hover:bg-primary/5 transition-colors active:scale-95"
+                  >
+                    <Navigation className="w-5 h-5" />
+                    {getTranslation(
+                      (generatedPlan?.giorni[navModal.gIdx ?? -1]?.tappe.length || 0) > 1
+                        ? 'open_apple_maps_solo_arrivo'
+                        : 'open_apple_maps',
+                      language,
+                    )}
+                  </a>
+                )}
               </div>
 
               <p className="text-center text-[10px] text-gray-500 font-medium">
@@ -7611,6 +8541,17 @@ export default function PlanScreen({
         {/* L'overlay appare per QUALSIASI navigazione attiva: prima era
             vincolato a navDayIndex/navStopIndex, quindi il WIP Nav avviato
             dalla singola tappa navigava "alla cieca" senza banner. */}
+        {/* «Quando andare»: la scheda Anno/Mese del clima (stessa della mappa). */}
+        <ClimaReportSheet
+          aperto={!!quandoAndare}
+          onClose={() => setQuandoAndare(null)}
+          lat={quandoAndare?.lat ?? 0}
+          lon={quandoAndare?.lon ?? 0}
+          nome={quandoAndare?.nome}
+          dati={null}
+          meseIniziale={quandoAndare?.mese ?? null}
+          language={language}
+        />
         {navState !== 'idle' && (
           <NavigationOverlay
             state={navState}
@@ -7629,8 +8570,16 @@ export default function PlanScreen({
               setNavDayIndex(null);
               setNavStopIndex(null);
             }}
+            onRecalc={() => { void recalculateRoute().then((ok) => { if (!ok) notify(getTranslation('tour_ricalcolo_fallito', language)); }); }}
+            recalcInCorso={navRecalculating}
             onNextStop={navDayIndex !== null && navStopIndex !== null && (generatedPlan?.giorni[navDayIndex]?.tappe.length || 0) > (navStopIndex || 0) + 1 ? handleNextStop : undefined}
             onRepeat={repeatInstruction}
+            routeSummary={navRouteSummary}
+            gemmaVicina={navGemmaVicina}
+            onDeviaGemma={() => { void navDeviaVersoGemma(); }}
+            onIgnoraGemma={navIgnoraGemma}
+            metaDaRiprendere={navMetaDaRiprendere}
+            onRiprendiMeta={() => { void navRiprendiMeta(); }}
           />
         )}
       </AnimatePresence>
@@ -7655,6 +8604,7 @@ export default function PlanScreen({
           userId={currentUserId || ''}
           language={language}
           onDismiss={() => setQuizDismissed(true)}
+          avvisoAttesa={loading ? 'itinerario' : undefined}
         />
       )}
 
@@ -7716,7 +8666,7 @@ export default function PlanScreen({
                       // Nome file univoco legato alla guida (mai un nome fisso)
                       const titolo = guideToRender?.content?.guida_titolo || generatedPlan?.titolo || 'Guida';
                       const filename = `WIP_${String(titolo).replace(/[^a-zA-Z0-9àèéìòù ]/g, '').trim().replace(/\s+/g, '_').slice(0, 40)}.pdf`;
-                      await downloadGuideAsPdf('premium-guide-pdf-inner-plan', filename);
+                      await downloadGuideAsPdf('premium-guide-pdf-inner-plan', filename, { content: guideToRender.content, mediaManifest: guideToRender.media, language: String(language) });
                     } catch (e) {
                       console.error("PDF Download failed", e);
                     } finally {

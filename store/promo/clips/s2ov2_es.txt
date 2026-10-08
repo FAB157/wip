@@ -1,0 +1,2 @@
+WIP arranca sola delante de cada lugar.
+Incluso con la pantalla apagada.

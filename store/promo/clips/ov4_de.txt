@@ -1,0 +1,2 @@
+Der Audioguide startet von selbst.
+Auch bei ausgeschaltetem Display.

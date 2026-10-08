@@ -144,6 +144,34 @@ enum PoiFootprints {
     /// 22/08/2026: "a 30 metri dal perimetro, non quando si è dentro").
     /// Stesso valore in foregroundTriggers.ts e Footprints.kt.
     static let triggerM: Double = 30
+
+    /// LUOGHI SENZA PORTA (03/10/2026, committente: «la regola del muro solo per
+    /// piazze, parchi, ponti, panorami»). Per un edificio, una chiesa o un museo
+    /// la guida parte SOLO a 30 m dal punto d'arrivo (50 in auto), come fanno
+    /// Google Maps e Mappe; il perimetro resta la misura giusta dove non c'è una
+    /// porta a cui arrivare. Stesso elenco in Footprints.kt::senzaPorta e
+    /// guideSettings.ts::luogoSenzaPorta.
+    private static let tipiSenzaPorta: Set<String> = [
+        "square", "piazza", "piazze", "bridge", "ponte", "ponti", "viewpoint", "panorami", "panorama",
+        "park", "parchi", "parco", "garden", "giardino", "botanical_garden", "national_park",
+        "nature_reserve", "riserva", "geopark", "forest", "foresta", "wood", "bosco",
+        "beach", "spiaggia", "spiagge", "bay", "baia", "island", "isola", "cliff", "falesia",
+        "coast", "costa", "dune", "lake", "lago", "laghi", "river", "fiume", "gorge", "gola",
+        "canyon", "desert", "deserto", "peak", "vetta", "vette", "volcano", "vulcano",
+        "glacier", "ghiacciaio", "natura", "trail", "scenic_road",
+        "cemetery", "war_cemetery", "archaeological_park", "archaeological_site", "archeo",
+        "ruins", "necropolis", "city_walls", "harbour", "pier", "aqueduct", "quarry",
+        "saltworks", "dam", "racetrack", "racecourse"
+    ]
+    private static let nomeSenzaPorta =
+        "^(piazza|piazzale|piazzetta|ponte|parco|giardin[io]|belvedere|lungomare|plaza|puente|pont |place |jardin|parc )"
+        + "|( square| bridge| park| gardens?)$|platz$|brücke$"
+    static func senzaPorta(tipo: String?, nome: String?) -> Bool {
+        if let t = tipo?.trimmingCharacters(in: .whitespaces).lowercased(), tipiSenzaPorta.contains(t) { return true }
+        guard let n = nome?.trimmingCharacters(in: .whitespaces) else { return false }
+        return n.range(of: nomeSenzaPorta, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
     /// In auto 30 m sono un secondo a 50 km/h: la frase partirebbe a POI superato.
     static let triggerCarM: Double = 100
     static func triggerM(isDriving: Bool) -> Double { isDriving ? triggerCarM : triggerM }

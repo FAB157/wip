@@ -27,6 +27,36 @@ export interface ItaintaBackgroundPoiPlugin {
   /** Apre la scheda dell'app nelle Impostazioni di sistema (permessi). */
   openAppSettings(): Promise<void>;
 
+  // ── Permessi (29/08/2026, portati su iOS il 30/08/2026) ────────────────
+  /** Catena unica: posizione fg+bg → notifiche. Presente su entrambe. */
+  checkAndRequestPermissions(): Promise<{ status?: string; background?: string }>;
+  /** Lo stato di tutto in una lettura (le spunte della schermata permessi). */
+  getPermissionsStatus(): Promise<{
+    /** `unknown` = mai chiesto (iOS: .notDetermined): non e' un rifiuto. */
+    location?: 'always' | 'whileInUse' | 'denied' | 'unknown';
+    notifications?: boolean;
+    notificationsPermission?: boolean;
+    notificationsEnabled?: boolean;
+    battery?: boolean;
+    activity?: boolean;
+  }>;
+  /**
+   * Foreground e poi background. Android: API 30+ apre la pagina «Posizione»
+   * col radio «Consenti sempre». iOS: il prompt di sistema e, da «Mentre usi
+   * l'app», la richiesta di «Sempre» (che iOS mostra una volta sola).
+   */
+  requestLocationPermissions(): Promise<{ location?: 'always' | 'whileInUse' | 'denied' | 'unknown'; opened?: boolean }>;
+  /**
+   * Permesso notifiche e, se non ripropinibile, la pagina di sistema:
+   * su Android quando l'interruttore dell'app le blocca, su iOS quando
+   * l'utente le aveva gia' negate (`opened: true` in entrambi i casi).
+   */
+  requestNotificationPermission(): Promise<{ granted?: boolean; enabled?: boolean; opened?: boolean }>;
+  /** Facoltativo. Android: la lista di sistema delle esenzioni batteria. iOS: non esiste, risponde e basta. */
+  requestBatteryOptimization(): Promise<{ status?: string }>;
+  /** Facoltativo, sensori del gate anti-teletrasporto: ACTIVITY_RECOGNITION / Motion & Fitness. */
+  requestActivityRecognition(): Promise<{ granted?: boolean }>;
+
   startBackgroundPoiService(options: Record<string, any>): Promise<void>;
   stopBackgroundPoiService(): Promise<void>;
   syncManualSelection(options: { poisJson: string }): Promise<void>;
@@ -35,7 +65,71 @@ export interface ItaintaBackgroundPoiPlugin {
   getTeaserState(): Promise<{ isSpeaking: boolean; speakingPoiId: string; lastPoiId: string; lastFinishedAt: number }>;
   stopNativeTeaser(): Promise<void>;
   getPendingDeepLink(): Promise<any>;
-  speakText(options: { text: string; poiId?: string; kind?: string; priority?: number }): Promise<{ ok?: boolean }>;
+  /**
+   * Voce TTS di sistema. Senza `force` entra nella coda dei teaser e, a
+   * servizio in background spento, risponde ok:false. Con `force:true`
+   * (29/08/2026) a servizio spento parla COMUNQUE con un motore tutto del
+   * plugin — il ripiego che non muore mai quando Azure/Google non rispondono
+   * — e risponde `direct:true, id`: la fine arriva con l'evento
+   * `directSpeechFinished {id}`, non stimata.
+   * `ttlMs` (21/09/2026, additivo): l'elemento di coda SCADE dopo ttlMs —
+   * solo le svolte del navigatore (20000): un «gira a destra» uscito dietro
+   * una guida o una telefonata è un'indicazione sbagliata. Teaser, arrivi e
+   * guide non lo mandano e non scadono mai, come prima.
+   */
+  speakText(options: { text: string; poiId?: string; kind?: string; priority?: number; force?: boolean; ttlMs?: number }): Promise<{ ok?: boolean; direct?: boolean; id?: string; reason?: string }>;
+  /** Ferma la voce diretta avviata con speakText({force:true}). */
+  stopSpeakText(): Promise<void>;
+
+  /**
+   * NAVIGATORE A SCHERMO SPENTO (18/09/2026, committente: «deve funzionare
+   * anche a schermo spento, è fondamentale»). Le svolte le calcola e le dice
+   * il JS, ma a schermo spento la WebView viene congelata e il navigatore
+   * taceva. Il JS consegna qui il percorso GIÀ tradotto; il servizio nativo —
+   * che i fix GPS li riceve comunque — tiene il conto delle manovre e le dice
+   * lui quando il battito del JS manca da 8 s. Contratto completo e
+   * algoritmo (identico su Kotlin e Swift): `docs/nav-nativo-spec.md`.
+   * Chi chiama passa da `src/lib/nav/navNativo.ts`, mai da qui direttamente.
+   */
+  /**
+   * PRE-SCARICO DELLE AUDIOGUIDE NELLA CACHE NATIVA (18/09/2026, committente:
+   * «fai che sia scaricato sempre in nativo anche»). Il pre-scarico del giro
+   * (tourService.prescarica) salva testi e MP3 nell'IndexedDB della WebView,
+   * che a schermo spento dorme: il servizio nativo non li vedeva, e restava
+   * col solo prefetch all'avvicinamento (150 m), proprio dove nel centro
+   * storico la rete manca. Qui le stesse tappe vanno anche nella cache del
+   * servizio. Non addebita nulla: vedi `prescaricaGuideNativo` più sotto.
+   */
+  prefetchGuides(options: { poiIds: string[]; lang: string; character?: string }): Promise<{ ok?: boolean; accodati?: number }>;
+  /**
+   * (03/10/2026) Pre-scarico delle STRADE lungo un percorso nella cache del
+   * servizio nativo (RoadSnap.prescarica): a schermo spento e senza rete le
+   * distanze di strada devono avere i loro dati. `points` = [[lat, lon], ...].
+   */
+  prefetchRoads(options: { points: number[][]; car?: boolean }): Promise<{ ok?: boolean; punti?: number }>;
+  setNavRoute(options: { routeJson: string }): Promise<{ ok?: boolean }>;
+  clearNavRoute(): Promise<void>;
+  /** `inPausa` (21/09/2026): il battito PORTA la pausa del JS; assente = false. */
+  navHeartbeat(options: { indice: number; dettiVicino?: number[]; dettiLontano?: number[]; inPausa?: boolean }): Promise<void>;
+  /**
+   * `finito` (21/09/2026): l'arrivo finale l'ha chiuso il nativo al comando.
+   * `terminato`: il follower è stato svuotato dal «Termina» del cruscotto —
+   * `attivo:false` con la fotografia di id, indice e «detti» di quel momento.
+   */
+  /** (03/10/2026) Registro di collaudo del follower: una riga per fix col percorso attivo. */
+  getNavLog(): Promise<{ righe?: string[] }>;
+  /** (04/10/2026) Svuota il registro di collaudo (su disco dal 04/10: navigatore + audioguida). */
+  clearNavLog(): Promise<void>;
+  /** (04/10/2026) Modalità collaudo: accesa, il registro tiene anche la traccia (una posizione ogni 4 s). Senza `attivo` risponde lo stato. */
+  setCollaudo(options: { attivo?: boolean }): Promise<{ attivo?: boolean }>;
+  /** (04/10/2026) Il segno di chi collauda («qui ha sbagliato») nel registro, con nota e posizione. */
+  addNavLogNote(options: { text: string; lat?: number; lon?: number }): Promise<void>;
+  getNavProgress(): Promise<{
+    attivo?: boolean; id?: string; indice?: number;
+    dettiVicino?: number[]; dettiLontano?: number[];
+    nativoAlComando?: boolean; ultimoTestoVicino?: string; ultimoTestoLontano?: string;
+    finito?: boolean; terminato?: boolean;
+  }>;
 
   /**
    * Cruscotto del navigatore a display spento. Android: riscrive la notifica
@@ -57,6 +151,21 @@ export interface ItaintaBackgroundPoiPlugin {
     metriRimanenti?: number;
     eta?: string;
     nomeProssima?: string;
+    /** URL della foto della tappa (vuoto = nessuna): icona grande / miniatura. */
+    foto?: string;
+    /**
+     * (03/09/2026) La card blu sulla lock screen (Live Activity iOS): la
+     * manovra OSRM grezza (tipo/verso → freccia), l'avanzamento 0..1 (barra),
+     * i metri totali, lo stato di pausa (icona play/pause) e il modo
+     * ('giro' | 'percorso' | 'singola': decide quali tasti mostrare).
+     */
+    manovraTipo?: string;
+    manovraVerso?: string;
+    progresso?: number;
+    metriTotali?: number;
+    inPausa?: boolean;
+    modo?: 'giro' | 'percorso' | 'singola';
+    minutiRimanenti?: number;
   }): Promise<{ ok?: boolean; reason?: string }>;
 
   setDayPass(options: { expiresAt: number; cap: number; used: number }): Promise<void>;
@@ -84,6 +193,25 @@ export interface ItaintaBackgroundPoiPlugin {
     eventName: 'audioguideCreditsRequired',
     listener: (data: { poiId?: string; poiName?: string; lat?: number; lon?: number; ts?: number; data?: string }) => void,
   ): Promise<PluginListenerHandle> & PluginListenerHandle;
+  /** Fine (o errore) della voce diretta avviata con speakText({force:true}). */
+  addListener(
+    eventName: 'directSpeechFinished',
+    listener: (data: { id?: string }) => void,
+  ): Promise<PluginListenerHandle> & PluginListenerHandle;
+  /**
+   * (03/09/2026) Un tasto del cruscotto a display spento: i Button della
+   * Live Activity iOS (App Intents) o le azioni della notifica del servizio
+   * Android. `action`: 'pausa' | 'riprendi' (dal 21/09/2026 azioni
+   * ESPLICITE e idempotenti, non più un'alternanza) | 'riascolta' | 'salta' |
+   * 'ricalcola' | 'termina'. `ts` = ms dal 1970 del TOCCO (Android e, dal
+   * 21/09/2026, iOS): serve alla regola dei 60 s di App.tsx. Lo gestisce
+   * App.tsx (giro/percorso) o useWalkingNavigation (tappa singola, via
+   * evento 'wip-nav-banner-action').
+   */
+  addListener(
+    eventName: 'navBannerAction',
+    listener: (data: { action?: string; ts?: number }) => void,
+  ): Promise<PluginListenerHandle> & PluginListenerHandle;
   addListener(
     eventName: string,
     listener: (data: any) => void,
@@ -107,6 +235,53 @@ export async function apriImpostazioniApp(): Promise<boolean> {
   try {
     await ItaintaBackgroundPoi.openAppSettings();
     return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Le audioguide di queste tappe ANCHE nella cache del servizio nativo (vedi
+ * `prefetchGuides` nell'interfaccia). Sul web e sulle build native senza il
+ * metodo è un no-op silenzioso: best-effort, mai un errore verso chi chiama.
+ *
+ * NON TOCCA I PAGAMENTI (verificato il 18/09/2026 su richiesta del
+ * committente): il nativo chiede il testo a `/api/poi/audioguide` SENZA
+ * `charge` — l'addebito lo decide il server e scatta solo con `charge:true`;
+ * chi non ha diritto (POI non acquistato, niente Day Pass) riceve 402 con
+ * l'anteprima, che per il pre-scarico vale «niente MP3». L'MP3 poi viene da
+ * `/api/tts/smart`, che è cache-first: DI NORMA è un colpo di cache (il
+ * pre-scarico JS ha appena sintetizzato lo stesso testo con la stessa voce) e
+ * non consuma nulla; se il passo JS era fallito è un cache miss, e vale la
+ * STESSA regola del prefetch all'avvicinamento che c'era già — una sintesi a
+ * nostre spese e un'unità del tetto anti-abuso giornaliero, mai un addebito
+ * all'utente. Nessun credito, nessun Day Pass consumato, nessun ascolto
+ * registrato; e il file in cache non aggira il cancello all'arrivo, che
+ * controlla il diritto PRIMA di guardare se l'MP3 c'è (ArrivalWorker).
+ * Revisione indipendente del 18/09/2026: «pagamenti e cancelli intatti».
+ */
+export async function prescaricaGuideNativo(poiIds: string[], lang: string, character?: string): Promise<number> {
+  if (!isNative()) return 0;
+  const ids = Array.from(new Set((poiIds || []).map(x => String(x || '').trim()).filter(Boolean)));
+  if (ids.length === 0) return 0;
+  try {
+    const r = await ItaintaBackgroundPoi.prefetchGuides({ poiIds: ids, lang: String(lang || 'it').toLowerCase().slice(0, 2), character });
+    return Number(r?.accodati) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Le strade lungo un percorso, anche nella cache del servizio NATIVO (vedi
+ * `prefetchRoads`). Sul web e sulle build native senza il metodo è un no-op
+ * silenzioso: best-effort, mai un errore verso chi chiama.
+ */
+export async function prescaricaStradeNativo(points: number[][], car = false): Promise<boolean> {
+  if (!isNative() || !points?.length) return false;
+  try {
+    const r = await ItaintaBackgroundPoi.prefetchRoads({ points, car });
+    return !!r?.ok;
   } catch {
     return false;
   }

@@ -58,6 +58,16 @@ struct Poi: Codable {
     var addressPointLat: Double? = nil
     var addressPointLon: Double? = nil
     var addressPointSource: String? = nil
+    /// LA FONTE della scheda (05/10/2026), per l'ARBITRATO fra luoghi vicini:
+    /// la colonna `source` delle RPC nearby_pois / get_geofence_pois
+    /// (= coalesce(enrichment_source, 'official')), lo stesso valore che il web
+    /// legge in foregroundTriggers.ts. Un luogo con una voce di
+    /// Wikipedia/Wikidata alle spalle «pesa» (vedi `Arbitrato.pesa` più sotto):
+    /// davanti al Pantheon parlava una targa, in Piazza Navona un locale.
+    /// Default nil: tappe d'itinerario, pacchetti offline e POI già salvati non
+    /// la portano (restano decodificabili) e sono «senza peso», salvo le gemme.
+    /// Parità con PoiEntity.source (Android).
+    var source: String? = nil
 
     /// GUARDIA: oltre questa distanza dal centroide il punto dell'indirizzo non
     /// è l'indirizzo di QUESTO POI ma di qualcos'altro (un abbinamento
@@ -130,38 +140,24 @@ struct Poi: Codable {
 ///  • `ingresso`  — c'è entrance_lat/lon: è la porta, raggio BASE.
 ///  • `indirizzo` — c'è il PUNTO dell'indirizzo (address_point_lat/lon)
 ///    utilizzabile: raggio BASE, stretto, perché quel punto È l'arrivo.
-///  • `centroide` — nient'altro: raggio ×2, è l'unico caso davvero incerto.
+///  • `centroide` — nient'altro: raggio invariato, MAI raddoppiato (vedi sotto).
 ///
-/// COSA FA GRADINO (23/08/2026): il PUNTO, non la stringa. La distinzione
-/// civico/via provata poche ore prima è stata tolta: il criterio non è il
-/// numero dentro il testo dell'indirizzo, è l'esistenza delle coordinate. Un
-/// POI con la sola stringa e nessun punto è `centroide`.
+/// Regola (decisione utente, 01/09/2026): IL RAGGIO NON AUMENTA MAI PER
+/// INCERTEZZA. Fino a ieri un POI a centroide puro raddoppiava il raggio
+/// (fino a un tetto di 250/400 m) — ma la maggioranza dei POI importati da
+/// Overture/OSM è a centroide (nessun entrance_lat/lon geocodificato) anche
+/// quando è un luogo notissimo con indirizzo (Chiesa Evangelica ADI, Chiesa
+/// San Pietro Avenza, Biblioteca della Camera di Commercio...), e il
+/// raddoppio produceva notifiche "Esplorazione" a 200-400+ m su POI mai
+/// avvicinati davvero.
 ///
-/// I TETTI valgono solo per l'allargamento: non possono mai portare un raggio
-/// SOTTO la preferenza dell'utente (chi mette lo slider a 400 m di avviso
-/// continua ad avere 400 m).
-///
-/// Il `geofence_radius`/`alert_radius` calibrati dal DB, quando ci sono,
-/// VINCONO su tutto: sono misure sul perimetro reale, non stime.
+/// Il `geofence_radius`/`alert_radius` calibrati dal DB, quando ci sono
+/// (misurati o default di categoria Overture), VINCONO sempre — con o senza
+/// entrance geocodificato, perché sono comunque una misura, non una stima —
+/// e possono solo allargare la preferenza utente, mai stringerla. Senza
+/// raggio calibrato resta la preferenza utente così com'è (default 150 m a
+/// piedi / 300 m in auto), nessun moltiplicatore.
 enum PoiRadii {
-    /// Fonte del punto del POI, in ordine di fiducia decrescente.
-    enum FontePunto { case perimetro, ingresso, indirizzo, centroide }
-
-    /// Tetti all'allargamento, per modalità.
-    static let tettoTriggerPiedi: Double = 80
-    static let tettoTriggerAuto: Double = 120
-    static let tettoAvvisoPiedi: Double = 250
-    static let tettoAvvisoAuto: Double = 400
-
-    static func fontePunto(_ poi: Poi) -> FontePunto {
-        if poi.footprint?.isEmpty == false { return .perimetro }
-        if poi.entranceLat != nil && poi.entranceLon != nil { return .ingresso }
-        // Il gradino lo fa il PUNTO (con le sue guardie: fonte e distanza dal
-        // centroide), non la stringa `address`.
-        if poi.puntoIndirizzo != nil { return .indirizzo }
-        return .centroide
-    }
-
     /// UNICA funzione dei raggi operativi: la usano sia la registrazione delle
     /// region CLLocationManager sia la valutazione predittiva dei trigger. Se
     /// due chiamanti calcolassero raggi diversi, la region di rilancio e il
@@ -172,43 +168,151 @@ enum PoiRadii {
         baseAlert: Double,
         baseArrival: Double
     ) -> (alert: Double, arrival: Double) {
-        var alert = baseAlert
-        var arrival = baseArrival
+        // RAGGIO CALIBRATO DAL DB: vince sempre che sia presente, con o senza
+        // entrance geocodificato. In auto può solo ALLARGARE (a 50 km/h un
+        // raggio stretto si attraversa fra due fix); a piedi la misura batte
+        // sempre la preferenza utente.
+        // (03/10/2026, committente dopo la simulazione su 20 luoghi: «non va bene,
+        // deve essere a 30 m e 50 in auto, 150 a piedi e 300 in auto») I RAGGI
+        // DEL DATABASE NON CONTANO PIÙ. `geofence_radius`/`alert_radius` non
+        // sono misure: li scrive il trigger `assign_geofence_radii` alla
+        // nascita della riga, per categoria (80/200 monumenti e chiese, 100/200
+        // musei, 120/250 gemme; il 66% dei luoghi ha 80/200). Misurato: guida a
+        // 70-120 m dalla porta su 60 percorsi su 60, avviso a 200 m. Valgono
+        // SOLO i raggi dell'utente (default 30/150 a piedi, 50/300 in auto); il
+        // perimetro vero dell'edificio (30 m dal muro) resta l'unica misura.
+        // Uguale in RaggiFiducia.calcola (Kotlin) e radiiForTransport (web).
 
-        // RAGGI CALIBRATI DAL DB (footprint OSM). Gated sull'ingresso reale
-        // come radiiForTransport lato web: senza entrance i default 50/150 di
-        // un POI mai processato sarebbero indistinguibili da una misura.
-        // In auto il calibrato può solo ALLARGARE (a 50 km/h un raggio di 15 m
-        // si attraversa fra due fix); a piedi la misura batte la stima.
-        let hasEntrance = poi.entranceLat != nil && poi.entranceLon != nil
-        let calAlert = Double(poi.alertRadius ?? 0)
-        let calArrival = Double(poi.arrivalRadius ?? 0)
-        if hasEntrance && (calAlert > 0 || calArrival > 0) {
-            if calArrival > 0 { arrival = isDriving ? max(baseArrival, calArrival) : calArrival }
-            if calAlert > 0 { alert = max(baseAlert, calAlert) }
-            // Nessun tetto: è una misura, non una stima. Un parco ha davvero
-            // quel raggio.
-            return (alert, arrival)
+        // Nessun raggio calibrato: centroide puro, non sappiamo dove sia la
+        // porta. Il raggio resta quello dell'utente, punto — mai allargato.
+        return (baseAlert, baseArrival)
+    }
+}
+
+/// ARBITRATO FRA I LUOGHI — quale luogo parla quando più d'uno è pronto
+/// (05/10/2026). Port delle regole del motore web del 04–05/10/2026
+/// (src/lib/geofencing/foregroundTriggers.ts, la fonte di verità), trovate col
+/// test virtuale a Roma e Milano: davanti al Pantheon parlava una targa, in
+/// Piazza Navona un locale, e le dieci righe del Pantheon parlavano una dopo
+/// l'altra.
+///
+/// Qui vive solo la parte PURA (costanti, peso, nome nudo, punteggio); lo
+/// stato (chi aspetta, la voce che parla) è in BackgroundPoiManager.
+///
+/// IDENTICO a `object Arbitrato` in GeofenceManager.kt (Android): cambiare un
+/// valore qui = cambiarlo là e in foregroundTriggers.ts.
+enum Arbitrato {
+    /// Una gemma «vale» 50 m nell'arbitrato: sul web sono 30 (gemma) + 20
+    /// (`premium`, che la RPC get_geofence_pois restituisce uguale a is_gem).
+    static let gemmaBonusM: Double = 50
+    /// Chi ha una voce di Wikipedia/Wikidata alle spalle vale 25 m.
+    static let fonteBonusM: Double = 25
+    /// Un luogo senza peso cede il passo se uno che pesa sta arrivando entro questi metri di strada.
+    static let attesaImportanteM: Double = 100
+    /// Isteresi minima per dire «la distanza sta calando» (come il web).
+    static let avvicinaEpsM: Double = 0.5
+    /// Stesso nome nudo entro questi metri = stesso luogo: tace insieme al vincitore.
+    static let doppioneM: Double = 150
+    /// Stesso nome raccontato da meno di così: silenzio, anche se la riga è un'altra.
+    static let nomeAppenaDettoMs: Double = 10 * 60_000
+    /// Silenzio dopo la fine di una guida, prima che parli il luogo successivo.
+    static let pausaDopoGuidaMs: Double = 20_000
+    /// Quanto si aspetta che la voce di un arrivo appena emesso PARTA prima di
+    /// considerarla mai partita. Sul web sono 120 s (lì in mezzo c'è il
+    /// paywall); qui la voce è il teaser nativo, che parte da solo: bastano i
+    /// tempi del recupero del teaser dal server con un margine.
+    static let attesaPartenzaMs: Double = 45_000
+    /// Aggancio alla strada che sposta il fix più di così: si misura anche dal punto non agganciato.
+    static let snapDubbioM: Double = 5
+    /// Fin dove si cerca la strada dal punto NON agganciato: serve solo a confermare un arrivo.
+    static func ricercaLiberaM(isDriving: Bool) -> Double { isDriving ? 150 : 100 }
+    /// Da fermi il GPS tace (filtro di spostamento): chi aspetta il suo turno si rivaluta ogni 5 s…
+    static let battitoAttesaMs: Double = 5_000
+    /// …sull'ultima posizione, finché non è più vecchia di così (come il web).
+    static let fermiMaxEtaMs: Double = 10 * 60_000
+
+    static func haFonte(_ poi: Poi) -> Bool {
+        (poi.source ?? "").range(of: "wiki", options: .caseInsensitive) != nil
+    }
+
+    /// Gemma, oppure una fonte Wikipedia/Wikidata alle spalle.
+    static func pesa(_ poi: Poi) -> Bool { poi.isGem || haFonte(poi) }
+
+    /// Il più basso vince: i metri (di strada) meno i bonus d'importanza.
+    static func punteggio(_ poi: Poi, distM: Double) -> Double {
+        distM - (poi.isGem ? gemmaBonusM : 0) - (haFonte(poi) ? fonteBonusM : 0)
+    }
+
+    /// Il nome senza parentesi, accenti e articolo: «Pantheon (Roma)» e «The
+    /// Pantheon» sono lo stesso luogo. Stessi passi, nello stesso ordine, di
+    /// `nomeNudo` in foregroundTriggers.ts e in GeofenceManager.kt. Un nome in
+    /// un alfabeto non latino diventa vuoto: per lui le regole sul nome non
+    /// scattano (come sul web).
+    static func nomeNudo(_ n: String?) -> String {
+        guard let n = n, !n.isEmpty else { return "" }
+        // NFD e via i segni diacritici combinanti (U+0300–U+036F).
+        var scalari = String.UnicodeScalarView()
+        for s in n.lowercased().decomposedStringWithCanonicalMapping.unicodeScalars
+        where !(s.value >= 0x0300 && s.value <= 0x036F) {
+            scalari.append(s)
         }
+        var out = String(scalari)
+        out = out.replacingOccurrences(of: "\\([^)]*\\)", with: " ", options: .regularExpression)
+        out = out.replacingOccurrences(of: "^(the|il|la|lo|le|i|gli|l')\\s+", with: "", options: .regularExpression)
+        out = out.replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression)
+        return out.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
-        switch fontePunto(poi) {
-        case .perimetro:
-            break // il muro è la misura: nessun allargamento
-        case .ingresso:
-            break // la porta è il punto giusto: raggio base
-        case .indirizzo:
-            break // il punto dell'indirizzo È l'arrivo: raggio base, stretto
-        case .centroide:
-            alert *= 2
-            arrival *= 2
+    /// Due nomi nudi sono lo stesso luogo: uguali, oppure (entrambi di almeno 6
+    /// lettere) uno contiene l'altro. Il nome del vincitore deve avere almeno 4
+    /// lettere, altrimenti la regola non si applica.
+    static func stessoLuogo(nudoVincitore: String, nudoAltro: String) -> Bool {
+        if nudoVincitore.count < 4 || nudoAltro.isEmpty { return false }
+        if nudoVincitore == nudoAltro { return true }
+        return nudoVincitore.count >= 6 && nudoAltro.count >= 6 &&
+            (nudoVincitore.contains(nudoAltro) || nudoAltro.contains(nudoVincitore))
+    }
+
+    // ── TARGHE E LAPIDI IN SILENZIO SE C'È UN MONUMENTO VICINO (08/10/2026) ──
+    // Port della regola web del 05/10/2026 (committente, prova a Parigi:
+    // sull'Île de la Cité le targhe parlavano prima di Notre-Dame), l'ultima
+    // che sul nativo mancava. Una targa con un luogo che non è una targa entro
+    // 100 m NON parla e NON entra nel cooldown: lontano dai monumenti parla
+    // come prima. Una gemma non è mai «solo una targa». Identico a
+    // `Arbitrato.eTarga` in GeofenceManager.kt e a foregroundTriggers.ts.
+    static let targaM: Double = 100
+
+    static func eTarga(_ poi: Poi) -> Bool {
+        if poi.isGem { return false }
+        let cat = (poi.poiType ?? "").lowercased()
+        if cat.range(of: "plaque|targa|lapide|stolperstein", options: .regularExpression) != nil { return true }
+        if poi.id.hasPrefix("plaque-") { return true }
+        return poi.nome.range(of: "\\b(plaque|targa|lapide|stolperstein|gedenktafel|placa conmemorativa)\\b",
+                              options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static func metri(_ la1: Double, _ lo1: Double, _ la2: Double, _ lo2: Double) -> Double {
+        let r = 6_371_000.0, k = Double.pi / 180
+        let dLa = (la2 - la1) * k, dLo = (lo2 - lo1) * k
+        let a = sin(dLa / 2) * sin(dLa / 2) + cos(la1 * k) * cos(la2 * k) * sin(dLo / 2) * sin(dLo / 2)
+        return 2 * r * asin(min(1, sqrt(a)))
+    }
+
+    /// Fra i luoghi dati (quelli che il setup lascia parlare, attorno
+    /// all'utente) le targhe che hanno entro 100 m un luogo che non è una targa.
+    static func targheConMonumentoVicino(_ luoghi: [Poi]) -> Set<String> {
+        let targhe = luoghi.filter { eTarga($0) }
+        if targhe.isEmpty { return [] }
+        let altri = luoghi.filter { !eTarga($0) }
+        if altri.isEmpty { return [] }
+        var mute = Set<String>()
+        for t in targhe {
+            for p in altri {
+                if abs(p.lat - t.lat) > 0.0012 || abs(p.lon - t.lon) > 0.002 { continue }
+                if metri(t.lat, t.lon, p.lat, p.lon) <= targaM { mute.insert(t.id); break }
+            }
         }
-
-        let tettoTrigger = isDriving ? tettoTriggerAuto : tettoTriggerPiedi
-        let tettoAvviso = isDriving ? tettoAvvisoAuto : tettoAvvisoPiedi
-        // Il tetto limita la CRESCITA, mai la preferenza dell'utente.
-        arrival = min(arrival, max(baseArrival, tettoTrigger))
-        alert = min(alert, max(baseAlert, tettoAvviso))
-        return (alert, arrival)
+        return mute
     }
 }
 
@@ -356,14 +460,14 @@ enum PoiCategories {
         // Monumenti: include il patrimonio costruito importato in fase 2
         // (17/08/2026). Allineato a CategoryMap.kt e guideSettings.
         "monumenti": ["monument", "castle", "castelli", "ruins", "archaeological_site", "archeo", "artwork", "attraction", "monumenti",
-                      "square", "bridge", "fountain", "theatre", "opera_house", "palace",
-                      "tower", "skyscraper", "cemetery", "library", "windmill", "aqueduct",
-                      "observatory", "stadium",
+                      "square", "bridge", "fountain", "palace",
+                      "tower", "skyscraper", "cemetery", "windmill", "aqueduct",
+                      "observatory",
                       // Fasi 3-5: nessun chip nuovo, tutto in "monumenti".
                       "birthplace", "house_museum", "necropolis", "catacomb", "fortress",
                       "city_walls", "villa", "harbour", "mine", "chimney", "funicular",
                       "amphitheatre", "roman_baths", "triumphal_arch", "obelisk", "mausoleum",
-                      "market_hall", "train_station", "dam", "watermill", "prison", "museum_ship",
+                      "market_hall", "dam", "watermill", "prison", "museum_ship",
                       "archaeological_park", "memorial", "sculpture", "university", "town_hall",
                       "roman_theatre", "roman_circus", "roman_villa", "domus", "city_gate",
                       "coastal_tower", "stronghold", "quarry", "saltworks", "racetrack",
@@ -420,7 +524,8 @@ enum PoiCategories {
                    "desert", "deserto", "tree", "albero", "national_park"],
         "locali": ["restaurant", "cafe", "bar", "fast_food", "pub", "locali"],
         // ev_charging (27/08/2026): colonnine EV da OpenChargeMap.
-        "utilita": ["pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth", "ev_charging"],
+        // marketplace/mercato tolti (29/08/2026): verticale Mercatini, senza audioguida.
+        "utilita": ["pharmacy", "hospital", "police", "taxi", "utilita", "drinking_water", "station", "subway_entrance", "toll_booth", "ev_charging"],
         "famiglie": ["playground", "theme_park", "aquarium", "zoo", "famiglie", "water_park"],
         /// Vino e Gusto (20/08/2026): 199.280 luoghi del gusto importati da
         /// OpenStreetMap. Chip OFF di default. Allineato a CategoryMap.kt.
@@ -496,7 +601,10 @@ enum PoiCategories {
         // servizio nativo"), e isCategoryAllowed usa `?? true`. Restano attive
         // salvo la sentinella "gemme:off" (vedi areGemsActive), in parità con
         // Android (isPoiCategoryActive: `if (poi.isGem) return areGemsActive`).
-        if poi.isGem || cat == "gemme" { return areGemsActive(selected: selected) }
+        // (05/10/2026) Con le gemme spente una gemma parla lo stesso se è accesa la
+        // SUA categoria (la Fontana di Trevi con «Monumenti» acceso): stessa regola
+        // di isCategoryAllowed (web) e CategoryMap.isActive (Android).
+        if (poi.isGem || cat == "gemme") && areGemsActive(selected: selected) { return true }
         if selected.isEmpty { return culturalCats.contains(cat) }
         if selected.contains(cat) { return true }
         return selected.contains { map[$0]?.contains(cat) == true }

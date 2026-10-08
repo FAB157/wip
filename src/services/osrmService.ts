@@ -4,7 +4,7 @@
 // =====================================================================
 
 import type { LatLon } from '../lib/geo';
-import { getApiUrl } from '../lib/api';
+import { getApiUrl, apiFetch } from '../lib/api';
 
 // Base OSRM per il routing PEDONALE, condivisa da TUTTI i consumatori
 // (osrmService, routeEngine, NavigatorEngine, PlanScreen): un'unica costante.
@@ -33,7 +33,7 @@ export interface RouteStep {
   instruction: string;
   /** Coordinata del punto di manovra. */
   location: LatLon;
-  /** Distanza (m) del segmento che porta a questa manovra. */
+  /** Distanza (m) da questa manovra alla SEGUENTE (OSRM step.distance: il tratto che parte qui). */
   distance: number;
   maneuverType: string;
   maneuverModifier?: string;
@@ -211,6 +211,84 @@ export function translateManeuver(
   }
 }
 
+// EVITA SCALE (08/09/2026): preferenza dell'utente, persistente. Quando e'
+// attiva il server salta le fonti che non sanno evitare le scalinate (OSRM
+// foot, Geoapify, Mapbox) e usa Valhalla/ORS con profilo accessibile.
+const EVITA_SCALE_KEY = 'wip_nav_evita_scale';
+export function getEvitaScale(): boolean {
+  try { return typeof localStorage !== 'undefined' && localStorage.getItem(EVITA_SCALE_KEY) === '1'; } catch { return false; }
+}
+export function setEvitaScale(on: boolean): void {
+  try {
+    if (on) localStorage.setItem(EVITA_SCALE_KEY, '1'); else localStorage.removeItem(EVITA_SCALE_KEY);
+    window.dispatchEvent(new CustomEvent('wip-settings-updated', { detail: { evitaScale: on } }));
+  } catch { /* storage non disponibile */ }
+}
+
+// SVOLTE A RAFFICA (04/10/2026, test virtuale a Carrara: «gira a sinistra»,
+// «gira a sinistra», «gira a destra», «tra 70 metri gira a destra» in nove
+// secondi, su tratti di 6-12 m). Due svolte a meno di 15 m l'una dall'altra
+// non sono due istruzioni: sono una, «gira a sinistra, poi subito a destra».
+// La seconda si fonde nella prima e sparisce dall'elenco; una terza e una
+// quarta nello stesso groviglio spariscono e basta (il tracciato sulla mappa
+// le mostra). Si fa QUI, sull'elenco dei passi, così la voce della pagina e il
+// follower nativo (che riceve gli stessi passi) restano allineati.
+const MANOVRE_VICINE_M = 15;
+const POI_SUBITO: Record<string, string> = {
+  it: 'poi subito', en: 'then immediately', fr: 'puis tout de suite', es: 'y enseguida', de: 'dann sofort', ru: 'затем сразу', zh: '然后立即',
+};
+export function accorpaManovreVicine(steps: RouteStep[], lang: string): void {
+  const l2 = String(lang || 'it').slice(0, 2).toLowerCase();
+  const lega = POI_SUBITO[l2] || POI_SUBITO.en;
+  const svolta = (s: RouteStep) => { const t = String(s.maneuverType || '').toLowerCase(); return t !== 'depart' && t !== 'arrive'; };
+  const fuse = new Set<RouteStep>();
+  for (let i = 1; i < steps.length; ) {
+    const prima = steps[i - 1], dopo = steps[i];
+    // `distance` di un passo = metri dalla SUA manovra alla successiva.
+    if (svolta(prima) && svolta(dopo) && (prima.distance ?? 0) < MANOVRE_VICINE_M) {
+      if (!fuse.has(prima) && dopo.instruction) {
+        prima.instruction = `${prima.instruction}, ${lega} ${dopo.instruction.charAt(0).toLowerCase()}${dopo.instruction.slice(1)}`;
+        fuse.add(prima);
+      }
+      prima.distance = (prima.distance ?? 0) + (dopo.distance ?? 0);
+      steps.splice(i, 1);
+      continue;
+    }
+    i += 1;
+  }
+}
+
+/**
+ * La stessa fusione, sui passi GREZZI del server (legs[].steps[] in forma OSRM): la
+ * usano il giro e il percorso su misura (tourService), che tengono le tratte del
+ * server così come arrivano. Il testo composto va in `maneuver.instruction`, che
+ * `istruzionePerStep` legge per primo: voce della pagina, cartello in alto e passi
+ * consegnati al follower nativo escono tutti dallo stesso elenco già accorciato,
+ * quindi Kotlin e Swift non cambiano. Partenza e arrivo non si toccano mai.
+ */
+export function accorpaPassiGrezzi(steps: any[], lang: string): void {
+  if (!Array.isArray(steps) || steps.length < 3) return;
+  const l2 = String(lang || 'it').slice(0, 2).toLowerCase();
+  const lega = POI_SUBITO[l2] || POI_SUBITO.en;
+  const svolta = (s: any) => { const t = String(s?.maneuver?.type || '').toLowerCase(); return t !== 'depart' && t !== 'arrive'; };
+  const fuse = new Set<any>();
+  for (let i = 1; i < steps.length; ) {
+    const prima = steps[i - 1], dopo = steps[i];
+    if (svolta(prima) && svolta(dopo) && (Number(prima?.distance) || 0) < MANOVRE_VICINE_M) {
+      if (!fuse.has(prima)) {
+        const a = istruzionePerStep(prima, lang), b = istruzionePerStep(dopo, lang);
+        if (a && b) prima.maneuver = { ...(prima.maneuver || {}), instruction: `${a}, ${lega} ${b.charAt(0).toLowerCase()}${b.slice(1)}` };
+        fuse.add(prima);
+      }
+      prima.distance = (Number(prima.distance) || 0) + (Number(dopo?.distance) || 0);
+      if (prima.duration != null || dopo?.duration != null) prima.duration = (Number(prima.duration) || 0) + (Number(dopo?.duration) || 0);
+      steps.splice(i, 1);
+      continue;
+    }
+    i += 1;
+  }
+}
+
 /**
  * Calcola il percorso pedonale da -> a.
  * Ritorna null se OSRM non risponde o non trova rotte.
@@ -226,13 +304,18 @@ export async function fetchWalkingRoute(
     // `language`: il server la passa a Valhalla/ORS/Geoapify per le istruzioni
     // testuali; senza, usava 'it' per tutti (anche utenti EN/FR/DE).
     const langCode = String(lang || 'it').slice(0, 2).toLowerCase();
-    const url = `${OSRM_FOOT_BASE}${coords}?overview=full&geometries=geojson&steps=true&language=${encodeURIComponent(langCode)}`;
+    const evita = getEvitaScale() ? '&evita=scale' : '';
+    const url = `${OSRM_FOOT_BASE}${coords}?overview=full&geometries=geojson&steps=true&language=${encodeURIComponent(langCode)}${evita}`;
     // Timeout: senza, una richiesta appesa lasciava la navigazione bloccata in
     // "routing" all'infinito. Ma 6 s erano TROPPO POCHI: dietro /api/route/foot
     // il server prova cinque fonti in serie (6+7+8+8+8 s) e il client mollava
     // mentre la prima era ancora in corso — le quattro riserve non venivano mai
     // raggiunte (verificato il 22/08/2026). 45 s copre l'intera catena.
-    const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
+    // apiFetch, non fetch (21/09/2026): dal 10/09 la rotta esige il Bearer
+    // (audit SEC-01) e la fetch nuda prendeva 401 — il WIP Nav a piedi verso
+    // una meta sola non partiva per nessuno, loggato o no. apiFetch mette il
+    // token e, per l'ospite, propone il login invece di fallire in silenzio.
+    const res = await apiFetch(url, undefined, 45000);
     if (!res.ok) return null;
     const data = await res.json();
     const route = data?.routes?.[0];
@@ -260,6 +343,8 @@ export async function fetchWalkingRoute(
         name,
       };
     });
+
+    accorpaManovreVicine(steps, lang);
 
     const geometry: [number, number][] = (route.geometry?.coordinates ?? []).map(
       ([lon, lat]: [number, number]) => [lat, lon],

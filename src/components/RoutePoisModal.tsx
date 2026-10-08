@@ -5,6 +5,7 @@ import { getApiUrl } from '../lib/api';
 import { haversineMeters } from '../lib/geo';
 import { notify } from '../lib/toast';
 import { locationService } from '../services/locationService';
+import { isCategoryAllowed } from '../lib/guideSettings';
 
 // Oltre questa distanza in linea d'aria il tragitto a piedi è irrealistico
 // per la maggior parte degli utenti: prima si procedeva silenziosamente
@@ -141,15 +142,25 @@ export default function RoutePoisModal({
         startLon: origin.lon,
         endLat: endCoords.lat,
         endLon: endCoords.lon,
-        radius_m: 300
+        // (05/10/2026) 60 m, non 300: la guida parte a 30 m dal punto d'arrivo,
+        // quindi un luogo a 300 m dal percorso non parlerà mai — e nel centro di
+        // Roma la lista proponeva 235 luoghi per 400 m di strada.
+        radius_m: 60
       })
     })
       .then(r => { if (!r.ok) throw new Error(`route-pois ${r.status}`); return r.json(); })
       .then(data => {
         if (cancelled) return;
         if (Array.isArray(data)) {
-          setRoutePois(data);
-          setSelectedIds(new Set(data.map((p: any) => p.id)));
+          // Solo le categorie che l'utente ha acceso per l'audioguida (04/10/2026,
+          // committente: «perché esce enogastronomia?»): il server manda tutto ciò
+          // che sta lungo la strada, bar e negozi compresi, ed erano tutti già
+          // spuntati — partivano le loro «audioguide» una sull'altra.
+          let sub: Record<string, boolean> = {};
+          try { sub = JSON.parse(localStorage.getItem('wip_active_subcategories') || '{}') || {}; } catch { /* default */ }
+          const ammessi = data.filter((p: any) => { try { return isCategoryAllowed(p, sub); } catch { return true; } });
+          setRoutePois(ammessi);
+          setSelectedIds(new Set(ammessi.map((p: any) => p.id)));
         }
       })
       .catch(err => { if (!cancelled) { console.error('[WIP Nav] route-pois:', err); setScanError(true); } })

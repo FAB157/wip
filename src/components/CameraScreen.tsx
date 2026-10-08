@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Camera, X, ImageIcon, Loader2, Search, Ticket } from 'lucide-react';
+import { Camera, X, ImageIcon, Loader2, Search, Ticket, Volume2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { Language, getTranslation } from '../lib/i18n';
@@ -12,7 +12,7 @@ import ShopScreen from './ShopScreen';
 import { logApiCall } from '../lib/apiLogger';
 import { getApiUrl } from '../lib/api';
 import { locationService } from '../services/locationService';
-import { getLocalMuseumPassExpiry, fetchMuseumPassStatus, buyMuseumPass, formatPassRemaining } from '../lib/museumPass';
+import { getLocalMuseumPassExpiry, getLocalMuseumPassTier, fetchMuseumPassFull, buyMuseumPass, formatPassRemaining, MuseumPassTier } from '../lib/museumPass';
 import AROverlay from './AROverlay';
 import VisionCommentModal from './VisionCommentModal';
 import VisionLocationPicker, { VisionCoordsSource, VisionLocationPick } from './VisionLocationPicker';
@@ -21,6 +21,14 @@ import { readJpegExif } from '../lib/exif';
 import { db } from '../lib/db';
 import { toggleFavoritePoi, getLocalFavorites } from '../lib/favorites';
 import { getNearbyPois } from '../services/poiRepository';
+import MuseumVisitSheet from './MuseumVisitSheet';
+import LoadingQuiz from './LoadingQuiz';
+import { chiediConsensoAi } from '../lib/aiConsent';
+import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, fetchMuseumSuggest, MuseumSuggestion, OPEN_MUSEUM_GUIDE_EVENT, prendiRichiestaGuidaMuseo, riapriVisitaConservata, whereAmI, DoveSono, markWorkSeen, visitaAttivaKey, fetchPrezziBiglietti } from '../lib/museumVisit';
+import { visiteConservate, opereInArchivio, ArchivioMuseo, museoScaricato, conservaVisita } from '../lib/pacchettoMuseo';
+import { speakAudioguide, stopSpeech } from '../services/ttsService';
+import { getGuideCharacter } from '../lib/guideSettings';
+import { Landmark } from 'lucide-react';
 
 // ── Provenienza della foto (Vision v2) ──────────────────────────────────────
 // photoSource: da dove arriva l'immagine. coordsSource: da dove arrivano le
@@ -155,7 +163,8 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   const [showCamera, setShowCamera] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string>('');
-  const [mode, setMode] = useState<'vision' | 'ar'>('vision');
+  // 'visite': la sezione musei e chiese, terzo modo di WIP Vision.
+  const [mode, setMode] = useState<'vision' | 'ar' | 'visite'>('vision');
   // Vision opere musei (ondata 7): in modalità "Opera" il server riceve
   // mode:'artwork' → prompt da storico dell'arte, cache GPS bypassata (due
   // opere distano pochi metri). Col Pass Museo attivo la scansione è inclusa.
@@ -191,6 +200,9 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   const tr = (key: string) => getTranslation(key, language);
   // Pass Museo: mirror locale subito (musei = rete scarsa), poi verità server.
   const [passExpiresAt, setPassExpiresAt] = useState<number | null>(getLocalMuseumPassExpiry());
+  // Livello del pass: 'base' (40 audioguide) o 'tour' (anche la visita guidata).
+  const [passTier, setPassTier] = useState<MuseumPassTier | null>(getLocalMuseumPassTier());
+  const [passScans, setPassScans] = useState<{ used: number; limit: number }>({ used: 0, limit: 40 });
   const [buyingPass, setBuyingPass] = useState(false);
   // Foto in analisi: sfondo del mirino di scansione stile AR.
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -202,8 +214,374 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   const [queueProcessing, setQueueProcessing] = useState(false);
   const processingQueueRef = useRef(false);
 
+  // ── VISITA GUIDATA DALL'AI (10/09/2026) ─────────────────────────────────
+  // Dentro un museo/chiesa WIP accompagna: dopo il primo scatto (o col tasto
+  // «Avvia la visita guidata») risolve DOVE sei da GPS + luogo dichiarato
+  // dal modello e propone il percorso; ogni opera inquadrata viene spuntata.
+  // Lo stato vive in museumVisit.ts; qui solo la vista.
+  const [visit, setVisit] = useState<MuseumVisit | null>(() => getVisit());
+  const [visitOpen, setVisitOpen] = useState(false);
+  // Un'opera in ascolto o in pausa tiene MONTATA la scheda della visita
+  // anche quando e' chiusa (13/09/2026): i comandi della schermata di blocco
+  // e della barra del player in app vivono dentro MuseumVisitSheet, e
+  // smontarla li spegneva a meta' racconto.
+  const [museoInAscolto, setMuseoInAscolto] = useState(false);
   useEffect(() => {
-    fetchMuseumPassStatus().then(setPassExpiresAt);
+    const h = (e: Event) => setMuseoInAscolto(!!((e as CustomEvent).detail || {}).attivo);
+    window.addEventListener('wip-museum-player', h);
+    return () => window.removeEventListener('wip-museum-player', h);
+  }, []);
+  const [visitStarting, setVisitStarting] = useState(false);
+  // Quale riga dell'elenco "qui vicino" sta generando la propria guida: solo
+  // quella mostra lo spinner al posto della foto/icona, le altre restano
+  // toccabili solo dopo (visitStarting le disabilita tutte, ma questo dice
+  // QUALE sta lavorando).
+  const [avviandoKey, setAvviandoKey] = useState<string | null>(null);
+  // Ripiego SOLO quando il GPS non trova nessun luogo: campo per il nome.
+  const [visitNameFallback, setVisitNameFallback] = useState<string | null>(null);
+  // Il server ha risposto che la visita guidata è del pass con itinerario.
+  const [needsTourPass, setNeedsTourPass] = useState(false);
+  // Sezione Visite: i musei e le chiese qui intorno che hanno la guida pronta.
+  const [museiVicini, setMuseiVicini] = useState<MuseumLibraryItem[] | null>(null);
+  const [cercaMuseo, setCercaMuseo] = useState('');
+  // AUTOCOMPLETAMENTO della casella (12/09/2026, committente: «una casella
+  // che si autocompleti e che accetti errori e più lingue»). Dopo 300 ms
+  // di pausa nella digitazione si chiedono i suggerimenti: guide pronte,
+  // musei dell'archivio, voci Wikipedia; la richiesta precedente si annulla.
+  const [suggerimenti, setSuggerimenti] = useState<MuseumSuggestion[] | null>(null);
+  const [suggerendo, setSuggerendo] = useState(false);
+  const suggTimer = useRef<number | null>(null);
+  const suggAbort = useRef<AbortController | null>(null);
+  // Le coordinate lette per la sezione Visite: servono ai suggerimenti per
+  // mettere prima i luoghi vicini, senza rileggere il GPS a ogni lettera.
+  const coordsVisite = useRef<{ lat: number | null; lon: number | null }>({ lat: null, lon: null });
+  const onCercaMuseo = (v: string) => {
+    setCercaMuseo(v);
+    if (suggTimer.current) window.clearTimeout(suggTimer.current);
+    suggAbort.current?.abort();
+    const q = v.trim();
+    if (q.length < 2) { setSuggerimenti(null); setSuggerendo(false); return; }
+    setSuggerendo(true);
+    suggTimer.current = window.setTimeout(async () => {
+      const ctrl = new AbortController();
+      suggAbort.current = ctrl;
+      const out = await fetchMuseumSuggest({ q, lat: coordsVisite.current.lat, lon: coordsVisite.current.lon, language, signal: ctrl.signal });
+      if (ctrl.signal.aborted) return;
+      setSuggerimenti(out);
+      setSuggerendo(false);
+    }, 300);
+  };
+  const scegliSuggerimento = (s: MuseumSuggestion) => {
+    suggAbort.current?.abort();
+    setSuggerimenti(null);
+    setSuggerendo(false);
+    setCercaMuseo(s.venue_name);
+    void apriVisitaDiElenco(s);
+  };
+  // LE TUE VISITE: quelle già fatte, conservate per sempre. Sono roba già
+  // pagata e si riaprono senza chiamare il server — anche in aereo.
+  const [visiteSalvate, setVisiteSalvate] = useState<ArchivioMuseo[]>([]);
+  // DOVE SONO, dal GPS, prima di toccare qualsiasi cosa: nome e foto del
+  // museo entro 200 m. Niente AI, un secondo. Il primo minuto non è più muto.
+  const [seiQui, setSeiQui] = useState<DoveSono | null>(null);
+  // L'ASSAGGIO (11/09/2026): quando il server dice «serve il pass» e la guida
+  // esiste già, manda i primi novanta secondi dell'introduzione. Si ascolta
+  // la voce PRIMA di pagare, come in ogni podcast.
+  const [passSample, setPassSample] = useState<{ text: string; language: string } | null>(null);
+  // Per QUALE luogo il server ha chiesto il pass (nome del museo toccato
+  // nell'elenco o cercato): compare in testa alla scheda «serve il pass».
+  const [passPerLuogo, setPassPerLuogo] = useState<string | null>(null);
+  // La scheda «serve il pass»: ci si scorre sopra quando il server risponde
+  // così a un tocco più in basso nell'elenco, altrimenti la risposta resta
+  // fuori dallo schermo e il tocco sembra a vuoto.
+  const schedaPassRef = useRef<HTMLDivElement | null>(null);
+  // POCHE OPERE (12/09/2026, committente): il server ha detto che la guida
+  // di questo museo ha meno di {minOpere} opere. Il pass da 100/150 non
+  // conviene: lo si scrive, si consigliano le scansioni singole a 5 crediti
+  // e la cassa del pass resta chiusa per questo museo.
+  const [pocheOpere, setPocheOpere] = useState<{ nome: string; opere: number; minOpere: number; prezzo: number } | null>(null);
+  const mostraPocheOpere = (nome: string | null, out: { opere?: number; minOpere?: number; prezzoScansione?: number }) => {
+    setNeedsTourPass(false);
+    setPocheOpere({ nome: nome || '', opere: out.opere ?? 0, minOpere: out.minOpere ?? 12, prezzo: out.prezzoScansione ?? PRICING_LIST.photo_search });
+    notify(tr('mv_poche_opere_title'));
+    window.setTimeout(() => schedaPassRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
+  };
+  // La chiave del museo per cui si compra la Visita (senza scadenza).
+  const [passVenueKey, setPassVenueKey] = useState<string | null>(null);
+  // Cosa riaprire DOPO l'acquisto (12/09/2026 sera, committente: «ho cercato
+  // Duomo di Milano, ho cliccato... la guida non c'è»). Prima, comprata la
+  // Visita, ripartiva startGuidedVisit() senza nome, cioè il museo più
+  // vicino alle coordinate — non quello toccato nell'elenco o cercato.
+  const riavviaDopoPassRef = useRef<null | (() => Promise<void> | void)>(null);
+  const mostraSchedaPass = (nome: string | null, sample: { text: string; language: string } | null, venueKey?: string | null, riavvia?: () => Promise<void> | void) => {
+    setPocheOpere(null);
+    setNeedsTourPass(true);
+    setPassPerLuogo(nome);
+    setPassSample(sample);
+    setPassVenueKey(venueKey || null);
+    riavviaDopoPassRef.current = riavvia || null;
+    notify(tr('mv_locked_title'));
+    // Al prossimo frame la scheda esiste (needsTourPass appena messo a true).
+    window.setTimeout(() => schedaPassRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
+  };
+  // La scansione non ha riconosciuto l'opera: si sceglie con gli occhi fra
+  // quelle del percorso, la sala in cui si è per prima.
+  const [sceltaOpera, setSceltaOpera] = useState<{ cardId: string | null; image: string; refunded: boolean } | null>(null);
+  const [samplePlaying, setSamplePlaying] = useState(false);
+  const toggleSample = async () => {
+    if (!passSample) return;
+    if (samplePlaying) { stopSpeech(); setSamplePlaying(false); return; }
+    try {
+      await speakAudioguide(passSample.text, String(passSample.language || language).toLowerCase(), getGuideCharacter(), () => setSamplePlaying(false));
+      setSamplePlaying(true);
+    } catch { setSamplePlaying(false); }
+  };
+  // Quiz durante l'attesa (10/09/2026, richiesta del committente: «come negli
+  // itinerari»). Costruire il percorso di un museo richiede 20-35 secondi:
+  // invece di far guardare una rotellina, si gioca e si vincono crediti — un
+  // credito e 20 punti per risposta giusta, accreditati dal server.
+  const [quizUserId, setQuizUserId] = useState<string | null>(null);
+  const [quizAperto, setQuizAperto] = useState(false);
+  const [quizLuogo, setQuizLuogo] = useState('');
+
+  /** Apre il quiz mentre la guida si costruisce. Senza login niente quiz. */
+  const apriQuizAttesa = async (nomeLuogo: string) => {
+    try {
+      const { data } = await supabase.auth.getSession();
+      const uid = data?.session?.user?.id;
+      if (!uid) return;
+      setQuizUserId(uid);
+      setQuizLuogo(nomeLuogo || visit?.venue?.name || '');
+      setQuizAperto(true);
+    } catch { /* il quiz è un di più: mai bloccare la generazione */ }
+  };
+  const chiudiQuiz = () => setQuizAperto(false);
+
+  /** Elenco dei luoghi con visita già pronta, per la sezione Visite. */
+  const caricaMuseiVicini = async () => {
+    // Le visite già fatte si leggono dal telefono: nessuna attesa, nessuna
+    // rete. Si mostrano PRIMA dell'elenco «qui vicino», perché sono già
+    // dell'utente.
+    setVisiteSalvate(visiteConservate(language));
+    const coords = await resolveVisitCoords();
+    coordsVisite.current = coords;
+    // In parallelo: «dove sono» (istantaneo) e l'elenco dei vicini.
+    const [qui, elenco] = await Promise.all([
+      whereAmI(coords, language),
+      fetchMuseumLibrary({ lat: coords.lat, lon: coords.lon, language, radiusKm: 30, limit: 20 }),
+    ]);
+    setSeiQui(qui);
+    setMuseiVicini(elenco);
+    // «Biglietto da 18 €» sui musei che lo hanno (13/09/2026): solo dalla
+    // cache del server, l'elenco resta istantaneo.
+    fetchPrezziBiglietti(elenco.map(m => m.venue_name), language).then(setPrezziBiglietti).catch(() => {});
+  };
+  const [prezziBiglietti, setPrezziBiglietti] = useState<Record<string, string>>({});
+
+  /**
+   * Riapre una visita conservata. Non chiama il server, quindi non consuma
+   * pass né crediti: è esattamente il senso di «quello che hai è tuo».
+   */
+  const riapriConservata = (a: ArchivioMuseo) => {
+    const v = riapriVisitaConservata(a);
+    if (v) { setVisit(v); setVisitOpen(true); }
+    // LA COPIA SUL TELEFONO NON RESTA INDIETRO (06/10/2026: il Duomo di Milano si riapriva con le 16 tappe
+    // scaricate a settembre mentre in libreria ne aveva 25, con le correzioni fatte dopo). Con la rete, e solo
+    // per le sedi con un POI, si chiede la guida di oggi: se è cambiata (più tappe, o un'altra introduzione)
+    // prende il posto di quella aperta — le opere già viste restano viste — e aggiorna l'archivio. Senza rete,
+    // o se il server non la dà (pass mancante), resta la copia scaricata: mai peggio di prima.
+    const poiId = /^poi_/.test(String(a?.venueKey || '')) ? String(a.venueKey).slice(4) : '';
+    if (!v || !poiId || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+    void (async () => {
+      try {
+        const out = await startVisitByPoi(poiId, language, { lat: null, lon: null });
+        const nuova = out.ok ? out.visit : null;
+        if (!nuova || nuova.venueKey !== v.venueKey) return;
+        const prima = v.guide?.tappe || [], dopo = nuova.guide?.tappe || [];
+        const cambiata = dopo.length !== prima.length || String(nuova.guide?.intro || '') !== String(v.guide?.intro || '')
+          || dopo.some((t, i) => String(t?.perche || '') !== String(prima[i]?.perche || ''));
+        if (!cambiata || dopo.length < Math.min(3, prima.length)) return;
+        conservaVisita(nuova, language);
+        setVisit(nuova);
+      } catch { /* resta la copia scaricata */ }
+    })();
+  };
+
+  /** Apre la visita di un museo scelto dall'elenco (o cercato per nome). */
+  const apriVisitaDiElenco = async (m: MuseumLibraryItem) => {
+    if (visitStarting) return;
+    setVisitStarting(true);
+    // Un museo senza guida in libreria la genera al volo: può volerci fino a
+    // un minuto (vedi Agnes sui prompt lunghi). Senza un avviso subito, il
+    // tocco sembra non aver fatto nulla — l'unico segnale prima era lo
+    // spinner generico sull'icona "Sei qui", invisibile per un tocco più giù
+    // nell'elenco (11/09/2026, segnalazione utente: "ho cliccato e non
+    // succede nulla").
+    setAvviandoKey(m.venue_key);
+    notify(tr('mv_generating').replace('{s}', m.venue_name));
+    void apriQuizAttesa(m.venue_name);
+    try {
+      const out = m.poi_id
+        ? await startVisitByPoi(m.poi_id, language, { lat: m.lat, lon: m.lon })
+        : await startVisitByName(m.venue_name, { lat: m.lat, lon: m.lon }, language);
+      if (out.ok && out.visit) { setVisit(out.visit); setVisitOpen(true); }
+      // Prima qui c'era solo setNeedsTourPass(true): se la scheda «serve il
+      // pass» era GIÀ aperta per un altro museo, non cambiava niente sullo
+      // schermo (12/09/2026, «se clicco su Palazzo delle Logge non succede
+      // nulla»). Ora la scheda prende il nome del museo toccato, l'assaggio
+      // della sua introduzione, e ci si scorre sopra.
+      else if (out.reason === 'needs_tour_pass') mostraSchedaPass(m.venue_name, out.sample || null, out.venueKey || m.venue_key || null, () => apriVisitaDiElenco(m));
+      else if (out.reason === 'poche_opere') mostraPocheOpere(m.venue_name, out);
+      else notify(tr('mv_not_found'));
+    } catch (e) {
+      console.warn('[Visite] Avvio visita fallito:', e);
+      notify(tr('mv_not_found'));
+    } finally {
+      setVisitStarting(false);
+      setAvviandoKey(null);
+      setQuizAperto(false);
+    }
+  };
+
+  // Dal badge sulle tappe-museo (itinerari, libreria): Visite già su QUEL
+  // museo. La richiesta è in sospeso in museumVisit.ts perché la scheda
+  // può non essere ancora montata quando parte l'evento.
+  useEffect(() => {
+    const apri = () => {
+      const r = prendiRichiestaGuidaMuseo();
+      if (!r) return;
+      setMode('visite');
+      void caricaMuseiVicini();
+      // "I miei download" (12/09/2026): con la lingua del pacchetto valorizzata,
+      // il museo e' gia' scaricato — si riapre dall'ARCHIVIO offline (niente
+      // rete, niente nuovo addebito), non si rifà partire una visita online.
+      const archiviata = r.venueKey && r.language ? museoScaricato(r.venueKey, r.language) : null;
+      if (archiviata) { riapriConservata(archiviata); return; }
+      void apriVisitaDiElenco({ venue_key: r.venueKey || (r.poiId ? `poi_${r.poiId}` : `nome_${r.venueName}`), venue_name: r.venueName, poi_id: r.poiId, venue_type: 'museo', city: null, lat: r.lat ?? null, lon: r.lon ?? null, stops_count: 0, stops_with_room: 0, official_site: null });
+    };
+    apri();
+    window.addEventListener(OPEN_MUSEUM_GUIDE_EVENT, apri);
+    return () => window.removeEventListener(OPEN_MUSEUM_GUIDE_EVENT, apri);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // WIDGET «COSA VEDO?» (23/09/2026): App lascia `wip_richiesta_vision` e
+  // poi emette 'wip-apri-vision'. Se la richiesta ha meno di 15 s si apre
+  // Vision sul luogo e si prova la fotocamera live. Senza gesto dell'utente
+  // getUserMedia può essere rifiutato: si resta sulla schermata Vision col
+  // suo tasto, e MAI cameraInputRef.click() (senza gesto è bloccato comunque).
+  useEffect(() => {
+    const apriVision = async () => {
+      let ts = 0;
+      try { ts = Number(localStorage.getItem('wip_richiesta_vision') || 0); } catch { /* storage bloccato */ }
+      if (!ts || Date.now() - ts > 15_000) return;
+      try { localStorage.removeItem('wip_richiesta_vision'); } catch { /* niente */ }
+      setMode('vision');
+      setVisionTarget('place');
+      try {
+        if (!navigator.mediaDevices?.getUserMedia || streamRef.current) return;
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+        streamRef.current = stream;
+        setShowCamera(true);
+      } catch (e) {
+        console.warn('[Camera] widget Vision: fotocamera non aperta senza gesto', e);
+      }
+    };
+    void apriVision();
+    const h = () => { void apriVision(); };
+    window.addEventListener('wip-apri-vision', h);
+    return () => window.removeEventListener('wip-apri-vision', h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onVisit = () => setVisit(getVisit());
+    const onOpen = () => { setVisit(getVisit()); setVisitOpen(true); };
+    window.addEventListener(MUSEUM_VISIT_EVENT, onVisit);
+    window.addEventListener(OPEN_MUSEUM_VISIT_EVENT, onOpen);
+    return () => {
+      window.removeEventListener(MUSEUM_VISIT_EVENT, onVisit);
+      window.removeEventListener(OPEN_MUSEUM_VISIT_EVENT, onOpen);
+    };
+  }, []);
+
+  /**
+   * Posizione per la visita: dentro un edificio il GPS puro spesso non
+   * aggancia, quindi si accetta l'ultimo fix noto (anche quello dell'ingresso,
+   * fino a 10 minuti prima) e la localizzazione di rete (Wi-Fi/celle), che sul
+   * telefono è già fusa nel servizio di geolocalizzazione del browser.
+   */
+  const resolveVisitCoords = async (): Promise<{ lat: number | null; lon: number | null }> => {
+    const last = locationService.getLastLocation();
+    if (last && last.latitude && last.longitude) return { lat: last.latitude, lon: last.longitude };
+    try {
+      const pos: any = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: false, timeout: 6000, maximumAge: 10 * 60 * 1000 });
+      });
+      return { lat: pos.coords.latitude, lon: pos.coords.longitude };
+    } catch {
+      return { lat: null, lon: null };
+    }
+  };
+
+  /** Tasto «Avvia la visita guidata»: dove sono? → percorso. */
+  const startGuidedVisit = async (typedName?: string) => {
+    if (visitStarting) return;
+    setVisitStarting(true);
+    // Il quiz parte SUBITO: la guida si costruisce dietro, e alla fine il
+    // quiz si chiude da solo consegnando i crediti vinti.
+    void apriQuizAttesa(typedName || '');
+    try {
+      const coords = await resolveVisitCoords();
+      // Prima qui c'era anche una voce di sistema («Sei agli Uffizi, sto
+      // preparando il percorso»): su iOS con i sottotitoli in diretta attivi
+      // (Accessibilità → Contenuto vocale) fa comparire una fascia di
+      // sottotitoli di SISTEMA, sopra qualunque schermata dell'app, che resta
+      // visibile anche cambiando tab — non è un elemento nostro, e toccare la
+      // X dentro l'app non la chiude (11/09/2026, segnalazione utente: la
+      // fascia "Sei a Duomo..." restava fissa passando da Radar AR a Visite
+      // alla Mappa). Il nome del luogo è già scritto nella scheda "Sei qui":
+      // la voce era un di più, non l'unica fonte dell'informazione.
+      if (typedName && typedName.trim().length >= 3) {
+        const out = await startVisitByName(typedName.trim(), coords, language);
+        if (out.ok && out.visit) { setVisitNameFallback(null); setVisit(out.visit); setVisitOpen(true); }
+        else if (out.reason === 'needs_tour_pass') mostraSchedaPass(typedName.trim(), out.sample || null, out.venueKey, () => startGuidedVisit(typedName));
+        else if (out.reason === 'poche_opere') mostraPocheOpere(typedName.trim(), out);
+        else notify(out.reason === 'network' ? tr('vis_generic_error') : tr('mv_not_found'));
+        return;
+      }
+      if (coords.lat === null) { setVisitNameFallback(''); return; }
+      const resp = await fetchVenueGuide({ lat: coords.lat, lon: coords.lon, language });
+      if (resp && resp.ok === true) {
+        const v = startVisitFromGuide(resp);
+        setVisit(v);
+        setVisitOpen(true);
+      } else if (resp && resp.ok === false && resp.reason === 'needs_tour_pass') {
+        // La visita guidata è del pass con itinerario: si propone lo sblocco,
+        // senza generare nulla (nessun costo AI per chi non ha pagato).
+        mostraSchedaPass(seiQui?.name || resp.venue?.name || null, resp.sample || null, (resp as any).venueKey || null, () => startGuidedVisit());
+      } else if (resp && resp.ok === false && resp.reason === 'poche_opere') {
+        mostraPocheOpere(seiQui?.name || resp.venue?.name || null, resp);
+      } else if (resp && resp.ok === false && resp.reason === 'venue_unknown') {
+        // Nessun museo/chiesa entro 200 m nel nostro archivio: si chiede il nome.
+        setVisitNameFallback('');
+      } else {
+        notify(tr('mv_not_found'));
+      }
+    } finally {
+      setVisitStarting(false);
+      // Guida pronta: il quiz si chiude e i crediti vinti vengono accreditati
+      // (LoadingQuiz li manda al server quando viene smontato).
+      setQuizAperto(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchMuseumPassFull().then(s => {
+      setPassExpiresAt(s.expiresAt);
+      setPassTier(s.tier);
+      setPassScans({ used: s.scansUsed, limit: s.scansLimit });
+    });
     // Tick per countdown e scadenza del banner senza rifetch.
     const t = setInterval(() => setTick(x => x + 1), 30_000);
     return () => clearInterval(t);
@@ -389,21 +767,58 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     setShopUserId(data?.session?.user?.id || "mock-user-id");
   };
 
-  const handleBuyPass = async () => {
+  /**
+   * Acquisto del Pass Museo, due livelli (10/09/2026):
+   *  - 'base' 100 crediti: 40 audioguide, si inquadrano le opere che si vogliono
+   *  - 'tour' 150 crediti: le stesse 40 più la visita guidata del museo
+   * Con un pass base attivo, 'tour' costa solo la differenza e la scadenza
+   * resta quella già pagata.
+   */
+  const handleBuyPass = async (tier: 'base' | 'tour' = 'base') => {
     if (buyingPass) return;
+    // Museo con poche opere: niente cassa del pass, si ripete il consiglio
+    // (12/09/2026, committente: «stessa logica per il pass da 150»).
+    if (pocheOpere && !visit) {
+      notify(tr('mv_poche_opere_desc').replace('{s}', pocheOpere.nome || tr('mv_title')).replace('{n}', String(pocheOpere.opere)).replace('{p}', String(pocheOpere.prezzo)));
+      schedaPassRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
     const { data } = await supabase.auth.getSession();
     const uid = data?.session?.user?.id;
     if (!uid) { setError(tr('vis_pass_login')); return; }
     const bal = await getWalletBalance(uid);
     setCurrentBalance(bal.total);
-    const confirmed = await creditConfirm.requestConfirmation(PRICING_LIST.museum_pass, getTranslation("museum_pass_title", language));
+    const upgrade = tier === 'tour' && passActive && passTier === 'base';
+    const costo = upgrade
+      ? Math.max(0, PRICING_LIST.museum_pass_tour - PRICING_LIST.museum_pass)
+      : (tier === 'tour' ? PRICING_LIST.museum_pass_tour : PRICING_LIST.museum_pass);
+    const confirmed = await creditConfirm.requestConfirmation(
+      costo,
+      tier === 'tour' ? getTranslation('museum_pass_tour_title', language) : getTranslation('museum_pass_title', language)
+    );
     if (!confirmed) return;
     setBuyingPass(true);
-    const out = await buyMuseumPass();
+    const out = await buyMuseumPass(tier, tier === 'tour' ? passVenueKey : null);
     setBuyingPass(false);
-    if (out.ok && out.expiresAt) {
-      setPassExpiresAt(out.expiresAt);
+    // Riparte ESATTAMENTE la richiesta che aveva chiesto il pass (museo
+    // dell'elenco, nome cercato, o «sei qui»); senza, il museo della scheda.
+    const riparti = () => {
+      const r = riavviaDopoPassRef.current;
+      riavviaDopoPassRef.current = null;
+      setNeedsTourPass(false);
+      if (r) void r();
+      else void startGuidedVisit(passPerLuogo || undefined);
+    };
+    if (out.ok && out.permanent) {
+      // Visita Museo comprata per sempre per questo museo: la visita parte.
       notify(getTranslation("museum_pass_bought", language));
+      riparti();
+    } else if (out.ok && out.expiresAt) {
+      setPassExpiresAt(out.expiresAt);
+      setPassTier(out.tier || tier);
+      notify(getTranslation("museum_pass_bought", language));
+      // Comprato il pass con itinerario: la visita parte subito.
+      if ((out.tier || tier) === 'tour') riparti();
     } else if (out.error === 'credits') {
       notify(tr('vis_no_credits'));
       openCreditShop();
@@ -506,6 +921,10 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
 
       // Modalità 📱 Screenshot: niente EXIF né coordinate, flusso dedicato.
       if (visionTarget === 'screenshot') {
+        // Consenso AI anche qui (22/09/2026): questo ramo saltava analyzeImage
+        // e quindi il gate — una foto della galleria partiva verso OpenAI
+        // senza richiesta.
+        if (!(await chiediConsensoAi())) return;
         const shot = await resizeImage(file);
         setPreviewImage(`data:image/jpeg;base64,${shot.base64}`);
         await analyzeScreenshot(shot.base64);
@@ -685,6 +1104,15 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   };
 
   const analyzeImage = async (base64Image: string, meta: ShotMeta) => {
+    // App Store 5.1.2(i) (18/09/2026): la foto va a un'AI di terze parti.
+    // Il permesso si chiede QUI, ingresso unico di ogni foto (scatto, galleria,
+    // screenshot) e prima anche della coda offline: senza consenso la foto
+    // non lascia il telefono e non viene nemmeno accodata.
+    if (!(await chiediConsensoAi())) {
+      setPreviewImage(null);
+      setIsScanning(false);
+      return;
+    }
     // Modalità 📱 Screenshot: flusso dedicato (sopra), vale sia per la foto
     // scattata (schermo di un altro telefono) sia per il file dalla galleria.
     if (visionTarget === 'screenshot') {
@@ -771,7 +1199,9 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
           // Modalità "Opera" (ondata 7): il server identifica l'opera
           // inquadrata (quadro/statua/reperto), non l'edificio del GPS.
           // Modalità "Natura": prompt da naturalista, categoria 'natura'.
-          ...(visionTarget !== 'place' ? { mode: visionTarget } : {})
+          ...(visionTarget !== 'place' ? { mode: visionTarget } : {}),
+          // La scansione durante una Visita posseduta è coperta dalle sue 20.
+          ...(visitaAttivaKey() ? { venueKey: visitaAttivaKey() } : {}),
         })
       });
 
@@ -816,6 +1246,15 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
         const enrichedData = { ...data, image: `data:image/jpeg;base64,${base64Image}` };
         // Privacy: volti riconoscibili → se pubblicata verranno sfocati.
         if (data.privacy?.volti === true) notify(tr('vis_privacy_people'), 'success');
+        // Visita guidata: un'opera riconosciuta (modalità Opera o Pass Museo)
+        // avvia o aggiorna la visita in sottofondo. La scheda dell'opera si
+        // apre subito; il percorso arriva dopo, dalla scheda o dal riquadro.
+        if (visionTarget === 'artwork' || passActive) {
+          const hadVisit = !!getVisit();
+          void onArtworkRecognized(data, { lat: gpsLat, lon: gpsLon }, language).then(v => {
+            if (v && !hadVisit) notify(tr('mv_ready').replace('{name}', v.venue.name), 'success');
+          });
+        }
         // Bassa confidenza con candidati reali: selettore prima della scheda.
         const candidati: string[] = Array.isArray(data.candidati)
           ? data.candidati.filter((c: any) => typeof c === 'string' && c.trim()).slice(0, 3)
@@ -827,6 +1266,16 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
           onRecognize(enrichedData);
         }
       } else {
+        // NON RICONOSCIUTA, MA SIAMO DENTRO UN MUSEO CON UN PERCORSO
+        // (11/09/2026): vetro, riflessi, gente davanti — la foto non basta.
+        // Invece di «non so», si mostrano le foto delle opere di questa sala
+        // e la persona la riconosce con gli occhi in un secondo. Le foto e la
+        // sala ce le abbiamo già.
+        const visitaInCorso = getVisit();
+        if (visionTarget === 'artwork' && (visitaInCorso?.guide?.tappe?.length || 0) > 0) {
+          setSceltaOpera({ cardId: data.card_id || null, image: `data:image/jpeg;base64,${base64Image}`, refunded: !!data.refunded });
+          return;
+        }
         // Il server ha già (best-effort) rimborsato i crediti e salvato la
         // foto in My Vision: chiediamo all'utente perché quel posto è speciale
         // (il racconto aiuta la revisione WIP Community). `refunded` riflette
@@ -1005,9 +1454,155 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     window.dispatchEvent(new CustomEvent('wip-itinerary-checkin', { detail: { poiId: 'reel-to-plan' } }));
   };
 
+  // La scheda «serve la Visita» si vede anche con una visita già attiva
+  // (12/09/2026 sera: con la Pietà aperta, toccare «Duomo di Milano» dava
+  // solo un avviso e nessuna cassa, perché la scheda era nascosta da
+  // `!visit`). Con un museo richiesto per nome, si mostra sempre.
+  const schedaPassVisibile = needsTourPass && (!visit || !!passPerLuogo);
+
+  // LA SCHEDA «SERVE IL PASS CON ITINERARIO», una sola (11/09/2026, dalle
+  // foto del committente). Prima viveva solo nel modo Scansione, dove
+  // stava sopra i due pass in vendita e offriva il pass da 150 due volte;
+  // nel modo Visite non c'era affatto: si toccava un museo dell'elenco, il
+  // server rispondeva «serve il pass» e sullo schermo non succedeva nulla.
+  // Ora è una sola scheda, mostrata dove serve, e sotto di lei il pass da
+  // 150 non si ripete.
+  const schedaPassTour = pocheOpere && !visit ? (
+    <div ref={schedaPassRef} className="w-full px-4 py-3 rounded-2xl border border-amber-300 bg-amber-50 text-left space-y-2">
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-xl bg-white border border-amber-200 flex items-center justify-center shrink-0">
+          <Ticket className="w-5 h-5 text-amber-700" />
+        </div>
+        <div className="flex-1 min-w-0">
+          {pocheOpere.nome && <p className="text-[9px] font-black uppercase tracking-[0.1em] text-amber-800 truncate">{pocheOpere.nome}</p>}
+          <p className="text-xs font-black text-slate-900">{tr('mv_poche_opere_title')}</p>
+          <p className="text-[10px] font-bold text-slate-600 leading-snug">
+            {tr('mv_poche_opere_desc').replace('{s}', pocheOpere.nome || tr('mv_title')).replace('{n}', String(pocheOpere.opere)).replace('{p}', String(pocheOpere.prezzo))}
+          </p>
+        </div>
+      </div>
+      <button
+        onClick={() => { setMode('vision'); setVisionTarget('artwork'); void openCamera(); }}
+        className="w-full py-2.5 rounded-xl bg-primary text-white text-xs font-black active:scale-95 transition-transform flex items-center justify-center gap-2"
+      >
+        <Camera className="w-4 h-4" />{tr('mv_poche_opere_scansiona')} · {pocheOpere.prezzo} {getTranslation('credits_word', language)}
+      </button>
+    </div>
+  ) : schedaPassVisibile ? (
+    <div ref={schedaPassRef} className="w-full px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left space-y-2">
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+          <Landmark className="w-5 h-5 text-primary" />
+        </div>
+        <div className="flex-1 min-w-0">
+          {/* Il museo toccato nell'elenco, per nome: la scheda deve dire DI
+              CHI è il pass che chiede, altrimenti toccare «Palazzo delle
+              Logge» e vedere la stessa scheda di prima è «non succede
+              nulla» (12/09/2026, foto del committente). */}
+          {passPerLuogo && <p className="text-[9px] font-black uppercase tracking-[0.1em] text-primary truncate">{passPerLuogo}</p>}
+          <p className="text-xs font-black text-slate-900">{tr('mv_locked_title')}</p>
+          <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('mv_locked_desc')}</p>
+        </div>
+      </div>
+      {/* Prima la voce, poi la cassa: trenta secondi dell'introduzione di
+          QUESTO museo, gratis. */}
+      {passSample && (
+        <button
+          onClick={() => void toggleSample()}
+          className="w-full py-2.5 rounded-xl bg-white border border-primary/40 text-primary text-xs font-black active:scale-95 transition-transform flex items-center justify-center gap-2"
+        >
+          {samplePlaying ? <X className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+          {samplePlaying ? tr('mv_sample_stop') : tr('mv_sample_listen')}
+        </button>
+      )}
+      <button
+        onClick={() => { if (samplePlaying) { stopSpeech(); setSamplePlaying(false); } void handleBuyPass('tour'); }}
+        disabled={buyingPass}
+        className="w-full py-2.5 rounded-xl bg-primary text-white text-xs font-black active:scale-95 transition-transform disabled:opacity-50"
+      >
+        {buyingPass ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : (
+          passActive && passTier === 'base'
+            ? `${tr('museum_pass_upgrade')} · +${Math.max(0, PRICING_LIST.museum_pass_tour - PRICING_LIST.museum_pass)} ${getTranslation('credits_word', language)}`
+            : `${getTranslation('museum_pass_tour_title', language)} · ${PRICING_LIST.museum_pass_tour} ${getTranslation('credits_word', language)}`
+        )}
+      </button>
+    </div>
+  ) : null;
+
   return (
-    <div className="flex-1 w-full h-full relative bg-[#0a0a0a] overflow-hidden flex flex-col font-sans">
+    /* TEMA CHIARO COME LE TAVOLE (10/09/2026, decisione del committente).
+       Questa schermata era l'unica isola scura di un'app che è chiara da
+       sempre (--color-background: #fdfbf7). Il nero aveva senso quando qui
+       viveva solo il mirino; ora ci abitano tre sezioni di lettura — la
+       scansione, il Radar AR e le Visite — e su fondo nero `text-secondary`
+       vale ORO CHAMPAGNE (#d4af37), scelta buona per un mirino e pessima
+       per un elenco di musei.
+       Palette presa dalle tavole approvate, una per una: fondo #fdfbf7,
+       schede bianche con bordo #e5e7eb, testo #0f172a/#64748b/#94a3b8,
+       accento #1e3a8a, chiese in ambra #b45309. Sono i valori di
+       slate-900/500/400, gray-200 e blue-50, quindi si scrivono con le
+       classi di sempre invece che a mano.
+       Resta nero SOLO il mirino a tutto schermo (in fondo al file): lì
+       sotto scorre il video, e qualunque fondo chiaro sarebbe una cornice
+       bianca attorno all'immagine. */
+    <div className="flex-1 w-full h-full relative bg-background overflow-hidden flex flex-col font-sans">
       {quotaToast && <QuotaLimitToast feature={quotaToast} onClose={closeQuotaToast} />}
+
+      {/* NON RICONOSCIUTA: È UNA DI QUESTE? Le opere del percorso con la foto,
+          quelle della sala corrente per prime. Un tocco = opera spuntata e
+          audioguida che parte. «Nessuna di queste» = la strada di sempre. */}
+      {sceltaOpera && (() => {
+        const v = getVisit();
+        const tappe = v?.guide?.tappe || [];
+        const salaQui = String(v?.salaCorrente || (() => { for (let i = tappe.length - 1; i >= 0; i--) { if (tappe[i].seenCardId && tappe[i].dove) return tappe[i].dove; } return ''; })() || '').trim();
+        const ordinate = tappe.map((t, i) => ({ t, i })).filter(x => !x.t.soloCollezione)
+          .sort((a, b) => Number(String(b.t.dove || '').trim() === salaQui) - Number(String(a.t.dove || '').trim() === salaQui));
+        const scegli = (i: number) => {
+          const t = tappe[i];
+          markWorkSeen(t.nome, sceltaOpera.cardId);
+          setSceltaOpera(null);
+          const nuova = getVisit();
+          if (nuova) { setVisit(nuova); setVisitOpen(true); }
+          setTimeout(() => window.dispatchEvent(new CustomEvent('wip-museum-play-index', { detail: { index: i } })), 350);
+        };
+        return (
+          <div className="fixed inset-0 z-[2650] bg-black/60 backdrop-blur-sm flex items-end sm:items-center sm:justify-center" onClick={() => setSceltaOpera(null)}>
+            <div onClick={(e) => e.stopPropagation()} className="bg-[#fdfbf7] w-full sm:max-w-md max-h-[86vh] rounded-t-[2rem] sm:rounded-[2rem] overflow-hidden flex flex-col shadow-2xl">
+              <div className="px-5 pt-5 pb-3 shrink-0">
+                <p className="text-lg font-black text-slate-900 leading-tight">{tr('mv_pick_work')}</p>
+                <p className="text-[11px] font-bold text-slate-500 mt-0.5">{tr('mv_pick_work_hint')}{salaQui ? ` · ${salaQui}` : ''}</p>
+              </div>
+              <div className="flex-1 overflow-y-auto px-5 pb-3">
+                <div className="grid grid-cols-3 gap-2">
+                  {ordinate.map(({ t, i }) => (
+                    <button
+                      key={`pick-${i}`}
+                      onClick={() => scegli(i)}
+                      className={`flex flex-col items-center gap-1.5 p-2 rounded-2xl bg-white border active:scale-95 transition-transform ${String(t.dove || '').trim() === salaQui && salaQui ? 'border-primary' : 'border-slate-200'}`}
+                    >
+                      {t.fotoIcona ? (
+                        <img src={t.foto || t.fotoIcona} alt="" loading="lazy" className="w-full aspect-square rounded-xl object-cover border border-slate-200" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                      ) : (
+                        <div className="w-full aspect-square rounded-xl bg-blue-50 flex items-center justify-center"><Landmark className="w-6 h-6 text-primary" /></div>
+                      )}
+                      <span className="text-[10px] font-black text-slate-800 leading-tight text-center line-clamp-2">{t.nome}</span>
+                      {t.dove && <span className="text-[9px] font-bold text-slate-500 truncate max-w-full">{t.dove}</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="px-5 pb-5 pt-2 shrink-0">
+                <button
+                  onClick={() => { const s = sceltaOpera; setSceltaOpera(null); setCommentCard({ cardId: s.cardId, image: s.image, refunded: s.refunded }); }}
+                  className="w-full py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 font-bold text-[13px] active:scale-[0.98] transition-transform"
+                >
+                  {tr('mv_pick_none')}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Prima card guidata: overlay una-tantum al primo ingresso in camera */}
       <AnimatePresence>
@@ -1018,20 +1613,20 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
             exit={{ opacity: 0 }}
             className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-6"
           >
-            <div className="w-full max-w-sm bg-[#111827] border border-white/15 rounded-3xl p-6 space-y-4 text-white shadow-2xl">
+            <div className="w-full max-w-sm bg-white border border-gray-200 rounded-3xl p-6 space-y-4 text-slate-900 shadow-[0_24px_48px_rgba(15,23,42,0.18)]">
               <h3 className="text-lg font-black text-center">{tr('vis_first_title')}</h3>
               <div className="space-y-3">
                 {(['vis_first_step1', 'vis_first_step2', 'vis_first_step3'] as const).map((key, i) => (
                   <div key={key} className="flex items-start gap-3">
-                    <span className="w-7 h-7 shrink-0 rounded-full bg-primary flex items-center justify-center text-xs font-black">{i + 1}</span>
-                    <p className="text-sm text-white/85">{tr(key)}</p>
+                    <span className="w-7 h-7 shrink-0 rounded-full bg-primary text-white flex items-center justify-center text-xs font-black">{i + 1}</span>
+                    <p className="text-sm text-slate-600">{tr(key)}</p>
                   </div>
                 ))}
               </div>
               {nearbySuggestion && (
-                <div className="bg-primary/20 border border-primary/40 rounded-2xl px-4 py-3 text-center">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-white/60 mb-0.5">{tr('vis_first_nearby')}</p>
-                  <p className="text-sm font-black">{nearbySuggestion.name} <span className="font-bold text-white/60">~{nearbySuggestion.dist} m</span></p>
+                <div className="bg-blue-50 border border-primary/30 rounded-2xl px-4 py-3 text-center">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-0.5">{tr('vis_first_nearby')}</p>
+                  <p className="text-sm font-black text-primary">{nearbySuggestion.name} <span className="font-bold text-slate-500">~{nearbySuggestion.dist} m</span></p>
                 </div>
               )}
               <button
@@ -1045,46 +1640,79 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
         )}
       </AnimatePresence>
       {onClose && mode !== 'ar' && (
-        <button 
+        // Allineata alla stessa quota della X di Radar AR (top-0 + p-4): prima
+        // stava più in basso (top-6), sola, senza nessuna barra a fianco —
+        // qui non c'è una testata come nell'AR, ma la X deve comunque cadere
+        // alla stessa altezza quando si passa da un modo all'altro (11/09/2026).
+        <button
           onClick={onClose}
-          className="absolute top-6 right-6 z-40 w-10 h-10 rounded-full bg-surface/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-secondary active:scale-90 transition-transform shadow-lg cursor-pointer hover:bg-surface/20"
+          className="absolute top-4 right-4 z-40 w-10 h-10 rounded-full bg-white border border-gray-200 flex items-center justify-center text-slate-900 active:scale-90 transition-transform shadow-[0_1px_3px_rgba(15,23,42,0.08)] cursor-pointer hover:bg-gray-50"
         >
           <X className="w-5 h-5" />
         </button>
       )}
 
-      {/* Decorative Background */}
-      <div className="absolute inset-0 pointer-events-none opacity-40">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/20 rounded-full blur-[100px]" />
-        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-500/20 rounded-full blur-[100px]" />
+      {/* Sfondo decorativo. Su nero due macchie al 40% erano un alone; su
+          panna la stessa intensità sporca il foglio e fa sembrare sbiadito
+          il testo. Restano, molto più tenui: danno profondità al fondo senza
+          entrare in concorrenza con le schede bianche. */}
+      <div className="absolute inset-0 pointer-events-none opacity-[0.55]">
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/[0.07] rounded-full blur-[100px]" />
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-[#d4af37]/[0.07] rounded-full blur-[100px]" />
       </div>
 
-      <div className="flex-1 relative flex flex-col items-center justify-center p-8 z-10">
+      {/* pt-20: sotto la X in alto a destra (top-4 + 40 px) non deve finire
+          niente. Nel modo Scansione il contenuto è alto e il selettore dei
+          tre modi saliva fin sotto la X, che copriva «Visite».
+          SCORREVOLE (11/09/2026): prima il contenitore era `overflow-hidden`
+          col genitore e centrato in verticale — con più di una schermata di
+          contenuto (Pass Museo, elenco "qui vicino"...) il resto restava
+          semplicemente tagliato fuori, senza modo di raggiungerlo. `justify-
+          center` con overflow-y-auto rende irraggiungibile la PARTE ALTA del
+          contenuto quando supera l'altezza dello schermo (bug noto dei
+          browser); si allinea in alto e si lascia che sia il contenuto breve
+          a restare centrato "a vista" grazie al padding, non al centraggio
+          flex.
+          min-h-0 (12/09/2026, foto del committente: nel modo Opera il pass da
+          150 restava tagliato in fondo e la pagina non scorreva): un figlio
+          flex ha min-height:auto, quindi cresceva quanto il contenuto e a
+          tagliare era l'overflow-hidden del genitore — overflow-y-auto qui
+          non aveva mai niente da far scorrere. */}
+      <div className="flex-1 min-h-0 relative flex flex-col items-center px-8 pb-8 pt-20 z-10 overflow-y-auto overscroll-contain">
         {mode === 'vision' ? (
           <>
-            <div className="w-full flex bg-surface/10 rounded-2xl p-1 backdrop-blur-md border border-white/10 mb-8 max-w-xs">
-              <button 
+            {/* I TRE MODI DI WIP VISION (10/09/2026): scansione, radar e le
+                VISITE dentro musei e chiese. La sezione musei sta qui, non in
+                una tab nuova: la barra in basso è già piena. */}
+            <div className="w-full flex bg-white rounded-2xl p-1 border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] gap-0.5 mb-8 max-w-xs">
+              <button
                 onClick={() => setMode('vision')}
-                className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${mode === 'vision' ? 'bg-primary text-white shadow-lg' : 'text-secondary/60 hover:text-secondary'}`}
+                className={`flex-1 py-2.5 text-[11px] font-black rounded-xl transition-all ${mode === 'vision' ? 'bg-primary text-white shadow-[0_4px_12px_rgba(30,58,138,0.25)]' : 'text-slate-500 hover:text-slate-900'}`}
               >
                 {tr('vis_tab_scan')}
               </button>
               <button
                 onClick={() => setMode('ar')}
-                className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${mode === 'ar' ? 'bg-primary text-white shadow-lg' : 'text-secondary/60 hover:text-secondary'}`}
+                className={`flex-1 py-2.5 text-[11px] font-black rounded-xl transition-all ${mode === 'ar' ? 'bg-primary text-white shadow-[0_4px_12px_rgba(30,58,138,0.25)]' : 'text-slate-500 hover:text-slate-900'}`}
               >
                 {tr('vis_tab_ar')}
               </button>
+              <button
+                onClick={() => { setMode('visite'); void caricaMuseiVicini(); }}
+                className={`flex-1 py-2.5 text-[11px] font-black rounded-xl transition-all ${mode === 'visite' ? 'bg-primary text-white shadow-[0_4px_12px_rgba(30,58,138,0.25)]' : 'text-slate-500 hover:text-slate-900'}`}
+              >
+                {tr('vis_tab_visite')}
+              </button>
             </div>
 
-            <div className="w-24 h-24 bg-surface/5 rounded-[2.5rem] flex items-center justify-center mb-8 border border-white/10 backdrop-blur-xl shadow-2xl">
+            <div className="w-24 h-24 bg-blue-50 rounded-[2.5rem] flex items-center justify-center mb-8 border border-[#dbe4f5] shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
               <Search className="w-12 h-12 text-primary" />
             </div>
-        
-        <h2 className="text-3xl font-black text-secondary text-center mb-4 tracking-tight">
+
+        <h2 className="text-3xl font-black text-slate-900 text-center mb-4 tracking-tight">
           {tr('vis_title')}
         </h2>
-        <p className="text-xs text-secondary/40 font-medium max-w-[200px] text-center mx-auto">
+        <p className="text-xs text-slate-500 font-medium max-w-[200px] text-center mx-auto">
           {visionTarget === 'artwork'
             ? tr('vis_hint_artwork')
             : visionTarget === 'nature'
@@ -1095,8 +1723,8 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
         <div className="flex flex-col gap-4 w-full max-w-xs">
           {/* Coda Vision offline: foto scattate senza rete, in attesa */}
           {queueCount > 0 && (
-            <div className="w-full px-4 py-3 rounded-2xl border border-sky-400/30 bg-sky-400/10 backdrop-blur-md text-left">
-              <p className="text-xs font-black text-sky-300">
+            <div className="w-full px-4 py-3 rounded-2xl border border-sky-200 bg-sky-50 text-left">
+              <p className="text-xs font-black text-sky-800">
                 {(queueProcessing ? tr('vis_queue_processing') : tr('vis_queue_waiting')).replace('{n}', String(queueCount))}
               </p>
             </div>
@@ -1106,7 +1734,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
               dall'interfaccia il 22/08/2026 per decisione del committente: il
               ramo analyzeScreenshot e la rotta server restano, ma senza
               questo pulsante non si raggiungono. */}
-          <div className="w-full flex items-center gap-1 p-1 bg-surface/10 border border-white/10 rounded-2xl backdrop-blur-md">
+          <div className="w-full flex items-center gap-0.5 p-1 bg-white border border-gray-200 rounded-2xl shadow-[0_1px_3px_rgba(15,23,42,0.06)]">
             {([
               { key: 'place', label: tr('vis_mode_place') },
               { key: 'artwork', label: tr('vis_mode_artwork') },
@@ -1118,7 +1746,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                 onClick={() => setVisionTarget(opt.key)}
                 aria-pressed={visionTarget === opt.key}
                 className={`flex-1 py-2.5 px-0.5 rounded-xl text-[11px] font-black transition-all active:scale-95 ${
-                  visionTarget === opt.key ? 'bg-primary text-white shadow-lg' : 'text-secondary/50 hover:text-secondary'
+                  visionTarget === opt.key ? 'bg-primary text-white shadow-[0_4px_12px_rgba(30,58,138,0.25)]' : 'text-slate-500 hover:text-slate-900'
                 }`}
               >
                 {opt.label}
@@ -1128,7 +1756,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
           <button
             onClick={openCamera}
             disabled={isScanning}
-            className="w-full flex items-center justify-center gap-3 py-4 bg-primary text-white font-black text-base rounded-2xl shadow-[0_0_40px_rgba(var(--color-primary),0.3)] active:scale-95 transition-all hover:bg-primary/90 disabled:opacity-50 disabled:active:scale-100"
+            className="w-full flex items-center justify-center gap-3 py-4 bg-primary text-white font-black text-base rounded-2xl shadow-[0_12px_28px_rgba(30,58,138,0.25)] active:scale-95 transition-all hover:bg-primary/90 disabled:opacity-50 disabled:active:scale-100"
           >
             <Camera className="w-5 h-5" />
             <span>{tr('vis_take_photo')}</span>
@@ -1137,48 +1765,467 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
           <button
             onClick={() => galleryInputRef.current?.click()}
             disabled={isScanning}
-            className="w-full flex items-center justify-center gap-3 py-4 bg-surface/10 text-secondary font-black text-base rounded-2xl border border-white/10 backdrop-blur-md active:scale-95 transition-all hover:bg-surface/20 disabled:opacity-50 disabled:active:scale-100"
+            className="w-full flex items-center justify-center gap-3 py-4 bg-white text-slate-900 font-black text-base rounded-2xl border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] active:scale-95 transition-all hover:bg-gray-50 disabled:opacity-50 disabled:active:scale-100"
           >
             <ImageIcon className="w-5 h-5" />
             <span>{tr('vis_pick_gallery')}</span>
           </button>
 
+          {/* VISITA GUIDATA — WIP capisce dove sei (GPS + opera riconosciuta)
+              e ti accompagna nel museo o nella chiesa con un percorso. */}
+          {(visionTarget === 'artwork' || passActive || visit) && (
+            (needsTourPass || pocheOpere) && !visit ? (
+              // Il server ha detto che il percorso è del pass con itinerario.
+              schedaPassTour
+            ) : visit ? (
+              <button
+                onClick={() => setVisitOpen(true)}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left active:scale-95 transition-all"
+              >
+                <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                  <Landmark className="w-5 h-5 text-primary" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-black text-slate-900 truncate">{tr('mv_title')} · {visit.venue.name}</p>
+                  <p className="text-[10px] font-bold text-slate-500">
+                    {tr('mv_seen_count').replace('{n}', String(countSeen(visit))).replace('{t}', String(visit.guide.tappe.length))} · {tr('mv_open')}
+                  </p>
+                </div>
+              </button>
+            ) : visitNameFallback !== null ? (
+              <form
+                onSubmit={(e) => { e.preventDefault(); void startGuidedVisit(visitNameFallback); }}
+                className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.06)] text-left space-y-2"
+              >
+                <p className="text-[11px] font-bold text-slate-600 leading-snug">{tr('mv_ask_name')}</p>
+                <div className="flex gap-2">
+                  <input
+                    value={visitNameFallback}
+                    onChange={(e) => setVisitNameFallback(e.target.value)}
+                    placeholder={tr('mv_name_placeholder')}
+                    className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-white border border-gray-200 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-primary"
+                  />
+                  <button type="submit" disabled={visitStarting || visitNameFallback.trim().length < 3} className="px-3 py-2 rounded-xl bg-primary text-white text-xs font-black disabled:opacity-50">
+                    {visitStarting ? <Loader2 className="w-4 h-4 animate-spin" /> : tr('mv_go')}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <button
+                onClick={() => void startGuidedVisit()}
+                disabled={isScanning || visitStarting}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left active:scale-95 transition-all hover:bg-blue-50/40 disabled:opacity-50"
+              >
+                <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                  {visitStarting ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-black text-slate-900">{tr('mv_start')}</p>
+                  <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('mv_start_desc')}</p>
+                </div>
+              </button>
+            )
+          )}
+
           {/* PASS MUSEO — dentro un museo il geofencing tace per design:
-              l'esperienza indoor è inquadrare le opere, col pass è illimitata */}
+              l'esperienza indoor è inquadrare le opere. Due livelli: base
+              (40 audioguide) e con itinerario (anche la visita guidata). */}
           {passActive && passExpiresAt !== null ? (
-            <div className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-amber-400/40 bg-amber-400/10 backdrop-blur-md">
-              <div className="w-9 h-9 rounded-xl bg-amber-400/20 flex items-center justify-center shrink-0">
-                <Ticket className="w-5 h-5 text-amber-400" />
+            <div className="w-full flex flex-col gap-2">
+              <div className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-[#d4af37] bg-[#f8f5f0] shadow-[0_1px_3px_rgba(15,23,42,0.06)]">
+                <div className="w-9 h-9 rounded-xl bg-white border border-[#e8dfc9] flex items-center justify-center shrink-0">
+                  <Ticket className="w-5 h-5 text-amber-700" />
+                </div>
+                <div className="flex-1 min-w-0 text-left">
+                  <p className="text-xs font-black text-amber-800">
+                    {getTranslation("museum_pass_active", language)}
+                    {passTier === 'tour' ? ` · ${getTranslation("museum_pass_tour_badge", language)}` : ''}
+                  </p>
+                  <p className="text-[10px] font-bold text-amber-700/80">
+                    {tr('museum_pass_scans_left').replace('{n}', String(Math.max(0, passScans.limit - passScans.used))).replace('{t}', String(passScans.limit))} · {getTranslation("museum_pass_remaining", language)} {formatPassRemaining(passExpiresAt)}
+                  </p>
+                </div>
               </div>
-              <div className="flex-1 min-w-0 text-left">
-                <p className="text-xs font-black text-amber-300">{getTranslation("museum_pass_active", language)}</p>
-                <p className="text-[10px] font-bold text-amber-200/70">
-                  {getTranslation("museum_pass_unlimited", language)} · {getTranslation("museum_pass_remaining", language)} {formatPassRemaining(passExpiresAt)}
-                </p>
-              </div>
+              {/* Pass base attivo: si sale a "con itinerario" pagando la differenza. */}
+              {passTier === 'base' && (
+                <button
+                  onClick={() => void handleBuyPass('tour')}
+                  disabled={isScanning || buyingPass}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] active:scale-95 transition-all disabled:opacity-50"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                    {buyingPass ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
+                  </div>
+                  <div className="flex-1 min-w-0 text-left">
+                    <p className="text-xs font-black text-slate-900">
+                      {tr('museum_pass_upgrade')} · +{Math.max(0, PRICING_LIST.museum_pass_tour - PRICING_LIST.museum_pass)} {getTranslation("credits_word", language)}
+                    </p>
+                    <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('museum_pass_upgrade_desc')}</p>
+                  </div>
+                </button>
+              )}
             </div>
           ) : (
-            <button
-              onClick={handleBuyPass}
-              disabled={isScanning || buyingPass}
-              className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-amber-400/30 bg-surface/5 backdrop-blur-md active:scale-95 transition-all hover:bg-amber-400/10 disabled:opacity-50 disabled:active:scale-100"
-            >
-              <div className="w-9 h-9 rounded-xl bg-amber-400/15 flex items-center justify-center shrink-0">
-                {buyingPass ? <Loader2 className="w-5 h-5 text-amber-400 animate-spin" /> : <Ticket className="w-5 h-5 text-amber-400" />}
-              </div>
-              <div className="flex-1 min-w-0 text-left">
-                <p className="text-xs font-black text-secondary">
-                  {getTranslation("museum_pass_title", language)} · {PRICING_LIST.museum_pass} {getTranslation("credits_word", language)}
-                </p>
-                <p className="text-[10px] font-bold text-secondary/50 leading-snug">{getTranslation("museum_pass_desc", language)}</p>
-              </div>
-            </button>
+            <div className="w-full flex flex-col gap-2">
+              <button
+                onClick={() => void handleBuyPass('base')}
+                disabled={isScanning || buyingPass}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-gray-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.06)] active:scale-95 transition-all hover:bg-[#f8f5f0] disabled:opacity-50 disabled:active:scale-100"
+              >
+                <div className="w-9 h-9 rounded-xl bg-[#f8f5f0] flex items-center justify-center shrink-0">
+                  {buyingPass ? <Loader2 className="w-5 h-5 text-amber-700 animate-spin" /> : <Ticket className="w-5 h-5 text-amber-700" />}
+                </div>
+                <div className="flex-1 min-w-0 text-left">
+                  <p className="text-xs font-black text-slate-900">
+                    {getTranslation("museum_pass_title", language)} · {PRICING_LIST.museum_pass} {getTranslation("credits_word", language)}
+                  </p>
+                  <p className="text-[10px] font-bold text-slate-500 leading-snug">{getTranslation("museum_pass_desc", language)}</p>
+                </div>
+              </button>
+              {/* Il pass da 150 NON si ripete quando la scheda «serve il
+                  pass» qui sopra lo sta già offrendo — e quella scheda, in
+                  questo modo, esiste SOLO con «Opera» selezionato. Prima la
+                  condizione ignorava il modo: dopo un «serve il pass» arrivato
+                  dalla tab Visite, in «Luogo» e «Natura» sparivano ENTRAMBE le
+                  offerte da 150 (12/09/2026, foto del committente: solo il
+                  pass da 100 sotto «Scatta foto»). */}
+              {!(schedaPassVisibile && visionTarget === 'artwork') && (
+              <button
+                onClick={() => void handleBuyPass('tour')}
+                disabled={isScanning || buyingPass}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] active:scale-95 transition-all hover:bg-blue-50/40 disabled:opacity-50 disabled:active:scale-100"
+              >
+                <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                  {buyingPass ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
+                </div>
+                <div className="flex-1 min-w-0 text-left">
+                  <p className="text-xs font-black text-slate-900">
+                    {getTranslation("museum_pass_tour_title", language)} · {PRICING_LIST.museum_pass_tour} {getTranslation("credits_word", language)}
+                  </p>
+                  <p className="text-[10px] font-bold text-slate-500 leading-snug">{getTranslation("museum_pass_tour_desc", language)}</p>
+                </div>
+              </button>
+              )}
+            </div>
           )}
         </div>
         </>
+        ) : mode === 'visite' ? (
+          /* ── SEZIONE VISITE: musei e chiese ────────────────────────────── */
+          <div className="w-full max-w-xs flex flex-col gap-3">
+            <div className="w-full flex bg-white rounded-2xl p-1 border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] gap-0.5">
+              <button onClick={() => setMode('vision')} className="flex-1 py-2.5 text-[11px] font-black rounded-xl text-slate-500 hover:text-slate-900 transition-colors">{tr('vis_tab_scan')}</button>
+              <button onClick={() => setMode('ar')} className="flex-1 py-2.5 text-[11px] font-black rounded-xl text-slate-500 hover:text-slate-900 transition-colors">{tr('vis_tab_ar')}</button>
+              <button className="flex-1 py-2.5 text-[11px] font-black rounded-xl bg-primary text-white shadow-[0_4px_12px_rgba(30,58,138,0.25)]">{tr('vis_tab_visite')}</button>
+            </div>
+
+            {/* Visita in corso: si riprende da dove si era rimasti */}
+            {visit && (
+              <button
+                onClick={() => setVisitOpen(true)}
+                className="w-full flex items-center gap-3 px-4 py-3.5 rounded-3xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left active:scale-95 transition-all"
+              >
+                <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                  <Landmark className="w-5 h-5 text-primary" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[9px] font-black uppercase tracking-[0.1em] text-primary">{tr('mv_title')}</p>
+                  <p className="text-[19px] leading-tight font-black text-slate-900 truncate">{visit.venue.name}</p>
+                  <p className="text-[11px] font-bold text-slate-500">
+                    {tr('mv_seen_count').replace('{n}', String(countSeen(visit))).replace('{t}', String(visit.guide.tappe.length))}
+                  </p>
+                </div>
+              </button>
+            )}
+
+            {/* Sei qui: il luogo riconosciuto dalla posizione */}
+            {!visit && (
+              <button
+                onClick={() => void startGuidedVisit()}
+                disabled={visitStarting}
+                className="w-full flex items-center gap-3 px-4 py-4 rounded-3xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left active:scale-95 transition-all disabled:opacity-50"
+              >
+                {/* La foto del luogo riconosciuto dal GPS, nel cerchio; il
+                    simbolo se non c'è ancora (o non c'è nessun museo vicino). */}
+                {seiQui?.photoIcon && !visitStarting ? (
+                  <img src={seiQui.photoIcon} alt="" loading="lazy" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} className="w-10 h-10 rounded-full object-cover shrink-0 border border-gray-200" />
+                ) : (
+                  <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                    {visitStarting ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  {seiQui ? (
+                    <>
+                      <p className="text-[9px] font-black uppercase tracking-[0.1em] text-primary">{tr('mv_you_are_at')}</p>
+                      <p className="text-[17px] leading-tight font-black text-slate-900 truncate">{seiQui.name}</p>
+                      <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('mv_start_here')}{seiQui.inLibrary ? ` · ${tr('mv_con_sale')}` : ''}</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm font-black text-slate-900">{tr('mv_start')}</p>
+                      <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('mv_start_desc')}</p>
+                    </>
+                  )}
+                </div>
+              </button>
+            )}
+
+            {/* «Serve il pass»: anche qui, altrimenti toccare un museo
+                dell'elenco non fa succedere niente sullo schermo. */}
+            {schedaPassTour}
+
+            {/* PASS MUSEO — prima c'era solo nella tab "Scansione AI": qui in
+                "Visite" si vedeva SOLO l'offerta da 150 crediti (dentro
+                schedaPassTour, e solo quando un museo la richiedeva), mai
+                l'opzione base da 100 senza percorso (11/09/2026, segnalazione
+                utente). */}
+            {passActive && passExpiresAt !== null ? (
+              <div className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-[#d4af37] bg-[#f8f5f0] shadow-[0_1px_3px_rgba(15,23,42,0.06)]">
+                <div className="w-9 h-9 rounded-xl bg-white border border-[#e8dfc9] flex items-center justify-center shrink-0">
+                  <Ticket className="w-5 h-5 text-amber-700" />
+                </div>
+                <div className="flex-1 min-w-0 text-left">
+                  <p className="text-xs font-black text-amber-800">
+                    {getTranslation("museum_pass_active", language)}
+                    {passTier === 'tour' ? ` · ${getTranslation("museum_pass_tour_badge", language)}` : ''}
+                  </p>
+                  <p className="text-[10px] font-bold text-amber-700/80">
+                    {tr('museum_pass_scans_left').replace('{n}', String(Math.max(0, passScans.limit - passScans.used))).replace('{t}', String(passScans.limit))} · {getTranslation("museum_pass_remaining", language)} {formatPassRemaining(passExpiresAt)}
+                  </p>
+                </div>
+                {passTier === 'base' && (
+                  <button
+                    onClick={() => void handleBuyPass('tour')}
+                    disabled={buyingPass}
+                    className="shrink-0 px-3 py-2 rounded-xl bg-primary text-white text-[11px] font-black disabled:opacity-50"
+                  >
+                    {buyingPass ? <Loader2 className="w-4 h-4 animate-spin" /> : tr('museum_pass_upgrade')}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="w-full flex flex-col gap-2">
+                <button
+                  onClick={() => void handleBuyPass('base')}
+                  disabled={buyingPass}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-gray-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.06)] active:scale-95 transition-all hover:bg-[#f8f5f0] disabled:opacity-50"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-[#f8f5f0] flex items-center justify-center shrink-0">
+                    {buyingPass ? <Loader2 className="w-5 h-5 text-amber-700 animate-spin" /> : <Ticket className="w-5 h-5 text-amber-700" />}
+                  </div>
+                  <div className="flex-1 min-w-0 text-left">
+                    <p className="text-xs font-black text-slate-900">
+                      {getTranslation("museum_pass_title", language)} · {PRICING_LIST.museum_pass} {getTranslation("credits_word", language)}
+                    </p>
+                    <p className="text-[10px] font-bold text-slate-500 leading-snug">{getTranslation("museum_pass_desc", language)}</p>
+                  </div>
+                </button>
+                {/* Il pass da 150 NON si ripete quando la scheda "serve il
+                    pass" qui sopra lo sta già offrendo. */}
+                {!schedaPassVisibile && (
+                  <button
+                    onClick={() => void handleBuyPass('tour')}
+                    disabled={buyingPass}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] active:scale-95 transition-all hover:bg-blue-50/40 disabled:opacity-50"
+                  >
+                    <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                      {buyingPass ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
+                    </div>
+                    <div className="flex-1 min-w-0 text-left">
+                      <p className="text-xs font-black text-slate-900">
+                        {getTranslation("museum_pass_tour_title", language)} · {PRICING_LIST.museum_pass_tour} {getTranslation("credits_word", language)}
+                      </p>
+                      <p className="text-[10px] font-bold text-slate-500 leading-snug">{getTranslation("museum_pass_tour_desc", language)}</p>
+                    </div>
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Ricerca: qualsiasi museo o chiesa del mondo */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                // Invio: il primo suggerimento se c'è (è già il migliore),
+                // altrimenti il nome scritto, come prima.
+                if (suggerimenti && suggerimenti.length > 0) scegliSuggerimento(suggerimenti[0]);
+                else if (cercaMuseo.trim().length >= 3) void startGuidedVisit(cercaMuseo.trim());
+              }}
+              className="w-full flex gap-2"
+            >
+              <input
+                value={cercaMuseo}
+                onChange={(e) => onCercaMuseo(e.target.value)}
+                placeholder={tr('mv_cerca_luogo')}
+                autoComplete="off"
+                autoCorrect="off"
+                className="flex-1 min-w-0 px-3.5 py-2.5 rounded-2xl bg-white border border-gray-200 text-[13px] text-slate-900 placeholder:text-slate-400 outline-none focus:border-primary"
+              />
+              <button type="submit" disabled={visitStarting || cercaMuseo.trim().length < 3} className="px-3.5 rounded-2xl bg-primary text-white disabled:opacity-40">
+                <Search className="w-4 h-4" />
+              </button>
+            </form>
+
+            {/* I SUGGERIMENTI: guide pronte con la spunta, poi i musei
+                dell'archivio e le voci Wikipedia («si prepara al momento»).
+                Un tocco apre la visita con lo stesso gesto dell'elenco. */}
+            {cercaMuseo.trim().length >= 2 && (suggerendo || suggerimenti !== null) && (
+              <div className="w-full -mt-1 rounded-2xl bg-white border border-gray-200 shadow-[0_8px_24px_rgba(15,23,42,0.08)] overflow-hidden">
+                {suggerendo && !(suggerimenti && suggerimenti.length) ? (
+                  <div className="flex items-center justify-center py-3"><Loader2 className="w-4 h-4 text-primary animate-spin" /></div>
+                ) : suggerimenti && suggerimenti.length === 0 ? (
+                  <p className="text-[11px] font-bold text-slate-400 leading-snug px-3.5 py-3">{tr('mv_sugg_nessuno')}</p>
+                ) : (
+                  <div className="max-h-[36vh] overflow-y-auto divide-y divide-gray-100">
+                    {(suggerimenti || []).map(s => {
+                      const chiesa = s.venue_type === 'chiesa';
+                      return (
+                        <button
+                          key={s.venue_key}
+                          type="button"
+                          onClick={() => scegliSuggerimento(s)}
+                          disabled={visitStarting}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 text-left active:bg-blue-50/60 transition-colors disabled:opacity-50"
+                        >
+                          {s.venue_photo_icon ? (
+                            <img src={s.venue_photo_icon} alt="" loading="lazy" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} className="w-8 h-8 rounded-full object-cover shrink-0 border border-gray-200" />
+                          ) : (
+                            <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${chiesa ? 'bg-[#f8f5f0]' : 'bg-blue-50'}`}>
+                              <Landmark className={`w-4 h-4 ${chiesa ? 'text-amber-700' : 'text-primary'}`} />
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[13px] font-black text-slate-900 truncate">{s.venue_name}</p>
+                            <p className="text-[11px] font-bold text-slate-500 truncate">
+                              {s.kind === 'library'
+                                ? `${tr('mv_sugg_pronta')} · ${tr('mv_n_opere').replace('{n}', String(s.stops_count))}${s.subtitle ? ` · ${s.subtitle}` : ''}`
+                                : (s.subtitle || tr('mv_sugg_genera'))}
+                            </p>
+                          </div>
+                          {s.kind === 'library' && <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 shrink-0">✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* LE TUE VISITE: già pagate, si riaprono gratis e senza rete */}
+            {visiteSalvate.length > 0 && (
+              <div className="w-full">
+                <p className="text-[10px] font-black uppercase tracking-[0.08em] text-slate-500 mb-2">{tr('mv_le_tue_visite')}</p>
+                <div className="space-y-2 max-h-[26vh] overflow-y-auto">
+                  {visiteSalvate.map(a => (
+                    <button
+                      key={`${a.venueKey}-${a.language}`}
+                      onClick={() => riapriConservata(a)}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-white border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] text-left active:scale-95 transition-all"
+                    >
+                      {a.venuePhotoIcon ? (
+                        <img
+                          src={a.venuePhotoIcon}
+                          alt=""
+                          loading="lazy"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                          className="w-9 h-9 rounded-full object-cover shrink-0 border border-gray-200"
+                        />
+                      ) : (
+                        <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                          <Landmark className="w-4 h-4 text-primary" />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-black text-slate-900 truncate">{a.venueName}</p>
+                        <p className="text-[11px] font-bold text-slate-500">
+                          {tr('mv_n_opere').replace('{n}', String(a.guide?.tappe?.length || 0))}
+                          {opereInArchivio(a.venueKey, language) > 0
+                            ? ` · ${tr('mv_audioguide_tue').replace('{n}', String(opereInArchivio(a.venueKey, language)))}`
+                            : ''}
+                        </p>
+                      </div>
+                      <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 shrink-0">{tr('mv_gia_tua')}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Qui vicino, già pronti */}
+            <div className="w-full">
+              <p className="text-[10px] font-black uppercase tracking-[0.08em] text-slate-500 mb-2">{tr('mv_qui_vicino')}</p>
+              {museiVicini === null ? (
+                <div className="flex items-center justify-center py-6"><Loader2 className="w-5 h-5 text-primary animate-spin" /></div>
+              ) : museiVicini.length === 0 ? (
+                <p className="text-[11px] font-bold text-slate-400 leading-snug py-2">{tr('mv_nessuno_vicino')}</p>
+              ) : (
+                <div className="space-y-2 max-h-[38vh] overflow-y-auto">
+                  {museiVicini.map(m => {
+                    const chiesa = m.venue_type === 'chiesa';
+                    return (
+                    <button
+                      key={m.venue_key}
+                      onClick={() => void apriVisitaDiElenco(m)}
+                      disabled={visitStarting}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-white border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] text-left active:scale-95 transition-all disabled:opacity-50"
+                    >
+                      {/* La FOTO del luogo nel cerchio, come per le opere. Se il
+                          museo non ne ha una dichiarata resta il simbolo: mai
+                          la foto di un altro posto, mai una foto "a tema".
+                          Mentre QUESTA riga genera la guida, lo spinner
+                          sostituisce foto/simbolo: è l'unico segnale che il
+                          tocco ha funzionato, la guida può volerci un minuto. */}
+                      {avviandoKey === m.venue_key ? (
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${chiesa ? 'bg-[#f8f5f0]' : 'bg-blue-50'}`}>
+                          <Loader2 className={`w-4 h-4 animate-spin ${chiesa ? 'text-amber-700' : 'text-primary'}`} />
+                        </div>
+                      ) : m.venue_photo_icon ? (
+                        <img
+                          src={m.venue_photo_icon}
+                          alt=""
+                          loading="lazy"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                          className="w-9 h-9 rounded-full object-cover shrink-0 border border-gray-200"
+                        />
+                      ) : (
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${chiesa ? 'bg-[#f8f5f0]' : 'bg-blue-50'}`}>
+                          <Landmark className={`w-4 h-4 ${chiesa ? 'text-amber-700' : 'text-primary'}`} />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-black text-slate-900 truncate">{m.venue_name}</p>
+                        <p className="text-[11px] font-bold text-slate-500">
+                          {/* Museo dell'archivio senza guida: «si prepara al
+                              momento», non «0 opere». */}
+                          {m.kind === 'poi' || !(m.stops_count > 0)
+                            ? tr('mv_sugg_genera')
+                            : tr('mv_n_opere').replace('{n}', String(m.stops_count))}
+                          {m.stops_with_room > 0 ? ` · ${tr('mv_con_sale')}` : ''}
+                        </p>
+                        {prezziBiglietti[m.venue_name] && (
+                          <span className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-[10px] font-black text-emerald-800">
+                            <Ticket className="w-3 h-3" />{tr('mv_biglietto_da').replace('{p}', String(prezziBiglietti[m.venue_name]).replace(/^\s*(da|from|ab|desde|dès|от)\s+/i, ''))}
+                          </span>
+                        )}
+                      </div>
+                      {m.distance_m != null && (
+                        <span className="text-[11px] font-black text-slate-400 shrink-0">
+                          {m.distance_m >= 1000 ? `${(m.distance_m / 1000).toFixed(1)} km` : `${m.distance_m} m`}
+                        </span>
+                      )}
+                    </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <p className="text-[10px] font-bold text-slate-400 text-center leading-relaxed">{tr('mv_promessa')}</p>
+          </div>
         ) : (
-          <AROverlay 
-            onClose={() => setMode('vision')} 
+          <AROverlay
+            onClose={() => setMode('vision')}
             onPoiClick={(poi) => {
               // Passa il POI al parent (App.tsx) che aprirà la scheda.
               // Formattiamo il dato come se fosse stato riconosciuto
@@ -1381,6 +2428,32 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
           language={language}
           onChoose={chooseCandidate}
           onKeep={keepRecognized}
+        />
+      )}
+
+      {/* Quiz mentre la guida del museo si costruisce: si gioca invece di
+          guardare una rotellina, e ogni risposta giusta vale un credito.
+          Chiudendolo la generazione continua lo stesso. */}
+      {quizAperto && quizUserId && (
+        <LoadingQuiz
+          destination={quizLuogo}
+          userId={quizUserId}
+          language={language}
+          quizLength={5}
+          onDismiss={chiudiQuiz}
+        />
+      )}
+
+      {/* Visita guidata: dove sei e percorso consigliato */}
+      {(visitOpen || museoInAscolto) && visit && (
+        <MuseumVisitSheet
+          key={visit.venueKey}
+          visit={visit}
+          language={language}
+          passExpiresAt={passExpiresAt}
+          nascosta={!visitOpen}
+          onClose={() => setVisitOpen(false)}
+          onScanNext={() => { setVisitOpen(false); setVisionTarget('artwork'); void openCamera(); }}
         />
       )}
 

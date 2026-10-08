@@ -12,13 +12,17 @@ import {
   uploadPdfToStorage,
   GUIDE_STYLE_META,
   getAccessToken,
+  computeItineraryHash,
 } from '../services/premiumGuideService';
+import { accodaGuida } from '../services/generazioniService';
+import { supabase } from '../lib/supabase';
 import { getUserProfile, isUserPremium } from '../lib/quotaManager';
 import { useCreditConfirmation } from '../hooks/useCreditConfirmation';
 import CreditConfirmationModal from './CreditConfirmationModal';
 import { PRICING_LIST, getWalletBalance, notifyCreditsChanged } from '../lib/pricing';
 import { Language, getTranslation } from '../lib/i18n';
 import { getApiUrl } from '../lib/api';
+import { chiediConsensoAi } from '../lib/aiConsent';
 import ShopScreen from './ShopScreen';
 import PremiumGuideRenderer from './PremiumGuideRenderer';
 
@@ -29,12 +33,9 @@ interface PremiumGuideModalProps {
   onClose: () => void;
 }
 
-type Phase = 'select_style' | 'generating' | 'preview' | 'error';
-
-/** Lingua della sintesi vocale del podcast della guida (era IT/EN soltanto). */
-const UTTERANCE_LANG: Record<string, string> = {
-  IT: 'it-IT', EN: 'en-US', FR: 'fr-FR', ES: 'es-ES', DE: 'de-DE', RU: 'ru-RU', ZH: 'zh-CN',
-};
+// 'in_coda' (06/09/2026): la guida si prepara in differita — l'utente puo'
+// chiudere l'app; la trova nell'Archivio e la riceve via email e push.
+type Phase = 'select_style' | 'generating' | 'preview' | 'error' | 'in_coda';
 
 const STYLES: GuideStyle[] = ['art', 'family', 'shopping', 'food', 'essential'];
 
@@ -56,6 +57,9 @@ export default function PremiumGuideModal({
   const [isEpubLoading, setIsEpubLoading]   = useState(false);
   // Dedica regalo (opzionale): finisce in copertina, costo invariato
   const [dedica, setDedica]                 = useState('');
+  // Altri destinatari dell'email con la guida (oltre all'account), max 5.
+  const [emailExtra, setEmailExtra]         = useState('');
+  const [codaInfo, setCodaInfo]             = useState<{ titolo: string; emailAccount: string } | null>(null);
   const [isPremiumUser, setIsPremiumUser]   = useState<boolean | null>(null);
   const [creditsLeft, setCreditsLeft]       = useState<number | null>(null);
   const PDF_CONTAINER_ID = 'premium-guide-pdf-container';
@@ -91,10 +95,27 @@ export default function PremiumGuideModal({
 
     try {
       setStreamingText('');
-      // ADDEBITO E RIMBORSO ORA SERVER-SIDE: la rotta /premium-guide/generate
+      // IN DIFFERITA (06/09/2026): la guida si mette in coda sul server, che
+      // la prepara da solo (anche 10 minuti), la salva nell'Archivio e avvisa
+      // con email (PDF allegato) e push. L'utente puo' chiudere subito.
+      // Se la stessa guida e' gia' in archivio (stesso hash), si apre in
+      // diretta come prima, senza addebito.
+      // Consenso AI (22/09/2026): la coda genera con un modello esterno, e porta la dedica dell'utente.
+      if (!(await chiediConsensoAi())) { setPhase('select_style'); return; }
+      const hash = await computeItineraryHash(itinerary, `${selectedStyle}_${language}`);
+      const destinatari = emailExtra.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean).slice(0, 5);
+      const coda = await accodaGuida({ itinerary, style: selectedStyle, hash, language, dedica, emailExtra: destinatari });
+      if (coda.id) {
+        const { data: sess } = await supabase.auth.getSession();
+        setCodaInfo({ titolo: coda.titolo || itinerary?.titolo || '', emailAccount: sess?.session?.user?.email || '' });
+        setPhase('in_coda');
+        notifyCreditsChanged({ userId });
+        window.dispatchEvent(new CustomEvent('wip-generazioni-aggiornate'));
+        return;
+      }
+      // ADDEBITO E RIMBORSO SERVER-SIDE: la rotta /premium-guide/generate
       // scala i crediti in modo atomico e li restituisce se la generazione
-      // fallisce. Il client non addebita più (niente doppio addebito), passa
-      // solo il token; la modale di conferma sopra resta come UX.
+      // fallisce (qui arriva solo la guida gia' pronta in cache).
       const result = await generatePremiumGuide(itinerary, selectedStyle, userId, language, dedica);
 
       // Validazione d'esito: una guida senza giorni è un fallimento mascherato.
@@ -155,32 +176,35 @@ export default function PremiumGuideModal({
   const handlePlayGuidePodcast = async () => {
     if (!guideContent || playingPodcast) return;
 
+    const tappe = guideContent.giorni.flatMap(g => g.pois).map(p => ({ name: p.titolo, description: p.descrizione_lunga }));
+    const corpo = { destination: guideContent.guida_titolo, dayNum: 1, tappe: tappe.slice(0, 10), language: language || 'it' };
+    const intestazioni = { 'Content-Type': 'application/json', Authorization: `Bearer ${await getAccessToken()}` };
+    // Già generato (25/09/2026): nessuna conferma «15 crediti» per un riascolto gratuito. 204 = da generare.
+    let pronto: Response | null = null;
+    try {
+      const probe = await fetch(getApiUrl('/api/generate-daily-podcast'), { method: 'POST', headers: intestazioni, body: JSON.stringify({ ...corpo, soloCache: true }) });
+      if (probe.status === 200) pronto = probe;
+    } catch { /* rete: si procede con la conferma */ }
+
     // Stesso endpoint del podcast dell'itinerario, quindi stesso prezzo:
     // prima era gratuito e illimitato solo perché chiamato da qui.
-    const confirmed = await creditConfirm.requestConfirmation(
-      PRICING_LIST.podcast_daily,
-      getTranslation('premium_guide_podcast', language)
-    );
-    if (!confirmed) return;
+    if (!pronto) {
+      const confirmed = await creditConfirm.requestConfirmation(
+        PRICING_LIST.podcast_daily,
+        getTranslation('premium_guide_podcast', language)
+      );
+      if (!confirmed) return;
+    }
 
     setPlayingPodcast(true);
     try {
-      const tappe = guideContent.giorni.flatMap(g => g.pois).map(p => ({ name: p.titolo, description: p.descrizione_lunga }));
       // ADDEBITO SERVER-SIDE: la rotta scala/rimborsa i crediti e richiede il
       // token. Il client non addebita più (niente doppio addebito). Un giorno
       // reale, non "Intera Guida": dayNum va usato come numero per la cache.
-      const res = await fetch(getApiUrl('/api/generate-daily-podcast'), {
+      const res = pronto || await fetch(getApiUrl('/api/generate-daily-podcast'), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${await getAccessToken()}`,
-        },
-        body: JSON.stringify({
-          destination: guideContent.guida_titolo,
-          dayNum: 1,
-          tappe: tappe.slice(0, 10),
-          language: language || 'it'
-        })
+        headers: intestazioni,
+        body: JSON.stringify(corpo)
       });
       if (res.status === 402) {
         setPlayingPodcast(false);
@@ -191,14 +215,13 @@ export default function PremiumGuideModal({
       const data = await res.json();
       notifyCreditsChanged({ userId });
       if (data.text) {
-        if ('speechSynthesis' in window) {
-          window.speechSynthesis.cancel();
-          const utterance = new SpeechSynthesisUtterance(data.text);
-          utterance.lang = UTTERANCE_LANG[String(language).toUpperCase()] || 'it-IT';
-          utterance.onend = () => setPlayingPodcast(false);
-          utterance.onerror = () => setPlayingPodcast(false);
-          window.speechSynthesis.speak(utterance);
-        }
+        // (29/08/2026) Prima solo speechSynthesis: nella WebView Android
+        // spesso non esiste e il podcast pagato restava muto. Ora la catena
+        // completa di ttsService: Azure/Google, poi la voce di sistema
+        // nativa, poi Web Speech. Se nessuna voce parte, il tasto si sblocca.
+        const { speakAudioguide, isSpeechActive } = await import('../services/ttsService');
+        await speakAudioguide(String(data.text), String(language), 'nicky', () => setPlayingPodcast(false));
+        if (!isSpeechActive()) setPlayingPodcast(false);
       } else {
         setPlayingPodcast(false);
       }
@@ -230,7 +253,7 @@ export default function PremiumGuideModal({
     setIsDownloading(true);
     try {
       const filename = `WIP_${guideContent.guida_titolo.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40)}.pdf`;
-      const pdfBlob = await downloadGuideAsPdf(PDF_CONTAINER_ID, filename);
+      const pdfBlob = await downloadGuideAsPdf(PDF_CONTAINER_ID, filename, { content: guideContent, mediaManifest, language: String(language) });
       if (pdfBlob && guideHash) {
         // Upload in background (non-blocking)
         uploadPdfToStorage(guideHash, pdfBlob).catch(console.error);
@@ -368,6 +391,26 @@ export default function PremiumGuideModal({
                   </p>
                 </div>
 
+                {/* In differita (06/09/2026): la guida arriva via email; qui
+                    altri destinatari oltre all'account, es. i compagni di viaggio. */}
+                <div className="mt-4">
+                  <label className="block text-xs font-black text-[#1e3a8a] mb-1.5">
+                    ✉️ {getTranslation('gen_email_extra', language)}
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="email"
+                    value={emailExtra}
+                    onChange={(e) => setEmailExtra(e.target.value)}
+                    maxLength={400}
+                    placeholder="anna@esempio.it, marco@esempio.it"
+                    className="w-full px-4 py-3 rounded-2xl border-2 border-outline-variant bg-[#f8f5f0] text-sm text-[#1e3a8a] placeholder:text-[#1e3a8a]/40 focus:border-primary focus:outline-none transition-colors"
+                  />
+                  <p className="text-[10px] text-[#1e3a8a]/50 mt-1">
+                    {getTranslation('gen_email_hint', language)}
+                  </p>
+                </div>
+
                 {/* Generate button */}
                 <button
                   onClick={handleGenerate}
@@ -384,12 +427,34 @@ export default function PremiumGuideModal({
 
             {/* ── PHASE: generating ── */}
             {phase === 'generating' && (
-              <LoadingQuiz 
-                destination={itinerary.city || itinerary.destinazione || itinerary.titolo || ''} 
-                quizLength={8} 
-                userId={userId} 
-                language={language} 
+              <LoadingQuiz
+                destination={itinerary.city || itinerary.destinazione || itinerary.titolo || ''}
+                quizLength={8}
+                userId={userId}
+                language={language}
+                avvisoAttesa="guida"
               />
+            )}
+
+            {/* ── PHASE: in coda (06/09/2026) — puoi chiudere l'app ── */}
+            {phase === 'in_coda' && (
+              <div className="flex flex-col items-center justify-center px-8 py-12 text-center gap-5">
+                <div className="w-16 h-16 rounded-2xl bg-emerald-50 flex items-center justify-center text-3xl">📖</div>
+                <div>
+                  <h3 className="text-base font-black text-[#1e3a8a] mb-2">{getTranslation('gen_in_coda_titolo', language)}</h3>
+                  <p className="text-sm text-[#1e3a8a] max-w-sm leading-relaxed">
+                    {getTranslation('gen_in_coda_testo', language)}
+                    {codaInfo?.emailAccount ? <> <b>{codaInfo.emailAccount}</b></> : null}
+                  </p>
+                  <p className="text-xs text-[#1e3a8a]/60 max-w-sm leading-relaxed mt-3">{getTranslation('gen_in_coda_nota', language)}</p>
+                </div>
+                <button
+                  onClick={onClose}
+                  className="px-6 py-3 rounded-2xl bg-primary text-secondary font-black text-sm shadow-lg shadow-primary/25 hover:bg-primary/90 transition-colors"
+                >
+                  {getTranslation('gen_in_coda_ok', language)}
+                </button>
+              </div>
             )}
 
             {/* ── PHASE: error ── */}
@@ -414,14 +479,19 @@ export default function PremiumGuideModal({
             {/* ── PHASE: preview ── */}
             {phase === 'preview' && guideContent && (
               <div>
-                {/* Action bar */}
-                <div className="flex items-center justify-between px-5 py-3 border-b border-outline-variant bg-[#f8f5f0]">
-                  <p className="text-sm font-bold text-[#0a6c44] flex items-center gap-1.5">
+                {/* Action bar.
+                    flex-wrap (30/08/2026): su un telefono i quattro tasti non
+                    ci stavano in riga, «Rigenera» finiva FUORI dallo schermo e
+                    l'etichetta a sinistra veniva schiacciata su quattro righe
+                    («La tua / guida / è / pronta!»). Ora l'etichetta resta su
+                    una riga e i tasti vanno a capo. */}
+                <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-b border-outline-variant bg-[#f8f5f0]">
+                  <p className="text-sm font-bold text-[#0a6c44] flex items-center gap-1.5 shrink-0 whitespace-nowrap">
                     <span>✓</span>
                     <span>{getTranslation('premium_guide_ready', language)}</span>
                   </p>
-                  <div className="flex gap-2">
-                    
+                  <div className="flex flex-wrap gap-2">
+
                     <button
                       onClick={() => handleShareGuide()}
                       className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors"

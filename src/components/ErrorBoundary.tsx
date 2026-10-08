@@ -19,6 +19,23 @@ export class ErrorBoundary extends React.Component<Props, State> {
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    // PEZZO DI APP VECCHIO DOPO UN DEPLOY (07/10/2026): «Failed to fetch dynamically imported module
+    // …/assets/AdminPanel-XXXX.js». La pagina aperta prima del deploy chiede un modulo lazy col nome vecchio,
+    // che su Vercel non esiste più: «Qualcosa è andato storto» aprendo l'Admin. Non è un errore dell'app ma
+    // della versione: si ricarica UNA volta da soli (segno in sessionStorage contro i cicli), senza registrarlo
+    // come crash.
+    const msg = String(error?.message || '');
+    if (/Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk \d+ failed|error loading dynamically imported module/i.test(msg)) {
+      try {
+        const chiave = 'wip_ricarica_modulo_vecchio';
+        const quando = Number(sessionStorage.getItem(chiave) || 0);
+        if (Date.now() - quando > 60_000) {
+          sessionStorage.setItem(chiave, String(Date.now()));
+          window.location.reload();
+          return;
+        }
+      } catch { /* sessionStorage assente: si passa al registro e al tasto Ricarica */ }
+    }
     // Lo stack tecnico NON va mostrato all'utente: finisce solo nella tabella
     // system_errors (tab admin "Errori di sistema") tramite errorLogger.
     logSystemError(error?.message || 'React render crash', {

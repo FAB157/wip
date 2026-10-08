@@ -128,6 +128,33 @@ export interface PoiFootprint {
   hasEntrance?: boolean;
 }
 
+/**
+ * LUOGHI SENZA PORTA (03/10/2026, committente: «la regola del muro solo per piazze, parchi,
+ * ponti, panorami»). Per un edificio, una chiesa o un museo la guida parte SOLO a 30 m dal punto
+ * d'arrivo (50 in auto), come fanno Google Maps e Mappe: i 30 m dal muro facevano scattare sul
+ * retro o dal lato sbagliato. Il perimetro resta la misura giusta dove non c'è una porta a cui
+ * arrivare: chi è in mezzo alla piazza è già arrivato.
+ * Stesso elenco in Footprints.kt::senzaPorta (Android) e PoiFootprints.swift::senzaPorta (iOS).
+ */
+const TIPI_SENZA_PORTA = new Set([
+  'square', 'piazza', 'piazze', 'bridge', 'ponte', 'ponti', 'viewpoint', 'panorami', 'panorama',
+  'park', 'parchi', 'parco', 'garden', 'giardino', 'botanical_garden', 'national_park',
+  'nature_reserve', 'riserva', 'geopark', 'forest', 'foresta', 'wood', 'bosco',
+  'beach', 'spiaggia', 'spiagge', 'bay', 'baia', 'island', 'isola', 'cliff', 'falesia',
+  'coast', 'costa', 'dune', 'lake', 'lago', 'laghi', 'river', 'fiume', 'gorge', 'gola',
+  'canyon', 'desert', 'deserto', 'peak', 'vetta', 'vette', 'volcano', 'vulcano',
+  'glacier', 'ghiacciaio', 'natura', 'trail', 'scenic_road',
+  'cemetery', 'war_cemetery', 'archaeological_park', 'archaeological_site', 'archeo',
+  'ruins', 'necropolis', 'city_walls', 'harbour', 'pier', 'aqueduct', 'quarry',
+  'saltworks', 'dam', 'racetrack', 'racecourse',
+]);
+const NOME_SENZA_PORTA = /^(piazza|piazzale|piazzetta|ponte|parco|giardin[io]|belvedere|lungomare|plaza|puente|pont |place |jardin|parc )|( square| bridge| park| gardens?)$|platz$|brücke$/i;
+export function luogoSenzaPorta(poi: { category?: string | null; poi_type?: string | null; name?: string | null } | null | undefined): boolean {
+  const tipo = (v?: string | null) => !!v && TIPI_SENZA_PORTA.has(String(v).trim().toLowerCase());
+  if (tipo(poi?.poi_type) || tipo(poi?.category)) return true;
+  return !!poi?.name && NOME_SENZA_PORTA.test(String(poi.name).trim());
+}
+
 export function radiiForTransport(
   mode: TransportMode,
   category?: string | null,
@@ -141,13 +168,20 @@ export function radiiForTransport(
     ? { alert: d.carAlert, trigger: d.carTrigger }
     : { alert: d.walkAlert, trigger: d.walkTrigger };
 
-  // RAGGI CALIBRATI SUL PERIMETRO REALE. Se il POI è stato processato col
-  // footprint OSM (entrance valorizzato → hasEntrance) E porta un raggio
-  // GREZZO dal DB, quel raggio VINCE: è misurato sul perimetro dell'edificio,
-  // una piazza lo ha grande e una statua lo ha stretto. I POI non calibrati
-  // (raggio null) restano alla preferenza dell'utente.
+  // RAGGI CALIBRATI DAL DB (geofence_radius/alert_radius: misura sul
+  // perimetro OSM quando c'è, altrimenti un default di categoria dai POI
+  // Overture/OSM — comunque una misura, non una stima). VINCE sempre che sia
+  // presente, CON O SENZA `hasEntrance` (01/09/2026, decisione utente).
   //
-  // Perché non è più un `Math.max` (23/08/2026). Il massimo faceva da
+  // Fino a ieri era gated su `hasEntrance`: la maggioranza dei POI importati
+  // da Overture porta già geofence_radius/alert_radius ma NON un
+  // entrance_lat/lon geocodificato — il gate scartava una misura buona anche
+  // su luoghi notissimi con indirizzo (Chiesa Evangelica ADI, Chiesa San
+  // Pietro Avenza, Biblioteca della Camera di Commercio...) e li faceva
+  // cadere nel bump "edifici grandi" qui sotto, con notifiche "Esplorazione"
+  // a 200-400+ m su POI mai avvicinati.
+  //
+  // Perché non è più un `Math.max` a piedi (23/08/2026). Il massimo faceva da
   // PAVIMENTO: il trigger a piedi non poteva mai scendere sotto il default di
   // modalità, e chi portava lo slider a 15 m non otteneva nulla — la guida
   // partiva comunque a 30 m o più. Con un raggio calibrato il default di
@@ -163,28 +197,23 @@ export function radiiForTransport(
   // L'alert (l'avviso "stai per arrivare") resta un `Math.max` in entrambe le
   // modalità: è un preavviso, accorciarlo non aggiunge precisione, toglie solo
   // il tempo di reagire.
-  const fpTrigger = Number(footprint?.geofenceRadius) || 0;
-  const fpAlert = Number(footprint?.alertRadius) || 0;
-  if (footprint?.hasEntrance && (fpTrigger > 0 || fpAlert > 0)) {
-    if (fpTrigger > 0) trigger = mode === 'car' ? Math.max(trigger, fpTrigger) : fpTrigger;
-    if (fpAlert > 0) alert = Math.max(alert, fpAlert);
-    return { alert, trigger };
-  }
+  // (03/10/2026, committente dopo la simulazione su 20 luoghi d'Italia: «non va
+  // bene, deve essere a 30 m e 50 in auto, 150 a piedi e 300 in auto») I RAGGI
+  // DEL DATABASE NON CONTANO PIÙ. Quanto scritto qui sopra era sbagliato alla
+  // radice: `geofence_radius`/`alert_radius` NON sono misure, li scrive il
+  // trigger `assign_geofence_radii` alla nascita della riga, per categoria
+  // (80/200 monumenti e chiese, 100/200 musei, 120/250 gemme; il 66% dei luoghi
+  // ha 80/200, alcuni 300/800). Misurato (scratch/simula-trigger-20.mjs): guida
+  // a 70-120 m dalla porta su 60 percorsi su 60, avviso a 200 m. Valgono SOLO i
+  // raggi dell'utente; il perimetro vero dell'edificio (30 m dal muro, vedi
+  // foregroundTriggers.alPerimetro) resta l'unica misura che conta.
+  // Uguale in RaggiFiducia.calcola (Kotlin) e PoiRadii.effettivi (Swift).
+  void footprint;
 
-  // Fallback (comportamento attuale): bump forfettario per edifici grandi,
-  // perché il centroide di un edificio massiccio è lontano dalla strada.
-  const cat = (category || '').toLowerCase();
-  const largeScaleCategories = [
-    'castle', 'castelli', 'museum', 'musei', 'church', 'chiese',
-    'place_of_worship', 'fortress', 'palazzo', 'palace', 'monastery', 'abbey',
-    'archaeological_site', 'ruins', 'rovine', 'monument', 'monumento', 'attraction'
-  ];
-
-  if (largeScaleCategories.includes(cat)) {
-    trigger += 40; // Aggiungiamo 40 metri di tolleranza per edifici massicci
-    alert += 50;   // Espandiamo anche l'alert per dare tempo al GPS di stabilizzarsi
-  }
-
+  // Nessun raggio calibrato: centroide puro, non sappiamo dove sia la porta.
+  // Decisione utente 01/09/2026: il raggio non aumenta MAI per incertezza —
+  // niente più bump forfettario per categoria (chiese, musei, castelli...),
+  // resta la preferenza utente così com'è.
   return { alert, trigger };
 }
 
@@ -303,43 +332,33 @@ export interface FattoreFiducia {
   fattore: number;
   /** Moltiplicatore del raggio di AVVISO. */
   fattoreAvviso: number;
-  tettoTrigger: number;
-  tettoAvviso: number;
-}
-
-/** Tetti: oltre questi non si va, qualunque sia la sfiducia nel punto. */
-export const TETTO_TRIGGER_M: Record<TransportMode, number> = { walk: 80, car: 120 };
-export const TETTO_AVVISO_M: Record<TransportMode, number> = { walk: 250, car: 400 };
-
-export function fattoreFiducia(livello: LivelloFiducia, modo: TransportMode): FattoreFiducia {
-  const tettoTrigger = TETTO_TRIGGER_M[modo] ?? TETTO_TRIGGER_M.walk;
-  const tettoAvviso = TETTO_AVVISO_M[modo] ?? TETTO_AVVISO_M.walk;
-  switch (livello) {
-    case 'perimetro':
-    case 'ingresso':
-    case 'indirizzo':
-      // Muro, porta o punto dell'indirizzo: in tutti e tre i casi si misura da
-      // qualcosa di reale, e allargare peggiorerebbe e basta. «Via Roma 15» e'
-      // un punto quanto lo e' un portone.
-      return { fattore: 1, fattoreAvviso: 1, tettoTrigger, tettoAvviso };
-    default:
-      // Centroide puro: nessun punto, ne' porta ne' facciata. Meglio presto che mai.
-      return { fattore: 2, fattoreAvviso: 2, tettoTrigger, tettoAvviso };
-  }
 }
 
 /**
- * Applica la fiducia a un raggio base.
- * REGOLA D'ORO: la fiducia puo' solo ALLARGARE. Il tetto non deve mai
- * stringere cio' che l'utente ha scelto con gli slider (in auto il trigger
- * arriva a 150 m di preferenza: il tetto di 120 e' un limite all'allargamento,
- * non un massimo assoluto).
+ * Decisione utente 01/09/2026: IL RAGGIO NON AUMENTA MAI PER INCERTEZZA.
+ * Fino a ieri un `centroide` puro raddoppiava il raggio (fattore 2, tetti 80m
+ * piedi/120m auto per il trigger, 250m/400m per l'avviso) — ma la
+ * maggioranza dei POI importati da Overture/OSM e' a centroide (nessun
+ * entrance_lat/lon geocodificato) anche su luoghi notissimi con indirizzo
+ * (Chiesa Evangelica ADI, Chiesa San Pietro Avenza, Biblioteca della Camera
+ * di Commercio...), e il raddoppio produceva notifiche "Esplorazione" a
+ * 200-400+ m su POI mai avvicinati davvero. Nessun livello allarga piu': il
+ * fattore e' sempre 1, qualunque sia la fiducia nel punto.
+ */
+export function fattoreFiducia(_livello: LivelloFiducia, _modo: TransportMode): FattoreFiducia {
+  return { fattore: 1, fattoreAvviso: 1 };
+}
+
+/**
+ * Applica la fiducia a un raggio base. Con `fattoreFiducia` sempre a 1
+ * questa funzione e' oggi un no-op protettivo: resta per non toccare i
+ * chiamanti in foregroundTriggers.ts e per il giorno in cui un livello
+ * dovesse tornare ad allargare (mai stringere sotto la preferenza utente).
  */
 export function applicaFiducia(raggioBase: number, f: FattoreFiducia, tipo: 'trigger' | 'avviso'): number {
   const base = Number(raggioBase) || 0;
   const molt = tipo === 'trigger' ? f.fattore : f.fattoreAvviso;
-  const tetto = tipo === 'trigger' ? f.tettoTrigger : f.tettoAvviso;
-  return Math.max(base, Math.min(base * molt, tetto));
+  return Math.max(base, base * molt);
 }
 
 // --- Categorie ammesse per il trigger audioguida -------------------------
@@ -352,6 +371,23 @@ export function applicaFiducia(raggioBase: number, f: FattoreFiducia, tipo: 'tri
 // ("museum", "church", "viewpoint"...), un confronto che non poteva mai
 // combaciare → il filtro per categoria del radar/audioguida sul web non
 // applicava di fatto la selezione dell'utente.
+/**
+ * COSA VALE UNA CATEGORIA DEL SETUP MAI TOCCATA (05/10/2026). Il setup (Profilo ›
+ * Categorie audioguida) nasce con Monumenti, Musei e Chiese accesi e Panorami,
+ * Natura e Consigli spenti. Fino a oggi però una chiave ASSENTE valeva «accesa»
+ * qui e «non spuntata» nel setup: un belvedere parlava anche se la casella
+ * Panorami appariva vuota. Un solo elenco, letto da entrambi: ciò che l'utente
+ * vede spuntato è ciò che parla.
+ */
+export const PREDEFINITI_AUDIOGUIDA: Record<string, boolean> = {
+  monumenti: true, musei: true, chiese: true, panorami: false, natura: false, consigli: false,
+};
+/** Lo stato di una categoria del setup, col suo predefinito se non è mai stata toccata. */
+export function sceltaSetup(activeSubcats: Record<string, boolean> | null | undefined, chiave: string): boolean {
+  const v = activeSubcats ? activeSubcats[chiave] : undefined;
+  return typeof v === 'boolean' ? v : (PREDEFINITI_AUDIOGUIDA[chiave] ?? false);
+}
+
 export function isCategoryAllowed(
   poi: { category?: string | null; premium?: boolean; is_gem?: boolean },
   activeSubcats: Record<string, boolean>,
@@ -366,7 +402,23 @@ export function isCategoryAllowed(
   // Prima questo controllo stava dopo le due esclusioni qui sotto, e una
   // gemma tematica restava zitta. Il nativo fa già così (CategoryMap.isActive
   // guarda is_gem per primo).
-  if (poi.premium || poi.is_gem || cat === 'gemme') return activeSubcats.gemme ?? true;
+  // Solo il FLAG, non la categoria (03/09/2026): `category='gemme'` e' il
+  // contenitore dell'import CSV di Wikipedia e vale per 9.062 righe che il
+  // modello ha giudicato NON gemme. Quelle rispondono all'interruttore dei
+  // monumenti, come la macro in cui ora ricadono (vedi poiTaxonomy). Senza la
+  // riga sotto resterebbero mute: `cat` vale 'gemme' e non combacia con
+  // nessuno degli elenchi piu' avanti.
+  // (05/10/2026, test virtuale a Roma: con «Gemme» spenta e «Monumenti» accesa la
+  // Fontana di Trevi — gemma — restava muta, e al suo posto parlavano i doppioni
+  // senza testo. Committente: «fai per la meglio, le audioguide siano quelle che
+  // l'utente seleziona in setup».) Il SETUP dichiara le gemme «Default assoluto · sempre
+  // attive» con la casella bloccata, ma la chiave `gemme` in memoria la scrive la
+  // CHIP DELLA MAPPA (App.tsx, MAP_FILTER_KEYS): nascondere i pin delle gemme
+  // spegneva di nascosto le loro audioguide. L'audioguida segue il setup, non la
+  // mappa: una gemma parla sempre — come nei nativi, dove «gemme» non viene mai
+  // inoltrata e le spegne solo la sentinella "gemme:off" del modo navigatore.
+  if (poi.premium || poi.is_gem === true) return true;
+  if (cat === 'gemme') return activeSubcats.monumenti ?? true;
 
   // BENI CULTURALI: scheda e foto, MAI audioguida.
   // Sono i beni dei registri nazionali del patrimonio promossi a POI (circa
@@ -400,16 +452,22 @@ export function isCategoryAllowed(
   // Monumenti: include il patrimonio costruito importato in fase 2 (piazze,
   // ponti, fontane, teatri, palazzi, torri, grattacieli, cimiteri monumentali,
   // biblioteche storiche, mulini, acquedotti, osservatori, stadi).
+  // (05/10/2026, committente dopo il test a Roma, dove hanno parlato una
+  // biblioteca e un teatro: «tra i monumenti togli biblioteche, teatri, stazioni
+  // e stadi».) Fuori dall'audioguida dei monumenti: library, theatre, opera_house,
+  // train_station, stadium. Restano sulla mappa e nelle schede; parlano solo se
+  // sono gemme. Il teatro ROMANO (roman_theatre) è archeologia e resta.
+  // Stesso elenco in CategoryMap.kt e PoiModels.swift.
   if (['monument', 'artwork', 'monumenti', 'attraction',
-       'square', 'bridge', 'fountain', 'theatre', 'opera_house', 'palace',
-       'tower', 'skyscraper', 'cemetery', 'library', 'windmill', 'aqueduct',
-       'observatory', 'stadium',
+       'square', 'bridge', 'fountain', 'palace',
+       'tower', 'skyscraper', 'cemetery', 'windmill', 'aqueduct',
+       'observatory',
        // Fasi 3-5: archeologia romana, difensivo, industria, memoria,
        // trasporti storici, cultura, scienza.
        'birthplace', 'house_museum', 'necropolis', 'catacomb', 'fortress',
        'city_walls', 'villa', 'harbour', 'mine', 'chimney', 'funicular',
        'amphitheatre', 'roman_baths', 'triumphal_arch', 'obelisk', 'mausoleum',
-       'market_hall', 'train_station', 'dam', 'watermill', 'prison', 'museum_ship',
+       'market_hall', 'dam', 'watermill', 'prison', 'museum_ship',
        'archaeological_park', 'memorial', 'sculpture', 'university', 'town_hall',
        'roman_theatre', 'roman_circus', 'roman_villa', 'domus', 'city_gate',
        'coastal_tower', 'stronghold', 'quarry', 'saltworks', 'racetrack',
@@ -439,7 +497,7 @@ export function isCategoryAllowed(
   // Dal 22/08/2026 c'e' anche la macro «natura» (chip mappa e setup): vale
   // per tutte e cinque le famiglie quando la famiglia non e' stata toccata.
   const naturaSub = (famiglia: string): boolean =>
-    (activeSubcats as any)[famiglia] ?? (activeSubcats as any).natura ?? activeSubcats.panorami ?? true;
+    (activeSubcats as any)[famiglia] ?? (activeSubcats as any).natura ?? activeSubcats.panorami ?? PREDEFINITI_AUDIOGUIDA.natura;
   if (['beach', 'spiaggia', 'spiagge', 'bay', 'baia', 'island', 'isola', 'cliff', 'falesia', 'coast', 'costa', 'dune',
       ].includes(cat)) return naturaSub('spiagge');
   if (['peak', 'vetta', 'vette', 'volcano', 'vulcano', 'glacier', 'ghiacciaio', 'mountain_pass', 'valico', 'ridge', 'arete', 'saddle',
@@ -453,7 +511,7 @@ export function isCategoryAllowed(
       ].includes(cat)) return naturaSub('parchi');
   if (['viewpoint', 'panorami', 'panorama', 'lighthouse', 'faro', 'scenic_road', 'aerialway', 'natura',
        'trail', 'sentiero', 'cammino', 'hiking', 'via_ferrata', 'ski_resort',
-      ].includes(cat)) return activeSubcats.panorami ?? true;
+      ].includes(cat)) return activeSubcats.panorami ?? PREDEFINITI_AUDIOGUIDA.panorami;
   if (['museum', 'gallery', 'musei', 'art_museum', 'natural_history_museum',
        'art_gallery', 'house_museum'].includes(cat)) return activeSubcats.musei ?? true;
   if (['information', 'tourism_information', 'office', 'consigli'].includes(cat))

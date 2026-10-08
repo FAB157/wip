@@ -13,7 +13,7 @@ import com.google.android.gms.location.LocationServices
 import com.itaintasca.app.db.PoiEntity
 
 /**
- * RAGGIO IN BASE ALLA FIDUCIA DEL PUNTO (23/08/2026).
+ * RAGGIO IN BASE ALLA FIDUCIA DEL PUNTO (23/08/2026, rivisto 01/09/2026).
  *
  * Un POI non e' un punto: e' un punto di cui sappiamo, caso per caso, quanto
  * fidarci. Il perimetro e' misurato sul muro; l'ingresso e' la porta vera; il
@@ -21,22 +21,19 @@ import com.itaintasca.app.db.PoiEntity
  * vicinanza MISURATA a pochi metri; il centroide e' solo il baricentro di
  * quello che sappiamo, e li' non conosciamo ne' la via ne' la porta.
  *
- * Scala a quattro livelli (la STESSA di src/lib/guideSettings.ts):
- *   perimetro  → nessun allargamento: la misura c'e' gia' (Footprints)
- *   ingresso   → raggio base
- *   indirizzo  → raggio base, STRETTO: quando c'e' un PUNTO quello E' l'arrivo
- *   centroide  → base x2: non si sa dove sia la porta, meglio largo che muto
- *
- * COSA FA GRADINO E COSA NO (regola dell'utente, 23/08/2026). Il criterio non
- * e' la presenza del numero civico nella stringa — quella distinzione
- * civico/via, provata poche ore prima, e' stata TOLTA — ma la presenza del
- * PUNTO (address_point_lat/lon). Un POI con la sola stringa dell'indirizzo e
- * nessun punto e' `centroide`: la stringa non si puo' trasformare in un
- * cerchio.
- *
- * Tetti: trigger 80 m a piedi / 120 m in auto, avviso 250 m / 400 m. Un raggio
- * CALIBRATO dal DB (geofence_radius/alert_radius) vince su tutto: e' misurato,
- * non stimato.
+ * Regola (decisione utente, 01/09/2026): IL RAGGIO NON AUMENTA MAI PER
+ * INCERTEZZA. Fino a ieri un POI a centroide puro raddoppiava il raggio
+ * (fino a un tetto di 250/400 m) per "non perderlo" — ma la maggioranza dei
+ * POI importati da Overture/OSM e' a centroide (nessun entrance_lat/lon
+ * geocodificato) anche quando e' un luogo notissimo con indirizzo (Chiesa
+ * Evangelica ADI, Chiesa San Pietro Avenza, Biblioteca della Camera di
+ * Commercio...), e il raddoppio produceva notifiche "Esplorazione" a
+ * 200-400+ m su POI mai avvicinati. Ora:
+ *   - raggio CALIBRATO in DB (geofence_radius/alert_radius, misurato o
+ *     default di categoria Overture) → vince sempre se presente, puo' solo
+ *     allargare la preferenza utente, mai stringerla;
+ *   - nessun raggio calibrato → resta la preferenza utente cosi' com'e'
+ *     (default 150 m a piedi / 300 m in auto), niente moltiplicatore.
  *
  * UNICO punto di verita': lo usano GeofenceManager (recinti di sistema) e
  * ItaintaBackgroundPoiService (valutazione predittiva). Tre copie della stessa
@@ -44,17 +41,10 @@ import com.itaintasca.app.db.PoiEntity
  */
 object RaggiFiducia {
 
-    enum class Livello { PERIMETRO, INGRESSO, INDIRIZZO, CENTROIDE }
-
     data class Raggi(val alert: Float, val arrivo: Float)
 
     /** Un punto d'arrivo: le coordinate a cui puntare (trigger e navigatore). */
     data class Punto(val lat: Double, val lon: Double)
-
-    const val TETTO_TRIGGER_PIEDI = 80f
-    const val TETTO_TRIGGER_AUTO = 120f
-    const val TETTO_ALERT_PIEDI = 250f
-    const val TETTO_ALERT_AUTO = 400f
 
     /**
      * GUARDIA sul punto dell'indirizzo: oltre questa distanza dal centroide il
@@ -64,23 +54,6 @@ object RaggiFiducia {
      * nel posto sbagliato.
      */
     const val MAX_DISTANZA_PUNTO_INDIRIZZO = 250f
-
-    /**
-     * Moltiplicatore del raggio base per livello di fiducia.
-     *
-     * L'INDIRIZZO CON UN PUNTO E' L'ARRIVO, NON UN'INCERTEZZA (decisione
-     * utente, 23/08/2026): quel punto e' la casa piu' vicina misurata sul dump
-     * Nominatim, sta a pochi metri dalla facciata, e il raggio ci resta stretto
-     * — 30 m da LI'. Il centroide puro e' l'unico caso da allargare, perche'
-     * li' non sappiamo ne' la via ne' la porta e stringere farebbe perdere
-     * il POI.
-     */
-    private fun moltiplicatore(livello: Livello): Float = when (livello) {
-        Livello.PERIMETRO -> 1f
-        Livello.INGRESSO -> 1f
-        Livello.INDIRIZZO -> 1f
-        Livello.CENTROIDE -> 2f
-    }
 
     /**
      * Il PUNTO dell'indirizzo, se utilizzabile, altrimenti null.
@@ -118,52 +91,210 @@ object RaggiFiducia {
         return puntoIndirizzo(poi) ?: Punto(poi.lat, poi.lon)
     }
 
-    /** Da dove viene il punto di questo POI. */
-    fun livello(poi: PoiEntity): Livello {
-        if (!poi.footprint.isNullOrBlank()) return Livello.PERIMETRO
-        if (poi.entranceLat != null && poi.entranceLon != null) return Livello.INGRESSO
-        if (puntoIndirizzo(poi) != null) return Livello.INDIRIZZO
-        return Livello.CENTROIDE
-    }
-
     /**
      * Raggi effettivi per questo POI, a partire dai raggi base della modalita'
      * (gli slider dell'utente). `alertBase`/`arrivoBase` sono gia' quelli della
      * modalita' corrente (piedi o auto).
      */
     fun calcola(poi: PoiEntity, isDriving: Boolean, alertBase: Float, arrivoBase: Float): Raggi {
-        var alert = alertBase
-        var arrivo = arrivoBase
+        // RAGGIO CALIBRATO DAL DB: vince sempre che sia presente, con o senza
+        // punto d'ingresso geocodificato. Fino al 01/09/2026 serviva anche
+        // `hasEntrance` (entrance_lat/entrance_lon non nulli): la maggioranza
+        // dei POI importati da Overture/OSM porta gia' geofence_radius/
+        // alert_radius (spesso un default di categoria, es. 80/200 per le
+        // chiese) ma NON un punto d'ingresso geocodificato — il gate scartava
+        // una misura buona e faceva cadere il POI nel ramo CENTROIDE qui
+        // sotto, raddoppiando il raggio fino a 250-600 m su luoghi noti con
+        // indirizzo (Chiesa Evangelica ADI, Chiesa San Pietro Avenza,
+        // Biblioteca della Camera di Commercio...). Puo' solo allargare,
+        // mai stringere sotto la preferenza utente.
+        // (03/10/2026, committente dopo la simulazione su 20 luoghi: «non va bene, deve
+        // essere a 30 m e 50 in auto, 150 a piedi e 300 in auto») I RAGGI DEL DATABASE
+        // NON CONTANO PIÙ. `geofence_radius`/`alert_radius` non sono misure: li scrive
+        // il trigger `assign_geofence_radii` alla nascita della riga, per categoria
+        // (80/200 monumenti e chiese, 100/200 musei, 120/250 gemme — il 66% dei luoghi
+        // ha 80/200, alcuni 300/800). Risultato misurato: guida a 70-120 m dalla porta
+        // su 60 percorsi su 60, avviso a 200 m. Valgono SOLO i raggi dell'utente
+        // (default 30/150 a piedi, 50/300 in auto); il perimetro vero dell'edificio
+        // (30 m dal muro, Footprints) resta l'unica misura che allarga.
+        // Uguale in PoiRadii.effettivi (Swift) e radiiForTransport (web).
 
-        // RAGGIO CALIBRATO DAL DB: vince. E' misurato sul perimetro reale — una
-        // piazza lo ha grande, una statua stretto — e non va ne' scalato ne'
-        // tagliato dai tetti, che servono alle STIME. Comportamento invariato
-        // rispetto a prima: gated su hasEntrance, e puo' solo allargare.
-        val hasEntrance = poi.entranceLat != null && poi.entranceLon != null
-        if (hasEntrance) {
-            val calAlert = poi.alertRadius?.takeIf { it > 0 }?.toFloat()
-            val calArrivo = poi.geofenceRadius?.takeIf { it > 0 }?.toFloat()
-            if (calAlert != null || calArrivo != null) {
-                if (calAlert != null) alert = maxOf(alert, calAlert)
-                if (calArrivo != null) arrivo = maxOf(arrivo, calArrivo)
-                return Raggi(alert, arrivo)
+        // Nessun raggio calibrato: il POI e' un centroide puro, non sappiamo
+        // dove sia la porta. Decisione utente 01/09/2026: il raggio non
+        // aumenta MAI per incertezza — restare sulla preferenza utente
+        // (default 150 m a piedi / 300 m in auto) e' meglio di un cerchio
+        // allargato che genera notifiche a centinaia di metri su POI mai
+        // avvicinati davvero.
+        return Raggi(alert = alertBase, arrivo = arrivoBase)
+    }
+}
+
+/**
+ * ARBITRATO FRA I LUOGHI — quale luogo parla quando piu' d'uno e' pronto
+ * (05/10/2026). Port delle regole del motore web del 04–05/10/2026
+ * (src/lib/geofencing/foregroundTriggers.ts, la fonte di verita'), trovate col
+ * test virtuale a Roma e Milano: davanti al Pantheon parlava una targa, in
+ * Piazza Navona un locale, e le dieci righe del Pantheon parlavano una dopo
+ * l'altra.
+ *
+ * Qui vive solo la parte PURA (costanti, peso, nome nudo, punteggio): la usano
+ * il giro del servizio (ItaintaBackgroundPoiService.runPredictiveEvaluation) e
+ * il ricevitore dei recinti di sistema (GeofenceBroadcastReceiver). Lo stato
+ * della voce («sta parlando», «sta per partire») vive nel companion del
+ * ricevitore, accanto alla coda che lo conosce.
+ *
+ * IDENTICO a `enum Arbitrato` in ios/App/App/PoiModels.swift: cambiare un
+ * valore qui = cambiarlo la' e in foregroundTriggers.ts.
+ */
+object Arbitrato {
+    /**
+     * Una gemma «vale» 50 m nell'arbitrato: sul web sono 30 (gemma) + 20
+     * (`premium`, che la RPC get_geofence_pois restituisce uguale a is_gem).
+     */
+    const val GEMMA_BONUS_M = 50f
+    /** Chi ha una voce di Wikipedia/Wikidata alle spalle vale 25 m. */
+    const val FONTE_BONUS_M = 25f
+    /** Un luogo senza peso cede il passo se uno che pesa sta arrivando entro questi metri di strada. */
+    const val ATTESA_IMPORTANTE_M = 100f
+    /** Isteresi minima per dire «la distanza sta calando» (come il web). */
+    const val AVVICINA_EPS_M = 0.5f
+    /** Stesso nome nudo entro questi metri = stesso luogo: tace insieme al vincitore. */
+    const val DOPPIONE_M = 150f
+    /** Stesso nome raccontato da meno di cosi': silenzio, anche se la riga e' un'altra. */
+    const val NOME_APPENA_DETTO_MS = 10 * 60_000L
+    /** Silenzio dopo la fine di una guida, prima che parli il luogo successivo. */
+    const val PAUSA_DOPO_GUIDA_MS = 20_000L
+    /**
+     * Quanto si aspetta che la voce di un arrivo appena emesso PARTA prima di
+     * considerarla mai partita. Sul web sono 120 s (li' in mezzo c'e' il
+     * paywall); qui la voce e' il teaser nativo, che parte da solo: bastano i
+     * tempi del recupero del teaser dal server (15 s + 15 s) con un margine.
+     */
+    const val ATTESA_PARTENZA_MS = 45_000L
+    /** Aggancio alla strada che sposta il fix piu' di cosi': si misura anche dal punto non agganciato. */
+    const val SNAP_DUBBIO_M = 5f
+    /** Fin dove si cerca la strada dal punto NON agganciato: serve solo a confermare un arrivo. */
+    fun ricercaLiberaM(isDriving: Boolean): Double = if (isDriving) 150.0 else 100.0
+    /** Da fermi il GPS puo' tacere: chi aspetta il suo turno si rivaluta ogni 5 s... */
+    const val BATTITO_ATTESA_MS = 5_000L
+    /** ...sull'ultima posizione, finche' non e' piu' vecchia di cosi' (come il web). */
+    const val FERMI_MAX_ETA_MS = 10 * 60_000L
+
+    fun haFonte(poi: PoiEntity): Boolean = poi.source?.contains("wiki", ignoreCase = true) == true
+
+    /** Gemma, oppure una fonte Wikipedia/Wikidata alle spalle. */
+    fun pesa(poi: PoiEntity): Boolean = poi.isGem || haFonte(poi)
+
+    /** Il piu' basso vince: i metri (di strada) meno i bonus d'importanza. */
+    fun punteggio(poi: PoiEntity, distM: Float): Float =
+        distM - (if (poi.isGem) GEMMA_BONUS_M else 0f) - (if (haFonte(poi)) FONTE_BONUS_M else 0f)
+
+    private val RE_ACCENTI = Regex("[\\u0300-\\u036f]")
+    private val RE_PARENTESI = Regex("\\([^)]*\\)")
+    private val RE_ARTICOLO = Regex("^(the|il|la|lo|le|i|gli|l')\\s+")
+    private val RE_NON_ALFANUM = Regex("[^a-z0-9]+")
+
+    /**
+     * Il nome senza parentesi, accenti e articolo: «Pantheon (Roma)» e «The
+     * Pantheon» sono lo stesso luogo. Stessi passi, nello stesso ordine, di
+     * `nomeNudo` in foregroundTriggers.ts. Un nome in un alfabeto non latino
+     * diventa vuoto: per lui le regole sul nome non scattano (come sul web).
+     */
+    fun nomeNudo(n: String?): String {
+        if (n.isNullOrEmpty()) return ""
+        val base = java.text.Normalizer.normalize(n.lowercase(java.util.Locale.ROOT), java.text.Normalizer.Form.NFD)
+        return base.replace(RE_ACCENTI, "")
+            .replace(RE_PARENTESI, " ")
+            .replace(RE_ARTICOLO, "")
+            .replace(RE_NON_ALFANUM, " ")
+            .trim()
+    }
+
+    /**
+     * Due nomi nudi sono lo stesso luogo: uguali, oppure (entrambi di almeno 6
+     * lettere) uno contiene l'altro. Il nome del vincitore deve avere almeno 4
+     * lettere, altrimenti la regola non si applica.
+     */
+    fun stessoLuogo(nudoVincitore: String, nudoAltro: String): Boolean {
+        if (nudoVincitore.length < 4 || nudoAltro.isEmpty()) return false
+        if (nudoVincitore == nudoAltro) return true
+        return nudoVincitore.length >= 6 && nudoAltro.length >= 6 &&
+            (nudoVincitore.contains(nudoAltro) || nudoAltro.contains(nudoVincitore))
+    }
+
+    // ── I luoghi che pesano e stanno arrivando, visti dall'ultimo giro del
+    // servizio. Li scrive runPredictiveEvaluation a ogni fix; li legge anche il
+    // ricevitore dei recinti di sistema, che non ha una distanza precedente per
+    // sapere chi si avvicina. Oltre 10 s la fotografia non vale piu'. ──
+    @Volatile private var importantiIds: Set<String> = emptySet()
+    @Volatile private var importantiAt = 0L
+
+    fun pubblicaImportanti(ids: Set<String>) {
+        importantiIds = ids
+        importantiAt = System.currentTimeMillis()
+    }
+
+    /** Un luogo che pesa (diverso da `tranne`) sta arrivando entro 100 m di strada? */
+    fun importanteInArrivo(tranne: String): Boolean {
+        val eta = System.currentTimeMillis() - importantiAt
+        if (eta < 0 || eta > 10_000L) return false
+        return importantiIds.any { it != tranne }
+    }
+
+    // ── TARGHE E LAPIDI IN SILENZIO SE C'E' UN MONUMENTO VICINO (08/10/2026) ──
+    // Port della regola web del 05/10/2026 (committente, prova a Parigi:
+    // sull'Île de la Cité le targhe parlavano prima di Notre-Dame), l'ultima
+    // che sul nativo mancava. Una targa con un luogo che non e' una targa
+    // entro 100 m NON parla e NON entra nel cooldown: lontano dai monumenti
+    // parla come prima. Una gemma non e' mai «solo una targa». Identico in
+    // PoiModels.swift (`Arbitrato.eTarga`) e in foregroundTriggers.ts.
+    const val TARGA_M = 100f
+    private val RE_TARGA_CAT = Regex("plaque|targa|lapide|stolperstein")
+    private val RE_TARGA_NOME = Regex("\\b(plaque|targa|lapide|stolperstein|gedenktafel|placa conmemorativa)\\b", RegexOption.IGNORE_CASE)
+
+    fun eTarga(poi: PoiEntity): Boolean {
+        if (poi.isGem) return false
+        if (RE_TARGA_CAT.containsMatchIn((poi.poiType ?: "").lowercase(java.util.Locale.ROOT))) return true
+        if (poi.id.startsWith("plaque-")) return true
+        return RE_TARGA_NOME.containsMatchIn(poi.nome)
+    }
+
+    /**
+     * Fra i luoghi dati (quelli che il setup lascia parlare, attorno all'utente)
+     * le targhe che hanno entro 100 m un luogo che non e' una targa.
+     */
+    fun targheConMonumentoVicino(luoghi: List<PoiEntity>): Set<String> {
+        val targhe = luoghi.filter { eTarga(it) }
+        if (targhe.isEmpty()) return emptySet()
+        val altri = luoghi.filter { !eTarga(it) }
+        if (altri.isEmpty()) return emptySet()
+        val buf = FloatArray(1)
+        val mute = HashSet<String>()
+        for (t in targhe) {
+            for (p in altri) {
+                if (Math.abs(p.lat - t.lat) > 0.0012 || Math.abs(p.lon - t.lon) > 0.002) continue
+                android.location.Location.distanceBetween(t.lat, t.lon, p.lat, p.lon, buf)
+                if (buf[0] <= TARGA_M) { mute.add(t.id); break }
             }
         }
+        return mute
+    }
 
-        val m = moltiplicatore(livello(poi))
-        alert *= m
-        arrivo *= m
+    // Le targhe da tenere mute, viste dall'ultimo giro del servizio: le legge
+    // anche il ricevitore dei recinti di sistema, che non ha la lista dei
+    // luoghi attorno. Stessa scadenza della fotografia degli importanti.
+    @Volatile private var targheMuteIds: Set<String> = emptySet()
+    @Volatile private var targheMuteAt = 0L
 
-        // I tetti limitano l'ALLARGAMENTO, non la scelta dell'utente: chi porta
-        // lo slider a 400 m a piedi continua ad averli. Senza il maxOf col
-        // valore base, il tetto diventerebbe un tappo sugli slider e
-        // spegnerebbe una preferenza esplicita.
-        val tettoTrigger = maxOf(arrivoBase, if (isDriving) TETTO_TRIGGER_AUTO else TETTO_TRIGGER_PIEDI)
-        val tettoAlert = maxOf(alertBase, if (isDriving) TETTO_ALERT_AUTO else TETTO_ALERT_PIEDI)
-        return Raggi(
-            alert = alert.coerceAtMost(tettoAlert),
-            arrivo = arrivo.coerceAtMost(tettoTrigger)
-        )
+    fun pubblicaTargheMute(ids: Set<String>) {
+        targheMuteIds = ids
+        targheMuteAt = System.currentTimeMillis()
+    }
+
+    fun targaMuta(id: String): Boolean {
+        val eta = System.currentTimeMillis() - targheMuteAt
+        if (eta < 0 || eta > 10_000L) return false
+        return targheMuteIds.contains(id)
     }
 }
 
@@ -394,7 +525,9 @@ class GeofenceManager(private val context: Context) {
         // copre quindi il vertice piu' lontano del perimetro + 30 m; per
         // un edificio compatto non cambia nulla, per un parco o una cinta
         // muraria e' la differenza fra parlare e tacere sul lato opposto.
-        Footprints.raggioCopertura(poi.id, poi.footprint, lat, lon)?.let {
+        // (03/10/2026) Solo per i luoghi senza porta: per un edificio il cerchio
+        // d'arrivo resta quello dell'utente attorno al punto d'arrivo.
+        if (Footprints.senzaPorta(poi.poiType, poi.nome)) Footprints.raggioCopertura(poi.id, poi.footprint, lat, lon)?.let {
             arrivalRadius = maxOf(arrivalRadius, it.toFloat())
             alertRadius = maxOf(alertRadius, arrivalRadius)
         }

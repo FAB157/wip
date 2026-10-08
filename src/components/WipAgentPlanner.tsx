@@ -22,9 +22,14 @@ import { motion } from 'motion/react';
 import { X, Mic, Send, Loader2, Volume2, VolumeX, Sparkles, Pencil } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
+import { chiediConsensoAi } from '../lib/aiConsent';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { pickVoice } from '../services/ttsService';
+import { speakAudioguide, stopSpeech } from '../services/ttsService';
+import { getGuideCharacter } from '../lib/guideSettings';
+import { avviaAscolto, type SessioneVoce } from '../lib/voceInput';
+import CreditConfirmationModal from './CreditConfirmationModal';
+import { PRICING_LIST, getWalletBalance } from '../lib/pricing';
 
 /** I parametri che l'agente consegna: sono ESATTAMENTE gli stati del form. */
 export interface WipAgentParams {
@@ -65,13 +70,19 @@ export default function WipAgentPlanner({
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState<WipAgentParams | null>(null);
+  // Pacchetto chat: 3 crediti / 10 messaggi (09/09/2026). Il contatore e
+  // l'addebito vivono sul SERVER; qui si mostra solo la conferma quando il
+  // pacchetto è finito, come fa la chat della barra.
+  const [mostraModaleCrediti, setMostraModaleCrediti] = useState(false);
+  const [saldoCrediti, setSaldoCrediti] = useState(0);
+  const [daConfermare, setDaConfermare] = useState('');
   // WIP parla di default: è il senso della modalità. Si può spegnere, e la
   // scelta resta (chi è in treno non vuole la voce ogni volta).
   const [voiceOn, setVoiceOn] = useState<boolean>(() => {
     try { return localStorage.getItem('wip_agent_voice') !== '0'; } catch { return true; }
   });
   const listRef = useRef<HTMLDivElement | null>(null);
-  const recognitionRef = useRef<any>(null);
+  const sessioneVoceRef = useRef<SessioneVoce | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -87,33 +98,43 @@ export default function WipAgentPlanner({
   // WIP legge ad alta voce le proprie risposte (non l'intro al montaggio:
   // partire a parlare da soli all'apertura è invadente, e alcuni browser
   // bloccano comunque l'audio senza un gesto dell'utente).
+  // (08/09/2026) Prima si usava `window.speechSynthesis` diretto: sul web va,
+  // ma nella WebView nativa speechSynthesis spesso NON esiste e WIP restava
+  // MUTO nell'app — la stessa trappola del microfono. Ora si usa la STESSA
+  // voce delle audioguide (Azure neural via /api/tts/smart, riprodotta dal
+  // player nativo): è quella che l'utente sente nei podcast, curata in tutte
+  // le lingue, e la stessa che usa già la chat di AgentControls — WIP ha una
+  // voce sola in tutta l'app. Il ripiego su Web Speech resta dentro
+  // speakAudioguide per quando si è offline.
   const speak = (text: string) => {
     if (!voiceOn) return;
-    try {
-      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = SPEECH_LANG[language] || 'it-IT';
-      const v = pickVoice(language.toLowerCase(), 'nicky');
-      if (v) u.voice = v;
-      u.rate = 1.0;
-      window.speechSynthesis.speak(u);
-    } catch { /* la voce è un di più: mai rompere la chat */ }
+    // La barra del player deve dire "WIP", non "Audioguida": qui a parlare è
+    // l'agente, non la guida di un luogo (segnalato dal committente 09/09/2026).
+    void speakAudioguide(text, language.toLowerCase(), getGuideCharacter(), undefined, 'WIP');
   };
-  const stopSpeaking = () => {
-    try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); } catch { /* niente */ }
-  };
-  useEffect(() => () => stopSpeaking(), []);
+  const stopSpeaking = () => stopSpeech();
+  // A schermo chiuso non deve restare né la voce né il microfono acceso:
+  // annulla() (abort) rilascia il microfono subito — con ferma() (stop)
+  // Safari iOS lasciava la spia rossa accesa dopo l'uscita dall'agente.
+  useEffect(() => () => { stopSpeaking(); sessioneVoceRef.current?.annulla(); }, []);
 
-  const send = async (text: string) => {
+  /**
+   * `confermaAcquisto` = l'utente ha già detto sì al pacchetto da 3 crediti:
+   * il server è autorizzato ad addebitarlo e a ricaricare i 10 messaggi.
+   * L'addebito NON avviene qui: il client non tocca il borsellino, chiede.
+   */
+  const send = async (text: string, confermaAcquisto = false) => {
     const clean = text.trim();
     if (!clean || thinking) return;
+    // App Store 5.1.2(i) (18/09/2026): dialogo con un'AI di terze parti.
+    if (!(await chiediConsensoAi())) return;
     setError(null);
     setReady(null);
     stopSpeaking();
-    const next: Msg[] = [...messages, { role: 'user', content: clean }];
-    setMessages(next);
-    setInput('');
+    // Al secondo giro (dopo la conferma) il messaggio è già in lista: non va
+    // aggiunto due volte.
+    const next: Msg[] = confermaAcquisto ? messages : [...messages, { role: 'user', content: clean }];
+    if (!confermaAcquisto) { setMessages(next); setInput(''); }
     setThinking(true);
     try {
       const { data: sess } = await supabase.auth.getSession();
@@ -124,11 +145,24 @@ export default function WipAgentPlanner({
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         // L'intro è testo nostro, non serve al modello: si manda solo il
         // dialogo vero.
-        body: JSON.stringify({ messages: next.slice(1), language }),
+        body: JSON.stringify({ messages: next.slice(1), language, confirmPurchase: confermaAcquisto }),
         signal: AbortSignal.timeout(60000),
       });
       const data = await res.json().catch(() => null);
       if (res.status === 401) { setError(t('wip_agent_login_required')); return; }
+      // 402 = pacchetto messaggi esaurito. Con crediti a sufficienza si chiede
+      // conferma (3 crediti / 10 messaggi); senza, si dice che sono finiti.
+      if (res.status === 402) {
+        if (data?.error === 'insufficient_credits') { setError(t('chat_no_credits')); return; }
+        const { data: u } = await supabase.auth.getUser();
+        if (u?.user?.id) {
+          const saldo = await getWalletBalance(u.user.id);
+          setSaldoCrediti(saldo.total);
+          setDaConfermare(clean);
+          setMostraModaleCrediti(true);
+        }
+        return;
+      }
       if (!res.ok || typeof data?.reply !== 'string') { setError(data?.error || t('wip_agent_error')); return; }
       setMessages(prev => [...prev, { role: 'assistant', content: data.reply }]);
       speak(data.reply);
@@ -140,34 +174,47 @@ export default function WipAgentPlanner({
     }
   };
 
-  const toggleMic = () => {
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) { notify(t('wip_agent_mic_unsupported')); inputRef.current?.focus(); return; }
+  // Dettatura: nativa sull'app, Web Speech API sul web — vedi voceInput.ts.
+  // Prima si usava solo la Web Speech API, che nella WebView nativa non
+  // esiste: il tasto sembrava morto (08/09/2026).
+  const toggleMic = async () => {
     if (listening) {
-      try { recognitionRef.current?.stop(); } catch { /* niente */ }
+      sessioneVoceRef.current?.ferma();
       setListening(false);
       return;
     }
     stopSpeaking(); // WIP tace quando l'utente parla
-    const rec = new SR();
-    rec.lang = SPEECH_LANG[language] || 'it-IT';
-    rec.continuous = false;
-    rec.interimResults = false;
-    rec.onresult = (ev: any) => {
-      const transcript = String(ev.results?.[0]?.[0]?.transcript || '').trim();
-      setListening(false);
+    setListening(true);
+    const sessione = await avviaAscolto({
+      lingua: SPEECH_LANG[language] || 'it-IT',
       // Quello che si dice a voce parte subito: il microfono è già la
       // conferma, chiedere anche "invio" è un passo in più.
-      if (transcript) void send(transcript);
-    };
-    rec.onerror = () => setListening(false);
-    rec.onend = () => setListening(false);
-    recognitionRef.current = rec;
-    setListening(true);
-    try { rec.start(); } catch { setListening(false); }
+      onRisultato: (testo) => { void send(testo); },
+      onFine: () => { setListening(false); sessioneVoceRef.current = null; },
+      onErrore: (motivo) => {
+        notify(t(motivo === 'permesso_negato' ? 'voce_permesso_negato' : 'voce_non_disponibile'));
+        inputRef.current?.focus();
+      },
+    });
+    sessioneVoceRef.current = sessione;
   };
 
   return (
+    <>
+    <CreditConfirmationModal
+      isOpen={mostraModaleCrediti}
+      onClose={() => setMostraModaleCrediti(false)}
+      onConfirm={() => {
+        setMostraModaleCrediti(false);
+        // Rimanda lo STESSO messaggio autorizzando l'addebito lato server.
+        if (daConfermare) void send(daConfermare, true);
+      }}
+      cost={PRICING_LIST.chat_session}
+      currentBalance={saldoCrediti}
+      serviceName={t('chat_service_name')}
+      onBuyCredits={() => {}}
+      language={language as any}
+    />
     <motion.div
       key="wip-agent"
       initial={{ opacity: 0, y: 20 }}
@@ -196,7 +243,7 @@ export default function WipAgentPlanner({
         >
           {voiceOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
         </button>
-        <button type="button" onClick={() => { stopSpeaking(); onClose(); }} aria-label={getTranslation('close', language)} className="p-2 rounded-full bg-gray-100 text-gray-400 hover:bg-gray-200 transition">
+        <button type="button" onClick={() => { stopSpeaking(); sessioneVoceRef.current?.annulla(); onClose(); }} aria-label={getTranslation('close', language)} className="p-2 rounded-full bg-gray-100 text-gray-400 hover:bg-gray-200 transition">
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -228,7 +275,7 @@ export default function WipAgentPlanner({
           <div className="flex flex-wrap gap-2 pt-1">
             <button
               type="button"
-              onClick={() => { stopSpeaking(); onReady(ready); }}
+              onClick={() => { stopSpeaking(); sessioneVoceRef.current?.annulla(); onReady(ready); }}
               className="flex items-center gap-2 px-5 py-3 min-h-[44px] bg-primary text-white rounded-2xl font-black text-sm shadow-md hover:shadow-lg transition"
             >
               <Sparkles className="w-4 h-4" /> {t('wip_agent_ready_cta')}
@@ -251,7 +298,7 @@ export default function WipAgentPlanner({
       >
         <button
           type="button"
-          onClick={toggleMic}
+          onClick={() => void toggleMic()}
           aria-pressed={listening}
           aria-label={t('wip_agent_listening')}
           className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 border transition ${
@@ -280,5 +327,6 @@ export default function WipAgentPlanner({
         </button>
       </form>
     </motion.div>
+    </>
   );
 }
