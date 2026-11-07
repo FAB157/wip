@@ -7,6 +7,7 @@
 
 import { supabase } from '../lib/supabase';
 import { haversineMeters } from '../lib/geo';
+import { nomiStessoLuogo } from '../lib/poiDisplay';
 // (03/10/2026, «tutto in strada reale») La distanza mostrata negli elenchi è in
 // metri di strada quando la rete attorno è nota (entro 450 m), diretta altrimenti.
 import { metriDiStradaDaMostrare } from '../lib/roadSnap';
@@ -888,19 +889,73 @@ export function mapItineraryCategoryToMapCategory(aiType: string = ""): Poi['cat
  *    servizio nativo scatterebbe passando vicino alla città;
  *  • 'pausa' — non ha un luogo per definizione.
  */
-const TAPPE_NON_LUOGO = /pausa|spostamento|trasferimento/;
+// (20/10/2026, Carrara) Una tappa di TIPO «Esperienze» è un prodotto per definizione («Cava di Marmo di Carrara e
+// degustazione di salumi locali» era diventata un locale sulla mappa): mai un POI, qualunque sia il nome.
+const TAPPE_NON_LUOGO = /pausa|spostamento|trasferimento|esperienz/;
 /**
  * Un PRODOTTO non è un luogo (07/10/2026, Los Angeles): la tappa «Tour privato in autobus di Hollywood» (tipo
  * esperienze) era diventata un POI `monumenti`, arricchito con la voce Wikipedia di Hollywood, la foto della scritta
  * e un'audioguida — e il navigatore ci «arrivava» come a un monumento. Tour, escursioni, biglietti, noleggi,
  * crociere, lezioni sono cose che si comprano, con un punto di ritrovo dell'operatore: niente pin, niente scheda.
  */
-export const NOME_PRODOTTO_NON_LUOGO = /^(tour|visita guidata|escursione|gita|crociera|bigliett[oi]|ticket|noleggio|degustazione|lezione|corso|workshop|laboratorio|esperienza|experience|day trip|walking tour|food tour|bike tour|private tour)\b|\btour (privato|guidato|in autobus|in bici|a piedi|gastronomico|panoramico|hop-on)\b|\bhop-on hop-off\b/i;
+// (08/10/2026, Venezia) «Esperienze: Giro in barca all'ora d'oro…» e «Esperienze: Da Venezia: Verona, Sirmione…»
+// erano diventati luoghi sulla mappa: il plurale «esperienze», il «giro in barca» e i titoli da catalogo
+// «Da <città>: …» / «… like a local» non erano nella regola. Stessa espressione in /api/poi/from-itinerary.
+export const NOME_PRODOTTO_NON_LUOGO = /^(tour|visita guidata|escursione|gita|crociera|bigliett[oi]|ticket|noleggio|degustazione|lezione|corso|workshop|laboratorio|esperienz[ae]|experiences?|day trip|walking tour|food tour|bike tour|private tour)\b|\btour (privato|guidato|in autobus|in bici|a piedi|gastronomico|panoramico|hop-on)\b|\bhop-on hop-off\b|^(giro|gita|uscita|tour) in (barca|battello|gondola|bici|bicicletta|bus|autobus|kayak)\b|^(da|from|desde|depuis|ab) [A-ZÀ-Ý][^:]{1,30}:|\blike a local\b|^[^:]{2,30}:\s*(bigliett[oi]|ticket|tour|visita guidata|ingresso|pass|escursione)\b|\b(degustazion[ei]|wine tasting|tasting|cooking class|lezione di cucina|boutique wine)\b/i;
 
-export function tappaDiventaPoi(aiType: string = "", nome: string = ""): boolean {
+export function tappaDiventaPoi(aiType: string = "", nome: string = "", testo: string = ""): boolean {
   if (TAPPE_NON_LUOGO.test(String(aiType).toLowerCase())) return false;
   if (nome && NOME_PRODOTTO_NON_LUOGO.test(String(nome).trim())) return false;
+  if (eViaCommerciale(aiType, nome, testo)) return false;
   return true;
+}
+
+/**
+ * 23/10/2026 — REGOLA: una VIA DI NEGOZI non è un monumento. Collaudo 7 città: «Via Nassa» (Lugano), tipo «via»,
+ * descritta come strada dello shopping, era diventata un POI `monumenti` che parlava. Una tappa di tipo via/strada
+ * (o col nome di una via) diventa POI solo se NON è commerciale: se il tipo, il nome o il testo della tappa parlano
+ * di negozi/shopping/boutique/vetrine/griffe, nessun POI (la tappa resta nel piano e nel giro, muta).
+ * Le vie importanti senza commercio restano luoghi (regola delle vie-gemme dell'08/10).
+ */
+const TIPO_VIA = /\b(via|strada|street|corso|viale|calle|rue|avenue|boulevard|promenade|passeggiata|stra(ss|ß)e|straat)\b/i;
+const COMMERCIALE = /shopping|negoz|boutique|vetrin|griffe|lusso|luxury|acquist|compr(are|e)\b|shop|store|outlet|commercial|mercato|market|moda\b|fashion/i;
+export function eViaCommerciale(aiType: string = "", nome: string = "", testo: string = ""): boolean {
+  const t = String(aiType || ''), n = String(nome || '');
+  const eVia = TIPO_VIA.test(t) || /^(via|viale|corso|rue|calle|avenue|boulevard)\s/i.test(n.trim());
+  if (!eVia) return false;
+  return COMMERCIALE.test(t) || COMMERCIALE.test(n) || COMMERCIALE.test(String(testo || ''));
+}
+
+/**
+ * Una tappa che la verifica ha SEGNALATO non diventa un luogo in mappa (09/10/2026, San Pietroburgo): la
+ * «Cattedrale di Cristo Salvatore» — che è a Mosca — era nel piano con l'avviso «⚠ da verificare», e aprendo il
+ * piano è diventata lo stesso un pin a San Pietroburgo, visibile a tutti. Il piano la mostra col suo avviso;
+ * la mappa, che è di tutti, no. «Poco noto» non è una segnalazione: quelle tappe diventano luoghi come prima.
+ */
+export function tappaSegnalata(tappa: any): boolean {
+  const v = String(tappa?.verifica || '');
+  return v === 'da_verificare' || v === 'non_conforme';
+}
+
+/**
+ * REGOLA 23/10/2026 (ricollaudo Lugano, Piazza della Riforma): prima di far diventare una tappa non agganciata un
+ * `iti-…` si cerca un luogo CON FONTE entro `raggioM` con lo STESSO nome (ogni parola propria del nome più corto sta
+ * nell'altro). Con fonte = id che non è `iti-`/`tappa-`/`vision-`/`community`, riga visibile, coordinate valide.
+ */
+export async function cercaGemelloConFonte(nome: string, lat: number, lon: number, raggioM = 50): Promise<NearbyPoi | null> {
+  if (!nome || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  const vicini = await getNearbyPois(lat, lon, Math.max(raggioM, 60)).catch(() => [] as NearbyPoi[]);
+  const buoni = (vicini || []).filter((p: any) => {
+    const id = String(p?.id || '');
+    if (!id || /^(iti-|tappa-|vision-)/.test(id) || String(p?.category || '') === 'community') return false;
+    if (!isVisiblePoiStatus(p) || p?.is_hidden === true) return false;
+    if (!Number.isFinite(Number(p?.lat)) || !Number.isFinite(Number(p?.lon))) return false;
+    if (haversineMeters(lat, lon, Number(p.lat), Number(p.lon)) > raggioM) return false;
+    return nomiStessoLuogo(nome, String(p?.name || ''));
+  });
+  // Una riga con fonte enciclopedica (wd-, unesco-, wv-) prima di una riga OSM/Overture.
+  buoni.sort((a: any, b: any) => (/^(wd-|unesco-|wv-)/.test(String(b.id)) ? 1 : 0) - (/^(wd-|unesco-|wv-)/.test(String(a.id)) ? 1 : 0));
+  return (buoni[0] as NearbyPoi) || null;
 }
 
 /** Inserisce POI auto-popolati (source=overpass_auto/foursquare, status=auto). */

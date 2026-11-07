@@ -27,6 +27,19 @@ import {
  * negozio (evento `wip-open-shop`: App.tsx apre il profilo, ProfileScreen la
  * scheda dei pacchetti).
  */
+/**
+ * 23/10/2026 — REGOLA: «scade alle HH:MM» porta la DATA quando non è oggi (un pass comprato la sera scade
+ * domani: «alle 21:30» sembrava stasera). Oggi → solo l'ora; altro giorno → «24/10 21:30».
+ */
+export function oraScadenza(ts: number): string {
+  const d = new Date(ts);
+  if (!Number.isFinite(d.getTime())) return '';
+  const ora = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const oggi = new Date();
+  const stessoGiorno = d.getFullYear() === oggi.getFullYear() && d.getMonth() === oggi.getMonth() && d.getDate() === oggi.getDate();
+  return stessoGiorno ? ora : `${d.toLocaleDateString([], { day: '2-digit', month: '2-digit' })} ${ora}`;
+}
+
 export default function DayPassCard({ compact = false }: { compact?: boolean }) {
   const [dayPass, setDayPass] = useState<DayPassState | null>(null);
   const [activating, setActivating] = useState(false);
@@ -66,12 +79,12 @@ export default function DayPassCard({ compact = false }: { compact?: boolean }) 
     } catch { return null; }
   };
 
+  // CONFERMA DENTRO LA CARD, NON confirm() DEL BROWSER (23/10/2026, collaudo Lugano): la finestra nativa
+  // bloccava tutta la pagina (e il test automatico). Primo tocco = si mostra la conferma; secondo = si compra.
+  const [chiedeConferma, setChiedeConferma] = useState(false);
   const handleActivate = async () => {
-    if (!confirm(
-      tr('gr_dp_confirm')
-        .replace('{costo}', String(DAY_PASS_COST))
-        .replace('{cap}', String(DAY_PASS_CAP))
-    )) return;
+    if (!chiedeConferma) { setChiedeConferma(true); return; }
+    setChiedeConferma(false);
     setActivating(true);
     try {
       const state = await activateDayPass();
@@ -121,7 +134,7 @@ export default function DayPassCard({ compact = false }: { compact?: boolean }) 
               <p className="text-sm text-blue-100 mt-0.5">
                 {tr('gr_dp_stato_attivo')
                   .replace('{n}', String(Math.max(0, dayPass.cap - dayPass.used)))
-                  .replace('{ora}', new Date(dayPass.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}
+                  .replace('{ora}', oraScadenza(dayPass.expiresAt))}
               </p>
             ) : (
               <p className="text-sm text-blue-100 mt-0.5">
@@ -140,6 +153,23 @@ export default function DayPassCard({ compact = false }: { compact?: boolean }) 
           </button>
         )}
       </div>
+      {!dayPass?.active && chiedeConferma && (
+        <div className="mt-3 pt-3 border-t border-white/20 flex flex-col gap-3 sm:flex-row sm:items-center">
+          <p className="flex-1 min-w-0 text-[12px] text-blue-100 leading-snug">
+            {tr('gr_dp_confirm').replace('{costo}', String(DAY_PASS_COST)).replace('{cap}', String(DAY_PASS_CAP))}
+          </p>
+          <div className="flex gap-2 shrink-0">
+            <button onClick={handleActivate} disabled={activating}
+              className="flex-1 sm:flex-none bg-amber-400 text-slate-900 font-black px-3 py-2 rounded-xl text-[12px] active:scale-95 disabled:opacity-50">
+              {tr('gr_dp_acquista_ora').replace('{n}', String(DAY_PASS_COST))}
+            </button>
+            <button onClick={() => setChiedeConferma(false)}
+              className="flex-1 sm:flex-none bg-white/15 text-white font-bold px-3 py-2 rounded-xl text-[12px] active:scale-95">
+              {tr('cancel')}
+            </button>
+          </div>
+        </div>
+      )}
       {/* Crediti che non bastano: si dice quanti mancano e si apre la strada
           per ricaricare. Prima qui c'era solo il toast dell'errore.
           Stessa impilatura della riga sopra: anche qui il tasto ha icona piu'

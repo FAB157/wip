@@ -39,8 +39,41 @@ function guidaSuona(): boolean {
   try { return !!locationService.getAudioState()?.isPlaying; } catch { return false; }
 }
 import { getTranslation, linguaCorrente, type Language } from '../i18n';
-import { sogliaArrivo } from './tourState';
+import { sogliaArrivoTappa, serveAprireScheda } from './tourState';
+import { teaserLeggibile } from '../geofencing/nomiAnnunciabili';
 import { metriDiStrada, tieniStradeAggiornate } from '../roadSnap';
+
+/**
+ * REGOLA 23/10/2026 (ricollaudo Lugano, LAC): ogni tappa con guida a cui si è ARRIVATI apre la sua scheda. Sul
+ * telefono la apre il servizio nativo ('poi-arrived' → wip-poi-trigger); se il suo arbitrato tace (un luogo a pochi
+ * metri ha appena parlato, «mai sopra una guida», doppioni), dopo 8 s — e solo quando la guida in corso è finita —
+ * la apre il giro, una volta. Mai oltre 3 minuti dall'arrivo, mai se il giro è chiuso o la tappa è già cambiata.
+ */
+const schedeAperteDa = new Map<string, number>();
+if (typeof window !== 'undefined') {
+  window.addEventListener('wip-poi-trigger', (e: any) => {
+    const id = String(e?.detail?.poiId ?? e?.detail?.poi?.id ?? '');
+    if (id) schedeAperteDa.set(id, Date.now());
+  });
+}
+function garantisciSchedaTappa(tappa: any, arrivoTs: number): void {
+  const id = String(tappa?.id ?? '');
+  if (!id) return;
+  const prova = () => {
+    const v = tourService.vista();
+    const sullaTappa = arrivatoA === id; // arrivatoA cambia solo all'arrivo alla tappa dopo
+    const esito = serveAprireScheda(schedeAperteDa.get(id) || 0, arrivoTs, Date.now(), guidaSuona(), !!v && sullaTappa);
+    if (esito === 'aspetta') { setTimeout(prova, 3000); return; }
+    if (esito !== 'apri') return;
+    console.warn(`[giroDriver] il nativo non ha aperto la scheda di ${tappa?.nome || id}: la apre il giro`);
+    window.dispatchEvent(new CustomEvent('wip-poi-trigger', { detail: {
+      poiId: id,
+      poi: { id, name: tappa.nome, lat: tappa.lat, lon: tappa.lon, category: tappa.categoria || undefined, city: tappa.citta || undefined },
+      alreadyPaid: false, autoPlay: true, ts: Date.now(), fromTour: true,
+    } }));
+  };
+  setTimeout(prova, 8000);
+}
 
 const ACCURACY_MAX_M = 50;
 /** Entro questi metri da te (e dal percorso) un POI e` un incontro. */
@@ -62,6 +95,14 @@ let avviato = false;
 let giroId: string | null = null;
 let tappaAnnunciata: string | null = null;
 let arrivatoA: string | null = null;
+/** 23/10/2026: una manovra che non è una svolta («continua dritto», la strada che piega, «new name»). */
+function eProseguimento(m: any): boolean {
+  const t = String(m?.type || '').toLowerCase(), mod = String(m?.modifier || '').toLowerCase();
+  if (t === 'continue' || t === 'new name') return mod !== 'uturn';
+  return mod === 'straight' && t !== 'roundabout' && t !== 'rotary';
+}
+/** 23/10/2026: la tappa per cui «Sei arrivato» è già stato detto (dal passo «arrive» o dall'arrivo). */
+let arrivoDettoPer: string | null = null;
 /** Manovre gia` dette: una volta "fra N metri", una volta a ridosso. */
 let svoltaDettaLontano: string | null = null;
 let svoltaDettaVicino: string | null = null;
@@ -355,7 +396,7 @@ function onFix(e: Event): void {
     if (Number.isFinite(accuracy) && accuracy > ACCURACY_MAX_M) return;
 
     const giro = tourService.datiGiro()!;
-    if (giro.id !== giroId) { giroId = giro.id; tappaAnnunciata = null; arrivatoA = null; svoltaDettaLontano = null; svoltaDettaVicino = null; riferimentoSvolta = null; minimaTappa = null; }
+    if (giro.id !== giroId) { giroId = giro.id; tappaAnnunciata = null; arrivatoA = null; arrivoDettoPer = null; svoltaDettaLontano = null; svoltaDettaVicino = null; riferimentoSvolta = null; minimaTappa = null; }
 
     const pos = { lat, lon };
     // Durante un giro foregroundTriggers è fermo, e con lui lo scarico delle
@@ -394,8 +435,10 @@ function onFix(e: Event): void {
     // ripeteva la svolta che il nativo aveva appena detto (e il JS poteva
     // chiudere una tappa che il riallineamento chiudeva di nuovo). Si salta
     // questo campione: al prossimo il JS e` gia` in pari.
-    if (sincronizzaNativo(lingua)) return;
     const tappa = tourService.tappaAttuale();
+    // 23/10/2026: all'ultima tappa raggiunta non si riconsegna il percorso al nativo (vedi allUltima sotto).
+    const giaAllUltima = !!tappa && arrivatoA === String(tappa.id) && !v.nomeProssima;
+    if (!giaAllUltima && sincronizzaNativo(lingua)) return;
 
     // UNA SOLA VOCE PER FIX, in ordine di precedenza: istruzione del
     // navigatore > incontro lungo la strada > coda. Prima i tre blocchi
@@ -447,8 +490,16 @@ function onFix(e: Event): void {
     //     qui si sentiva due volte, o «Fra 200 metri, Sei arrivato a X». Sul
     //     web (niente geofence) le tappe con guida restano com'erano; il
     //     rientro dell'anello (nessuna tappa) pure.
-    const arrivoTappa = !!tappa && v.manovra?.type === 'arrive' && (tappa.senzaGuida === true || Capacitor.isNativePlatform());
-    if (!arrivoTappa && v.istruzione && v.metriAllaSvolta != null && v.stato !== 'ALL_INGRESSO' && v.stato !== 'GUIDA_IN_CORSO' && v.stato !== 'IN_PAUSA' && v.stato !== 'FINITO') {
+    // REGOLA 23/10/2026 (collaudo Lugano, «Sei arrivato» due volte): il passo «arrive» di una tappa già
+    // annunciata (dal blocco 1 o dal navigatore) o già dichiarata arrivata non si dice più — lo stato che
+    // tornava IN_ARRIVO riapriva il blocco 0b e la frase d'arrivo del navigatore ripeteva quella del blocco 1.
+    const arrivoGiaDetto = !!tappa && (tappaAnnunciata === String(tappa.id) || arrivoDettoPer === String(tappa.id) || tourService.tappaCorrenteGiaArrivata());
+    const arrivoTappa = !!tappa && v.manovra?.type === 'arrive' && (tappa.senzaGuida === true || Capacitor.isNativePlatform() || arrivoGiaDetto);
+    // 23/10/2026 — REGOLA: arrivati all'ULTIMA tappa (nessuna prossima, nessun rientro) il navigatore TACE e
+    // il follower nativo si ritira. Collaudo 7 città: dopo l'arrivo all'ultima tappa continuavano le svolte.
+    const allUltima = !!tappa && arrivatoA === String(tappa.id) && !v.nomeProssima;
+    if (allUltima) ritiraNativoSeMio();
+    if (!arrivoTappa && !allUltima && v.istruzione && v.metriAllaSvolta != null && v.stato !== 'ALL_INGRESSO' && v.stato !== 'GUIDA_IN_CORSO' && v.stato !== 'IN_PAUSA' && v.stato !== 'FINITO') {
       // La chiave e` PER MANOVRA (indice nella lista del nativo), non per
       // testo (21/09/2026): due «Gira a destra» di fila senza nome di via
       // avevano la stessa chiave, la seconda taceva e il battito la dava al
@@ -483,10 +534,14 @@ function onFix(e: Event): void {
       if (v.metriAllaSvolta <= vicinoM && svoltaDettaVicino !== chiave) { svoltaDettaVicino = chiave; svoltaDettaLontano = chiave; testo = v.istruzione; }
       // Il preavviso «fra N metri» solo per le svolte, mai per un arrivo (come
       // il follower, che lo fa solo sui passi 'turn').
-      else if (inFinestraLontana && inAvvicinamento && v.manovra?.type !== 'arrive' && svoltaDettaLontano !== chiave) { svoltaDettaLontano = chiave; testo = `${fraMetri(v.metriAllaSvolta, lingua)} ${String(v.istruzione).charAt(0).toLowerCase()}${String(v.istruzione).slice(1)}`; }
+      // 23/10/2026 — REGOLA (come WIP Nav dal 05/10): nessun preavviso per un «continua dritto» — si estende al giro.
+      else if (inFinestraLontana && inAvvicinamento && v.manovra?.type !== 'arrive' && !eProseguimento(v.manovra) && svoltaDettaLontano !== chiave) { svoltaDettaLontano = chiave; testo = `${fraMetri(v.metriAllaSvolta, lingua)} ${String(v.istruzione).charAt(0).toLowerCase()}${String(v.istruzione).slice(1)}`; }
       if (testo) {
         const decisione = tourService.chiPuoParlare('navigatore', { guidaInCorso: parlando, metriAllaSvolta: v.metriAllaSvolta, suAttraversamento: v.suAttraversamento });
-        if (decisione.azione === 'parla' || decisione.azione === 'abbassa_e_parla') { parla(testo, lingua, decisione.azione === 'abbassa_e_parla', TTL_SVOLTA_MS); dettoQualcosa = true; }
+        if (decisione.azione === 'parla' || decisione.azione === 'abbassa_e_parla') {
+          parla(testo, lingua, decisione.azione === 'abbassa_e_parla', TTL_SVOLTA_MS); dettoQualcosa = true;
+          if (v.manovra?.type === 'arrive' && tappa) arrivoDettoPer = String(tappa.id);
+        }
         else if (decisione.azione === 'accoda') tourService.accodaVoce('navigatore', testo);
         else if (decisione.azione === 'taci' && v.suAttraversamento) { svoltaDettaVicino = null; svoltaDettaLontano = null; }
       }
@@ -498,7 +553,11 @@ function onFix(e: Event): void {
     }
 
     // 1. Arrivo: la prima volta che si e` all'ingresso della tappa corrente.
-    if (tappa && v.stato === 'ALL_INGRESSO' && tappaAnnunciata !== String(tappa.id)) {
+    // REGOLA 23/10/2026 (collaudo Lugano: il pranzo Grand Café Al Porto saltato in silenzio). L'arrivo a una
+    // tappa senza guida (pasto) mentre la guida della tappa prima parla o su un attraversamento NON si mette in
+    // coda (completaTappa svuota la coda: la frase si perdeva): si aspetta il primo fix libero e si dice allora.
+    const pastoInAttesa = !!tappa && tappa.senzaGuida === true && (v.suAttraversamento || guidaSuona());
+    if (tappa && v.stato === 'ALL_INGRESSO' && tappaAnnunciata !== String(tappa.id) && !pastoInAttesa) {
       tappaAnnunciata = String(tappa.id);
       arrivatoA = tappaAnnunciata;
       const ts = Date.now();
@@ -546,16 +605,31 @@ function onFix(e: Event): void {
       // 'poi-arrived' → wip-poi-trigger): se lo emettesse anche questo driver,
       // la stessa tappa si aprirebbe e parlerebbe due volte. Qui si segna solo
       // il dedupe; sul web, dove il nativo non c'e', si emette.
-      else if (!Capacitor.isNativePlatform()) window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
-        detail: {
+      else if (!Capacitor.isNativePlatform()) {
+        // 23/10/2026 — REGOLA: ogni tappa ha il suo «Sei arrivato». Sul web, se la soglia d'arrivo è
+        // stata raggiunta prima che il passo «arrive» entrasse nella finestra vicina (ByWard, Parliament
+        // Hill a Ottawa), la frase non veniva mai detta e partiva solo la guida. Si dice qui, poi la guida.
+        const nomeArr = String(tappa.nome || '').trim();
+        const giaDetto = arrivoDettoPer === String(tappa.id);
+        if (nomeArr && !giaDetto && !guidaSuona()) {
+          parla(`${getTranslation('tour_sei_arrivato', lingua.toUpperCase() as Language)} ${nomeArr}`, lingua);
+          arrivoDettoPer = String(tappa.id);
+        }
+        const dettaglio = {
           poiId: tappa.id,
           poi: { id: tappa.id, name: tappa.nome, lat: tappa.lat, lon: tappa.lon, category: tappa.categoria || undefined, city: tappa.citta || undefined },
           alreadyPaid: false,
           autoPlay: true,
           ts,
           fromTour: true,
-        },
-      }));
+        };
+        const invia = () => window.dispatchEvent(new CustomEvent('wip-poi-trigger', { detail: dettaglio }));
+        if (nomeArr && !giaDetto) setTimeout(invia, 2500); else invia();
+      }
+      // REGOLA 23/10/2026 (ricollaudo Lugano, LAC): sul telefono la scheda la apre il servizio nativo, ma il suo
+      // arbitrato può tacere (stesso edificio del MASI a pochi metri, «mai sopra una guida», doppioni): si sentiva
+      // «Sei arrivato» e poi niente — né scheda né guida. Se entro il tempo il nativo non l'ha aperta, la apre il giro.
+      else garantisciSchedaTappa(tappa, ts);
     }
 
     // Tappa fatta: ci si era arrivati, ora si e` lontani e la guida tace.
@@ -583,9 +657,16 @@ function onFix(e: Event): void {
       else if (dTappa < minimaTappa.metri) minimaTappa.metri = dTappa;
       const margine = Math.max(SFIORATA_MARGINE_M, Number.isFinite(accuracy) ? accuracy : 0);
       const lasciata = arrivatoA === id
-        ? dTappa > sogliaArrivo(tappa.ingresso?.livello) + LASCIATA_M
+        ? dTappa > sogliaArrivoTappa(tappa) + LASCIATA_M
         : !!minimaTappa && minimaTappa.id === id && minimaTappa.metri < SFIORATA_M && dTappa > minimaTappa.metri + margine;
       if (lasciata && !parlando) {
+        // REGOLA 23/10/2026: un pasto (tappa senza guida) non si chiude MAI in silenzio. Sfiorato senza entrare
+        // nella soglia (o raggiunto mentre parlava la guida di prima), il suo «Sei arrivato» si dice adesso.
+        if (tappa.senzaGuida === true && tappaAnnunciata !== id && arrivoDettoPer !== id) {
+          const nome = String(tappa.nome || '').trim();
+          if (nome) parla(`${getTranslation('tour_sei_arrivato', lingua.toUpperCase() as Language)} ${nome}`, lingua);
+          tappaAnnunciata = id; arrivoDettoPer = id;
+        }
         arrivatoA = null;
         minimaTappa = null;
         tourService.completaTappa();
@@ -636,10 +717,12 @@ function testoIncontro(poi: any): string {
   // tutti — la voce EN leggeva frasi italiane. Il teaser per-lingua viaggia
   // gia` nella RPC nearby_pois (teaser_text_*): fuori dall'italiano vince lui;
   // senza teaser, meglio il solo nome che una frase nella lingua sbagliata.
-  const teaserLingua = poi[`teaser_text_${l}`];
+  // 23/10/2026 (8e): il teaser passa da teaserLeggibile — niente segnaposto «Apri l'app…», niente teaser IT
+  // che è in realtà il testo inglese. In italiano, senza teaser valido, la descrizione breve come prima.
+  const teaserOk = teaserLeggibile(poi, l, { riservaInglese: true });
   const breve = l === 'it'
-    ? (poi.teaser_text_it || poi.description_short || poi.descrizione_breve || poi.short_description || poi.description || '')
-    : (typeof teaserLingua === 'string' && teaserLingua.trim() ? teaserLingua : (poi.teaser_text_en || ''));
+    ? (teaserOk || poi.description_short || poi.descrizione_breve || poi.short_description || poi.description || '')
+    : (teaserOk || '');
   const testa = `${getTranslation('tour_incontro', lang)}: ${nome}.`;
   return breve ? `${testa} ${primaFrase(String(breve), 160)}` : testa;
 }

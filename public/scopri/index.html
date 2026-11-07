@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-itunes-app" content="app-id=6806769883">
 <title>WIP — l'audioguida che parte da sola</title>
 <meta name="description" content="WIP è l'audioguida geolocalizzata di oltre 9 milioni di luoghi in 196 paesi. A piedi, in auto, offline. In 7 lingue.">
 <meta name="keywords" content="audioguida, audioguida gratis, guida turistica, navigatore turistico, itinerario di viaggio, itinerari personalizzati, audioguida offline, cosa vedere, app da viaggio, WIP">
@@ -203,7 +204,7 @@
 </section>
 
 <section class="store">
-  <h2 data-i18n="store_h">In arrivo negli store</h2>
+  <h2 data-i18n="store_h">Scarica l'app</h2>
   <!-- ============================================================ -->
   <!-- SOSTITUIRE con i link store all'approvazione:                 -->
   <!-- App Store:  trasformare lo <span> in <a href="https://apps.apple.com/app/idXXXXXXXXX" class="badge-store"> e aggiornare data-i18n r1 in badge_su -->
@@ -211,10 +212,11 @@
   <!-- (i badge ufficiali Apple/Google si possono usare SOLO con i link veri) -->
   <!-- ============================================================ -->
   <div class="badges">
-    <span class="badge-store" id="badge-apple" role="button" tabindex="0">
+    <!-- (10/10/2026) App Store: l'app è pubblica dal 25/09/2026, il badge è un collegamento vero. Google Play resta «presto». -->
+    <a class="badge-store" id="badge-apple" href="https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct=sito&mt=8" style="text-decoration:none;color:inherit">
       <span class="icona" aria-hidden="true">&#63743;</span>
-      <span><span class="r1" data-i18n="badge_presto">Presto su</span><br><span class="r2">App Store</span></span>
-    </span>
+      <span><span class="r1" data-i18n="badge_su">Scarica su</span><br><span class="r2">App Store</span></span>
+    </a>
     <span class="badge-store" id="badge-google" role="button" tabindex="0">
       <span class="icona" aria-hidden="true">&#9654;</span>
       <span><span class="r1" data-i18n="badge_presto">Presto su</span><br><span class="r2">Google Play</span></span>
@@ -249,7 +251,8 @@ var I18N = {
     p2_t: "Monumenti, gemme nascoste, sentieri, location di film. In 196 paesi, sulla mappa, con foto e testi presi dalle fonti di quel posto.",
     p3_h: "Funziona offline e in auto",
     p3_t: "Scarichi l'itinerario e la guida parla anche senza rete. In auto la voce arriva sugli altoparlanti, come un navigatore.",
-    store_h: "In arrivo negli store",
+    store_h: "Scarica l'app",
+    badge_su: "Scarica su",
     badge_presto: "Presto su",
     cta: "Provala subito dal browser",
     cta_nota: "È una web app: si apre e funziona già, senza installare nulla.",
@@ -265,7 +268,8 @@ var I18N = {
     p2_t: "Monuments, hidden gems, trails, film locations. Across 196 countries, on the map, with photos and text drawn from that place's own sources.",
     p3_h: "Works offline and in the car",
     p3_t: "Download your itinerary and the guide keeps talking with no connection. In the car the voice comes through your speakers, like a sat nav.",
-    store_h: "Coming to the stores",
+    store_h: "Get the app",
+    badge_su: "Download on the",
     badge_presto: "Soon on",
     cta: "Try it now in your browser",
     cta_nota: "It's a web app: it opens and just works, nothing to install.",
@@ -281,7 +285,8 @@ var I18N = {
     p2_t: "Monuments, trésors cachés, sentiers, lieux de tournage. Dans 196 pays, sur la carte, avec des photos et des textes issus des sources du lieu lui-même.",
     p3_h: "Fonctionne hors ligne et en voiture",
     p3_t: "Télécharge ton itinéraire : le guide parle même sans réseau. En voiture, la voix passe par les haut-parleurs, comme un GPS.",
-    store_h: "Bientôt sur les stores",
+    store_h: "Télécharge l'app",
+    badge_su: "Télécharger dans l'",
     badge_presto: "Bientôt sur",
     cta: "Essaie-la tout de suite dans ton navigateur",
     cta_nota: "C'est une web app : elle s'ouvre et fonctionne déjà, rien à installer.",
@@ -297,7 +302,8 @@ var I18N = {
     p2_t: "Monumentos, joyas ocultas, senderos, localizaciones de cine. En 196 países, en el mapa, con fotos y textos de las fuentes de ese lugar.",
     p3_h: "Funciona sin conexión y en el coche",
     p3_t: "Descargas el itinerario y la guía habla también sin red. En el coche la voz sale por los altavoces, como un navegador.",
-    store_h: "Muy pronto en las tiendas",
+    store_h: "Descarga la app",
+    badge_su: "Descárgala en el",
     badge_presto: "Pronto en",
     cta: "Pruébala ya desde el navegador",
     cta_nota: "Es una web app: se abre y funciona, sin instalar nada.",
@@ -313,7 +319,8 @@ var I18N = {
     p2_t: "Denkmäler, versteckte Schätze, Wanderwege, Drehorte. In 196 Ländern, auf der Karte, mit Fotos und Texten aus den Quellen des Ortes selbst.",
     p3_h: "Funktioniert offline und im Auto",
     p3_t: "Lade deine Route herunter – der Guide spricht auch ohne Netz. Im Auto kommt die Stimme über die Lautsprecher, wie beim Navi.",
-    store_h: "Bald in den Stores",
+    store_h: "App laden",
+    badge_su: "Laden im",
     badge_presto: "Bald im",
     cta: "Probier sie jetzt im Browser",
     cta_nota: "Eine Web-App: öffnen und loslegen, ohne Installation.",
@@ -329,7 +336,8 @@ var I18N = {
     p2_t: "Памятники, скрытые жемчужины, тропы, места съёмок фильмов. В 196 странах, на карте, с фотографиями и текстами из источников самого места.",
     p3_h: "Работает офлайн и в машине",
     p3_t: "Скачай маршрут — гид говорит и без сети. В машине голос звучит из динамиков, как навигатор.",
-    store_h: "Скоро в магазинах приложений",
+    store_h: "Скачайте приложение",
+    badge_su: "Загрузите в",
     badge_presto: "Скоро в",
     cta: "Попробуй прямо в браузере",
     cta_nota: "Это веб-приложение: открывается и сразу работает, ничего устанавливать не нужно.",
@@ -345,7 +353,8 @@ var I18N = {
     p2_t: "名胜古迹、小众宝藏、步道、电影取景地。遍布 196 个国家，都在地图上，图文均来自该地点的真实资料。",
     p3_h: "离线可用，车内可用",
     p3_t: "下载行程后，没有网络导览也能继续讲。开车时声音通过车载音响播放，就像导航一样。",
-    store_h: "即将上架应用商店",
+    store_h: "下载应用",
+    badge_su: "下载于",
     badge_presto: "即将上线",
     cta: "现在就在浏览器里试试",
     cta_nota: "这是一个网页应用：打开即用，无需安装。",

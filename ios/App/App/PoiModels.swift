@@ -68,6 +68,16 @@ struct Poi: Codable {
     /// la portano (restano decodificabili) e sono «senza peso», salvo le gemme.
     /// Parità con PoiEntity.source (Android).
     var source: String? = nil
+    /// (25/10/2026) Campi per `NomiAnnunciabili` (port di nomiAnnunciabili.ts):
+    /// nome tradotto (`name_translated`), QID Wikidata (`wikidata`), città
+    /// (`city`) e il teaser INGLESE (`teaser_text_en`, serve solo a scoprire
+    /// una colonna «italiana» che contiene il testo inglese). Tutti nil se la
+    /// RPC non li porta: le regole che li usano degradano a quelle di prima.
+    /// Default nil: pacchetti e POI già salvati restano decodificabili.
+    var nameTranslated: String? = nil
+    var wikidata: String? = nil
+    var city: String? = nil
+    var teaserTextEn: String? = nil
 
     /// GUARDIA: oltre questa distanza dal centroide il punto dell'indirizzo non
     /// è l'indirizzo di QUESTO POI ma di qualcos'altro (un abbinamento
@@ -313,6 +323,213 @@ enum Arbitrato {
             }
         }
         return mute
+    }
+}
+
+/// QUALI RIGHE POSSONO PARLARE E QUALI NOMI SI POSSONO ANNUNCIARE (25/10/2026).
+/// Port 1:1 di src/lib/geofencing/nomiAnnunciabili.ts (regole del collaudo di
+/// 7 città del 23/10/2026): stesse espressioni regolari, stesso ordine dei
+/// controlli. Cambiare qui = cambiare là e in Kotlin.
+///  1. `rigaNonParla`: città, entità amministrative, metropolitane — mai.
+///  2. `nomeDaAnnunciare`: l'avviso dei 150 m dice un NOME, mai un'etichetta
+///     grezza (numeri, pietre d'inciampo, targhe, descrizioni inglesi, altro
+///     alfabeto) — nil = niente avviso.
+///  3. `stessoLuogoAltroAlfabeto`: il gemello in un altro alfabeto (o con lo
+///     stesso QID) è lo stesso luogo.
+///  4. `teaserLeggibile`: mai il segnaposto, mai l'italiano uguale all'inglese,
+///     mai un alfabeto che la voce non legge.
+enum NomiAnnunciabili {
+    enum Alfabeto: String { case latino, cirillico, greco, arabo, ebraico, cjk, devanagari, thai, altro, nessuno }
+
+    /// L'alfabeto prevalente di un testo (lettere soltanto).
+    static func alfabeto(_ testo: String?) -> Alfabeto {
+        var conta: [Alfabeto: Int] = [:]
+        for s in (testo ?? "").unicodeScalars {
+            let c = s.value
+            var a: Alfabeto? = nil
+            if (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || (c >= 0xc0 && c <= 0x24f) || (c >= 0x1e00 && c <= 0x1eff) { a = .latino }
+            else if c >= 0x400 && c <= 0x52f { a = .cirillico }
+            else if c >= 0x370 && c <= 0x3ff { a = .greco }
+            else if c >= 0x600 && c <= 0x6ff { a = .arabo }
+            else if c >= 0x590 && c <= 0x5ff { a = .ebraico }
+            else if (c >= 0x3040 && c <= 0x30ff) || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7af) { a = .cjk }
+            else if c >= 0x900 && c <= 0x97f { a = .devanagari }
+            else if c >= 0xe00 && c <= 0xe7f { a = .thai }
+            else if s.properties.isAlphabetic { a = .altro }
+            if let a = a { conta[a, default: 0] += 1 }
+        }
+        var migliore: Alfabeto = .nessuno, n = 0
+        // Ordine fisso (il dizionario non ne ha uno): a parità vince il primo.
+        for k in [Alfabeto.latino, .cirillico, .greco, .arabo, .ebraico, .cjk, .devanagari, .thai, .altro] {
+            if let v = conta[k], v > n { migliore = k; n = v }
+        }
+        return migliore
+    }
+
+    /// L'alfabeto che la voce della lingua dell'utente sa leggere.
+    static func alfabetoDellaLingua(_ lingua: String?) -> Alfabeto {
+        let l = String((lingua ?? "it").lowercased().prefix(2))
+        if l == "ru" { return .cirillico }
+        if l == "zh" { return .cjk }
+        return .latino
+    }
+
+    private static let categorieAmministrative = "^(city|town|village|hamlet|municipality|comune|citta|città|administrative|admin|region|regione|province|provincia|state|country|county|district|borough|suburb|quarter|neighbourhood|neighborhood|locality|metropolitan_area|subway|subway_station|metro|metro_station|metropolitana)$"
+    private static let nomeAmministrativo = "\\b(area metropolitana|citt[aà] metropolitana|metropolitan (area|city|borough|county)|metropolitana di|metro(politana)? line|linea \\d+ della metropolitana|provincia di|province of|regione|r[ée]gion de|comune di|municipality of|municipio de|arrondissement|bezirk|landkreis|okrug|oblast|county of)\\b"
+    private static let nomeMetro = "^(metro|metropolitana|subway|u-?bahn|underground|métro)\\b"
+
+    private static func combacia(_ testo: String, _ regex: String) -> Bool {
+        testo.range(of: regex, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static func pulito(_ s: String?) -> String {
+        (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// True se la riga non deve mai parlare come audioguida: città, entità
+    /// amministrative, metropolitane. `citta`: il nome della città in cui si è —
+    /// una riga che si chiama esattamente così è la città. Una gemma resta
+    /// gemma, salvo che sia proprio un'entità amministrativa dichiarata.
+    static func rigaNonParla(_ poi: Poi, citta: String? = nil) -> Bool {
+        let tipo = pulito(poi.poiType)
+        if poi.isGem { return combacia(tipo, categorieAmministrative) }
+        if combacia(tipo, categorieAmministrative) { return true }
+        let nome = pulito(poi.nome)
+        if nome.isEmpty { return false }
+        if combacia(nome, nomeAmministrativo) || combacia(nome, nomeMetro) { return true }
+        if let c = citta, !pulito(c).isEmpty, nome.lowercased() == pulito(c).lowercased() { return true }
+        if let c = poi.city, !pulito(c).isEmpty, nome.lowercased() == pulito(c).lowercased() { return true }
+        return false
+    }
+
+    private static let soloNumeri = "^[\\s\\d.,:/#№-]+$"
+    private static let pietraOTarga = "\\b(stolperstein|pietra d'inciampo|pietre d'inciampo|struikelsteen|pav[ée] de m[ée]moire|plaque|targa|lapide|gedenktafel|placa conmemorativa|memorial plaque|blue plaque)\\b|^plaque\\s*№?"
+    private static let descrizioneInglese = "^(a |an |the )?(school|office|residential|apartment|commercial|industrial|public|private|old|former|historic|small|large)?\\s*(building|house|statue|sculpture|monument|bust|fountain|church|chapel|shrine|memorial|tower|gate|wall|bridge|structure|artwork|mural|relief|sign|bench)( of [a-z ]+| building)?$"
+
+    /// Il nome da dire nell'avviso dei 150 m, o nil se il nome è grezzo.
+    static func nomeDaAnnunciare(_ poi: Poi, lingua: String?) -> String? {
+        var grezzo = pulito(poi.nameTranslated)
+        if grezzo.isEmpty { grezzo = pulito(poi.nome) }
+        if grezzo.count < 3 { return nil }
+        if combacia(grezzo, soloNumeri) { return nil }
+        if combacia(grezzo, pietraOTarga) || combacia(poi.poiType ?? "", "stolperstein|plaque|targa") { return nil }
+        if poi.id.hasPrefix("plaque-") { return nil }
+        if combacia(grezzo, descrizioneInglese) || combacia(grezzo, " - (school|residential|office) building$") { return nil }
+        let a = alfabeto(grezzo)
+        if a != .nessuno && a != alfabetoDellaLingua(lingua) { return nil }
+        return grezzo
+    }
+
+    /// QID Wikidata della riga, se lo conosciamo (colonna o id `wd-…Q123`).
+    static func qidDi(_ poi: Poi) -> String? {
+        let q = pulito(poi.wikidata)
+        if q.range(of: "^Q\\d+$", options: .regularExpression) != nil { return q }
+        if let r = poi.id.range(of: "(?:^|-)(Q\\d+)$", options: .regularExpression) {
+            var m = String(poi.id[r])
+            if m.hasPrefix("-") { m.removeFirst() }
+            return m
+        }
+        return nil
+    }
+
+    /// Due righe sono lo stesso luogo scritto in due alfabeti (o lo stesso QID)?
+    /// `metri`: distanza fra le due.
+    static func stessoLuogoAltroAlfabeto(_ a: Poi, _ b: Poi, metri: Double) -> Bool {
+        if let qa = qidDi(a), let qb = qidDi(b), qa == qb { return true }
+        if !(metri <= 150) { return false }
+        let na = alfabeto(a.nome), nb = alfabeto(b.nome)
+        return na != .nessuno && nb != .nessuno && na != nb
+    }
+
+    /// Il teaser da LEGGERE, o nil. `teaser` è già la colonna della lingua
+    /// dell'utente (WipSupabaseClient legge solo quella, regola dell'08/10);
+    /// `teaserEn` serve a smascherare una colonna italiana col testo inglese.
+    /// `riservaInglese`: vale solo dove il chiamante accettava già l'inglese.
+    static func teaserLeggibile(teaser: String?, teaserEn: String?, lingua: String?, riservaInglese: Bool = false) -> String? {
+        let l = String((lingua ?? "it").lowercased().prefix(2))
+        let en = pulito(teaserEn)
+        var t = pulito(teaser)
+        if l != "en", !t.isEmpty, !en.isEmpty, t == en { t = "" } // la colonna della lingua contiene il testo inglese
+        if t.isEmpty, l != "it", riservaInglese { t = en }
+        if t.isEmpty { return nil }
+        if combacia(t, "apri l'app per scoprire|open the app to discover|ouvrez l'app|abre la app|öffne die app") { return nil }
+        let a = alfabeto(t)
+        let attesa = alfabetoDellaLingua(l == "en" && riservaInglese ? "en" : l)
+        if a != .nessuno, a != attesa, !(riservaInglese && a == .latino) { return nil }
+        return t
+    }
+
+    static func teaserLeggibile(_ poi: Poi, lingua: String?, riservaInglese: Bool = false) -> String? {
+        teaserLeggibile(teaser: poi.teaserText, teaserEn: poi.teaserTextEn, lingua: lingua, riservaInglese: riservaInglese)
+    }
+}
+
+/// IL DAY PASS CONTA UNA VOLTA PER LUOGO (25/10/2026), come il server
+/// (`/api/day-pass/consume`, regola del 19/10/2026 «il Day Pass conta una volta
+/// per luogo»). Prima ogni arrivo, ogni «Ascolta» e ogni consumo dal JS
+/// incrementavano `daypass_used` anche per un luogo già contato nello stesso
+/// pass. Qui vive l'UNICO punto che incrementa: l'insieme degli id già contati
+/// per il pass corrente sta nelle prefs e si azzera quando cambia `expiresAt`.
+/// Stesse chiavi prefs di Android (`daypass_*`).
+enum DayPassContatore {
+    static let prefContati = "daypass_contati"
+    static let prefContatiScadenza = "daypass_contati_scadenza"
+
+    private static func contati(_ prefs: UserDefaults) -> Set<String> {
+        // Gli id contati valgono solo per il pass con QUESTA scadenza.
+        guard prefs.double(forKey: prefContatiScadenza) == prefs.double(forKey: "daypass_expires_at") else { return [] }
+        return Set(prefs.stringArray(forKey: prefContati) ?? [])
+    }
+
+    private static func scrivi(_ ids: Set<String>, _ prefs: UserDefaults) {
+        prefs.set(Array(ids), forKey: prefContati)
+        prefs.set(prefs.double(forKey: "daypass_expires_at"), forKey: prefContatiScadenza)
+    }
+
+    /// È già stato contato per il pass corrente?
+    static func giaContato(_ poiId: String, prefs: UserDefaults) -> Bool {
+        !poiId.isEmpty && contati(prefs).contains(poiId)
+    }
+
+    /// Conta il luogo: incrementa `daypass_used` SOLO se l'id è nuovo per questo
+    /// pass. `poiId` vuoto (chiamante senza id) incrementa come prima. Ritorna
+    /// il contatore dopo la chiamata.
+    @discardableResult
+    static func consuma(poiId: String, prefs: UserDefaults) -> Int {
+        let used = prefs.integer(forKey: "daypass_used")
+        if poiId.isEmpty {
+            prefs.set(used + 1, forKey: "daypass_used")
+            return used + 1
+        }
+        var ids = contati(prefs)
+        if ids.contains(poiId) { return used }
+        ids.insert(poiId)
+        scrivi(ids, prefs)
+        prefs.set(used + 1, forKey: "daypass_used")
+        return used + 1
+    }
+
+    /// `setDayPass` dal JS: stesso pass (stessa scadenza) → il contatore non
+    /// scende mai (max fra salvato e ricevuto); pass diverso → si prende il
+    /// ricevuto e l'insieme dei contati riparte da zero.
+    static func imposta(expiresAt: Double, cap: Int, used: Int, prefs: UserDefaults) {
+        let stessoPass = prefs.double(forKey: "daypass_expires_at") == expiresAt
+        let usatoPrima = prefs.integer(forKey: "daypass_used")
+        prefs.set(expiresAt, forKey: "daypass_expires_at")
+        prefs.set(cap, forKey: "daypass_cap")
+        if stessoPass {
+            prefs.set(max(usatoPrima, used), forKey: "daypass_used")
+        } else {
+            prefs.set(used, forKey: "daypass_used")
+            prefs.removeObject(forKey: prefContati)
+            prefs.set(expiresAt, forKey: prefContatiScadenza)
+        }
+    }
+
+    /// Logout: via tutto.
+    static func azzera(prefs: UserDefaults) {
+        prefs.removeObject(forKey: prefContati)
+        prefs.removeObject(forKey: prefContatiScadenza)
     }
 }
 

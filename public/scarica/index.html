@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WIP — Scarica l'app</title>
+<meta name="description" content="WIP · World in Pocket: l'audioguida che parte da sola. Inquadra il codice QR per scaricare l'app.">
+<meta name="robots" content="noindex">
+<link rel="icon" href="/favicon.ico">
+<!--
+  Pagina «Scarica l'app» con codice QR (21/10/2026, committente: «crea una pagina con QR code per scaricare l'app», da dare
+  a comuni, musei e hotel perché la promuovano). UN FOGLIO A4 stampabile o da condividere sullo schermo.
+  Lingua: ?lang=IT|EN|ES|PT|FR|DE, altrimenti quella del browser. ?ente=Nome mette il nome dell'ente in alto (solo testo,
+  mai HTML). ?c=… cambia il segnaposto di campagna del link App Store (ct=, default «qr») per contare da dove vengono.
+  Apple oggi; Google Play «in arrivo»: quando l'app è su Play basta mettere l'indirizzo in PLAY qui sotto e il tasto
+  diventa un secondo QR. Il QR è disegnato in locale con /regalo/qrcode.min.js (nessun servizio esterno).
+  Misure in mm e foglio di 296 mm (mai esattamente una pagina: uscirebbe una seconda pagina vuota).
+-->
+<style>
+  :root { --blu:#1e3a8a; --oro:#c8963e; --chiaro:#f8f5f0; --testo:#1f2937; --grigio:#6b7280; --bordo:#e5e7eb; }
+  * { box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--testo); background:#e9e5de; line-height:1.5; }
+  .barra { max-width:210mm; margin:0 auto; padding:12px 14px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between; }
+  .barra select, .barra button { border:1px solid var(--bordo); background:#fff; color:var(--testo); border-radius:999px; padding:8px 14px; font-size:14px; font-weight:700; cursor:pointer; }
+  .foglio { width:210mm; max-width:100%; min-height:296mm; margin:0 auto 24px; background:#fff; box-shadow:0 6px 30px rgba(0,0,0,.15); display:flex; flex-direction:column; overflow:hidden; }
+  .sopra { background:linear-gradient(160deg,#1e3a8a 0%,#16306f 60%,#0f2557 100%); color:#fff; padding:13mm 15mm 11mm; }
+  .marchio { font-weight:900; letter-spacing:.04em; font-size:13pt; display:flex; justify-content:space-between; align-items:baseline; }
+  .marchio span { font-weight:600; font-size:10pt; opacity:.8; }
+  .ente { margin-top:8mm; font-size:10pt; text-transform:uppercase; letter-spacing:.16em; color:#f0d9ae; font-weight:700; min-height:1em; }
+  h1 { font-size:27pt; line-height:1.1; margin:2mm 0 0; font-weight:900; }
+  .frase { font-size:15pt; line-height:1.4; margin:6mm 0 0; }
+  .frase b { color:#f0d9ae; }
+  .corpo { flex:1; padding:11mm 15mm 9mm; display:flex; flex-direction:column; align-items:center; text-align:center; }
+  .qrbox { width:78mm; padding:4mm; border:1.4mm solid var(--blu); border-radius:6mm; background:#fff; }
+  .qrbox svg { display:block; width:100%; height:auto; }
+  .etichetta { margin-top:4mm; font-weight:900; font-size:15pt; color:var(--blu); }
+  .sub { margin-top:1mm; font-size:11pt; color:var(--grigio); }
+  .store { margin-top:6mm; display:flex; gap:6mm; flex-wrap:wrap; justify-content:center; width:100%; }
+  .store .b { flex:1 1 60mm; max-width:80mm; border:1px solid var(--bordo); border-radius:4mm; padding:3mm 4mm; background:var(--chiaro); }
+  .store .b b { display:block; font-size:12pt; color:var(--testo); }
+  .store .b small { color:var(--grigio); font-size:9.5pt; }
+  .store a { color:var(--blu); font-weight:800; word-break:break-all; font-size:9.5pt; }
+  .passi { margin:7mm 0 0; padding:0; list-style:none; display:grid; grid-template-columns:repeat(3,1fr); gap:5mm; width:100%; text-align:left; }
+  .passi li { background:var(--chiaro); border-radius:4mm; padding:4mm; font-size:10pt; line-height:1.35; }
+  .passi b { display:block; font-size:11pt; margin-bottom:1mm; color:var(--blu); }
+  .piede { margin-top:auto; padding-top:6mm; width:100%; display:flex; justify-content:space-between; font-size:10pt; color:var(--grigio); }
+  .piede .sito { font-weight:900; color:var(--blu); font-size:12pt; }
+  @media (max-width:640px) { .passi { grid-template-columns:1fr; } .foglio { min-height:0; } h1 { font-size:22pt; } }
+  @media print {
+    body { background:#fff; }
+    .barra { display:none; }
+    .foglio { box-shadow:none; margin:0; width:210mm; min-height:296mm; }
+    @page { size:A4; margin:0; }
+  }
+</style>
+</head>
+<body>
+<div class="barra">
+  <select id="lingua" aria-label="Lingua / Language">
+    <option value="IT">Italiano</option><option value="EN">English</option><option value="ES">Español</option>
+    <option value="PT">Português</option><option value="FR">Français</option><option value="DE">Deutsch</option>
+    <option value="RU">Русский</option><option value="ZH">中文</option>
+  </select>
+  <button id="stampa" type="button"></button>
+</div>
+<div class="foglio">
+  <div class="sopra">
+    <div class="marchio">WIP <span>World in Pocket</span></div>
+    <div class="ente" id="ente"></div>
+    <h1 id="titolo"></h1>
+    <p class="frase" id="frase"></p>
+  </div>
+  <div class="corpo">
+    <div class="qrbox" id="qr"></div>
+    <div class="etichetta" id="etichetta"></div>
+    <div class="sub" id="sub"></div>
+    <div class="store">
+      <div class="b"><b>App Store (iPhone)</b><small id="ios"></small><br><a id="linkIos" href="#"></a></div>
+      <div class="b"><b>Google Play (Android)</b><small id="android"></small></div>
+    </div>
+    <ul class="passi" id="passi"></ul>
+    <div class="piede"><span id="piede"></span><span class="sito">www.wip.guide</span></div>
+  </div>
+</div>
+<script src="/regalo/qrcode.min.js"></script>
+<script>
+(function () {
+  var IOS = "https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct={ct}&mt=8";
+  var PLAY = ""; // Quando l'app è su Google Play: metti qui l'indirizzo e il blocco Android mostra il link.
+  var T = {
+    IT: { stampa:"Stampa o salva in PDF", titolo:"Scarica l'app", frase:"L'audioguida che <b>parte da sola</b> quando ti avvicini a un luogo, in 7 lingue.", etichetta:"Inquadra il codice con la fotocamera", sub:"Si apre la pagina dell'app: tocca «Ottieni».", ios:"Disponibile ora", android:"In arrivo a breve",
+      passi:[["1 · Inquadra","Apri la fotocamera del telefono e inquadra il codice."],["2 · Scarica","Tocca «Ottieni» e installa l'app: è gratuita."],["3 · Cammina","Esplora la città: la guida parte da sola vicino a ogni luogo."]], piede:"Gratis · 9 milioni di luoghi in 196 paesi" },
+    EN: { stampa:"Print or save as PDF", titolo:"Get the app", frase:"The audio guide that <b>starts by itself</b> when you approach a place, in 7 languages.", etichetta:"Scan the code with your camera", sub:"The app page opens: tap “Get”.", ios:"Available now", android:"Coming soon",
+      passi:[["1 · Scan","Open your phone camera and point it at the code."],["2 · Download","Tap “Get” and install the app: it is free."],["3 · Walk","Explore the city: the guide starts by itself near each place."]], piede:"Free · 9 million places in 196 countries" },
+    ES: { stampa:"Imprimir o guardar en PDF", titolo:"Descarga la app", frase:"La audioguía que <b>empieza sola</b> cuando te acercas a un lugar, en 7 lenguas.", etichetta:"Escanea el código con la cámara", sub:"Se abre la página de la app: toca «Obtener».", ios:"Disponible ahora", android:"Muy pronto",
+      passi:[["1 · Escanea","Abre la cámara del móvil y apunta al código."],["2 · Descarga","Toca «Obtener» e instala la app: es gratuita."],["3 · Camina","Explora la ciudad: la guía empieza sola cerca de cada lugar."]], piede:"Gratis · 9 millones de lugares en 196 países" },
+    PT: { stampa:"Imprimir ou guardar em PDF", titolo:"Descarregue a aplicação", frase:"O guia áudio que <b>arranca sozinho</b> quando se aproxima de um lugar, em 7 línguas.", etichetta:"Aponte a câmara ao código", sub:"Abre-se a página da aplicação: toque em «Obter».", ios:"Disponível agora", android:"Em breve",
+      passi:[["1 · Aponte","Abra a câmara do telemóvel e aponte ao código."],["2 · Descarregue","Toque em «Obter» e instale a aplicação: é gratuita."],["3 · Caminhe","Explore a cidade: o guia arranca sozinho junto a cada lugar."]], piede:"Grátis · 9 milhões de lugares em 196 países" },
+    FR: { stampa:"Imprimer ou enregistrer en PDF", titolo:"Téléchargez l'app", frase:"L'audioguide qui <b>démarre toute seule</b> quand vous approchez d'un lieu, en 7 langues.", etichetta:"Scannez le code avec l'appareil photo", sub:"La page de l'app s'ouvre : touchez « Obtenir ».", ios:"Disponible maintenant", android:"Bientôt",
+      passi:[["1 · Scannez","Ouvrez l'appareil photo et visez le code."],["2 · Téléchargez","Touchez « Obtenir » et installez l'app : elle est gratuite."],["3 · Marchez","Explorez la ville : le guide démarre seul près de chaque lieu."]], piede:"Gratuit · 9 millions de lieux dans 196 pays" },
+    DE: { stampa:"Drucken oder als PDF speichern", titolo:"App herunterladen", frase:"Der Audioguide, der <b>von selbst startet</b>, wenn Sie sich einem Ort nähern, in 7 Sprachen.", etichetta:"Code mit der Kamera scannen", sub:"Die App-Seite öffnet sich: „Laden“ tippen.", ios:"Jetzt verfügbar", android:"Bald verfügbar",
+      passi:[["1 · Scannen","Kamera öffnen und auf den Code richten."],["2 · Laden","„Laden“ tippen und die App installieren: kostenlos."],["3 · Losgehen","Stadt entdecken: der Guide startet an jedem Ort von selbst."]], piede:"Kostenlos · 9 Millionen Orte in 196 Ländern" },
+    RU: { stampa:"Печать или сохранить в PDF", titolo:"Скачайте приложение", frase:"Аудиогид, который <b>включается сам</b>, когда вы подходите к месту, на 7 языках.", etichetta:"Наведите камеру на код", sub:"Откроется страница приложения: нажмите «Загрузить».", ios:"Доступно сейчас", android:"Скоро",
+      passi:[["1 · Наведите","Откройте камеру телефона и наведите её на код."],["2 · Скачайте","Нажмите «Загрузить» и установите приложение: оно бесплатное."],["3 · Гуляйте","Исследуйте город: гид включается сам рядом с каждым местом."]], piede:"Бесплатно · 9 миллионов мест в 196 странах" },
+    ZH: { stampa:"打印或保存为 PDF", titolo:"下载应用", frase:"走近一个地点时<b>自动开始</b>的语音导览，支持 7 种语言。", etichetta:"用相机扫描二维码", sub:"将打开应用页面：点击“获取”。", ios:"现已上线", android:"即将推出",
+      passi:[["1 · 扫描","打开手机相机，对准二维码。"],["2 · 下载","点击“获取”并安装应用：完全免费。"],["3 · 漫步","探索城市：在每个地点附近导览会自动开始。"]], piede:"免费 · 196 个国家的 900 万个地点" }
+  };
+  var q = new URLSearchParams(location.search);
+  var ct = (q.get("c") || "qr").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 30) || "qr";
+  var url = IOS.replace("{ct}", ct);
+  var lang = (q.get("lang") || (navigator.language || "it").slice(0, 2)).toUpperCase();
+  if (!T[lang]) lang = "EN";
+  var sel = document.getElementById("lingua");
+  function disegna() {
+    var t = T[lang], el = document.getElementById("qr");
+    try { var qr = qrcode(0, "M"); qr.addData(url); qr.make(); el.innerHTML = qr.createSvgTag(4, 0); } catch (e) { el.textContent = url; }
+    document.documentElement.lang = lang.toLowerCase();
+    document.getElementById("titolo").textContent = t.titolo;
+    document.getElementById("frase").innerHTML = t.frase;
+    document.getElementById("etichetta").textContent = t.etichetta;
+    document.getElementById("sub").textContent = t.sub;
+    document.getElementById("ios").textContent = t.ios;
+    var l = document.getElementById("linkIos"); l.href = url; l.textContent = url.replace(/^https?:\/\//, "").slice(0, 46) + "…";
+    var a = document.getElementById("android");
+    if (PLAY) a.innerHTML = t.ios + '<br><a href="' + PLAY + '">' + PLAY.replace(/^https?:\/\//, "") + "</a>"; else a.textContent = t.android;
+    document.getElementById("passi").innerHTML = t.passi.map(function (p) { return "<li><b>" + p[0] + "</b>" + p[1] + "</li>"; }).join("");
+    document.getElementById("piede").textContent = t.piede;
+    document.getElementById("stampa").textContent = t.stampa;
+    document.title = "WIP — " + t.titolo;
+    sel.value = lang;
+  }
+  var ente = (q.get("ente") || "").trim().slice(0, 80);
+  document.getElementById("ente").textContent = ente; // solo testo, mai HTML
+  sel.addEventListener("change", function () { lang = sel.value; disegna(); });
+  document.getElementById("stampa").addEventListener("click", function () { window.print(); });
+  disegna();
+})();
+</script>
+</body>
+</html>

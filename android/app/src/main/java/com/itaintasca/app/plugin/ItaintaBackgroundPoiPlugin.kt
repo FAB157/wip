@@ -1674,11 +1674,10 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         val expiresAt = (call.getDouble("expiresAt") ?: 0.0).toLong()
         val cap = call.getInt("cap") ?: com.itaintasca.app.offline.BillingLogic.DAY_PASS_CAP
         val used = call.getInt("used") ?: 0
-        context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE).edit()
-            .putLong("daypass_expires_at", expiresAt)
-            .putInt("daypass_cap", cap)
-            .putInt("daypass_used", used)
-            .apply()
+        // (25/10/2026) Mai abbassare il contatore nativo dello STESSO pass
+        // (ascolti contati a schermo spento che il JS non ha ancora visto);
+        // un pass nuovo riparte dal JS e azzera i luoghi contati. DayPassLocale.
+        com.itaintasca.app.offline.DayPassLocale.imposta(context, expiresAt, cap, used)
         call.resolve()
     }
 
@@ -1703,18 +1702,20 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
      */
     @PluginMethod
     fun consumeDayPassGuide(call: PluginCall) {
-        val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
-        val expiresAt = prefs.getLong("daypass_expires_at", 0L)
-        val used = prefs.getInt("daypass_used", 0)
-        val cap = prefs.getInt("daypass_cap", 0)
+        // (25/10/2026) UNA VOLTA PER LUOGO, come il server: con `poiId` un
+        // luogo gia' contato sul pass corrente non incrementa (e resta coperto
+        // anche a cap raggiunto). Senza `poiId` (chiamanti vecchi) si conta
+        // come prima. Tutto in DayPassLocale.
+        val poiId = call.getString("poiId") ?: ""
+        val cap = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE).getInt("daypass_cap", 0)
         val ret = JSObject()
-        if (!com.itaintasca.app.offline.BillingLogic.isPassActive(System.currentTimeMillis(), expiresAt, used, cap)) {
+        if (!com.itaintasca.app.offline.DayPassLocale.copre(context, poiId)) {
             ret.put("ok", false)
         } else {
-            prefs.edit().putInt("daypass_used", used + 1).apply()
+            val used = com.itaintasca.app.offline.DayPassLocale.consuma(context, poiId)
             ret.put("ok", true)
-            ret.put("used", used + 1)
-            ret.put("remaining", (cap - used - 1).coerceAtLeast(0))
+            ret.put("used", used)
+            ret.put("remaining", (cap - used).coerceAtLeast(0))
         }
         call.resolve(ret)
     }
@@ -1805,10 +1806,9 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
 
                 val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
                 val nowMs = System.currentTimeMillis()
-                val passUsed = prefs.getInt("daypass_used", 0)
-                val passActive = com.itaintasca.app.offline.BillingLogic.isPassActive(
-                    nowMs, prefs.getLong("daypass_expires_at", 0L), passUsed, prefs.getInt("daypass_cap", 0)
-                )
+                // (25/10/2026) Pass: copre il luogo anche a cap raggiunto se
+                // gia' contato; si conta una volta per luogo (DayPassLocale).
+                val passActive = com.itaintasca.app.offline.DayPassLocale.copre(context, poiId, nowMs)
                 // Già nello storico ascolti = già acquistato: gratis, non
                 // consuma né pass né crediti (come authorizeGuidePlayback web)
                 val alreadyPurchased = com.itaintasca.app.service.ListeningHistoryStore
@@ -1816,7 +1816,7 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                 if (alreadyPurchased) {
                     ret.put("mode", "purchased")
                 } else if (passActive) {
-                    prefs.edit().putInt("daypass_used", passUsed + 1).apply()
+                    com.itaintasca.app.offline.DayPassLocale.consuma(context, poiId)
                     ret.put("mode", "day_pass")
                 } else {
                     val snapshot = prefs.getInt("wallet_snapshot_credits", 0)

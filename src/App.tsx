@@ -6,6 +6,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import { getGuideCharacter, setGuideCharacter, isCategoryAllowed } from "./lib/guideSettings";
 import { apriGuidaMuseo } from "./lib/museumVisit";
+import { normalizzaPoiMinimo, ePoiMinimo } from "./lib/poiDisplay";
 import { getBlockedCommunityPoiIds, refreshBlockedCommunityPois } from "./lib/communityModeration";
 import { motion, AnimatePresence } from "motion/react";
 import { supabase } from "./lib/supabase";
@@ -20,7 +21,7 @@ import { locationService } from "./services/locationService";
 import { clearOrphanedAudioFiles } from "./lib/offlineStorage";
 import { FAVORITES_EVENT, getLocalFavorites, setLocalFavorites, toggleFavoritePoi, removeFavoritePoi, flushPendingFavSync } from "./lib/favorites";
 import { initOfflineBilling, azzeraPoiPosseduti, caricaPoiPosseduti } from "./services/dayPassService";
-import { ItaintaBackgroundPoi, clearNativeUserContext, pushUserContextToNative } from "./plugins/ItaintaBackgroundPoi";
+import { ItaintaBackgroundPoi, clearNativeUserContext, pushUserContextToNative, assicuraSessioneFrescaPerIlNativo } from "./plugins/ItaintaBackgroundPoi";
 import DayPassBadge from "./components/DayPassBadge";
 import { wipeLocalUserData } from "./lib/userSession";
 import { getApiUrl, invalidaTokenCache } from "./lib/api";
@@ -474,6 +475,14 @@ export default function App() {
     }).then((h) => { if (vivo) handle = h; else void h.remove(); }).catch(() => {});
     return () => { vivo = false; if (handle) void handle.remove(); };
   }, [riascoltaTappa]);
+  // (25/10/2026) A ogni ripresa dell'app (schermo riacceso, ritorno dallo sfondo) la sessione viene rinnovata
+  // se le restano poche ore e rispinta al nativo: è l'unico momento in cui il JS può farlo prima del prossimo
+  // tratto a schermo spento. Solo sulle app native (sul web la funzione è un no-op).
+  useEffect(() => {
+    const allaRipresa = () => { if (document.visibilityState === 'visible') assicuraSessioneFrescaPerIlNativo().catch(() => {}); };
+    document.addEventListener('visibilitychange', allaRipresa);
+    return () => document.removeEventListener('visibilitychange', allaRipresa);
+  }, []);
   // Scheda Vision (riconoscimento fotocamera): NON è un POI, ha una vista dedicata
   const [visionCard, setVisionCard] = useState<any | null>(null);
   // Visita guidata nei musei: il foglio vive anche fuori dalla fotocamera,
@@ -1059,9 +1068,14 @@ export default function App() {
           .select('id, name, lat, lon, category, poi_type, description_short, image_url')
           .eq('id', poiId)
           .limit(1);
-        const p: any = data?.[0];
+        // Senza riga leggibile (rete, permessi) valgono id/lat/lon/nome del link: la mappa li sa aprire.
+        const uLat = Number(params.get('lat')), uLon = Number(params.get('lon'));
+        const p: any = data?.[0] || (Number.isFinite(uLat) && Number.isFinite(uLon) ? { id: poiId, name: params.get('nome') || '', lat: uLat, lon: uLon } : null);
         if (!p || p.lat == null || p.lon == null) return;
         setActiveTab('map');
+        // 24/10/2026: in attesa anche qui — se MapArea non è ancora montata (accesso, onboarding) l'evento sotto
+        // non lo sente nessuno; MapArea lo apre appena la mappa è visibile.
+        (window as any).__wipFocusPoiInAttesa = { ...p, lat: Number(p.lat), lon: Number(p.lon) };
         setTimeout(() => {
           window.dispatchEvent(new CustomEvent('wip-open-map-area', { detail: { lat: Number(p.lat), lon: Number(p.lon), zoom: 16 } }));
           window.dispatchEvent(new CustomEvent('focus-poi', { detail: { ...p, lat: Number(p.lat), lon: Number(p.lon) } }));
@@ -1360,6 +1374,9 @@ export default function App() {
       invalidaTokenCache();
       if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') && s?.user?.id) {
         pushUserContextToNative({ userId: s.user.id, accessToken: s.access_token }).catch(() => {});
+        // (25/10/2026) All'avvio e al login: se alla sessione restano poche ore, rinnovala SUBITO, così il
+        // nativo ha un token che regge un giro a schermo spento (il JS congelato non può rinnovarlo dopo).
+        if (event !== 'TOKEN_REFRESHED') assicuraSessioneFrescaPerIlNativo().catch(() => {});
       } else if (event === 'SIGNED_OUT') {
         clearNativeUserContext().catch(() => {});
       }
@@ -1368,6 +1385,18 @@ export default function App() {
     // Check for deep links (e.g. ?pin=123456)
     const params = new URLSearchParams(window.location.search);
     if (params.get('pin')) {
+      setActiveTab('profile');
+    }
+    // Coupon da riscattare SUL SITO (11/10/2026, committente: «da riscattare sul sito, Apple non accetta»):
+    // /riscatta?codice=X manda qui con ?coupon=X; il codice passa a ProfileScreen via localStorage (il tab
+    // può montare dopo il login) e il riquadro coupon resta nascosto su iOS come prima.
+    const couponUrl = String(params.get('coupon') || '').trim().toUpperCase();
+    if (/^[A-Z0-9]{3,30}$/.test(couponUrl)) {
+      try {
+        localStorage.setItem('wip_coupon_da_riscattare', couponUrl);
+        // Dalla presentazione del regalo (/regalo, tasto «Attiva il regalo»): il riscatto parte da solo appena c'è un account.
+        if (params.get('regalo') === '1') localStorage.setItem('wip_coupon_regalo_auto', couponUrl);
+      } catch { /* ok */ }
       setActiveTab('profile');
     }
     // Pianificazione di gruppo (ondata 7): ?groupplan=PIN apre il tab Piani
@@ -1954,6 +1983,16 @@ export default function App() {
           poi = await getPoiById(String(poiId));
         } catch { /* repository non disponibile: si prosegue solo se poi esiste */ }
       }
+      // 23/10/2026 — REGOLA: il POI minimo del giro ({id, nome, coordinate}) si completa dal repository e si
+      // normalizza (poiDisplay.normalizzaPoiMinimo): con i campi mancanti la scheda mandava la pagina in errore.
+      if (poi && ePoiMinimo(poi) && (poi.id ?? poiId) != null) {
+        try {
+          const { getPoiById } = await import('./services/poiRepository');
+          const pieno: any = await getPoiById(String(poi.id ?? poiId));
+          if (pieno) poi = { ...pieno, ...Object.fromEntries(Object.entries(poi).filter(([, v]) => v != null && v !== '')) };
+        } catch { /* si prosegue col minimo, normalizzato */ }
+      }
+      if (poi) poi = normalizzaPoiMinimo(poi);
       if (poi) {
         console.log(`[App] Opening POI from trigger: ${poi.name || poi.id}, autoPlay=${autoPlay}`);
         // Il deep link della notifica porta il personaggio (itainta://poi/ID?guide=dante):

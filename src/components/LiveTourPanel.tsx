@@ -12,7 +12,7 @@ export default function LiveTourPanel() {
   const t = (k: string) => getTranslation(k, lingua);
   // Il broadcast del leader e il canale realtime vivono dentro useLiveTour a
   // livello di modulo: il tour resta attivo anche uscendo da questo tab.
-  const { activeSession, isLeader, participantCount, members, loading, error, createSession, joinSession, leaveSession } = useLiveTour();
+  const { activeSession, isLeader, participantCount, members, avviso, loading, error, createSession, joinSession, leaveSession } = useLiveTour();
   const [pinInput, setPinInput] = useState('');
   const [copied, setCopied] = useState(false);
   const [sessionUser, setSessionUser] = useState<any>(null);
@@ -76,6 +76,15 @@ export default function LiveTourPanel() {
               {copied ? <CheckCircle className="w-5 h-5 text-green-500" /> : <Copy className="w-5 h-5" />}
             </button>
           </div>
+
+          {/* Difetti della sessione visibili (25/10/2026): canale rifiutato,
+              leader assente da 30 s, chiusura non riuscita, secondo leader. */}
+          {avviso && (
+            <div className="mt-4 w-full bg-amber-50 border border-amber-200 text-amber-800 p-3 rounded-2xl text-xs font-bold flex items-center gap-2 text-left" aria-live="polite">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              {avviso}
+            </div>
+          )}
 
           {/* Conteggio partecipanti reale via presence Realtime */}
           <div className="mt-4 flex items-center gap-2 bg-blue-50 text-blue-700 px-4 py-2 rounded-full">

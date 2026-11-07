@@ -7,9 +7,9 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
-import { leggiRegistroCollaudo } from '../lib/collaudoRegistro';
+import { leggiRegistroCollaudo, SILENZIO_LENTO_S } from '../lib/collaudoRegistro';
 import {
-  statoTest, ascoltaTest, avviaTest, vaiA, seguiGiro, pausaTest, riprendiTest, fermaTest,
+  statoTest, vociInAttesa, ascoltaTest, avviaTest, vaiA, seguiGiro, pausaTest, riprendiTest, fermaTest,
   impostaTest, segnoTest, azzeraAscolti, righeTest, schermoTest, scenarioCorrente, rilanciaScenario,
   gpsGalleria, gpsSalto, gpsDeriva, gpsDerivaAccesa, filmTest,
   type ModoTest, type ScenarioTest,
@@ -64,8 +64,13 @@ export default function TestVirtuale() {
       if (ora.attivo && ora.inCammino) partito = true;
       if (!finito && partito && ora.attivo && !ora.inCammino) {
         finito = true;
-        const l = leggiRegistroCollaudo(righeTest());
-        try { window.parent?.postMessage({ tipo: 'wip-test-folla', nome: folla, pagella: l.pagella, scatti: l.scatti.map(x => ({ nome: x.nome, strada: x.strada, raggio: x.raggio, esito: x.esito })) }, window.location.origin); } catch { /* aperta da sola */ }
+        // Il cammino finisce quasi sempre davanti a un luogo: la sua voce si aspetta (al più 90 s) prima della pagella.
+        const manda = (giri: number) => {
+          if (vociInAttesa() > 0 && giri < 95) { setTimeout(() => manda(giri + 1), 1000); return; }
+          const l = leggiRegistroCollaudo(righeTest());
+          try { window.parent?.postMessage({ tipo: 'wip-test-folla', nome: folla, pagella: l.pagella, scatti: l.scatti.map(x => ({ nome: x.nome, strada: x.strada, raggio: x.raggio, esito: x.esito })) }, window.location.origin); } catch { /* aperta da sola */ }
+        };
+        manda(0);
       }
     });
     (async () => {
@@ -265,6 +270,16 @@ export default function TestVirtuale() {
                   <b className="text-[#1e3a8a] text-[15px]">{letto.pagella.voto == null ? '—' : `${letto.pagella.voto}%`}</b> scatti giusti ·
                   guide {letto.pagella.guide.giuste}/{letto.pagella.guide.totali} · svolte {letto.pagella.svolte.giuste}/{letto.pagella.svolte.totali}
                 </p>
+                {letto.pagella.voce.attese > 0 && (
+                  <p className={letto.pagella.voce.mai || letto.pagella.voce.lente ? 'text-orange-600 font-bold' : 'text-green-700'}>
+                    Voce dopo lo scatto: partite {letto.pagella.voce.partite}/{letto.pagella.voce.attese}
+                    {letto.pagella.voce.silenzioMedioS != null && ` · silenzio medio ${letto.pagella.voce.silenzioMedioS} s, peggiore ${letto.pagella.voce.silenzioPeggioreS} s`}
+                    {letto.pagella.voce.lente > 0 && ` · lente (oltre ${SILENZIO_LENTO_S} s) ${letto.pagella.voce.lente}`}
+                    {letto.pagella.voce.mai > 0 && ` · MAI partite ${letto.pagella.voce.mai}`}
+                    {letto.pagella.voce.nonPartite > 0 && ` · fermate dall'app ${letto.pagella.voce.nonPartite}`}
+                  </p>
+                )}
+                {vociInAttesa() > 0 && <p className="text-gray-500">In attesa della voce di {vociInAttesa()} guida/e (al più 90 s).</p>}
                 {letto.scatti.slice(-6).map((x, i) => (
                   <p key={i} className={x.esito === 'giusto' ? 'text-green-700' : 'text-orange-600'}>
                     {x.nome}: {x.strada == null ? 'strada irraggiungibile' : `${Math.round(x.strada)} m di strada`} (raggio {x.raggio} m) — {x.esito}

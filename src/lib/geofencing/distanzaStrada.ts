@@ -53,7 +53,23 @@ interface Segmento {
 export interface SorgenteStrada {
   /** Metri di strada fino al punto; Infinity se oltre il raggio di ricerca; null se il luogo è fuori rete. */
   verso(lat: number, lon: number): number | null;
+  /**
+   * SOLO IN AUTO (30/10/2026). A piedi è stata provata e scartata il 12/10/2026: faceva parlare 53 gemme mute su
+   * 380 ma ne anticipava 4 giuste su 251 di 70–100 m (`zone-simula-scatto.mts --fine-strada`).
+   * LA DISTANZA CHE DECIDE lo scatto, tutta in un punto: metri di strada + regola d'uso (`distanzaCheDecide`) +
+   * «FINE STRADA» (committente 11–12/10/2026: «dove finisce la strada far partire a fine strada»). Quando il punto
+   * d'arrivo è giusto (sull'ingresso) ma la via non ci arriva — il cancello di una villa, il cortile di un palazzo,
+   * Buckingham Palace — la somma «strada + tratto fuori rete» non scende mai sotto il raggio e la guida taceva
+   * (110 gemme su 202 «mai» in Europa avevano il punto sull'ingresso). `aria` = distanza diretta dal punto.
+   */
+  decide(lat: number, lon: number, aria: number): number;
+  /** Solo per i collaudi: via→punto (coda), strada mancante fino a quella via, utente→via. */
+  spiega(lat: number, lon: number): { coda: number | null; finoAllaVia: number | null; daUtenteAVia: number };
 }
+/** Oltre questi metri fra la via e il punto vale la regola «fine strada»; ed è quanto conta quel tratto. */
+export const STRADA_CODA_LIBERA_M = 20;
+/** In auto la via che chiude il viaggio si cerca fin qui: con 120 m 39 percorsi su 60, con 250 m 48, stesso anticipo massimo (51 m). */
+export const STRADA_FINE_AUTO_MAX_M = 250;
 export interface GrafoStrade {
   /** Prepara le distanze da una posizione. null se l'utente è fuori rete (o il grafo è vuoto). */
   da(lat: number, lon: number, maxM: number): SorgenteStrada | null;
@@ -282,6 +298,36 @@ export function creaGrafoStrade(polilinee: number[][][]): GrafoStrade {
           const tot = best + arrivo.d;
           return tot > maxM ? Infinity : tot;
         },
+        /** Solo per i collaudi: quanto dista il punto dalla via (coda) e quanta strada manca fino a lì. */
+        spiega(pLat: number, pLon: number) {
+          const arrivo = aggancia(X(pLon), Y(pLat), 400);
+          if (!arrivo) return { coda: null, finoAllaVia: null, daUtenteAVia: Math.round(partenza.d) };
+          let best = Infinity;
+          if (arrivo.seg === partenza.seg) best = partenza.d + Math.abs(arrivo.t - partenza.t) * segmenti[arrivo.seg].len;
+          for (const [n, w] of vicini(arrivo.seg, arrivo.t)) { const d = dist.get(n); if (d !== undefined && d + w < best) best = d + w; }
+          return { coda: Math.round(arrivo.d), finoAllaVia: Number.isFinite(best) ? Math.round(best) : null, daUtenteAVia: Math.round(partenza.d) };
+        },
+        decide(pLat, pLon, aria) {
+          const px = X(pLon), py = Y(pLat);
+          const arrivo = aggancia(px, py, STRADA_FINE_AUTO_MAX_M);
+          if (!arrivo) return aria; // luogo fuori rete: resta la distanza diretta
+          let best = Infinity;
+          if (arrivo.seg === partenza.seg) best = partenza.d + Math.abs(arrivo.t - partenza.t) * segmenti[arrivo.seg].len;
+          for (const [n, w] of vicini(arrivo.seg, arrivo.t)) {
+            const d = dist.get(n);
+            if (d !== undefined && d + w < best) best = d + w;
+          }
+          // FINE STRADA: la via non arriva al punto (più di STRADA_CODA_LIBERA_M fra la via e il punto). Decide la
+          // strada fino a dove finisce, e quel tratto fuori rete conta STRADA_CODA_LIBERA_M: si è arrivati a ~10 m
+          // di strada dal punto della rete più vicino al luogo. La linea d'aria qui non entra: da lì al punto
+          // possono esserci 80 m di viale privato, ed è la fine della strada che conta.
+          if (arrivo.d > STRADA_CODA_LIBERA_M && Number.isFinite(best)) {
+            const tot = best + STRADA_CODA_LIBERA_M;
+            if (tot <= maxM) return tot;
+          }
+          const tot = Number.isFinite(best) ? best + arrivo.d : Infinity;
+          return distanzaCheDecide(aria, tot > maxM ? Infinity : tot);
+        },
       };
     },
   };
@@ -295,9 +341,15 @@ export function creaGrafoStrade(polilinee: number[][][]): GrafoStrade {
  *  • entro STRADA_SICUREZZA_M (15 m) dal punto si è arrivati comunque: chi è
  *    in mezzo alla piazza accanto alla fontana c'è, anche se la via più
  *    vicina a lui e quella più vicina alla fontana sono su lati diversi.
+ *  • MA se la strada è NOTA e dice che mancano più di STRADA_GIRO_LARGO_M (120 m), i 15 m in linea d'aria non
+ *    bastano (11/10/2026, simulazione di 4.400 gemme: 10 scattavano con 175–450 m di cammino ancora da fare —
+ *    il tornante sopra, la strada sotto il muro, l'altra sponda). Una strada non raggiunta (Infinity: buco nei
+ *    dati o oltre il raggio di ricerca) NON rientra: lì la sicurezza resta, o la guida tacerebbe.
  */
+export const STRADA_GIRO_LARGO_M = 120;
 export function distanzaCheDecide(aria: number, strada: number | null | undefined): number {
   if (strada === null || strada === undefined) return aria;
+  if (aria <= STRADA_SICUREZZA_M && Number.isFinite(strada) && strada > STRADA_GIRO_LARGO_M) return strada;
   if (aria <= STRADA_SICUREZZA_M) return Math.min(aria, strada);
   return Math.max(aria, strada);
 }

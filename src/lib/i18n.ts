@@ -1589,6 +1589,7 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   tour_pausa: { IT: "Metti in pausa", EN: "Pause", FR: "Mettre en pause", ES: "Pausar", DE: "Pausieren", RU: "Пауза", ZH: "暂停" },
   tour_riprendi: { IT: "Riprendi", EN: "Resume", FR: "Reprendre", ES: "Reanudar", DE: "Fortsetzen", RU: "Продолжить", ZH: "继续" },
   tour_riascolta: { IT: "Riascolta", EN: "Play again", FR: "Réécouter", ES: "Volver a escuchar", DE: "Nochmal hören", RU: "Прослушать снова", ZH: "重听" },
+  tour_prossima_tappa: { IT: "Vai alla prossima tappa", EN: "Go to the next stop", FR: "Aller à l'étape suivante", ES: "Ir a la siguiente parada", DE: "Zur nächsten Station", RU: "К следующей точке", ZH: "前往下一站" },
   tour_salta: { IT: "Salta questa tappa", EN: "Skip this stop", FR: "Passer cette étape", ES: "Saltar esta parada", DE: "Station überspringen", RU: "Пропустить точку", ZH: "跳过此站" },
   tour_termina: { IT: "Termina il giro", EN: "End tour", FR: "Terminer le parcours", ES: "Terminar el recorrido", DE: "Tour beenden", RU: "Завершить маршрут", ZH: "结束行程" },
   tour_problemi: { IT: "tappe senza percorso pedonale", EN: "stops with no walking route", FR: "étapes sans itinéraire piéton", ES: "paradas sin ruta peatonal", DE: "Stationen ohne Fußweg", RU: "точек без пешего маршрута", ZH: "个站点没有步行路线" },

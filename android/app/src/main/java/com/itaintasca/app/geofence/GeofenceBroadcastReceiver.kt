@@ -740,6 +740,64 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             )
         }
 
+        /**
+         * (25/10/2026) Senza rete e senza MP3/testo gia' sul telefono la guida
+         * non puo' partire: la notifica d'arrivo (stesso id di quella gia'
+         * mostrata: la SOSTITUISCE, mai una seconda riga) dice che serve la
+         * rete. Un solo avviso per luogo ogni 10 minuti.
+         */
+        @Volatile private var ultimoAvvisoRetePoi = ""
+        @Volatile private var ultimoAvvisoReteTs = 0L
+
+        fun showNetworkRequiredNotification(
+            context: Context,
+            poiId: String,
+            name: String,
+            guideVoice: String,
+            lang: String
+        ) {
+            val now = System.currentTimeMillis()
+            if (poiId == ultimoAvvisoRetePoi && now - ultimoAvvisoReteTs < 10 * 60_000L) return
+            ultimoAvvisoRetePoi = poiId
+            ultimoAvvisoReteTs = now
+            val testo = NotificationStrings.get(lang, "network_required_text")
+            ponte.showNotification(
+                context.applicationContext,
+                NotificationStrings.get(lang, "arrival_at", name),
+                testo,
+                poiId, guideVoice, true, bigText = testo
+            )
+        }
+
+        /**
+         * (25/10/2026) L'id dell'ultimo luogo per cui e' stato emesso un arrivo,
+         * se da meno di NOME_APPENA_DETTO_MS; altrimenti null. Serve a
+         * handleArrival per il gemello in un altro alfabeto / stesso QID, che
+         * `nomeAppenaDetto` non vede (il nome nudo di «Трг републике» e' vuoto).
+         */
+        private fun ultimoArrivoRecente(context: Context): String? =
+            synchronized(arbLock) {
+                caricaArbitrato(context)
+                val eta = System.currentTimeMillis() - ultimoArrivoTs
+                if (ultimoArrivoPoi.isNotEmpty() && eta >= 0 && eta < Arbitrato.NOME_APPENA_DETTO_MS) ultimoArrivoPoi else null
+            }
+
+        /**
+         * (25/10/2026) AL MASSIMO UN AVVISO DI AVVICINAMENTO OGNI 20 S (regola
+         * del 23/10/2026): a Belgrado i 150 m leggevano quaranta nomi in un
+         * chilometro e mezzo. Le tappe di un giro non passano di qui.
+         */
+        const val AVVISO_OGNI_MS = 20_000L
+        @Volatile private var ultimoAvvisoTs = 0L
+
+        private fun avvisoConcesso(): Boolean = synchronized(arbLock) {
+            val now = System.currentTimeMillis()
+            val eta = now - ultimoAvvisoTs
+            if (eta >= 0L && eta < AVVISO_OGNI_MS) return false
+            ultimoAvvisoTs = now
+            true
+        }
+
         private fun processNextSpeech(appContext: Context) {
             val prefs = appContext.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
             if (!prefs.getBoolean("isServiceActive", false)) {
@@ -1728,6 +1786,10 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
             // Filtro Maniacale Categorie nel Geofencing OS
             if (!isPoiCategoryActive(poi, selectedCats)) continue
+            // (25/10/2026) Citta', entita' amministrative e metropolitane non
+            // parlano mai (NomiAnnunciabili.rigaNonParla), nemmeno dai recinti
+            // di sistema: stesso filtro del giro del servizio.
+            if (NomiAnnunciabili.rigaNonParla(poi)) continue
 
             val poiLoc = Location("").apply {
                 latitude = poi.entranceLat ?: poi.lat
@@ -1799,14 +1861,13 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // pensa il giro del servizio (approach/arrivo radiale) al fix in cui
             // i metri di strada rientrano. Fuori rete o senza tile vale la linea
             // d'aria, come prima (RoadGraph.cheDecide).
-            var distStrada = RoadGraph.cheDecide(
-                info.realDist.toDouble(),
-                try {
-                    RoadSnap.grafo(isDrivingMode)
-                        ?.da(currentLoc.latitude, currentLoc.longitude, RoadGraph.ricercaM(isDrivingMode))
-                        ?.verso(poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon)
-                } catch (e: Exception) { null }
-            )
+            var distStrada = try {
+                RoadGraph.misura(
+                    info.realDist.toDouble(),
+                    RoadSnap.grafo(isDrivingMode)?.da(currentLoc.latitude, currentLoc.longitude, RoadGraph.ricercaM(isDrivingMode)),
+                    poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon, isDrivingMode
+                )
+            } catch (e: Exception) { info.realDist.toDouble() }
             // (05/10/2026, ARBITRATO) L'AGGANCIO ALLA STRADA NON E' CREDUTO DA
             // SOLO. Qui si misura dal fix NON agganciato; il giro del servizio
             // misura da quello agganciato. Le due misure devono dare entrambe
@@ -1823,11 +1884,10 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                             val pLat = poi.entranceLat ?: poi.lat
                             val pLon = poi.entranceLon ?: poi.lon
                             Location.distanceBetween(agg.first, agg.second, pLat, pLon, buf)
-                            val dallAggancio = RoadGraph.cheDecide(
+                            val dallAggancio = RoadGraph.misura(
                                 buf[0].toDouble(),
-                                RoadSnap.grafo(isDrivingMode)
-                                    ?.da(agg.first, agg.second, Arbitrato.ricercaLiberaM(isDrivingMode))
-                                    ?.verso(pLat, pLon)
+                                RoadSnap.grafo(isDrivingMode)?.da(agg.first, agg.second, Arbitrato.ricercaLiberaM(isDrivingMode)),
+                                pLat, pLon, isDrivingMode
                             )
                             if (dallAggancio > distStrada) distStrada = dallAggancio
                         }
@@ -2140,17 +2200,40 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         // ✅ [PREFETCH MP3] - Al primo avviso scarichiamo in background l'MP3
         // dell'audioguida nella cache locale: al trigger di arrivo la
         // riproduzione parte istantanea (best-effort, mai bloccante).
-        com.itaintasca.app.service.AudioPrefetchManager.prefetch(context, poiId, lang, guideVoice)
+        // (25/10/2026) Senza diritto (ne' pass che copre il luogo ne' acquisto:
+        // DayPassLocale.haDiritto, la condizione di ArrivalWorker) si prende
+        // solo cio' che e' gia' in cache sul server: mai una sintesi per chi
+        // all'arrivo non la sentirebbe.
+        val haDiritto = com.itaintasca.app.offline.DayPassLocale.haDiritto(context, poiId)
+        com.itaintasca.app.service.AudioPrefetchManager.prefetch(context, poiId, lang, guideVoice, soloCache = !haDiritto)
+
+        // (25/10/2026) L'AVVISO DICE UN NOME, MAI UN'ETICHETTA GREZZA
+        // (NomiAnnunciabili.nomeDaAnnunciare: numeri, targhe, «School building»,
+        // alfabeto che la voce non legge) e AL MASSIMO UNO OGNI 20 S. Senza
+        // nome, o troppo presto: stato, evento e prefetch restano fatti (la
+        // guida all'arrivo ha le sue regole), ma niente voce, vibrazione ne'
+        // notifica. Le tappe di un giro passano sempre.
+        val nomeAvviso = if (isItinerary) name else NomiAnnunciabili.nomeDaAnnunciare(poi, lang)
+        if (nomeAvviso == null) {
+            Log.d(TAG, "Avviso non emesso per $name ($poiId): nome grezzo o in un altro alfabeto")
+            com.itaintasca.app.service.RegistroCollaudo.scrivi("AVVISO muto-nome-grezzo \"$name\" id=$poiId")
+            return
+        }
+        if (!isItinerary && !avvisoConcesso()) {
+            Log.d(TAG, "Avviso non emesso per $name ($poiId): un altro avviso da meno di 20 s")
+            com.itaintasca.app.service.RegistroCollaudo.scrivi("AVVISO muto-20s \"$name\" id=$poiId")
+            return
+        }
 
         // Messaggio localizzato: prima era italiano fisso anche per utenti EN/FR/ES/DE
         val approachMsg = when (lang) {
-            "en" -> "You are approaching $name"
-            "fr" -> "Vous approchez de $name"
-            "es" -> "Te estás acercando a $name"
-            "de" -> "Sie nähern sich $name"
-            "ru" -> "Вы приближаетесь к $name"
-            "zh" -> "您正在接近$name"
-            else -> "Ti stai avvicinando a $name"
+            "en" -> "You are approaching $nomeAvviso"
+            "fr" -> "Vous approchez de $nomeAvviso"
+            "es" -> "Te estás acercando a $nomeAvviso"
+            "de" -> "Sie nähern sich $nomeAvviso"
+            "ru" -> "Вы приближаетесь к $nomeAvviso"
+            "zh" -> "您正在接近$nomeAvviso"
+            else -> "Ti stai avvicinando a $nomeAvviso"
         }
 
         val prefix = if (isItinerary) "📍 Tappa: " else if (isGem) "💎 " else ""
@@ -2160,7 +2243,12 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         // leggibile nella notifica. Stato/eventi/prefetch restano identici:
         // nessun trigger perso.
         val silentMode = com.itaintasca.app.service.WebViewPrefs.isSilentMode(context)
-        if (speak && !silentMode) {
+        // (01/11/2026, feedback dei tester Play su 1.3.8) L'avviso si DICE solo
+        // se all'arrivo ci sara' qualcosa da ascoltare (un teaser leggibile), o
+        // per le tappe di un giro: «Ti stai avvicinando a X» e poi nulla era
+        // proprio l'annuncio vuoto segnalato. Vibrazione e notifica restano.
+        val haContenuto = isItinerary || NomiAnnunciabili.teaserLeggibile(poi.teaserText, null, lang) != null
+        if (speak && !silentMode && haContenuto) {
             enqueue(context, SpeechItem("$prefix$approachMsg", isGem, isItinerary, poiId, priority, kind = "approach"))
         }
         if (silentMode) {
@@ -2177,11 +2265,12 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                           else prefs.getFloat("alertRadiusWalk", 150f)
         // In modalità silenziosa il teaser (se già disponibile) va nella
         // notifica in versione espandibile: è l'unico canale di contenuto.
-        val approachBigText = if (silentMode && !poi.teaserText.isNullOrBlank()) {
-            "$approachMsg\n\n${poi.teaserText}"
+        val teaserAvviso = NomiAnnunciabili.teaserLeggibile(poi.teaserText, null, lang)
+        val approachBigText = if (silentMode && !teaserAvviso.isNullOrBlank()) {
+            "$approachMsg\n\n$teaserAvviso"
         } else null
         // (03/10/2026) Stesso testo di prima, ma per la strada della notifica UNICA (regole 1 e 3).
-        notificaAvvicinamento(context, poiId, name, isItinerary, "$notifTitle: $name", NotificationStrings.get(lang, "approach_text", alertRadNow.toInt().toString()), guideVoice, approachBigText)
+        notificaAvvicinamento(context, poiId, nomeAvviso, isItinerary, "$notifTitle: $nomeAvviso", NotificationStrings.get(lang, "approach_text", alertRadNow.toInt().toString()), guideVoice, approachBigText)
     }
 
     /**
@@ -2272,6 +2361,25 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             com.itaintasca.app.service.RegistroCollaudo.scrivi("GUIDA muto-stesso-nome \"$name\" id=$poiId")
             return false
         }
+        // (25/10/2026) IL GEMELLO IN UN ALTRO ALFABETO O CON LO STESSO QID del
+        // luogo appena raccontato («Трг републике» dopo «Piazza della
+        // Repubblica») e' lo stesso luogo: il nome nudo non lo vede (vuoto per
+        // il cirillico). NomiAnnunciabili.stessoLuogoAltroAlfabeto, entro 150 m.
+        val poiOra = poi
+        if (!tappa && poiOra != null) {
+            val ultimoId = ultimoArrivoRecente(context)
+            val ultimo = if (ultimoId != null && ultimoId != poiId) db.poiDao().getPoiById(ultimoId) else null
+            if (ultimo != null) {
+                val buf = FloatArray(1)
+                Location.distanceBetween(poiOra.lat, poiOra.lon, ultimo.lat, ultimo.lon, buf)
+                if (NomiAnnunciabili.stessoLuogoAltroAlfabeto(ultimo, poiOra, buf[0])) {
+                    db.poiDao().updateTriggerState(TriggerStateEntity(poiId, TriggerState.ARRIVED_FIRED))
+                    Log.d(TAG, "handleArrival: $name ($poiId) muto, gemello in altro alfabeto/QID di ${ultimo.nome}")
+                    com.itaintasca.app.service.RegistroCollaudo.scrivi("GUIDA muto-gemello-alfabeto \"$name\" id=$poiId di=${ultimo.id}")
+                    return false
+                }
+            }
+        }
         // (05/10/2026, ARBITRATO) MAI UN LUOGO SOPRA UNA GUIDA. I chiamanti hanno
         // gia' guardato, ma sono due (giro del servizio e recinti di sistema) e
         // possono arrivare qui insieme per due luoghi diversi: l'ultimo
@@ -2323,14 +2431,28 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             }
         }
 
-        val arrivalMsg = when (lang) {
-            "en" -> "You arrived at $name."
-            "fr" -> "Vous êtes arrivés a $name."
-            "es" -> "Has llegado a $name."
-            "de" -> "Sie sind in $name angekommen."
-            "ru" -> "Вы прибыли в $name."
-            "zh" -> "您已到达$name。"
-            else -> "Sei arrivato a $name."
+        // (01/11/2026, feedback dei tester Play su 1.3.8: «place names spoken in
+        // foreign languages») Il nome si pronuncia solo se la voce dell'utente
+        // lo sa leggere (NomiAnnunciabili.nomeDaAnnunciare): un nome in un altro
+        // alfabeto o un'etichetta grezza → «Sei arrivato.» senza nome. La
+        // notifica scritta mostra comunque il nome. Le tappe di un giro: sempre.
+        val nomeDetto = if (isItinerary) name else NomiAnnunciabili.nomeDaAnnunciare(name, poiId, poi?.poiType, lang)
+        val arrivalMsg = if (nomeDetto == null) when (lang) {
+            "en" -> "You have arrived."
+            "fr" -> "Vous êtes arrivés."
+            "es" -> "Has llegado."
+            "de" -> "Sie sind angekommen."
+            "ru" -> "Вы прибыли."
+            "zh" -> "您已到达。"
+            else -> "Sei arrivato."
+        } else when (lang) {
+            "en" -> "You arrived at $nomeDetto."
+            "fr" -> "Vous êtes arrivés a $nomeDetto."
+            "es" -> "Has llegado a $nomeDetto."
+            "de" -> "Sie sind in $nomeDetto angekommen."
+            "ru" -> "Вы прибыли в $nomeDetto."
+            "zh" -> "您已到达$nomeDetto。"
+            else -> "Sei arrivato a $nomeDetto."
         }
 
         // Frase di ripiego quando il teaser manca: NON sempre la stessa. In un
@@ -2375,7 +2497,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         val semeRipiego = poiId.fold(0) { acc, c -> (acc * 31 + c.code) and 0x7fffffff }
         val fallbackTeaser = variantiRipiego[semeRipiego % variantiRipiego.size]
 
-        val teaser = poi?.teaserText
+        // (25/10/2026) Solo un teaser leggibile (NomiAnnunciabili.teaserLeggibile):
+        // mai il segnaposto, mai un alfabeto che la voce non sa.
+        val teaser = NomiAnnunciabili.teaserLeggibile(poi?.teaserText, null, lang)
         val fullMsg = if (!teaser.isNullOrBlank()) "$arrivalMsg $teaser" else "$arrivalMsg $fallbackTeaser"
 
         // MODALITÀ «SOLO VIBRAZIONE + TESTO» (wip_silent_mode='1'): niente TTS
@@ -2429,16 +2553,10 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         // SOLO se la guida partira' davvero da sola (gia' acquistata o Day
         // Pass attivo, ArrivalWorker.run:158-167); altrimenti prima diceva
         // «Avvio audioguida» e restava muta. Senza pass → «Tocca per ascoltare».
-        val autoPlay = fullGuide && isAutomaticMode && !silentMode && run {
-            val alreadyPurchased = com.itaintasca.app.service.ListeningHistoryStore.isAlreadyPurchased(context, poiId)
-            val passActive = com.itaintasca.app.offline.BillingLogic.isPassActive(
-                System.currentTimeMillis(),
-                prefs.getLong("daypass_expires_at", 0L),
-                prefs.getInt("daypass_used", 0),
-                prefs.getInt("daypass_cap", 0)
-            )
-            alreadyPurchased || passActive
-        }
+        // (25/10/2026) Stessa condizione di ArrivalWorker, in un posto solo:
+        // DayPassLocale.haDiritto (acquistato, o pass che copre il luogo).
+        val autoPlay = fullGuide && isAutomaticMode && !silentMode &&
+            com.itaintasca.app.offline.DayPassLocale.haDiritto(context, poiId)
 
         if (silentMode) {
             // Notifica d'arrivo con il TESTO del teaser ben leggibile: è il
@@ -2476,15 +2594,21 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
      */
     private suspend fun silenziaDoppioni(db: PoiDatabase, vincitore: PoiEntity) {
         try {
+            // (25/10/2026) Oltre allo stesso nome nudo, tace anche il GEMELLO in
+            // un altro alfabeto o con lo stesso QID entro 150 m
+            // (NomiAnnunciabili.stessoLuogoAltroAlfabeto): per lui il nome nudo
+            // e' vuoto e la regola di prima non lo vedeva. Il riquadro in gradi
+            // viene prima di tutto, come prima.
             val nudo = Arbitrato.nomeNudo(vincitore.nome)
-            if (nudo.length < 4) return
+            val perNome = nudo.length >= 4
             val buf = FloatArray(1)
             for (p in db.poiDao().getAllPois()) {
                 if (p.id == vincitore.id || p.isFromItinerary) continue
                 if (!(Math.abs(p.lat - vincitore.lat) < 0.002 && Math.abs(p.lon - vincitore.lon) < 0.004)) continue
-                if (!Arbitrato.stessoLuogo(nudo, Arbitrato.nomeNudo(p.nome))) continue
                 Location.distanceBetween(p.lat, p.lon, vincitore.lat, vincitore.lon, buf)
-                if (!(buf[0] <= Arbitrato.DOPPIONE_M)) continue
+                val stessoNome = perNome && Arbitrato.stessoLuogo(nudo, Arbitrato.nomeNudo(p.nome)) && buf[0] <= Arbitrato.DOPPIONE_M
+                val gemello = NomiAnnunciabili.stessoLuogoAltroAlfabeto(vincitore, p, buf[0])
+                if (!stessoNome && !gemello) continue
                 val lucchetto = lockForPoi(p.id)
                 if (!lucchetto.tryLock()) continue
                 try {

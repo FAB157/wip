@@ -2,8 +2,9 @@ import React, { useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import {
   Hotel, Trash2, Copy, Pencil, Check, X, Search, Download,
-  ChevronLeft, ChevronRight, AlertTriangle, CalendarClock
+  ChevronLeft, ChevronRight, AlertTriangle, CalendarClock, QrCode
 } from 'lucide-react';
+import CouponDettaglio from './CouponDettaglio';
 import { SCORCIATOIE_CREDITI, CREDITI_MIN, CREDITI_MAX, isErroreColonnaMancante, AVVISO_SCADENZA_ASSENTE } from './CouponForm';
 
 interface Props {
@@ -53,6 +54,8 @@ export default function CouponList({ coupons, setIsLoading, onMessage, onChanged
   const [bozza, setBozza] = useState<{ reward_credits: string; max_uses: string; is_active: boolean; expires_at: string }>({
     reward_credits: '', max_uses: '', is_active: true, expires_at: ''
   });
+  // Scheda del coupon (ente, riscatti, presentazione con QR): si apre toccando codice e struttura.
+  const [idAperto, setIdAperto] = useState<string | null>(null);
   // Conferma eliminazione inline (niente confirm() nativo).
   const [idDaEliminare, setIdDaEliminare] = useState<string | null>(null);
   // Avviso onesto quando il DB non ha ancora la colonna expires_at.
@@ -271,15 +274,20 @@ export default function CouponList({ coupons, setIsLoading, onMessage, onChanged
                     <React.Fragment key={coupon.id}>
                     <tr className="hover:bg-gray-50/50">
                       <td className="p-4">
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-xl bg-primary/5 text-primary flex items-center justify-center">
+                        <button
+                          type="button"
+                          onClick={() => setIdAperto(idAperto === coupon.id ? null : coupon.id)}
+                          title="Apri la scheda: a chi è stato emesso, chi l'ha riscattato, presentazione con QR"
+                          className="flex items-center gap-2.5 text-left"
+                        >
+                          <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${idAperto === coupon.id ? 'bg-primary text-white' : 'bg-primary/5 text-primary'}`}>
                             <Hotel className="w-4 h-4" />
                           </div>
                           <div>
                             <span className="font-black text-primary bg-orange-50 text-orange-700 px-2 py-0.5 rounded-md text-[11px] uppercase tracking-wider mr-2">{coupon.code}</span>
-                            <span className="text-xs text-on-surface-variant opacity-80">{coupon.structure_name}</span>
+                            <span className="text-xs text-on-surface-variant opacity-80 underline decoration-dotted underline-offset-2">{coupon.structure_name}</span>
                           </div>
-                        </div>
+                        </button>
                       </td>
                       <td className="p-4 text-xs font-bold text-on-surface-variant">
                         {coupon.reward_credits || (coupon.duration_days * 10)} Crediti
@@ -350,6 +358,15 @@ export default function CouponList({ coupons, setIsLoading, onMessage, onChanged
                           </div>
                         ) : (
                         <div className="flex items-center justify-end gap-2">
+                          <a
+                            href={`https://www.wip.guide/regalo?codice=${encodeURIComponent(coupon.code)}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="p-1.5 bg-primary/5 hover:bg-primary/10 text-primary rounded-lg transition-colors"
+                            title="Presentazione con QR code, da stampare o inviare"
+                          >
+                            <QrCode className="w-3.5 h-3.5" />
+                          </a>
                           <button
                             onClick={() => (idInModifica === coupon.id ? setIdInModifica(null) : apriModifica(coupon))}
                             className={`p-1.5 rounded-lg transition-colors ${
@@ -386,6 +403,14 @@ export default function CouponList({ coupons, setIsLoading, onMessage, onChanged
                         )}
                       </td>
                     </tr>
+
+                    {idAperto === coupon.id && (
+                      <tr className="bg-[#f8f5f0]">
+                        <td colSpan={6} className="p-4">
+                          <CouponDettaglio coupon={coupon} onMessage={onMessage} />
+                        </td>
+                      </tr>
+                    )}
 
                     {/* Riga di modifica: si apre sotto il coupon così la tabella
                         non cambia larghezza e resta chiaro chi si sta modificando. */}

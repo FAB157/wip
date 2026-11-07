@@ -53,7 +53,8 @@ import DayPassCard from './DayPassCard';
 import ShopScreen from './ShopScreen';
 import LoadingQuiz from './LoadingQuiz';
 import { downloadGuideAsPdf, getLocalGuide } from '../services/premiumGuideService';
-import { mapItineraryCategoryToMapCategory, tappaDiventaPoi } from '../services/poiRepository';
+import { mapItineraryCategoryToMapCategory, tappaDiventaPoi, tappaSegnalata, eViaCommerciale, cercaGemelloConFonte } from '../services/poiRepository';
+import { displayName, nomeNellaLinguaUtente } from '../lib/poiDisplay';
 import { mieGenerazioni, type Generazione } from '../services/generazioniService';
 import BudgetTable from './itinerary/BudgetTable';
 import CalendarExportButton from './CalendarExportButton';
@@ -545,6 +546,8 @@ async function verifyItineraryAntiAllucinazioni(data: any, genBody: any): Promis
         interests: genBody.interests,
         // Le note di verifica (es. "chicca poco conosciuta") escono nella lingua dell'utente
         language: genBody.language,
+        // Viaggio in più città: ogni città è un riferimento per il controllo geografico.
+        ...(Array.isArray(genBody.legs) ? { legs: genBody.legs } : {}),
       }),
       signal: ctrl.signal,
     });
@@ -770,7 +773,9 @@ const ExperienceCard = ({ exp, onAdd, color }: { key?: React.Key, exp: any, onAd
  */
 function idPoiDaTappa(t: any, lat: number, lon: number): string {
   const p = String(t?.poi_id || '');
-  if (p && !p.startsWith('ov-')) return p;
+  // 23/10/2026 — REGOLA: un poi_id VERO (anche un locale `ov-` di locali_pois) è l'id della tappa ovunque —
+  // radar, giro, offline. Prima il pasto agganciato a `ov-…` prendeva un id `iti-…` che nel DB non c'era.
+  if (p) return p;
   const slug = String(t?.titolo_tappa || t?.titolo || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
   return `iti-${slug}-${lat.toFixed(3)}_${lon.toFixed(3)}`.replace(/\./g, 'p');
 }
@@ -1190,13 +1195,39 @@ export default function PlanScreen({
         const tappe = plan.giorni[g].tappe || [];
         const pts = tappe.map(coordOf);
         const validIdx = pts.map((p: any, i: number) => (p ? i : -1)).filter((i: number) => i >= 0);
+        // In linea d'aria ×1,3: la stima che resta quando la rete stradale non risponde.
+        const metriAria = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) => {
+          const p = Math.PI / 180, x = (b.lon - a.lon) * p * Math.cos(((a.lat + b.lat) / 2) * p), y = (b.lat - a.lat) * p;
+          return Math.sqrt(x * x + y * y) * 6371000;
+        };
+        // TRASFERIMENTO FRA CITTÀ (08/10/2026, committente: «usa anche google mezzi», «sempre
+        // presente»): sotto la tappa «In viaggio» il tasto «Mezzi» di Google Maps, dall'ultima
+        // tappa prima del viaggio (anche del giorno prima) alla prima dopo.
+        tappe.forEach((t: any, i: number) => {
+          if (t?.tipo !== 'trasferimento') return;
+          let da: any = null;
+          for (let k = i - 1; k >= 0 && !da; k--) if (tappe[k]?.tipo !== 'trasferimento') da = pts[k];
+          const prec = g > 0 ? (plan.giorni[g - 1].tappe || []) : [];
+          for (let k = prec.length - 1; k >= 0 && !da; k--) if (prec[k]?.tipo !== 'trasferimento') da = coordOf(prec[k]);
+          let a: any = null;
+          for (let k = i + 1; k < tappe.length && !a; k++) a = pts[k];
+          a = a || pts[i];
+          if (!da || !a) return;
+          const m = metriAria(da, a) * 1.3;
+          if (m < 1500) return;
+          out[g] = out[g] || {};
+          out[g][i] = { walkMin: 0, carMin: 0, km: m / 1000, taxiEur: 0, soloMezzi: true, da, a };
+        });
         if (validIdx.length < 2) continue;
         try {
           const coordStr = validIdx.map((i: number) => `${pts[i]!.lon},${pts[i]!.lat}`).join(';');
-          const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=false&steps=false`);
-          if (!r.ok) continue;
-          const data = await r.json();
-          const legs = data?.routes?.[0]?.legs || [];
+          // OSRM giù o in errore: le tratte si stimano in linea d'aria (sotto), mai sparire — il
+          // tasto «Mezzi» sopra 1,5 km deve esserci SEMPRE.
+          let legs: any[] = [];
+          try {
+            const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=false&steps=false`, { signal: AbortSignal.timeout(15000) });
+            if (r.ok) { const data = await r.json(); legs = data?.routes?.[0]?.legs || []; }
+          } catch { /* stima in linea d'aria */ }
           // walkMin sul grafo PEDONALE reale: a piedi il percorso/tempo differisce
           // da quello auto (marciapiedi, ZTL, scorciatoie). Richiesta foot separata
           // sulla base condivisa (stesso fix del routing pedonale). Best-effort: se
@@ -1220,7 +1251,7 @@ export default function PlanScreen({
               }
             }
           } catch { /* foot giù: fallback alla stima dalla distanza auto */ }
-          out[g] = {};
+          out[g] = out[g] || {};
           for (let j = 0; j < validIdx.length - 1; j++) {
             // La tratta vale solo tra tappe CONSECUTIVE nell'itinerario
             if (validIdx[j + 1] !== validIdx[j] + 1) continue;
@@ -1229,20 +1260,32 @@ export default function PlanScreen({
             // dedicata con km e durata reali. Un badge "🚶 N min · taxi ~340€"
             // calcolato da OSRM su quella tratta non avrebbe senso.
             if (tappe[validIdx[j]]?.tipo === 'trasferimento' || tappe[validIdx[j + 1]]?.tipo === 'trasferimento') continue;
-            const leg = legs[j];
-            if (!leg) continue;
-            const km = (leg.distance || 0) / 1000;
-            if (km <= 0.02) continue; // stessa piazza: inutile
             const footLeg = footLegs[j];
+            const stimaM = metriAria(pts[validIdx[j]]!, pts[validIdx[j + 1]]!) * 1.3;
+            // Senza risposta di OSRM la tratta è la stima: niente minuti d'auto inventati.
+            const senzaOsrm = !legs[j];
+            const leg = legs[j] || { distance: stimaM, duration: 0 };
+            // (08/10/2026, Venezia) Dove non ci sono strade per le auto OSRM «driving» porta al
+            // parcheggio più vicino: 2,1 km e 4 minuti d'auto per 336 m fra San Marco e Palazzo
+            // Ducale. I km sono quelli del percorso A PIEDI quando c'è; se l'auto fa più del
+            // triplo della strada a piedi, lì in auto non si va: niente minuti d'auto né taxi.
+            const metriPiedi = Number(footLeg?.distance) || 0;
+            // OSRM «driving» a Venezia risponde spesso 0 metri (i due punti si agganciano allo
+            // stesso parcheggio) e la riga spariva fra quasi tutte le tappe: se né la strada a
+            // piedi né l'auto danno una distanza ma i punti sono lontani, vale la stima.
+            const osrmVuoto = metriPiedi <= 0 && (leg.distance || 0) < 20 && stimaM > 60;
+            const senzaAuto = senzaOsrm || osrmVuoto || (leg.distance || 0) < 20 || (metriPiedi > 0 && (leg.distance || 0) > metriPiedi * 3 && (leg.distance || 0) - metriPiedi > 500);
+            const km = (metriPiedi > 0 ? metriPiedi : (osrmVuoto ? stimaM : (leg.distance || 0))) / 1000;
+            if (km <= 0.02) continue; // stessa piazza: inutile
             out[g][validIdx[j]] = {
-              carMin: Math.max(1, Math.round((leg.duration || 0) / 60)),
+              carMin: senzaAuto ? 0 : Math.max(1, Math.round((leg.duration || 0) / 60)),
               // Tempo a piedi dalla DURATA del percorso pedonale reale; solo se
               // manca si stima dalla distanza auto (÷1,25 m/s).
               walkMin: footLeg
                 ? Math.max(1, Math.round((footLeg.duration || 0) / 60))
-                : Math.max(1, Math.round((leg.distance || 0) / 1.25 / 60)),
+                : Math.max(1, Math.round((km * 1000) / 1.25 / 60)),
               km,
-              taxiEur: km >= 0.8 ? Math.round(3.5 + km * 1.35) : 0,
+              taxiEur: !senzaAuto && km >= 0.8 ? Math.round(3.5 + km * 1.35) : 0,
               // Estremi della tratta: servono al tasto «Mezzi» (Google Maps in
               // modalità trasporto pubblico) sulle tratte lunghe (06/10/2026).
               da: pts[validIdx[j]]!,
@@ -2300,8 +2343,11 @@ export default function PlanScreen({
           // 05/09/2026): la riga esiste gia', con scheda e foto verificate.
           // Non si riscrive con la prosa AI. I locali (`ov-…`) stanno in
           // locali_pois e diventano POI come prima.
-          const agganciata = !!tappa.poi_id && !String(tappa.poi_id).startsWith('ov-');
-          if (lat !== 0 && lon !== 0 && !agganciata && tappaDiventaPoi(tappa.tipo || '', tappa.titolo_tappa || '')) {
+          // 23/10/2026 — REGOLA: QUALUNQUE poi_id vero blocca il gemello, anche un locale `ov-` di locali_pois.
+          // Collaudo 7 città: i pasti agganciati a un `ov-` diventavano anche un pin `iti-` (due pin, due nomi, per
+          // lo stesso ristorante). Un id `iti-` non è un aggancio: quello sì si (ri)crea.
+          const agganciata = !!tappa.poi_id && !String(tappa.poi_id).startsWith('iti-');
+          if (lat !== 0 && lon !== 0 && !agganciata && !tappaSegnalata(tappa) && tappaDiventaPoi(tappa.tipo || '', tappa.titolo_tappa || '', String((tappa as any).attivita || '')) /* 23/10/2026: + testo, regola vie commerciali */) {
             // L'id porta anche le coordinate (22/08/2026): con il solo slug
             // del titolo, «iti-duomo» era UNA riga condivisa da tutte le
             // città con un Duomo, e teneva la foto e il testo della prima.
@@ -2788,13 +2834,33 @@ export default function PlanScreen({
     try {
       // Destinazione REALE dal form (il titolo dell'itinerario mandava il
       // modello fuori strada: "Weekend d'arte" non è una città) + coordinate
-      const regenCoords = destCoords || await resolveDestCoords();
+      // (21/10/2026, Sarzana) Un piano riaperto dall'archivio ha il modulo VUOTO: la destinazione mandata era il
+      // TITOLO («Sarzana in un giorno: fortezze, arte e sapori liguri») e le coordinate nessuna — la verifica cercava
+      // «"<nome>" Sarzana in un giorno: fortezze…», e «Piazza Matteotti» ha preso le coordinate di quella di Napoli
+      // perché il controllo «in zona» non aveva il punto della città. Prima la destinazione SALVATA nel piano, poi il
+      // titolo; le coordinate, se il modulo non le ha, dal centro delle tappe agganciate del piano.
+      // I piani salvati spesso non hanno `destinazione`: allora la città si ricava dal titolo come fanno i partner
+      // (resolvePartnerCity: «Sarzana in un giorno: …» → «Sarzana»), e il titolo intero resta l'ultima spiaggia.
+      const destinazioneRegen = destinations.filter(d => d.trim()).join(" e ")
+        || String((generatedPlan as any).destinazione || (generatedPlan as any).citta || '').trim()
+        || resolvePartnerCity()
+        || generatedPlan.titolo;
+      const centroDelPiano = (): { lat: number; lon: number } | null => {
+        const punti: Array<{ lat: number; lon: number }> = [];
+        for (const g of (generatedPlan.giorni || [])) for (const t of (g.tappe || [])) {
+          const la = Number(t?.coordinate?.lat), lo = Number(t?.coordinate?.lng ?? t?.coordinate?.lon);
+          if (t?.poi_id && Number.isFinite(la) && Number.isFinite(lo) && (la !== 0 || lo !== 0)) punti.push({ lat: la, lon: lo });
+        }
+        if (!punti.length) return null;
+        return { lat: punti.reduce((a, p) => a + p.lat, 0) / punti.length, lon: punti.reduce((a, p) => a + p.lon, 0) / punti.length };
+      };
+      const regenCoords = destCoords || await resolveDestCoords() || centroDelPiano();
       // Roadtrip (ondata 7): anche la rigenerazione conserva le città multiple;
       // silent=true perché qui l'addebito è già avvenuto — se una città non si
       // risolve si ricade sulla generazione mono-città senza doppio avviso.
       const regenLegs = await buildRoadtripLegs(destinations.filter(d => d.trim()), regenCoords, true);
       const data = await processItineraryStream('/api/groq/itinerary-stream', {
-        destination: destinations.filter(d => d.trim()).join(" e ") || generatedPlan.titolo,
+        destination: destinazioneRegen,
         lat: regenCoords?.lat,
         lon: regenCoords?.lon,
         ...(regenLegs ? { legs: regenLegs } : {}),
@@ -2810,7 +2876,12 @@ export default function PlanScreen({
         viaggiatori,
         ritmo,
         guida,
-        lockedStops: Object.values(lockedStops),
+        // (21/10/2026) Solo le tappe bloccate di QUESTO piano: `lockedStops` sopravvive al cambio di piano e la
+        // rigenerazione di Sarzana/Chicago riaperti dall'archivio è uscita due volte con «0 giorni».
+        lockedStops: Object.values(lockedStops).filter((ls: any) => {
+          const id = String(ls?.id_tappa || '');
+          return !!id && (generatedPlan.giorni || []).some((g: any) => (g?.tappe || []).some((t: any) => String(t?.id_tappa || '') === id));
+        }),
         radius: parseInt(radius),
         language,
         // Quota per-UTENTE, non per-IP: senza userId il server ricadeva su
@@ -2820,7 +2891,7 @@ export default function PlanScreen({
       }, (partialData) => {
         setGeneratedPlan(partialData);
       });
-      
+
       if (data && data.giorni) {
         warnIfFewerDays(data, numDaysForPricing);
         timbraViaggio(data);
@@ -4907,14 +4978,17 @@ export default function PlanScreen({
           // devono diventare POI in shared_pois.
           .filter(t => String((t as any).tipo || '').toLowerCase() !== 'trasferimento')
           // Un prodotto (tour, biglietto, noleggio…) non è un luogo: stessa regola di tappaDiventaPoi (07/10/2026).
-          .filter(t => tappaDiventaPoi(String((t as any).tipo || ''), String(t.titolo_tappa || '')))
+          .filter(t => tappaDiventaPoi(String((t as any).tipo || ''), String(t.titolo_tappa || ''), String((t as any).attivita || '')))
+          // Una tappa segnalata dalla verifica non diventa un luogo (09/10/2026): vedi tappaSegnalata.
+          .filter(t => !tappaSegnalata(t))
           .filter(t => t.coordinate && t.coordinate.lat !== 0)
           // Tappa già agganciata dal server a un POI VERO di shared_pois
           // (05/09/2026, agganciaTappeAlDatabase): il POI esiste, con la sua
           // scheda verificata. Ricrearlo qui vorrebbe dire un doppione con la
           // prosa AI sopra al luogo vero. I locali (`ov-…`, tabella
           // locali_pois) non stanno in shared_pois e seguono il percorso di prima.
-          .filter(t => { const p = String((t as any).poi_id || ''); return !p || p.startsWith('ov-'); })
+          // 23/10/2026 — REGOLA: anche il locale `ov-` agganciato NON si ricrea (niente gemello `iti-` del pasto).
+          .filter(t => { const p = String((t as any).poi_id || ''); return !p || p.startsWith('iti-'); })
           .map(tappa => {
             const lat = parseFloat(String(tappa.coordinate.lat));
             const lon = parseFloat(String(tappa.coordinate.lng || (tappa.coordinate as any).lon));
@@ -7598,7 +7672,10 @@ export default function PlanScreen({
                         try {
                           notify(getTranslation('pf_pdf_in_corso', language));
                           const { generaPdfItinerario } = await import('../lib/pdf/generaPdf');
-                          const blob = await generaPdfItinerario(printPlan, language);
+                          // Le tratte fra le tappe (tempi veri della rete stradale) vanno nel PDF solo se il
+                          // piano stampato è quello a schermo: gli indici sono giorno/tappa.
+                          const stessoPiano = printPlan === generatedPlan || (printPlan?.giorni?.length === generatedPlan?.giorni?.length && printPlan?.id === generatedPlan?.id);
+                          const blob = await generaPdfItinerario(stessoPiano ? { ...printPlan, tratte: dayLegs } : printPlan, language);
                           if (blob) {
                             const { saveBlobAsFile } = await import('../services/premiumGuideService');
                             const ok = await saveBlobAsFile(blob, nomeFile, { tipo: 'itinerario', nome: t });
@@ -7748,7 +7825,7 @@ export default function PlanScreen({
                       <div className="flex flex-wrap gap-1.5 shrink-0">
                         {setIsAudioGuideActive && (
                           <button 
-                            onClick={() => {
+                            onClick={async () => {
                               // (28/08/2026, collaudo) NON solo cuffie: LE TAPPE DI QUESTO
                               // GIORNO VANNO NEL RADAR come giro Dieci Tappe — tracciato,
                               // ordine del piano, aggiunte lungo la strada, X sui pin, «Crea
@@ -7774,23 +7851,68 @@ export default function PlanScreen({
                                 const la = Number(t?.coordinate?.lat), lo = Number(t?.coordinate?.lng ?? t?.coordinate?.lon);
                                 return Number.isFinite(la) && Number.isFinite(lo) && la !== 0 && lo !== 0;
                               });
-                              const poi = tappe.map((t: any) => {
+                              // REGOLA 23/10/2026 (ricollaudo Lugano: Piazza della Riforma era una riga `iti-` con la sola
+                              // riga dei dati, mentre il luogo ha una riga con fonte). Una tappa NON agganciata che diventerebbe
+                              // un `iti-` cerca prima un luogo CON FONTE (wd-/osm-/unesco-/wv-…) entro 50 m con lo stesso nome:
+                              // se c'è, la tappa entra nel giro con quel poi_id (scheda, foto, guida vere). Tetto 4 s.
+                              const gemelli = new Map<any, any>();
+                              await Promise.race([
+                                Promise.all(tappe.filter((t: any) => !t.poi_id && !tappaSegnalata(t) && tappaDiventaPoi(String(t.tipo || ''), String(t.titolo_tappa || ''), String(t.attivita || '')))
+                                  .map(async (t: any) => {
+                                    const g = await cercaGemelloConFonte(String(t.titolo_tappa || ''), Number(t.coordinate.lat), Number(t.coordinate.lng ?? t.coordinate.lon), 50).catch(() => null);
+                                    if (g) gemelli.set(t, g);
+                                  })),
+                                new Promise((r) => setTimeout(r, 4000)),
+                              ]);
+                              const poi = tappe.map((t0: any) => {
+                                const g = gemelli.get(t0);
+                                const t = g ? { ...t0, poi_id: String(g.id), name_translated: g.name_translated || t0.name_translated || null, coordinate: { lat: Number(g.arrival_lat ?? g.lat), lng: Number(g.arrival_lon ?? g.lon) } } : t0;
                                 const la = Number(t.coordinate.lat), lo = Number(t.coordinate.lng ?? t.coordinate.lon);
                                 // Tappa agganciata dal server a un POI vero: entra nel
                                 // giro CON L'ID DEL POI (scheda, foto, audioguida gia'
                                 // sue) e con le coordinate del suo punto d'arrivo, che
                                 // il server ha gia' messo in `coordinate`. Le altre
                                 // prendono l'id «iti-…», lo stesso del salvataggio.
-                                const stableId = idPoiDaTappa(t, la, lo);
-                                const agganciato = stableId === String(t.poi_id || '');
+                                // 23/10/2026 — REGOLA: una tappa SEGNALATA dalla verifica (da_verificare / non_conforme) e
+                                // senza aggancio non è mai diventata un POI (tappaSegnalata, 09/10): nel giro entra con le
+                                // sue coordinate e un id LOCALE `tappa-…`, mai un `iti-…` che farebbe credere a una riga
+                                // del DB (la scheda la cercava e non la trovava). È muta: nessuna guida da cercare.
+                                const segnalataSenzaAggancio = !t.poi_id && tappaSegnalata(t);
+                                // REGOLA 23/10/2026 (collaudo Lugano, giro da un piano salvato PRIMA delle regole): le stesse
+                                // regole valgono per i piani vecchi. Una VIA DI NEGOZI (eViaCommerciale) non è mai una tappa
+                                // che parla né un POI — nemmeno se un piano vecchio l'aveva agganciata a una riga `monumenti`;
+                                // una tappa senza aggancio che non diventa POI (prodotto, via di negozi) prende un id LOCALE
+                                // `tappa-…`, mai un `iti-…` finto; agganciata, l'id è il poi_id vero (idPoiDaTappa).
+                                const viaNegozi = eViaCommerciale(String(t.tipo || ''), String(t.titolo_tappa || ''), String(t.attivita || ''));
+                                const nonDiventaPoi = !t.poi_id && !tappaDiventaPoi(String(t.tipo || ''), String(t.titolo_tappa || ''), String(t.attivita || ''));
+                                const idLocale = segnalataSenzaAggancio || nonDiventaPoi || (viaNegozi && String(t.poi_id || '').startsWith('iti-'));
+                                const stableId = idLocale ? idPoiDaTappa({ ...t, poi_id: null }, la, lo).replace(/^iti-/, 'tappa-') : idPoiDaTappa(t, la, lo);
+                                const agganciato = !!t.poi_id && stableId === String(t.poi_id || '');
                                 const tipo = String(t?.tipo || '').toLowerCase();
+                                // REGOLA 23/10/2026: il nome della tappa nella lingua della voce — per una tappa agganciata
+                                // il nome tradotto del POI (name_translated, o quello ricordato da scheda/fumetto), come
+                                // displayName fa in mappa; il titolo originale resta se non c'è traduzione.
+                                // (23/10/2026, «Kirche Santa Maria degli Angioli») se il nome comincia con una parola di
+                                // tipo di un'altra lingua torna il titolo del modello (`titolo_ai`) o la parola tradotta.
+                                const nomeTappa = agganciato
+                                  ? displayName({ id: stableId, name: String(t.titolo_tappa || ''), name_translated: t.name_translated || null }, language, t.titolo_ai || null)
+                                  : nomeNellaLinguaUtente(String(t.titolo_tappa || ''), language, t.titolo_ai || null);
                                 return {
-                                  id: stableId, name: t.titolo_tappa, lat: la, lon: lo,
+                                  id: stableId, name: nomeTappa, lat: la, lon: lo,
                                   agganciato,
+                                  // (09/10/2026, giro maestro San Pietroburgo) Per una tappa agganciata la coordinata
+                                  // È il punto d'arrivo del server (arrivo → ingresso → indirizzo), ma senza questi
+                                  // due campi tappaDaPoi non trovava l'«ingresso», il giro la trattava da CENTROIDE
+                                  // e diceva «sei arrivato» con la soglia larga: 46–70 m prima della porta su 6
+                                  // tappe su 6 (pagella «0% scatti giusti»). Dichiarandolo, vale il raggio dell'utente.
+                                  ...(agganciato ? { arrival_lat: la, arrival_lon: lo } : {}),
                                   address: t.indirizzo || null,
                                   category: mapItineraryCategoryToMapCategory(t.tipo || 'monumenti'),
                                   city: (generatedPlan as any)?.destinazione || (generatedPlan as any)?.destination || null,
-                                  senzaGuida: SENZA_RACCONTO.some((s) => tipo.includes(s)) || undefined,
+                                  // (18/10/2026, collaudo Milano) Anche un PRODOTTO («Milano scoperta: tour privato…»,
+                                  // tipo esperienze) è una tappa muta: non è un luogo, non ha audioguida, e la sua
+                                  // coordinata è un punto d'incontro — il giro lo annunciava a 91 m come un monumento.
+                                  senzaGuida: (segnalataSenzaAggancio || viaNegozi || SENZA_RACCONTO.some((s) => tipo.includes(s)) || (!agganciato && !tappaDiventaPoi(String(t.tipo || ''), String(t.titolo_tappa || ''), String(t.attivita || '')))) || undefined,
                                   // La foto della tappa, se il piano la porta: va nel cruscotto a display spento.
                                   image_url: t.image_url || t.foto || t.immagine || t.photo_url || null,
                                 };
@@ -7897,6 +8019,7 @@ export default function PlanScreen({
                           onDelete={() => handleDeleteTappa(gIdx, tappa.id_tappa)}
                           onSelectPoi={onSelectPoi ? handleSelectItineraryPoi : undefined}
                           legToNext={dayLegs[gIdx]?.[tIdx] || null}
+                          legFromPrev={tIdx > 0 ? (dayLegs[gIdx]?.[tIdx - 1] || null) : null}
                         />
                         </div>
                       ))}

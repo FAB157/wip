@@ -497,28 +497,49 @@ async function resolveDestinationId(cityName: string, apiKey: string): Promise<n
  * (città prima delle regioni). Elenco in memoria per 24 ore (è grande, ma cambia di rado).
  */
 let destinazioniViator: { quando: number; voci: { id: number; nome: string; tipo: string; lat: number; lon: number }[] } | null = null;
+async function caricaDestinazioniViator(apiKey: string): Promise<{ id: number; nome: string; tipo: string; lat: number; lon: number }[]> {
+  if (!destinazioniViator || Date.now() - destinazioniViator.quando > 24 * 3600_000) {
+    const r = await axios.get(`https://${viatorApiHost()}/partner/destinations`, {
+      headers: { "exp-api-key": apiKey, "Accept": "application/json;version=2.0", "Accept-Language": "en-US" },
+      timeout: 15000, maxContentLength: 30_000_000,
+    });
+    const grezze: any[] = r.data?.destinations || [];
+    destinazioniViator = {
+      quando: Date.now(),
+      voci: grezze.map((d: any) => ({
+        id: Number(d.destinationId ?? d.id), nome: String(d.name || ''), tipo: String(d.type || ''),
+        lat: Number(d.center?.latitude ?? d.latitude), lon: Number(d.center?.longitude ?? d.longitude),
+      })).filter((d) => Number.isFinite(d.id) && Number.isFinite(d.lat) && Number.isFinite(d.lon)),
+    };
+  }
+  return destinazioniViator.voci;
+}
+const kmFraPuntiViator = (aLat: number, aLon: number, bLat: number, bLon: number) => {
+  const R = 6371, dLat = (bLat - aLat) * Math.PI / 180, dLon = (bLon - aLon) * Math.PI / 180;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(aLat * Math.PI / 180) * Math.cos(bLat * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
+/**
+ * (09/10/2026, San Pietroburgo) QUANTO DISTA una destinazione Viator dal punto chiesto. «San Pietroburgo» per
+ * NOME è St. Petersburg in FLORIDA: i suoi tour («Shell Key… in kayak - St. Pete») sono entrati nel prompt di un
+ * itinerario per la Russia e il modello ha scritto tutto il viaggio in Florida. Una destinazione trovata per nome
+ * vale solo se sta dove sta il viaggio. null = non si sa (elenco non letto, id sconosciuto).
+ */
+export async function kmDestinazioneViator(id: number, lat: number, lng: number, apiKey: string): Promise<number | null> {
+  if (!Number.isFinite(id) || !Number.isFinite(lat) || !Number.isFinite(lng) || !apiKey) return null;
+  try {
+    const d = (await caricaDestinazioniViator(apiKey)).find((x) => x.id === Number(id));
+    return d ? Math.round(kmFraPuntiViator(lat, lng, d.lat, d.lon)) : null;
+  } catch { return null; }
+}
+/** Oltre questa distanza la destinazione trovata per nome è un omonimo (o un'altra regione con lo stesso nome). */
+export const VIATOR_OMONIMO_KM = 200;
 export async function destinazioneViatorVicina(lat: number, lng: number, apiKey: string): Promise<{ id: number; nome: string; km: number } | null> {
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || !apiKey) return null;
   try {
-    if (!destinazioniViator || Date.now() - destinazioniViator.quando > 24 * 3600_000) {
-      const r = await axios.get(`https://${viatorApiHost()}/partner/destinations`, {
-        headers: { "exp-api-key": apiKey, "Accept": "application/json;version=2.0", "Accept-Language": "en-US" },
-        timeout: 15000, maxContentLength: 30_000_000,
-      });
-      const grezze: any[] = r.data?.destinations || [];
-      destinazioniViator = {
-        quando: Date.now(),
-        voci: grezze.map((d: any) => ({
-          id: Number(d.destinationId ?? d.id), nome: String(d.name || ''), tipo: String(d.type || ''),
-          lat: Number(d.center?.latitude ?? d.latitude), lon: Number(d.center?.longitude ?? d.longitude),
-        })).filter((d) => Number.isFinite(d.id) && Number.isFinite(d.lat) && Number.isFinite(d.lon)),
-      };
-    }
-    const km = (aLat: number, aLon: number, bLat: number, bLon: number) => {
-      const R = 6371, dLat = (bLat - aLat) * Math.PI / 180, dLon = (bLon - aLon) * Math.PI / 180;
-      const h = Math.sin(dLat / 2) ** 2 + Math.cos(aLat * Math.PI / 180) * Math.cos(bLat * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
-      return 2 * R * Math.asin(Math.sqrt(h));
-    };
+    const voci = await caricaDestinazioniViator(apiKey);
+    destinazioniViator = destinazioniViator || { quando: Date.now(), voci };
+    const km = kmFraPuntiViator;
     const pesoTipo = (t: string) => /^(CITY|TOWN|VILLAGE|ISLAND|DISTRICT|NEIGHBORHOOD)$/i.test(t) ? 0 : /^(REGION|STATE|PROVINCE|COUNTY)$/i.test(t) ? 1 : 2;
     const vicine = destinazioniViator.voci
       .map((d) => ({ ...d, km: km(lat, lng, d.lat, d.lon) }))
@@ -585,9 +606,15 @@ export const viatorAcceptLanguage = (lang?: string) => VIATOR_LANG[String(lang |
 export async function destinazioneViatorPer(cityName: string, lat?: number, lng?: number): Promise<number | null> {
   const apiKey = process.env.VIATOR_API_KEY || process.env.VITE_VIATOR_API_KEY;
   if (!apiKey) return null;
+  const coordValide = Number.isFinite(Number(lat)) && Number.isFinite(Number(lng)) && (Number(lat) !== 0 || Number(lng) !== 0);
   const perNome = await resolveDestinationId(cityName || "", apiKey).catch(() => null);
-  if (perNome) return perNome;
-  if (Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) {
+  if (perNome) {
+    // Un omonimo lontano non è la destinazione (vedi kmDestinazioneViator).
+    const km = coordValide ? await kmDestinazioneViator(Number(perNome), Number(lat), Number(lng), apiKey) : null;
+    if (km == null || km <= VIATOR_OMONIMO_KM) return perNome;
+    console.log(`[Viator] '${cityName}' per nome è a ${km} km dal punto chiesto: omonimo, scartato`);
+  }
+  if (coordValide) {
     const vicina = await destinazioneViatorVicina(Number(lat), Number(lng), apiKey);
     if (vicina) return vicina.id;
   }
@@ -640,9 +667,20 @@ export async function searchViatorExperiences(lat: number, lng: number, radiusKm
 
     // ── Risolvi il destinationId dinamicamente ──
     let destinationId = await resolveDestinationId(cityName || "", apiKey);
+    const coordValide = Number.isFinite(lat) && Number.isFinite(lng) && (lat !== 0 || lng !== 0);
+
+    // (09/10/2026) Trovata per NOME ma lontana dal punto chiesto: è un omonimo («San Pietroburgo» → St. Petersburg,
+    // Florida, 8.000 km dalla Russia). Si scarta e si passa alla più vicina alle coordinate.
+    if (destinationId && coordValide) {
+      const km = await kmDestinazioneViator(Number(destinationId), lat, lng, apiKey);
+      if (km != null && km > VIATOR_OMONIMO_KM) {
+        console.log(`[Viator] '${cityName || '?'}' per nome (${destinationId}) è a ${km} km dal punto chiesto: omonimo, scartato`);
+        destinationId = null as any;
+      }
+    }
 
     // Nome sconosciuto a Viator → la destinazione più vicina alle coordinate (06/10/2026, vedi sopra).
-    if (!destinationId) {
+    if (!destinationId && coordValide) {
       const vicina = await destinazioneViatorVicina(lat, lng, apiKey);
       if (vicina) {
         console.log(`[Viator] '${cityName || '?'}' non è una destinazione: uso la più vicina, ${vicina.nome} (${vicina.id}) a ${vicina.km} km`);
@@ -655,6 +693,9 @@ export async function searchViatorExperiences(lat: number, lng: number, radiusKm
       // Senza una città, il testo libero era «Italia»: i prodotti più
       // venduti del Paese spacciati per «qui vicino». Meglio niente.
       if (!cityName) return JSON.stringify([]);
+      // Col punto NOTO e nessuna destinazione vicina, il testo libero sul nome prende i prodotti degli omonimi nel
+      // resto del mondo: meglio nessun tour che i tour di un'altra città.
+      if (coordValide) { console.log(`[Viator] nessuna destinazione entro 60 km da ${lat.toFixed(2)},${lng.toFixed(2)} per '${cityName}': nessun prodotto`); return JSON.stringify([]); }
       console.log(`[Viator] Città '${cityName}' non trovata dinamicamente. Fallback a ricerca Freetext su PRODUCTS.`);
       // La paginazione va DENTRO ogni searchType, non (solo) in cima: senza
       // Viator risponde 400 «Missing pagination» e QUESTA funzione — usata

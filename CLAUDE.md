@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Due regole fisse per OGNI sessione (committente, 10/10/2026 — «per tutte le sessioni, ora e nuove», «per sempre»)
+
+Parlano di come lavori con il committente, non del codice. Valgono sempre, senza che debba ripeterle.
+
+1. **Dire quando passare a un modello superiore (Opus o Fable).** Il committente lavora di base con Sonnet per spendere meno e cambia modello con `/model` (tu non puoi). Prima di: scrivere nel database (anche una prova), cambiare la struttura delle tabelle, modificare il codice dell'app o di `server.ts`, togliere o sostituire dati esistenti, un guasto in produzione, un risultato che non torna — scrivi UNA riga («qui conviene passare a Opus/Fable») e aspetta il suo via. Per il resto resta sul modello in uso, senza chiedere.
+2. **Dire quando può fare `/clear`.** Dillo tu, senza che lo chieda, solo quando è sicuro: stato e prossimi passi scritti in memoria (scrivi tu la nota «da dove ripartire», senza chiedere), nessuna scrittura nel database a metà, nessun lavoro lungo che dipenda da questa conversazione. Se non è il momento, di' cosa manca. Basta una frase: «ora puoi fare /clear» oppure «non ancora, manca X».
+
 ## What this is
 
 **WIP / "World in Pocket"** (`com.itaintasca.app`, historically *itainta* / "Italia in Tasca") — a location-aware AI audio-guide app. As the user walks or drives, geofences around points of interest (POIs) fire and an AI-generated audioguide is spoken aloud. Ships as a Vite PWA, an Android/iOS Capacitor app, and a Vercel-hosted API.
@@ -135,9 +142,38 @@ Orders of the committente, all in force, identical on web, Android and iOS:
   metres; no known road within 120 m (tile not downloaded) → direct distance, the only exception;
   within 15 m of the point you have arrived anyway (guard against holes in the data).
   **On foot the network is foot ∪ car**: the pre-extracted «foot» tile holds only pedestrian classes.
+  **The 15 m guard does not beat a KNOWN long road (11/10/2026)**: when the road distance is finite and above
+  `STRADA_GIRO_LARGO_M` / `GIRO_LARGO_M` / `giroLargoM` (120 m), 15 m in a straight line is not an arrival (the
+  hairpin above, the street under the wall: 10 gems of 4,400 fired with 175–450 m still to walk). An unreached road
+  (Infinity: a hole in the data, or beyond the search radius) keeps the guard, or the guide would go silent. Same
+  rule in `distanzaStrada.ts`, `RoadGraph.kt`, `RoadSnap.swift`.
+  **SIMULAZIONE E CONFRONTO CON L'INGRESSO, SEMPRE (committente 12/10/2026: «devi sempre confrontare il punto
+  d'arrivo con gli ingressi!!», «test di simulazione e confronto con ingresso, sempre»).** La simulazione dice
+  che la guida parte al punto SALVATO; solo l'ingresso (`entrance_lat/lon`, il perimetro) dice che quel punto sta
+  davanti al luogo. Ogni verifica o correzione di punti d'arrivo fa le DUE cose: `zone-simula-scatto.mts` scrive
+  `dIngresso` e `ingresso` (`sull_ingresso` ≤ 25 m, `discosto` ≤ 60, `lontano_dall_ingresso`, `senza_ingresso`) e un
+  «giusto» a più di 60 m dall'ingresso diventa `giusto_ma_lontano_dall_ingresso`; gli strumenti di correzione
+  (`zone-correggi*.mjs`, `punti-arrivo-rete.mjs`) NON spostano un punto che è già sull'ingresso (≤ 25 m): lì il
+  difetto è la rete stradale che non arriva alla porta, e si corregge il modo di misurare, non il punto. Misurato il
+  12/10: delle 123 correzioni del 11/10 con ingresso noto, 115 si erano ALLONTANATE dall'ingresso (99 erano sull'ingresso
+  prima e ora a 26–1.700 m). Elenco da ripristinare: `scratch/zone/ripristino-candidati.json` su Oracle (99).
+  **«Dove finisce la strada, lì scatta» (committente 11/10/2026)**: a peak, a glacier, a lagoon, an island or a villa
+  behind a gate has its arrival point where the WALKING route ends. Written only after the trigger simulation
+  (`scratch/zone-simula-scatto.mts`, `zone-correggi2.mjs`: the end of the OSRM foot route from three directions —
+  never OSRM `nearest`, which snaps to ways one cannot walk to): `arrival_method='road_sim'` within 250 m of the
+  centroid, `'fine_strada'` beyond it (cap 3 km). `puntoArrivo` (web) skips the 250 m guard for `fine_strada`; the
+  natives never had that guard on the arrival point. Record of every previous value:
+  `/root/citta/punti-arrivo-zone-2026-10-11.jsonl` on Oracle.
   Tests: `scratch/collaudo-distanza-strada.mts` (synthetic, 18 checks),
   `collaudo-distanza-strada-vera.mts` (against OSRM on production tiles),
   `simula-trigger-strada.mts` (where it fires on 20 places).
+- **In the car the guide fires where the road ends (30/10/2026, committente «risolvi tutto»)**: on foot road metres
+  stay the rule; by car, when the nearest way is more than 20 m from the arrival point, the driver never covers that
+  last stretch, so it counts 20 m (`sorgente.decide`, `Sorgente.decide` Kotlin/Swift, called through `RoadGraph.misura`
+  on the natives; way searched up to 250 m, `STRADA_FINE_AUTO_MAX_M`). Simulation on 60 car routes
+  (`/root/simauto/scratch/simula-trigger-auto3.mts` on Oracle, web and Android models): 18 → 48 fired, earliest 51 m
+  from the end of the route. Still silent: the arrival point is beyond 250 m of road (San Marco) or the car route ends on
+  a different way from the nearest one.
 - **The «extra» road tiles**: `generate_road_tiles.py` never extracted `service`, `cycleway`, `road`,
   `corridor`, `platform`, `bridleway` — Rome centre matched OSRM on 10 pairs of 20. They are ADDED as a
   third file per cell, `x{gx}_y{gy}_extra.json.gz` (`scripts/offline_routing/strade-extra-*`: Geofabrik
@@ -782,6 +818,29 @@ verificare sia il contenuto che la grafica»):
   cut Tower Bridge from 485 to 214 words), 2 places per call, up to 6 calls in parallel, 75 s
   cap; Londra 3 days: 17/17 places checked, 5 corrected, text +3%, guide in 132 s (serial it was
   3/17 and 238 s). The podcast has the same reviewer (`/api/generate-daily-podcast`).
+- **Reviewer order changed on 11/10/2026 (committente: «usa Groq e fallback GLM») — this supersedes the Gemini-first
+  order above.** Google retired `gemini-3.5-flash`: every request to it is answered by `gemini-3.6-flash` (seen in
+  `modelVersion`), whose free tier is **20 requests per DAY per account** — at 10:00 four keys of five were at zero,
+  and «two models = two quotas» no longer holds for that pair (`gemini-3.5-flash-lite` is untouched). `chiamaRevisore`
+  now tries: Groq `gpt-oss-120b` → **GLM-5.3-Flash through Gonka** (pool `itinerari`, `gonkaSforzo: 'low'` =
+  `reasoning_effort`, 40 s) → Gemini 3.6-flash on the dedicated keys → Gemini lite. «Never Gonka» for a reviewer meant
+  «never DeepSeek, who writes»: another family through Gonka is allowed. Measured on the false-facts case (Pietà in San
+  Petronio, Dalla «morì» in via d'Azeglio): Groq 3 s, both found (it also flags a true sentence now and then); GLM with
+  `reasoning_effort: 'low'` 5–8 s, both found; GLM WITHOUT it 60–90 s and often an empty content (all tokens in the
+  reasoning; `enable_thinking: false` is ignored); MiniMax-M2.7 misses one and leaks `<think>`: not used. Mistral's
+  free budget is finished (402 «API budget exhausted», 11/10). **No call names `gemini-3.5-flash` any more** (same
+  day): the DEFAULT model of the `gemini` engine in `callUniversalAi` was that name — the common pool burned its 20
+  requests in an hour, the 429 paused the whole `gemini` engine and the lite model (500/day, untouched) was never
+  asked. Now: the pool asks `gemini-3.5-flash-lite`; only `revisore: true` (dedicated keys) asks `gemini-3.6-flash`;
+  vision (labels, room signs, audio description, floor-plan pins) tries `3.6-flash` then lite; one-model text calls
+  use lite. The quota is per ACCOUNT and per model: pool keys and reviewer keys do not share it. The offline bundles
+  on Oracle (`/root/locale`, `/root/wip-musei-server`) still carry the old default until they are rebuilt.
+  **Two keys we already have, reserved to the reviewers** (same day, «usa 2 chiavi che abbiamo già»): the code moves
+  the POOL, not the secret (Vercel keys are sensitive) — `GROQ_REVISORE_DAL_POOL="4"` takes that Groq key out of the
+  rotation (`groqRevisoreClients`, tried first when `revisore: true`), `GONKA_REVISORE_POOL="poi6"` takes that Gonka
+  account out of the places' round and exposes it as pool `revisore`. Without the two variables nothing changes. A key
+  is really dedicated only if it is ALSO removed from Oracle's `/root/locale/.env` (the offline server uses the same
+  accounts: Groq 1–4, Gonka POI…POI_13) and `wip-locale-server` is restarted.
 - **Dedicated keys, never in the rotating pool (committente 20/09/2026).** Five Groq and five
   Gemini accounts: each kind of work has keys of its own, so a background job can never eat
   the quota of a user who is waiting or of a reviewer.
@@ -850,6 +909,45 @@ verificare sia il contenuto che la grafica»):
     `scratch/collaudo-revisore-fatti.mjs`.
   - Nothing else in the itinerary pipeline changes without an explicit order.
 
+## Every stop EXISTS, every meal is a REAL venue, every position is CERTAIN (20/10/2026)
+
+Fixed rule of the committente, set during the Carrara test («verifica sempre le tappe che esistono», «basta cercare su
+internet: abbiamo la droplet SearXNG», «deve essere certa la distanza e la posizione delle tappe», «mai inventarsi
+locali, e mai inventarsi NULLA — in nessun itinerario o guida premium»). Three generations of a one-day Carrara
+itinerary had lunch and dinner at restaurants that do not exist («Locanda Il Padellone», «La Bottega del Lardo»,
+«Locanda del Cavatore», «La Fornace»), all marked «verificata»: the web signature accepted any two words of the
+name, and the words were the type words («ristorante», «locanda», «bottega»).
+
+- **`firmaWebLuogo`** (server.ts, next to `visitaRisultatiWeb`): the name is searched without the meal and without
+  type words (`PAROLE_TIPO_LOCALE`); a VENUE is cited only if a page carries the whole name (`chiaveNomeLocale`) or all
+  its proper words with the longest ≥ 7 letters; a PLACE needs its most distinctive word plus 75% of the others.
+  ALL unlinked stops are searched, meals first (`verifyItineraryAntiHallucination`, up to 30, 45 s cap live).
+- **A meal the web does not find in the city is REPLACED, never left** (`sostituisciPastoInventato` →
+  `cercaLocaleVero`): TripAdvisor nearby 1.5 km + details of the 4 nearest (stars, reviews, cuisine, description,
+  ranking; monthly budget), then Foursquare (free fields), then `locali_pois`; candidates without a rating get it
+  from SearXNG (`votoDaSearxng`, the TripAdvisor snippet). Score = stars + reviews − distance − fast food/chain +
+  typical cuisine. The stop text becomes data + the source's description (never model prose), `nota_verifica`
+  «🔁 Locale sostituito…» (`NOTE_PASTO`, 5 languages), `sostituito_da_archivio` keeps the old name. No substitute →
+  `da_verificare` «⚠ Locale non trovato». The same check runs in `/api/premium-guide/generate` (replace or leave
+  out), so guides of plans saved before the rule are clean too.
+- **A VENUE must exist in a venue archive, not just on a web page** (21/10/2026, after three regenerations of Carrara:
+  «La Bottega del Marmo» and «Il Toscano» passed the web signature because the phrase is in any page about Carrara).
+  `localeEsistePerNome`: TripAdvisor `location/search` by name within 6 km (name similarity ≥ 0.6), then Foursquare
+  `query`; found → the stop is LINKED with the archive's coordinates and address (`coordinate_fonte`); not found by
+  either → replaced; archives not reachable (key, budget) → the web signature decides as before. Meal hook-up in
+  `locali_pois`: a gelateria/caffè/pasticceria/bar is never a lunch or dinner unless the name says so, and a meal with
+  the model's own point links only within 2.5 km of it («Osteria La Capannina» in the centre linked to «Capannina
+  Ciccio» at Marina, 5 km: a 16 km day). TripAdvisor's internal monthly cap went from 1,000 to 4,000 (free plan 5,000);
+  on 21/10 TripAdvisor itself answered 403 to the key: check the key's restrictions in their developer portal.
+- **A place no page cites by name → `da_verificare`** (it used to be «poco noto»).
+- **Position**: every unlinked stop still «verificata» goes through Nominatim («name, city», never the municipality
+  itself, `posizioneDaGeocoder`); more than 300 m from the model's point → corrected (`coordinate_fonte`); no
+  result → `da_verificare` + «📍 Posizione non confermata». Meals: `agganciaTappeAlDatabase` searches the proper
+  word (`nomeLuogoDaTappa`, which now strips «Pranzo a …» / «Cena in …»), no longer «pranzo» or «bottega».
+- **The leg comes BEFORE the stop it reaches** (same evening: «gli spostamenti vanno prima della tappa»): km, minutes,
+  CO₂, taxi, «Mezzi» button and the Transitous line are rendered above the stop in `ItineraryStop` (`legFromPrev`),
+  `PrintView` and `ItinerarioPdf` («Per arrivare qui», `ET_TRATTE`).
+
 ## Print rules (itinerary PDF and Premium Guide)
 
 Learned from the two PDFs of 22/08/2026. Check these before touching
@@ -900,6 +998,14 @@ Learned from the two PDFs of 22/08/2026. Check these before touching
   `collaudo-pdf-guida.tsx`, then measure page fill / overlaps on the result.
   Known residue: a card whose photo block does not fit goes to the next page
   (gaps up to ~1/3 page, rarely more).
+- **The legend under the itinerary map shows the NUMBER of each stop** (09/10/2026, committente: «le tappe
+  hanno il punto blu… ma non è indicato il numero per capire che tappa è»). In every archived PDF the blue dot was
+  EMPTY (0 numeric spans on the map page): the number was passed as a number, inside a flex-centred box, and this
+  react-pdf version drew nothing. Now `String(t.n)` with declared width and `textAlign` (`Legenda` in
+  `ItinerarioPdf.tsx`); the same number as the Mapbox pin. Check: `python scratch/pdf-legenda-numeri.py <file.pdf>`
+  (numeric spans on the map page must equal the stops); `scratch/collaudo-pdf-itinerario.tsx` takes a 5th
+  argument, an image used as the map, so the map page and the legend are rendered too. PDFs already downloaded
+  keep the empty dots: they must be generated again.
 - **A museum guide always comes out of `generaPdfMuseo`.** The browser-print
   fallback (`MuseumPrintView`) is a plain list with no photos and blank
   trailing pages: `generaPdfMuseo` retries without the stop photos, then with
@@ -941,6 +1047,32 @@ Ricerca web per i MUSEI (sale e piante, `/api/admin/museums/web-search`, 12/09/2
 Affiliazioni Klook e Trip.com (07/09/2026) sono costanti in `klookCities.ts` (`KLOOK_AID`, `KLOOK_ADS`: un widget per città creato nel pannello affiliati) e `eventiFeed.ts` (`TRIPCOM_ALLIANCE_ID`, `TRIPCOM_SID`); non sono chiavi segrete.
 
 Routes degrade to an error response rather than crashing when a key is absent.
+
+## Tab admin «Posta» — casella marketing@wip.guide (23/10/2026)
+
+`marketing@wip.guide` è un alias ImprovMX che inoltra a Gmail `wip15775@gmail.com`. Admin › Posta
+(`src/components/admin/PostaTab.tsx`) legge, risponde, scrive, archivia (etichetta `WIP-Archivio`, tolta da Inbox),
+etichetta (`WIP-Enti` / `WIP-Hotel` / `WIP-Utenti`) e scarica allegati. `server.ts` `/api/admin/posta/*`
+(requireAdmin) è SOLO un proxy verso il servizio Oracle `/root/locale/posta-server.py` (systemd `wip-posta`,
+127.0.0.1:3060, header `x-posta-secret`); env Vercel `POSTA_URL` + `POSTA_SECRET`, assenti → 503
+`posta_non_configurata`. Le credenziali restano su Oracle: IMAP `GMAIL_IMAP_USER` / `GMAIL_IMAP_APP_PASSWORD` e
+`POSTA_SECRET` in `/root/locale/.env` (senza IMAP → `imap_non_configurato`), SMTP Armada da `campagna.env`, DKIM
+`wip1`. L'invio fa come le risposte tipo: From «WIP Marketing Team», firma, In-Reply-To/References, Bcc
+`wip15775@gmail.com`, copia APPEND nella cartella Inviati di Gmail (vista «Inviate»), riga `posta_admin…` in
+`campagna-risposte.jsonl`. Servizio separato e solo in aggiunta: campagna, risposte tipo, promemoria, Resend ed
+email Supabase non lo usano e non vanno toccati. **Esposizione HTTPS (23/10/2026)**: Caddy su Oracle
+(`/etc/caddy/Caddyfile`, certificato Let's Encrypt automatico) → `POSTA_URL=https://posta-79-76-119-22.nip.io`,
+solo i path /stato /messaggi /messaggio /allegato /archivia /etichetta /invia (gli altri 404), reverse_proxy
+127.0.0.1:3060; senza `x-posta-secret` → 401. iptables 80/443 aperte e salvate (netfilter-persistent). Serve
+ANCHE la Security List della VCN Oracle Cloud con Ingress TCP 80 e 443 da 0.0.0.0/0: finché manca, il certificato
+non si emette e la tab risponde «servizio non raggiungibile».
+**Via di ripiego senza Security List: quick tunnel Cloudflare (23/10/2026 sera).** `cloudflared` (deb arm64) +
+unit `wip-posta-tunnel` (Restart=always, wrapper `/root/locale/posta-tunnel.sh`) → `cloudflared tunnel
+--no-autoupdate --url http://127.0.0.1:8088`; Caddy ha un secondo blocco `http://:8088 { bind 127.0.0.1 … }` con gli
+stessi path consentiti (deve essere senza host: il tunnel passa Host *.trycloudflare.com, con `http://127.0.0.1:8088`
+Caddy rispondeva 200 vuoto). L'URL trycloudflare (senza account) è scritto in `/root/locale/posta-tunnel-url.txt` e
+**CAMBIA a ogni riavvio del tunnel (o di Oracle)**: allora va riaggiornato `POSTA_URL` su Vercel + redeploy.
+Verifica: `<url>/stato` → 401 senza header, 200 con `x-posta-secret`.
 
 ## Monitoring (added 30/08/2026)
 
@@ -1045,7 +1177,459 @@ portals, markets; «Collezioni permanenti» 18 museums). The map chip «Eventi»
   reads `shared_pois` (`marketplace`, `mercati`, `market_hall`, small box, no ORDER BY): Paris 144, London 252, NY 307
   rows. (c) Web exhibitions cap 40 s. (d) Library dedupe radius 120 → 300 m, same city (itinerary-born guides sit
   150–250 m from the venue); the 70 «duplicate» venue names are mostly different venues with the same name.
+- **The radius chip rules every list (10/10/2026, committente: «se clicco 500 km avrò gli eventi con un raggio di
+  500 — anche mostre in corso, permanenti e stagionali»).** Measured at Carrara before: 100, 300 and 500 km gave the SAME
+  27 collections (farthest 17 km), the same 8 exhibitions from 24 sites within 99 km, the same 8 skies — every route
+  took «the nearest N» and never left the province. Now: RPC `musei_vicini_corona` (migration `20261010190000`, plpgsql
+  with two branches — a SQL function with `(NOT solo_gemme OR is_gem)` could not use the partial index from PostgREST and
+  the 300–500 km band timed out at 8 s) plus the partial GIST index `idx_shared_pois_geog_musei_gemme`; up to 50 km the
+  nearest rows count, beyond it each band of `FASCE_LARGHE_KM` (50–150, 150–300, 300–500) brings its own GEMS
+  (`leggiMuseiCorona`). Permanenti: corona rings, no global distance cut (Carrara 500 km: 209 museums, 41 beyond
+  300 km, 3.3 s). Mostre: `massimoSitiMostre` 24/32/40 sites, half nearby and the rest split per band, Wikidata up to
+  500 km. Stagionali: caps ×1/×2/×3 by radius (cache key `tematici_ev2_`). Tiqets mostre: the user's radius up to
+  500 km (fallback to 50 on a 4xx), 4 cities instead of 2. Zones cached before (12 h) still answer the old lists until
+  the cron recomputes them.
 - Still open: Tiqets products appear only within the chosen radius (Carrara 10 km → none, by design); portals still let
   through a few events of other cities abroad (Tokyo page lists Osaka, London a Japanese meetup); Prado's site blocks
   every page; Ticketmaster has no affiliate code yet (Impact application «in revisione» since 07/10, site verified by
   the `impact-site-verification` meta tag in index.html).
+
+## Trips in more than one city — rules of 08/10/2026 (committente: «correggi tutto, non deve più succedere»)
+
+Found with a real test on production: Venezia + Verona, 3 days, «2 giorni a Venezia e 1 a Verona» written in the
+requests. The itinerary came out with 1 day in Venice and 2 in Verona, every Venice stop «⚠ a ~105 km dalla
+destinazione», Palazzo Ducale linked to a luxury-layer row, Ponte di Rialto not linked at all, and the Premium Guide
+titled and introduced on Venice only with a «Palazzo Ducale» chapter about the quay. All in force:
+
+- **Days per city are the user's** (`giorniPerCittaRoadtrip`, module level in `server.ts`): `legs[].days` from the
+  client, else what the requests say («2 giorni a Venezia e 1 a Verona», «Venezia: 2 giorni», numbers in words, 5
+  languages), else equal parts with the remainder to the FIRST cities (the old formula gave it to the last). Sum is
+  always the trip's days, every city ≥ 1. Test: `node scratch/collaudo-giorni-per-citta.mjs` (14 cases).
+- **A trip in several cities has several reference points.** `verifyItineraryAntiHallucination` takes `opts.centri`
+  (the generator passes `legsArr`, `/api/itinerary/verify` the body's `legs`, PlanScreen sends them): the distance
+  that decides is the one from the NEAREST city of the trip. The «homonym reference» safety net runs only for a
+  single-city trip.
+- **Hook-up (`agganciaTappeAlDatabase`)**: the word searched is the most distinctive of the name
+  (`tokensNomeLuogo`, longest), not the first — «Ponte di Rialto» asked for *ponte* and the first 40 rows in Venice
+  were other bridges; rows of the luxury layer (`lusso-…`, category lusso/luxury/shopping) are never a place to
+  visit; a row with a source (`wd-`, `unesco-`) outweighs an address in the tie-break.
+- **Every stop text stands alone** (prompt point 10, «REGOLE STRUTTURA GIORNATA»): no «inizia la giornata con…»,
+  «concludi…», «dopo pranzo…» — `ordinaTappePerStrada` reorders the stops after the model and the Arena read
+  «Inizia la visita di Verona» at 15:00.
+- **Public transport: ALWAYS above 1.5 km** (committente 08/10/2026: «deve essere sempre presente per tratti sopra
+  1500 mt», «usa anche google mezzi»). (a) The Transitous line is written for EVERY long leg, meals included (the
+  «never to meals» exclusion is gone) and on the «In viaggio: A → B» stop (last stop before → first stop after,
+  also across days; cache `mezzi_v3_tr_…`; between cities Transitous needs `searchWindow=14400` and
+  `maxPre/PostTransitTime=2700`, with the defaults it answered 0 trips for San Marco → Piazza Bra); no walking
+  time there, long-distance rail modes have their label (a Frecciarossa printed as «bus»), an operator's internal
+  code («0083_RV») is not a line name. (b) The Google Maps «Mezzi» button never depends on OSRM answering: when
+  the road service fails the leg is estimated (straight line ×1.3) and still shown, and under a transfer stop
+  there is a `soloMezzi` leg (km + button only). The server also leaves the endpoints on the stop (`mezzi_tratta`).
+- **Premium Guide of a trip**: `pgCittaDelViaggio` reads the cities from the transfer stops; title, subtitle, intro
+  and `citta_intro` cover ALL of them (material split per city, `=== NOME ===`), each stop is searched in the city
+  of ITS day, and a transfer card never carries the «poche informazioni verificate» line.
+- **Legs between stops (PlanScreen)**: the signature of a cancelled calculation is released (the legs never
+  appeared when the plan changed identity during the run); km are the WALKING ones when known; where the car route
+  is more than three times the walk (Venice) there are no car minutes, taxi or car CO₂ (`carMin: 0`).
+- **The leg line is everywhere** (committente, same day: «ci vuole il tragitto, con km e tempo a piedi o auto,
+  come quando c'è il tasto mezzi» + «nel pdf indicare tempo e distanza da una tappa all'altra»): under EVERY stop
+  of the itinerary (OSRM «driving» answers 0 m between most Venice stops — then the estimate is used, the row is
+  never skipped) and in the itinerary PDF (`trattaVersoLaProssima` / `RigaTratta` in `ItinerarioPdf.tsx`: the real
+  times when PlanScreen passes `plan.tratte`, else an estimate from the coordinates marked «~», never car minutes
+  from an estimate; labels `ET_TRATTE` in `generaPdf.ts`). Installed apps get it with the next build.
+- **Hook-up word, second lesson**: the distinctive word is never the CITY («Arena di Verona» asked for *verona*):
+  `paroleCitta(destination)` is removed from the candidates. The client sends `destination` as «Venezia e Verona»;
+  a call with one city only leaves the other city's stops unlinked (`cittaDiscordante`) and they become `iti-` twins.
+- **Products are not places, wider net** (`NOME_PRODOTTO_NON_LUOGO`, same regex in `/api/poi/from-itinerary`):
+  «Esperienze: …» (plural), «Giro in barca…», catalogue titles «Da <città>: …» and «… like a local» had become
+  `locali` pins on the map.
+- **Assisi + Perugia test, same day** (1 + 2 days as asked; navigator → arrival → teaser → guide all fired at
+  the Basilica di San Francesco). Fixed: a Wikipedia DISAMBIGUATION page is never material (`pgArticoloVicino`
+  reads `pageprops.disambiguation`: the «Piazza del Comune» chapter listed Cremona, Fabriano, Prato…); «<città>:
+  biglietto d'ingresso…» is a product, not a place. Seen and NOT touched (teasers need an order): 12 of 13 linked
+  stops have `teaser_text_it`, but some are written from memory — Santa Chiara of Assisi says «Nel cuore di
+  Napoli», Piazza del Comune «un borgo umbro-marchigiano»; the test's 150 m alert reads raw names («plaque №
+  57510», «Cong. Suore Francescane Elisabettine Vulgo Bigie»); day 1 came out with 7 stops instead of 8; the
+  long leg to a dinner had no Transitous line (no answer → no line; the Google button is there).
+- **Teasers: no source, no teaser — and measured (08/10/2026, committente: «verifica e modifica tutti i teaser
+  sbagliati»; «se l'utente ha lingua non italiana, teaser nella sua lingua?»).** `/api/poi/batch-teaser` used to
+  tell the model «usa solo fatti di cui sei certo» when the place had no text: precise dates and names from
+  memory. Now: under 120 chars of real material (longest of description_long / _ai / _short) there is NO call and
+  no teaser; every year and measure of a teaser must be in the material or it is not saved. Existing ones:
+  `node scratch/teaser-verifica.mjs --conta | --scansiona | --azzera` (read-only scan in id ranges → suspects in
+  `scratch/teaser-sospetti.jsonl` with the reason; `--azzera` nulls the seven language columns in small lots,
+  stops if `/api/health` fails, keeps the old values in `teaser-azzerati.jsonl`). First 36,000 read: 58% suspect,
+  37% «facts without any source». A removed teaser is rewritten by the route when a user walks by, if the place
+  has material. Counts that day: IT ~970,000, EN ~258,000, FR/ES/DE/RU ~103,000, ZH ~87,000.
+  **Language**: Kotlin and Swift fell back to the ITALIAN teaser when the user's language was missing — read with
+  the wrong voice, and the place counted as «has a teaser», so it was never asked in the user's language. Now only
+  the user's language (`SupabaseClient.kt`, `WipSupabaseClient.swift`; in no build yet).
+  **Translated on the fly** (committente, same evening: «se teaser è italiano e user altra lingua, sia tradotta on
+  the fly»): for `lang ≠ it`, `/api/poi/batch-teaser` first TRANSLATES the Italian teaser (same facts, nothing
+  added; never a provisional one; reasoning/refusal/unchanged text discarded) and saves it in
+  `teaser_text_<lang>`; only without an Italian teaser does it generate. A remembered rejection does not stop a
+  translation. The mass removal of the suspect teasers was NOT done («lascia così»): scan stopped at 461,000.
+- **Events and affiliates, check of 08/10/2026 evening** (`node scratch/collaudo-eventi-affiliati.mjs
+  --citta=Milano,London --base=https://www.wip.guide`: 14 routes per city, counts, affiliate code in the links,
+  `/api/out`; `collaudo-eventi-dettaglio.mjs <rotta> <lat> <lon>` prints titles and links; run 2–3 cities at a
+  time, the PC kills long background jobs). 10 cities: every route answers; Viator, GetYourGuide, Tiqets, Klook
+  (`aid=124310`), Trip.com (`Allianceid`) carry the code on 100% of the links and `/api/out` answers 302
+  (`https://wip.guide` first answers 308 → `www`). Fixed:
+  · **Ticketmaster abroad was empty** for an Italian user (Paris, Barcelona, Berlin: 0): `locale=it` returns only
+    events published in Italian → `locale=<lingua>,*`. And the Milan list opened with youth matches («Coppa U15»,
+    «Cadetti 2014», «Programma gare ore 14:00»): `TM_NON_EVENTO`, 100 rows asked, cache key `v2_`.
+  · **Permanent collections**: statues passed because they had a photo and two lines («Charles I», «Lion»,
+    «Horatio Nelson»): a name without a museum word needs a WEBSITE; in a Latin-script city a name in another
+    script is dropped (the National Gallery row is «国家美术馆» — data to fix).
+  · **Markets from our archive**: the link was `openstreetmap.org/db/ov-…` (no such page) → the point on the map;
+    read TOGETHER with Overpass; mini-markets and the BHV department store out. `festivalDaWikidata` timed out
+    at 15 s on every call in big cities (route 15–19 s, the phone closes at 20): 9 s and the failure is
+    remembered 6 h.
+  · **Exhibitions at zero** (Milan, New York, Tokyo, Turin): when the AI engines are saturated `mostreDalTesto`
+    failed silently and the EMPTY result was cached 12 h per site and per zone. Now a failed extraction is
+    `null`, is not remembered, is counted (`estrazioni_fallite`) and a zone with a quarter or more of failed sites
+    is not cached. Zones cached empty before the fix clear by themselves within 12 h.
+  · `/api/out` accepts universe.com, ticketweb, frontgatetickets (Ticketmaster group; New York answered 400).
+  Not defects: `/api/tematici/eventi` answers an object (stelle, fioriture, mercatini), Klook is a search link
+  where the city has no catalogue, Virgilio is Italy only, Ticketmaster has no Japan and still no affiliate code.
+- **FAI-like places and protected heritage, the whole world (night of 08–09/10/2026, committente: «cerca i luoghi
+  FAI italiani e simili in tutto il mondo e inseriscili con le coordinate e arricchimenti», then «paese per paese»,
+  «anche nella lingua locale»).** `scratch/trust-mondo-wikidata.mjs`, everything from Wikidata (CC0), resumable,
+  each write phase needs `--write`: `--org` (≈100 bodies that own or run places: National Trust for Scotland,
+  English Heritage, Cadw, Conservatoire du littoral, NPS, USFWS, Natuurmonumenten, Hendrick de Keyser, Russian
+  museum-reserves by class…) → `--scarica`; `--paesi` (196 states: places with a heritage designation P1435 or
+  tourist attraction, ≥ 5 Wikipedias, top 400 per country, name and article ALSO in the local language) →
+  `--pulisci` (drops municipalities, rivers, roads — dry run first) → `--match` (QID, then name within 500 m) →
+  `--crea` (id `wd-Q…`, `source='wikidata'`) → `--riempi` (photo/QID/wikipedia_url on existing rows, only where
+  missing) → `--atlante` (`beni_culturali`, source = the body's tag or `tutela_<cc>`) → `--arricchisci`
+  (production `/api/poi/enrich`, `mode:'full'`, `SCRIPT_SHARED_SECRET`). Result: 21,006 places; 18,187 were
+  already on the map (≈13,300 got the Wikipedia link, ≈1,700 the QID, ≈800 a photo), 2,819 created.
+  Lessons: (1) Wikidata answers HTTP 200 with a TRUNCATED JSON on timeout — a parse failure is a timeout, not
+  «zero rows» (China looked empty); big countries are asked one designation at a time. (2) «Is it a place?»
+  cannot use the whole subclass chain: `P279*` to «human settlement / administrative entity / geographic region»
+  swallowed the Escorial, Castel Sant'Elmo and Komodo — three levels at most, never when the NAME says what it is
+  (`E_UN_LUOGO`), archaeological sites excepted. (3) `Select-Object -First N` on a writing script KILLS it after
+  N lines: always `-Last`. (4) A tag like `patrimonio_es` was both a body and a country: country tags are `tutela_<cc>`.
+- **Map layers with AREAS, two rules (committente 10/10/2026: «deve essere regola per tutte le aree», «nomi generici
+  mai!»).** (1) Areas are drawn from the LARGEST to the smallest — `ordinaAreeGrandiPrima` (`src/lib/areeOrdine.ts`),
+  used by denominazioni, aree protette and ZTL; a new area layer MUST use it (Basilico Genovese DOP, 5,429 km², sat
+  over Colli di Luni, 14 km², and took every tap). (2) A layer never clears its groups BEFORE its awaits: build new
+  groups and swap at the end (`caricaStradeGusto`, `stradeGustoGenRef`) — the taste zones vanished at every pan and
+  POI tap. Taste pins: no pin with a generic name, of any type (`nomeGustoVero`, poiTaxonomy — «uliveto», «Cantina»,
+  «Azienda agricola s.r.l.» are type labels, not places; test `scratch/collaudo-nomi-gusto-generici.mts`); vineyards,
+  olive groves and orchards (`ENO_CAMPI`, OSM land parcels: 13,342 + 7,523 + 667 rows, 1,195 with a generic/empty
+  name) only from the botteghe zoom. The generic rows were hidden in the DB the same day (4,656, record in
+  `/root/citta/nascosti-gusto-nomi-generici-2026-10-10.jsonl` on Oracle). (3) Taste zones: `/api/denominazioni/aree`
+  reads `denominazioni_geometrie` directly, largest first, drops zones too small for the box, and merges products with
+  the SAME boundary into one zone (`altri`); colour by product family (`famigliaGusto` / `COLORI_GUSTO`: wine bordeaux,
+  cheese yellow, oil green, meats brick, other food amber), diagonal stripes when a zone holds more families
+  (`riempimentoGusto`). Product zones are inserted by `/root/locale/zone-inserisci.mjs` under its reliability rule
+  (a list of 6+ places is a truncated source: Grana Padano has no zone) — a zone less, never a false one.
+- **Every map layer, four rules (10/10/2026 evening, committente: «sistema tutti i livelli e le nuvole», «velocizza
+  tutte le mappe che si colorano»).** (1) A layer remembered as ON starts by itself: at app start the map does not
+  exist yet and every layer effect left on `if (!map) return` for good («devo deselezionare e riselezionare») —
+  `mappaPronta` (MapArea, above `loadServices`) is in the deps of ALL layer effects; a new layer MUST add it. (2) An
+  open bubble never closes by itself: opening it pans the map, the pan re-read the layer and emptying the layer closed
+  it — a loader calls `rimandaSeFumetto(key, layer, relaunch)` before clearing its group (the taste layer has its own
+  `gustoSospesoRef`); the re-read runs on `popupclose`. (3) Text bubbles of the layers get their inner margin from ONE
+  CSS rule in `index.css` (`.leaflet-popup-content > div[style*="font-family:system-ui"]`): the bubble has margin 0 and
+  very round corners, the emoji and first letter were cut; a new bubble must start with that same div. A zone bubble
+  says WHAT it is on top («🍷 VINO», `nomeFamigliaGusto`, 7 languages) — «Provincia di Mantova» is a wine's name.
+  (4) Boundaries are lightened FOR THE VIEW: `/api/denominazioni/aree` (`alleggerisci`, tolerance = box / 600; Italy
+  1,716 → 247 KB) and `fetchAreeProtette` (`semplificaM`, in steps); large zones have no dashed border (the slowest
+  thing a phone draws), `smoothFactor` 2.5. The taste layer shows progressively on first switch-on, zones first, the
+  three reads in parallel; the swap-at-the-end is only for a re-read (alone it left the map empty for 10 s).
+  Exact boundaries loaded the same day: `/root/locale/confini-esatti.py` + `confini-esatti-scrivi.mjs` (EU wine PDOs
+  from Candiago et al. 2022, INAO communes, NUTS3 lists — the «6 provinces» cut was OUR `[:6]` in gusto-unisci3.py):
+  592 new, 742 replaced (previous rows in `/root/citta/confini-sostituiti-2026-10-10.jsonl`).
+- **Category labels in the user's language**: `etichettaCategoria` (`src/lib/poiCategories.ts`) — the sheet and the
+  navigator list showed «CATHEDRAL», «PALACE», «Bridge» to an Italian user.
+- Seen and left: a guide's single atmosphere closing sentence is allowed by `regolaSpecificita` (27/09); standing in
+  Piazza San Marco three guides play one after the other (by the «standing still counts» rule); the «Punto di
+  partenza» dialog showed a stale position with the virtual phone only.
+
+## San Pietroburgo test, 09/10/2026 — homonym cities, stops that become places, a city in another alphabet
+
+Full test on production (itinerary ×5, Guida d'Autore, virtual phone, single-stop navigator; Day Pass not bought).
+Fixed and deployed the same morning (web + server, from disk, no push):
+
+- **The same NAME is another city.** «San Pietroburgo» with Russia's coordinates produced a whole itinerary in St.
+  Petersburg, FLORIDA: the partner tours were searched by name only and entered the prompt, and the verification's
+  safety net then moved the reference onto them. Now: Viator and Tiqets go by COORDINATES
+  (`searchViatorExperiences`: a destination resolved by name more than 200 km away is dropped, `VIATOR_OMONIMO_KM`;
+  nearest by coordinates, else nothing — never the free-text search when coordinates are valid); GetYourGuide has
+  no API, so `gygDiUnOmonimo` drops an activity whose address carries a US state or Canadian province
+  («…/san-pietroburgo-florida-l1050/…») when the destination is not in North America
+  (`STATI_NORDAMERICA_GYG`: only names that mean nothing else — no Nevada, Montana, Virginia; «georgia» is kept
+  for the country). `fetchGygExperiencesScraped(city, lang, senzaCache, dove)`: every caller that has coordinates
+  passes them; the filter also runs on the cached list. Known limit: inside North America (Paris, Texas) nothing
+  is filtered.
+- **The generator checks WHERE it wrote** (in `itinerary-stream`, right after parsing): with ≥ 4 stops and ≥ 60%
+  of them farther than `max(150 km, 1.5 × radius)` from every city of the trip, the plan is redone ONCE without
+  the partner context and with a correction (`qualita.posto_sbagliato`); if the redo is wrong too → full refund
+  and `{error}`. The verification moves the reference to the stops' centroid only when the centroid is a MORE
+  IMPORTANT homonym (`omonimiDestinazione`, Nominatim importance) — otherwise the itinerary is the one in the
+  wrong place, and it is the stops that get flagged.
+- **Hook-up, type and search word.** (a) The type must not contradict, in every mode: «Museo dell'Ermitage» had
+  been linked to «Ponte dell'Ermitage» (name changed, coordinates on the bridge). (b) A source (`wd-`, `unesco-`)
+  is a tie-break AFTER the data score, never added to it (+2 made the bridge win). (c) The searched word is never
+  a TYPE word when the name has another one: «Monumento al Cavaliere di Bronzo» asked for *monumento* and the row
+  «Il cavaliere di bronzo», 0 m away, was not in the answer.
+- **A flagged stop is not a place and is not in the guide.** A stop the verification marked `da_verificare` /
+  `non_conforme` («Cattedrale di Cristo Salvatore» — Moscow — in a St. Petersburg plan, twice in five
+  generations: San Basilio the other time) became an `iti-` pin when the plan was opened and a chapter of the
+  Guida d'Autore («una chiesa situata a San Pietroburgo», with the source of ANOTHER church). Now
+  `tappaSegnalata` (poiRepository) keeps it out of `/api/poi/from-itinerary` (client, both upsert paths; the
+  route also refuses a `verifica` field), and `/api/premium-guide/generate` drops unlinked `da_verificare` stops
+  and unlinked non-meal `non_conforme` ones before the material phase. The itinerary still shows it with its warning.
+- **The name a stop takes as a place**: `nomeLuogoDaTappa` (server.ts, used by `/api/poi/from-itinerary` only)
+  — «Cena al Ristorante 'Teplo'» → «Teplo», «"Palkin Restaurant"» → «Palkin Restaurant», «Cena da Gino» → «Da
+  Gino». Test: `node scratch/collaudo-nome-luogo-da-tappa.mjs` (19 cases). The itinerary's own titles are untouched.
+- **Guida d'Autore**: coordinates are for the map, never a sentence («…nelle coordinate indicate (latitudine
+  59.932, longitudine 30.3061)»): removed by `pgFiltraTesto`, forbidden by prompt rule 12, which also says what a
+  poor card without material may contain (what it is, in which city; no praise, no cuisine/atmosphere/service).
+- **An audioguide that admits it has nothing is not a guide**: «Qui c'è un edificio scolastico, e questa è
+  sostanzialmente la notizia principale… Nient'altro di specifico è documentato» was saved for «Nevsky 14 - School
+  building». `rifiutoDelModello` now catches that family; the row was removed (copy kept).
+- **Tools of this test** (all read-only unless said): `scratch/collaudo-tappe-stato.mjs <id itinerario>` (card,
+  photo, teaser, guides of every stop), `collaudo-cerca-vicino.mjs <lat> <lon> <m> [parole]`,
+  `collaudo-punti-arrivo.mjs <lat> <lon> <ids>`, `collaudo-conta-zona.mjs <lat> <lon> <km>` (families of rows,
+  non-Latin names, texts < 80 chars), `collaudo-guida-premium-stato.mjs [n] [--testo]`,
+  `collaudo-audioguide-testo.mjs <ids>`, `collaudo-iti-zona.mjs`. Data corrections with the previous row saved:
+  `correzioni-san-pietroburgo-2026-10-09.mjs` (+ `.jsonl`).
+- **The virtual phone with the Chrome window covered**: a hidden tab gets one timer a minute and the phone does
+  not walk. A near-silent WebAudio oscillator (gain 0.002) keeps the tab at one timer a second; screenshots do not
+  work, so the test is driven by events (`wip-map-click` to place and to set the destination, the panel's buttons
+  by text) and read from `window.__wipDiagTrigger`, `locationService.audioState` and a hook on
+  `speechSynthesis.speak`. At most ×2, and slower than the label says.
+- **Open, measured, NOT fixed (need an order — data work at night, or the itinerary prompt):**
+  · *Central St. Petersburg is two thirds noise for the audioguide.* In 5×5 km: 3,312 visible rows, 31 gems;
+    971 rows of the family `LAT_LON` (`source='csv'`, all `monumenti`: shops like «Woo-hoo!» and «Movie Art»,
+    plaques in the dative «В. И. Ленину», Russian twins of the Winter Palace), 97% with a non-Latin name, 89% with
+    less than 80 chars of text; 709 `ov-` rows (153 «museum»), 99% without text. The 150 m alert read 40 of them
+    in a 1.5 km walk, in Cyrillic, Hindi («शीत-महल») and Thai; the places that fired were an Overture «museum»
+    marked gem, a Russian twin of the Winter Palace, «General Staff Building», «Дворец Пиковой дамы» — none with a
+    text to read. The twins rule (`nomeNudo` within 150 m) cannot see a twin in another language.
+  · *The Hermitage had no audioguide row*: only `bc-…` (category `beni_culturali`, off by default in the setup).
+    Made a gem by hand that day; the same check («famous by Wikidata, best visible row not audioguidable») has
+    never been run outside the 16 cities of 05/10.
+  · *Names in the local alphabet break the hook-up*: «Chiesa del Salvatore sul Sangue Versato» is in the database
+    as «Храм Спаса на Крови» (`wd-Q215208`, text, photo, teaser) and the stop became an `iti-` twin. Idea not
+    built: when the name finds nothing, compare the Wikidata labels (it/en) of the `wd-` rows within 300–500 m.
+  · *Card language*: the short text of «Cattedrale di Sant'Isacco» is Russian for an Italian user (the row was
+    enriched for a Russian user), the Hermitage preview is the English Wikidata description.
+  · *Itinerary content*: Dante's line repeats the SAME quotation in 13 stops of 13 («Fatti non foste a viver come
+    bruti… ma per …»); the Hermitage and the Winter Palace are two stops for one building; lunch 2.8 km away and
+    back (day of 10.2 km on foot); restaurants «verified» by the web signature but placed by the model up to 4 km
+    from their address; no Transitous line anywhere in Russia (button only); fact reviewer `non_eseguito` /
+    `parziale` in 4 generations of 5 and the Guida d'Autore reviewer `non_eseguito` (quota).
+  · *Guida d'Autore*: 7 places of 13 «scarso», among them the Savior on Blood (its article was found and still
+    classed poor) and the Bronze Horseman (no article found by exact title); poor cards of restaurants are
+    praise from memory («rinomato», «ingredienti freschi») — rule 12 forbids it now, not re-measured.
+  · *Giro*: starting the navigation of a multi-stop tour needs the Day Pass (by design) — but the dashboard
+    silently jumps to the next stop at each tap on «Avvia la navigazione» while the Day Pass sheet is open.
+    Navigator: «mantieni la sinistra, poi subito mantieni la sinistra» (two identical maneuvers merged into one
+    sentence instead of one maneuver); no street names in Russia.
+
+## Master tours («giri maestri») — decisions of the committente, 09/10/2026 (NOT built yet)
+
+«Possiamo pre-preparare dei giri, ad esempio 5 giorni a San Pietroburgo, già collaudati con audioguide e navigatore,
+da lasciare in libreria… e così per tutte le grandi città turistiche?» — approved in principle, pilot = San Pietroburgo.
+
+- **One master per city, in Italian, 5 days, tested by us; then the 6 translations** (same shape as the museum
+  guides). A master is served only with a test stamp (date, outcome stop by stop, approved by the committente).
+- **«Se c'è maestra parti da lì»** (explicit order — this is the allowed change to the itinerary generator): a
+  request for N days in a city with a master gets the first N days of it; an added or changed stop generates ONLY
+  that piece.
+- **«Le regole devono essere sempre le stesse, sia per maestra che successive»**: no separate, softer or stricter
+  rule set — a master is built and checked with the same rules as an on-the-fly itinerary (hook-up, doppioni,
+  verification, fact reviewer, source-only texts, audioguide rules); an added stop goes through the same checks.
+- **«Pasti dentro: il giro deve essere completo»**: lunch and dinner are part of the master. Open: how to choose
+  them (the archive `locali_pois` has address/site/phone, but in Russia no rating and no Michelin).
+- Per stop a master carries: the linked row, verified arrival point, card + photo + teaser + IT audioguide, the
+  walking leg with its maneuvers, the transit line above 1.5 km. Test = the virtual phone walks each day; a day
+  passes only if every cultural stop spoke at the right point, no foreign voice in between, every turn said, no
+  flagged stop, walking under a daily cap.
+- **Day-zones, not a fixed sequence** (same day): each master day is a ZONE of the city — its gems close to each
+  other, 6–8 stops depending on length, meals within ~400 m with a verified RESERVE for each; a restaurant not in
+  `locali_pois` is INSERTED; a day is a closed, independently tested unit. N days = the N most important zones; a
+  zone the master lacks is generated as today and marked «non collaudato»; an added stop is generated alone.
+- **Guida Premium prepared in advance, but only AFTER the zone-days are approved**, assembled by day (N chapters +
+  city intro); an added day gets its chapter on the fly, marked.
+- **Day package with the museum/church guides, at a DISCOUNT (committente: «pacchetto scontato»), sold with or
+  without the floor plan** («con o senza mappa»): where the plan with pins is missing the offer says «visita
+  guidata con lista opere», never promises the map. Plans with pins: I place them from the room labels, the
+  committente corrects them in the admin panel («prova a mettere tu e io correggo i pin»). Measured 09/10: St.
+  Petersburg has 49 guides in the library (Ermitage 40 stops ×4 languages, Museo russo 30 ×4, Sant'Isacco,
+  Fabergé…) and ZERO `mappe_museo` plans; 131 plans in the whole archive. Figures of the discount: not decided.
+- Tools: `scratch/maestra-candidati.mjs <ids> [lat,lon,m …]`, `maestra-zona-gemme.mjs <lat> <lon> <m>` (gems and
+  sourced rows of a zone with what each is missing), `maestra-mappe-musei.mjs <lat> <lon> <km>` (library guides and
+  plans with pins), `maestra-guida-museo.mjs <venue_key>` (is a guide a guide or a catalogue), `maestra-ristoranti.mjs
+  <lat> <lon> <m> "<query>"…` (web search through the production route, crossed by name with `locali_pois`),
+  `maestra-giorno1-dati.mjs` (gems / IT audioguides via `/api/poi/audioguide` as background-script / IT cards),
+  `maestra-giorno1-piano.mjs --write --user=<id>` (composes the day from the archive and saves it as a user
+  itinerary for the virtual test).
+- **Pilot done, 09/10/2026 afternoon — day-zone 1 «Piazza del Palazzo e Ermitage»** (report
+  `scratch/maestra-spb-giorno1-collaudo.md`, plan `maestra-spb-giorno1.json`, itinerary
+  `45711d7e-12c5-49b7-8c30-035c459a4f3f` in the committente's account; NOT approved). Virtual phone: 6/6 cultural
+  stops fired and played their guide 26–39 s after the trigger, both meals announced, no foreign voice — BUT the
+  test's own report says «0% scatti giusti»: every stop fired 46–191 m of ROAD before its arrival point, because
+  the `derived` arrival points sit beyond the end of the road and the «in fondo alla tratta» rule closes the stop
+  there. **Rule for every master: arrival points on the entrance reachable from the road, checked before the
+  walk.** Also found: Palazzo d'Inverno and Ermitage are one building with two arrival points 45 m apart (one stop);
+  the lunch was ordered before the Admiralty while it sits 200 m from Sant'Isacco (order the meals by road);
+  `/api/poi/batch-teaser` writes nothing for the Bronze Horseman (342-char card); the library guide of the
+  Ermitage (`nome_ermitage`) has `poi_id` null, no official site, reviewer `non_eseguito` and a stop «Camera
+  d'ambra» that is at Carskoe Selo; the test report counts 0 guides when the tour plays MP3s (audio state saw 6).
+- **Same evening — the real cause and the second test.** The arrival points were fine (OSRM ends the route ON them,
+  `scratch/maestra-punti-arrivo.mjs`): «Nel radar» (PlanScreen) passed the linked stops WITHOUT
+  `arrival_lat/arrival_lon`, so `tappaDaPoi` had no `ingresso` and `sogliaArrivo` used the CENTROID threshold
+  (70 m). Fixed for every tour built from an itinerary (`...(agganciato ? { arrival_lat, arrival_lon } : {})`).
+  Plan v2 (`f64f629a-804c-4330-8e16-bedaac28cd2e`: Ermitage as one stop, lunch after the Admiralty) with the tab
+  in front: **94% right triggers, guides 7/8, turns 36/37** — Piazza 32 m, Ammiragliato 37, Cavaliere 27,
+  Sant'Isacco 27 (right at 30 m); «Vai alla prossima tappa» shown and used at lunch; both meals announced; no
+  foreign voice. The one «presto» (Ermitage 291 m) was the fake phone walking on while the square's guide
+  played: `testVirtuale.ts` now stands still while `__wipVoceInCorso()` is true (a listener does not walk).
+  Committente, same day: «mentre si fanno le matrici, correggi sempre gli errori dell'app» — every code defect a
+  master reveals is fixed at the root, for every city, never patched in the master. Still open for approval:
+  Ermitage library guide («Camera d'ambra», `poi_id` null), Teplo without phone/hours, `description_lang` label
+  of Sant'Isacco still `ru`, the General Staff Overture row (`59_9385_30_3184`) firing without text at the start.
+  Opening an itinerary from the archive in a BACKGROUND tab after a reload leaves the form on screen (state has
+  the plan) — seen twice; with the tab in front it opens: not reproduced as a user-facing bug. (what each candidate stop is missing; archive
+  restaurants around a point). First reading for San Pietroburgo: Colonna di Alessandro, Cavaliere di bronzo,
+  Museo russo, Fortezza di Pietro e Paolo without IT audioguide; Ermitage, Sant'Isacco, Colonna, Cavaliere without
+  teaser; Sant'Isacco and Prospettiva Nevskij with the card in Russian.
+- Also that day (web, deployed): street names in an alphabet the user's voice cannot read are not spoken
+  (`nomeViaPronunciabile`, osrmService); two identical merged maneuvers are said once; «Vai alla prossima tappa»
+  in the tour dashboard at a stop (`TourBanner`, state `ALL_INGRESSO` → `completaTappa`); the names of the
+  St. Petersburg `LAT_LON` rows are translated into `name_translated` (`scratch/nomi-spb-*.mjs` — they are
+  monuments, sculptures and plaques from OSM, NOT shops: nothing was hidden) and shown through
+  `/api/poi/details` + `ricordaNomeTradotto` / `displayName` (`src/lib/poiDisplay.ts`).
+- **Third to fifth test of day 1 (same night) — «Sei fuori percorso» said to someone ON the line.** Twice per tour,
+  always after a stop. Cause (read from `window.__wipDiagDeviazioni`, written by `ricalcolaDaDeviazione` right
+  before it recalculates: position, snap index, leg start, geometry): `scostamentoDalPercorso` searched from the
+  leg start to the END of the tour. Where the track passes the same place again (the return of a ring through the
+  square it started from, a street walked twice) a jittery fix of someone standing still listening snapped to the
+  LATER pass — vertex 339 of 341 at stop 2 — and from there, looking only forward, the real leg was «behind».
+  Now the window ends with the current leg + 150 m (`fineTrattaInGeometria`), and `inizioTrattaInGeometria` stops
+  300 m after a vertex within 30 m instead of looking for a nearer one at the end of the ring. **Web only: the
+  native followers (`NavFollower.kt`, Swift) have their own off-route check on the line they receive — to be
+  checked with the same case before the next build.**
+  Three defects of the TOOL, not of the app, fixed in `testVirtuale.ts` / `collaudoRegistro.ts`: (1) with the test
+  on, the sheet waits for `wip-teaser-finished` (25 s cap) and nobody sent it for the stops of a tour — 26 s of
+  silence between «Sei arrivato» and the guide, the fake phone walking away meanwhile (at Sant'Isacco the stop
+  closed before the guide began); now the go is given at once and the phone waits up to 15 s for the voice;
+  (2) «Frasi del navigatore ripetute» compared the text only — where street names are not spoken two different
+  turns share «gira a destra» (19 false repeats): now same phrase AND within 25 m; (3) the run can be read from
+  the page (`__wipDiagDeviazioni`). Third run, before these fixes: 98% right triggers, guides 5/5 at 27–32 m of
+  road, turns 59/60. **Fifth run, after: 99%, guides 5/5 at 24–33 m and starting 1–7 s after the arrival, turns
+  62/63, no «fuori percorso»** — registered as version 3, `collaudato`, not approved. Not defects: «Fra 40 metri, gira…» right after a turn (the next turn really is 40 m away);
+  the zig-zag at the Admiralty (paths of the Alexander Garden). Seen and open: a master day ending at dinner is
+  created as a RING («Ritorno al punto di partenza» after the last stop) — for a master the return makes no sense.
+
+## Collaudo di 7 città, 23/10/2026: le regole che ne sono uscite
+
+Lugano, Manchester, Bruxelles, Rimini, Belgrado, Guayaquil, Ottawa, 1 giorno ciascuna (itinerario, podcast, Guida d'Autore, telefono virtuale, Chiedi). Ordine del committente: «correggi tutto, ma le correzioni devono essere regole per il futuro». Il dettaglio di ogni correzione (funzione, test) è in `scratch/correzioni-server-2026-10-23.md` e `scratch/correzioni-app-2026-10-23.md`. I test: `node scratch/collaudo-correzioni-server-2026-10-23.mjs` (43 casi) e `npx tsx scratch/collaudo-regole-2026-10-23.mts` (25 casi).
+
+**Itinerario e Guida d'Autore (server)**
+- **La verifica finisce sempre e scrive sempre.** Una tappa che non si è fatto in tempo a controllare esce `da_verificare`, mai «verificata» per silenzio (`verificaItinerarioConTetto`; a Belgrado un tetto di 20 s lasciava passare un ristorante inesistente).
+- **Pranzo e cena solo in un ristorante.** Mercato, pasticceria, gelateria, bar e caffè non lo sono mai (`nonAdattoAPastoPrincipale`, in ogni punto: aggancio, archivio, geocoder, sostituzione, Guida d'Autore). Pranzo non prima delle 12:30, cena non prima delle 19:30. Il sostituto rispetta la cucina chiesta. Il campo `fonte` è quello vero dell'aggancio, mai copiato dal prompt.
+- **I nomi si cercano in tutte le forme**, con e senza parentesi, tradotti e originali (`variantiNomeTappa`). Questo vale per l'aggancio, l'archivio dei locali, la firma web e il geocoder.
+- **L'aggancio non prende mai cartelli o punti informazioni, né righe draft, hidden o needs_revision.** Il nome identico entro 300 m vince sul QID. Entro 25 km dal centro si resta nella stessa città (area metropolitana). Il titolo si riscrive col nome del database solo se è nella lingua dell'utente.
+- **Due tappe culturali agganciate entro 30 m sono un solo luogo.**
+- **Gli orari si ricalcolano dopo il riordino** (durata + tratta). Dal budget escono i prodotti tolti.
+- **La Guida d'Autore non cambia un pasto già verificato nell'itinerario.** Aggregatori e siti di recensioni valgono al massimo «medio». Le frasi superate («chiuso dal…», «riaprirà») senza un anno recente escono dal materiale. Un segnaposto come «[testo omesso]» non arriva mai al testo. La foto di copertina non si ripete su una tappa.
+- **Un link si toglie solo se è morto davvero** (404/410 o dominio inesistente, `linkMorto`). Un 403 dei siti che bloccano i robot non conta.
+- **Chiedi risponde alla domanda dal materiale del luogo e dalla guida già ascoltata**, al massimo 4 frasi. Senza risposta nel materiale c'è una frase onesta fissa in 7 lingue: mai inventare, mai leggere il gergo del prompt. Una riga di dati non è mai una guida (`no_material`).
+- **Città ed entità amministrative non hanno audioguida né teaser** (`eEntitaAmministrativa`).
+- **Il Day Pass conta una volta per luogo**, anche per approfondimenti e cambio di personaggio. Il contatore nativo non può abbassare quello del server.
+
+**Giro, audioguida libera, navigatore (app)**
+- **Se il GPS è a più di 50 km dalla tappa 1, il giro parte dalla tappa 1** (Guayaquil partiva da Carrara e chiudeva tutte le tappe in 50 s). Un giro non avviato non chiude tappe e non zittisce l'audioguida. Le strade non si prescaricano su salti oltre 50 km.
+- **«In fondo alla tratta» chiude la tappa solo se la porta è irraggiungibile e la linea d'aria è entro 45 m.**
+- **Le piazze senza poligono si misurano in linea d'aria** (St Peter's Square restava muta).
+- **Parlano solo i luoghi giusti** (`src/lib/geofencing/nomiAnnunciabili.ts`):
+  - città, entità amministrative e metropolitane mai;
+  - un luogo che pesa entro 100 m ha la precedenza;
+  - un luogo senza peso la cui guida non parte trattiene una gemma al massimo 15 s;
+  - gli avvisi dei 150 m arrivano al massimo uno ogni 20 s e mai con nomi grezzi (numeri, pietre d'inciampo, targhe, descrizioni, altro alfabeto);
+  - i gemelli in un altro alfabeto o con lo stesso QID tacciono dopo che il luogo ha parlato.
+- **Teaser segnaposto («Sei vicino a…») e teaser IT uguale all'EN non si leggono mai.** Una riga di dati non si legge mai come guida. Un timeout della guida libera sempre lo stato «ascolto la guida».
+- **Navigatore.** Le vie bilingui si dicono in una lingua sola. Nelle manovre accorpate la via non si ripete. Niente preavviso per «continua dritto». Dopo l'ultima tappa tace.
+- **Nel radar usa il `poi_id` vero.** Nessun gemello `iti-` per i pasti già in `locali_pois`, nessun id `iti-` fittizio. Una via di negozi non diventa un POI.
+- **La conferma del Day Pass è dentro la card**, non un `confirm()` del browser, che bloccava la pagina.
+
+**Ricollaudo della sera (server.ts, stesse prove: `collaudo-correzioni-server-2026-10-23.mjs`, ora 70 casi)**
+- **Un pasto cambia locale solo se il nome è lo stesso** (`localeStessoNome`, `localeEntroDistanza`): tutte le parole proprie della tappa (senza tipo di locale, pasto, città; «kafana», «restoran»… sono tipo) nel nome del locale, almeno una ≥ 4 lettere, ed entro 1,5 km dal punto del modello. Vale per aggancio a `locali_pois`, archivio e Foursquare di `localeEsistePerNome`. Belgrado: «Kafana Dva Jelena» finiva su «Kafana Dan Dva» a 6 km.
+- **Locale sostituito = nulla del vecchio**: `sostituisciPastoInventato` cancella sito, orari, voto, mezzi (`mezzi_precedente`, `mezzi_tratta`), foto, cucina prima di scrivere i dati del nuovo.
+- **Chiedi: «non lo so» in ogni grafia** (`eNonLoSo`: NONLOSO, NON LO SO, risposta vuota) → la frase onesta fissa in 7 lingue.
+- **Regola del comune anche per il sito da ricerca** (`sitoUfficialeViaRicerca`, quindi `/api/poi/contacts`): vale solo se nomina la città del luogo; senza città non si cerca (eccezione esplicita `senzaCitta`). Lugano aveva il sito di Viterbo.
+- **Una scheda salvata che non nomina mai la sua città e ne nomina un'altra è di un omonimo** (`schedaDiUnAltraCitta` in `motivoRipassoScheda` → `fonte_sospetta` al ripasso di sfondo). Lugano aveva la scheda di Genova.
+- **Un'etichetta d'import («[Wikipedia Import] sr:…») non è mai materiale** (`eEtichettaImport`): audioguida, Chiedi, teaser.
+- **Formule vietate tolte anche in chiusura e anche dalla cache** (`narrazioneSenzaFormule`, severa): al salvataggio in `salvaAudioguidaInCache` e quando `/api/poi/audioguide` serve una narrazione salvata. A Nicky resta «must-see» solo in una frase senza altre formule.
+- **`/api/tts/smart` non legge una riga di dati** (`rigaDatiDaNonLeggere`): «Nome (categoria)» sempre 422; con `kind` guida/audioguida anche ogni `eRigaDati`.
+
+**Ricollaudo di Lugano, sera (MASI, LAC, Piazza della Riforma, Kirche)**
+- **Una guida con formule vietate non si serve e non si sintetizza.** Se dopo la pulizia restano formule, o il testo è ragionamento del modello, si rigenera: cache di `poi_audioguides`, `audio_script` vecchio, MP3 già fatto (`narrazioneDaRifare` sul server, `guidaLeggibile` nell'app). `/api/tts/smart` con `kind: 'guida'` pulisce il testo oppure risponde 422 `testo_da_rifare`. Davanti a un 422 l'app non legge con la voce di sistema.
+- **Un MP3 salvato sul telefono porta con sé il suo testo** (`audio_testo_<chiave>`). Il pre-scarico del giro rifà l'MP3 se il testo manca o è diverso; la scheda scarta l'MP3 se il suo testo non è una guida.
+- **La scheda legge il primo testo che è una guida vera**: la narrazione generata viene prima del vecchio `audio_script`.
+- **Chiedi riceve anche il testo letto davvero dalla voce** (`guida`, da `locationService.testoLettoPer`), insieme a `question` e `poi_id`.
+- **Le frasi-modello delle schede fatte dai dati non sono una guida né materiale** («è una piazza di X», «classificata come», «Dati verificati — …»: `togliFrasiModello` / `testoSoloDati`). In quel caso `/api/poi/audioguide` risponde `no_material`. Il Day Pass si conta solo per una guida vera: il controllo dell'app viene prima di `authorize`.
+- **Una tappa senza aggancio cerca un luogo con fonte entro 50 m con lo stesso nome** prima di diventare `iti-` (`cercaGemelloConFonte`, «Nel radar»).
+- **Il nome nella lingua dell'utente.** Se un nome comincia con una parola di tipo in un'altra lingua («Kirche…»), si usa nell'ordine: `name_translated`, poi il titolo del modello (`titolo_ai`, ora salvato dall'aggancio), poi la sola parola di tipo tradotta (`displayName`). Script dati da lanciare solo col via: `scratch/correggi-nome-kirche-q3673656.mjs`.
+- **Ogni tappa con guida a cui si arriva apre la sua scheda.** Se il servizio nativo tace (stesso edificio, guida in corso), il giro la apre dopo 8 s e a guida finita (`serveAprireScheda`).
+
+**Schermo spento nelle app native — verifica e correzioni del 25/10/2026 (sul disco, non ancora in una build)**
+- **Il token lo rinnova SOLO il JS, prima che lo schermo si spenga.** Il nativo riceve il JWT da `setUserContext` e su un 401
+  emette solo `tokenExpired`; non rinnova da sé per scelta (i refresh token Supabase sono a uso singolo: due rinnovatori si
+  invalidano a vicenda fino al logout). `assicuraSessioneFrescaPerIlNativo` (`src/plugins/ItaintaBackgroundPoi.ts`) rinnova la
+  sessione se le restano meno di 12 h e la rispinge al nativo: all'avvio, a ogni ripresa dell'app, prima di avviare il servizio.
+  Perché copra una giornata intera serve JWT expiry = 86400 nel pannello Supabase (Authentication › Sessions).
+- **Il Day Pass nativo conta una volta per luogo, come il server, e `setDayPass` non abbassa mai il contatore dello stesso
+  pass**: un solo punto per piattaforma, `offline/DayPassLocale.kt` e `DayPassContatore` (PoiModels.swift); il JS passa
+  `poiId` a `consumeDayPassGuide`.
+- **Senza diritto (né pass né acquisto) il prefetch all'avvicinamento è `soloCache`**: mai una sintesi a nostre spese per chi
+  poi non ascolta. Il pre-scarico del giro lo era già.
+- **Mai il silenzio**: su Android senza rete e senza MP3 in cache la notifica d'arrivo dice che serve la rete
+  (`showNetworkRequiredNotification`, 7 lingue).
+- **`nomiAnnunciabili` vive anche su Kotlin (`geofence/NomiAnnunciabili.kt`) e Swift (`enum NomiAnnunciabili`)**: righe
+  amministrative mai candidate, nome grezzo → avviso muto, un avviso ogni 20 s, teaser segnaposto/IT=EN/alfabeto sbagliato mai
+  letti, gemelli con lo stesso QID o in altro alfabeto entro 150 m muti dopo che il luogo ha parlato. Chi cambia una lista la
+  cambia in tre posti. Limite noto: `nearby_pois` e `PoiEntity` non portano `name_translated`, `poi_type`, `wikidata` (il QID si
+  legge dall'id `wd-Q…`): aggiungerli è lavoro sul database, di notte e con un ordine.
+- **La voce nativa parla solo se ha qualcosa da dire (01/11/2026, feedback dei tester Google Play su 1.3.8: «nomi
+  pronunciati in lingue straniere», «annunci che dicono solo "You are near…"»)**: l'avviso dei 150 m si dice solo se il
+  luogo ha un teaser leggibile o è una tappa di un giro; all'arrivo senza teaser niente voce (la frase «Apri l'app per
+  scoprire…» resta solo nella notifica scritta); il nome all'arrivo si pronuncia solo se passa `nomeDaAnnunciare`,
+  altrimenti «Sei arrivato.» senza nome. Vibrazione e notifica restano. `GeofenceBroadcastReceiver.kt`,
+  `ArrivalWorker.kt`, `BackgroundPoiManager.swift`.
+
+**Tour di gruppo (Live Tour) — regole del 25/10/2026, dopo il collaudo reale con più utenti**
+- **La sessione si legge SOLO per PIN, mai in elenco**: RPC `live_tour_entra(p_pin)` (SECURITY DEFINER, una riga attiva e non
+  scaduta, anche per gli ospiti). Nessuna SELECT pubblica su `live_sessions`: il leader legge e aggiorna le proprie righe (anche
+  chiuse — con RETURNING la riga aggiornata deve passare la policy SELECT, ed è per questo che «Termina» falliva in silenzio).
+- **Il canale `live_tour:<pin>` è PRIVATO** (`private: true`, Realtime Authorization su `realtime.messages`): tutti ricevono e
+  fanno presence, **solo il leader trasmette** (`live_tour_e_leader`). In più ogni broadcast porta `da: leader_id` e i follower
+  scartano il resto. Migration `20261025180000_live_tour_sicurezza.sql`; collaudo `scratch/collaudo-live-tour-multi.mjs`.
+- **Il follower non paga mai la voce**: chiede a `/api/tts/smart` lo stesso testo, `kind` e voce del leader (stessa chiave di
+  cache) con `soloCache: true`; 204 → voce di sistema. Mai `poiId` (niente authorize/Day Pass).
+- **Gli esiti si leggono**: la chiusura controlla che l'UPDATE abbia toccato una riga; un canale in errore si vede a schermo;
+  30 s senza leader in presence → «Leader non raggiungibile».
+- Noto e aperto: l'ospite anonimo non compare in presence sul canale privato; a schermo spento il follower (solo JS) non sente nulla.
+
+**Aperto, da fare:**
+- la svolta detta prima del suo preavviso: causa non trovata;
+- una migration per togliere le righe città da `get_geofence_pois`;
+- la pulizia del cinema «Qui hanno girato» oltre 2 km (script `cinema-*`);
+- la coordinata Wikidata doppia (P625): l'import deve preferire il rank `preferred`, da controllare in massa.
+
+Corretti a mano: Museo della città di Rimini (coordinate, `wd-Q3868075`) e Galleria Nazionale del Canada (nome, `wv-Q1068063`). Copia dei valori di prima in `/root/citta/correzioni-collaudo-7-citta-2026-10-23.jsonl` su Oracle.
+
+**Ri-collaudo del giro di Lugano (23/10/2026 sera, solo app)**
+- **Una tappa arrivata resta arrivata.** Lo stato non torna da ALL_INGRESSO a IN_ARRIVO per la stessa tappa (`tappeArrivate` in `tourService.aggiorna`) e il passo «arrive» di una tappa già annunciata non si ripete (`giroDriver`).
+- **Un pasto non si salta mai in silenzio.** Se si arriva mentre parla la guida di prima, il «Sei arrivato» aspetta il primo momento libero e non va in coda (la coda si svuota a ogni tappa). Se il pasto viene solo sfiorato, il nome si dice quando la tappa si chiude.
+- **Piazze, parchi e ponti senza punto d'arrivo usano il raggio d'arrivo dell'utente** (30 m a piedi), misurato anche in linea d'aria (`sogliaArrivoTappa`). Mai i 70 m del centroide: Piazza della Riforma scattava a 61 m.
+- **Gli incontri del giro passano dallo stesso filtro dell'audioguida libera** (`rigaNonParla` + `nomeDaAnnunciare`). Il nome della città delle tappe non si annuncia mai («Sulla tua strada: Lugano»).
+- **La scheda non legge la guida del luogo precedente.** Il primo render dopo un cambio di POI ha ancora testo e `toggleSpeech` del POI prima: l'autoplay lo salta (`vecchio` in `PoiDetailSheet`). A Villa Ciani partiva la guida del MASI.
+- **«Nel radar» applica le regole anche ai piani vecchi.** Una via di negozi resta una tappa muta. Una tappa che non diventa POI prende un id locale `tappa-…`, mai un `iti-` finto. Il nome di una tappa agganciata passa da `displayName`.
+- **La svolta «detta prima del preavviso» erano due manovre sulla stessa via.** Una svolta che resta sulla stessa via non ripete «in Via X» (`istruzionePerStep(..., prev)`).

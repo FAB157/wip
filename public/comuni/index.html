@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WIP per comuni, pro loco e territori — gratis</title>
+<meta name="description" content="Comuni, pro loco, uffici turistici, musei e associazioni: inseriamo gratis i vostri luoghi in WIP e prepariamo l'audioguida di chiese e musei. Nessun costo, nessun obbligo.">
+<link rel="canonical" href="https://www.wip.guide/comuni">
+<meta property="og:title" content="WIP per comuni, pro loco e territori">
+<meta property="og:description" content="Inseriamo gratis i vostri luoghi e prepariamo l'audioguida di chiese e musei.">
+<meta property="og:image" content="https://www.wip.guide/press/og-image.jpg">
+<meta name="apple-itunes-app" content="app-id=6806769883">
+<link rel="icon" href="/favicon.ico">
+<!--
+  Pagina per enti e territori (11/10/2026, committente: «una pagina per la registrazione gratis e le
+  corrispondenze, con già i dettagli e se vogliono essere ricontattati — in tutte le lingue»).
+  Il modulo va a POST /api/enti/richiesta (server.ts), che salva in `richieste_enti` e manda la conferma.
+  Cosa si promette, e solo questo: luoghi inseriti e messi in evidenza (quali sono «gemme» lo decidiamo noi),
+  audioguida gratuita di chiese e musei e guida del museo, per cominciare fino a 3 luoghi per ente, solo da
+  fonti verificabili (il materiale lo mandano loro). Nessun tempo promesso, nessun numero di visitatori.
+  Le 7 lingue stanno nel dizionario T qui sotto: una voce nuova va aggiunta in tutte e sette.
+-->
+<style>
+  :root { --blu:#1e3a8a; --chiaro:#f8f5f0; --testo:#1f2937; --grigio:#6b7280; --bordo:#e5e7eb; --verde:#166534; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--testo); background:var(--chiaro); line-height:1.55; }
+  header { background:var(--blu); color:#fff; padding:28px 20px 34px; }
+  .dentro { max-width:760px; margin:0 auto; }
+  .riga-alta { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:22px; }
+  .marchio { color:#fff; text-decoration:none; font-weight:800; letter-spacing:.02em; }
+  select#lingua { background:rgba(255,255,255,.14); color:#fff; border:1px solid rgba(255,255,255,.35); border-radius:999px; padding:6px 12px; font-size:14px; }
+  select#lingua option { color:#111; }
+  h1 { font-size:clamp(26px,5vw,38px); line-height:1.15; margin:0 0 12px; }
+  header p { margin:0; font-size:17px; opacity:.92; max-width:620px; }
+  main { padding:26px 20px 60px; }
+  h2 { color:var(--blu); font-size:21px; margin:30px 0 12px; }
+  .punti { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); padding:0; margin:0; list-style:none; }
+  .punti li { background:#fff; border:1px solid var(--bordo); border-radius:16px; padding:16px; }
+  .punti b { display:block; color:var(--blu); margin-bottom:4px; }
+  .nota { background:#fff; border-left:4px solid var(--verde); border-radius:10px; padding:12px 16px; margin:14px 0 0; font-size:15px; }
+  form { background:#fff; border:1px solid var(--bordo); border-radius:20px; padding:20px; margin-top:8px; }
+  .campo { margin-bottom:14px; }
+  .due { display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
+  label { display:block; font-size:13px; font-weight:700; color:var(--blu); margin-bottom:5px; }
+  input[type=text],input[type=email],input[type=tel],input[type=url],select,textarea { width:100%; border:1px solid #cbd5e1; border-radius:10px; padding:10px 12px; font:inherit; background:#fff; color:inherit; }
+  textarea { min-height:96px; resize:vertical; }
+  .scelte label { display:flex; gap:8px; align-items:flex-start; font-weight:500; color:var(--testo); font-size:15px; margin-bottom:8px; }
+  .scelte input { margin-top:4px; }
+  .aiuto { font-size:13px; color:var(--grigio); margin-top:4px; }
+  button { background:var(--blu); color:#fff; border:0; border-radius:999px; padding:13px 26px; font:inherit; font-weight:700; cursor:pointer; }
+  button[disabled] { opacity:.6; cursor:default; }
+  .esito { margin-top:14px; padding:12px 16px; border-radius:12px; display:none; }
+  .esito.ok { display:block; background:#dcfce7; color:#14532d; }
+  .esito.no { display:block; background:#fee2e2; color:#7f1d1d; }
+  .esca { position:absolute; left:-9999px; width:1px; height:1px; overflow:hidden; }
+  footer { text-align:center; color:var(--grigio); font-size:13px; padding:0 20px 40px; }
+  footer a { color:var(--blu); }
+</style>
+</head>
+<body>
+<header>
+  <div class="dentro">
+    <div class="riga-alta">
+      <a class="marchio" href="https://www.wip.guide/">WIP · World in Pocket</a>
+      <select id="lingua" aria-label="Language">
+        <option value="IT">Italiano</option><option value="EN">English</option><option value="FR">Français</option>
+        <option value="ES">Español</option><option value="DE">Deutsch</option><option value="RU">Русский</option><option value="ZH">中文</option>
+      </select>
+    </div>
+    <h1 data-t="titolo"></h1>
+    <p data-t="sotto"></p>
+  </div>
+</header>
+<main>
+  <div class="dentro">
+    <h2 data-t="cosa_h"></h2>
+    <ul class="punti">
+      <li><b data-t="p1_t"></b><span data-t="p1"></span></li>
+      <li><b data-t="p2_t"></b><span data-t="p2"></span></li>
+      <li><b data-t="p3_t"></b><span data-t="p3"></span></li>
+    </ul>
+    <p class="nota" data-t="nota"></p>
+
+    <h2 data-t="modulo_h"></h2>
+    <form id="modulo" novalidate>
+      <div class="due">
+        <div class="campo"><label for="tipo" data-t="f_tipo"></label>
+          <select id="tipo" name="tipo">
+            <option value="comune" data-t="t_comune"></option><option value="pro_loco" data-t="t_pro_loco"></option>
+            <option value="ufficio_turistico" data-t="t_ufficio"></option><option value="museo" data-t="t_museo"></option>
+            <option value="chiesa" data-t="t_chiesa"></option><option value="parco" data-t="t_parco"></option>
+            <option value="associazione" data-t="t_associazione"></option><option value="altro" data-t="t_altro"></option>
+          </select></div>
+        <div class="campo"><label for="ente" data-t="f_ente"></label><input type="text" id="ente" name="ente" maxlength="200" required></div>
+      </div>
+      <div class="due">
+        <div class="campo"><label for="localita" data-t="f_localita"></label><input type="text" id="localita" name="localita" maxlength="200" required></div>
+        <div class="campo"><label for="paese" data-t="f_paese"></label><input type="text" id="paese" name="paese" maxlength="100"></div>
+      </div>
+      <div class="campo"><label for="sito" data-t="f_sito"></label><input type="url" id="sito" name="sito" maxlength="300" placeholder="https://"></div>
+      <div class="due">
+        <div class="campo"><label for="referente" data-t="f_referente"></label><input type="text" id="referente" name="referente" maxlength="150"></div>
+        <div class="campo"><label for="ruolo" data-t="f_ruolo"></label><input type="text" id="ruolo" name="ruolo" maxlength="150"></div>
+      </div>
+      <div class="due">
+        <div class="campo"><label for="email" data-t="f_email"></label><input type="email" id="email" name="email" maxlength="200" required></div>
+        <div class="campo"><label for="telefono" data-t="f_telefono"></label><input type="tel" id="telefono" name="telefono" maxlength="50"></div>
+      </div>
+      <div class="campo scelte"><label style="font-weight:700;color:var(--blu);font-size:13px" data-t="f_servizi"></label>
+        <label><input type="checkbox" name="servizi" value="luoghi" checked><span data-t="s_luoghi"></span></label>
+        <label><input type="checkbox" name="servizi" value="audioguida"><span data-t="s_audioguida"></span></label>
+        <label><input type="checkbox" name="servizi" value="guida_museo"><span data-t="s_museo"></span></label>
+      </div>
+      <div class="campo"><label for="luoghi" data-t="f_luoghi"></label><textarea id="luoghi" name="luoghi" maxlength="4000"></textarea><div class="aiuto" data-t="a_luoghi"></div></div>
+      <div class="campo"><label for="materiale" data-t="f_materiale"></label><input type="text" id="materiale" name="materiale" maxlength="1000"><div class="aiuto" data-t="a_materiale"></div></div>
+      <div class="campo scelte"><label style="font-weight:700;color:var(--blu);font-size:13px" data-t="f_ricontatto"></label>
+        <label><input type="radio" name="ricontatto" value="email" checked><span data-t="r_email"></span></label>
+        <label><input type="radio" name="ricontatto" value="telefono"><span data-t="r_telefono"></span></label>
+        <label><input type="radio" name="ricontatto" value="no"><span data-t="r_no"></span></label>
+      </div>
+      <div class="campo"><label for="note" data-t="f_note"></label><textarea id="note" name="note" maxlength="2000" style="min-height:70px"></textarea></div>
+      <div class="esca" aria-hidden="true"><label for="sito_azienda">Company website</label><input type="text" id="sito_azienda" name="sito_azienda" tabindex="-1" autocomplete="off"></div>
+      <div class="campo scelte"><label><input type="checkbox" id="consenso" name="consenso"><span><span data-t="consenso"></span> <a href="/privacy" target="_blank" rel="noopener" data-t="privacy"></a></span></label></div>
+      <button type="submit" id="invia" data-t="invia"></button>
+      <div class="esito" id="esito" role="status"></div>
+    </form>
+  </div>
+</main>
+<footer><span data-t="piede"></span> · <a href="https://www.wip.guide/">wip.guide</a> · <a href="https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct=comuni&mt=8">App Store</a></footer>
+
+<script>
+var T = {
+IT: { titolo:"Il vostro territorio dentro WIP, gratis", sotto:"WIP è l'audioguida che parte da sola quando ci si avvicina a un luogo: oltre 9 milioni di luoghi in 196 paesi, in 7 lingue. Per comuni, pro loco, uffici turistici, musei, parrocchie e associazioni la collaborazione è gratuita.",
+ cosa_h:"Cosa facciamo per voi", p1_t:"Inseriamo i vostri luoghi", p1:"Ci indicate i luoghi che meritano una visita: li inseriamo sulla mappa e li mettiamo in evidenza.", p2_t:"Audioguida di chiese e musei", p2:"Prepariamo gratuitamente l'audioguida delle vostre chiese, dei musei o di un'altra particolarità che volete far conoscere.", p3_t:"Guida del museo", p3:"Per i musei, una guida sala per sala e opera per opera, da ascoltare durante la visita.",
+ nota:"Nessun costo e nessun obbligo. Per cominciare seguiamo fino a 3 luoghi per ente. Scriviamo solo da fonti verificabili: per questo vi chiediamo il materiale che avete (un opuscolo, una scheda, una pagina del sito). Non promettiamo tempi né numeri di visitatori.",
+ modulo_h:"Registrazione gratuita", f_tipo:"Chi siete", t_comune:"Comune", t_pro_loco:"Pro loco", t_ufficio:"Ufficio turistico", t_museo:"Museo", t_chiesa:"Parrocchia o chiesa", t_parco:"Parco o riserva", t_associazione:"Associazione", t_altro:"Altro",
+ f_ente:"Nome dell'ente *", f_localita:"Località *", f_paese:"Paese", f_sito:"Sito web", f_referente:"Persona di riferimento", f_ruolo:"Ruolo", f_email:"Email *", f_telefono:"Telefono",
+ f_servizi:"Cosa vi interessa", s_luoghi:"Inserire i nostri luoghi sulla mappa", s_audioguida:"Audioguida di chiese, musei o altre particolarità", s_museo:"Guida del museo, opera per opera",
+ f_luoghi:"Quali luoghi", a_luoghi:"Un luogo per riga, con l'indirizzo se lo avete. Per cominciare fino a 3.", f_materiale:"Materiale da usare come fonte", a_materiale:"Un link a una pagina o a un documento. Gli allegati potete mandarli rispondendo all'email di conferma.",
+ f_ricontatto:"Volete essere ricontattati?", r_email:"Sì, per email", r_telefono:"Sì, per telefono", r_no:"No, mi basta la conferma", f_note:"Altro che volete dirci",
+ consenso:"Acconsento all'uso di questi dati per rispondere alla richiesta.", privacy:"Informativa sulla privacy", invia:"Invia la richiesta",
+ ok:"Richiesta ricevuta. Vi abbiamo mandato un'email di conferma: potete rispondere allegando il vostro materiale.", ok_senza:"Richiesta ricevuta. Vi risponderemo all'indirizzo indicato.", manca:"Compilate nome dell'ente, località ed email, e spuntate il consenso.", errore:"Non siamo riusciti a registrare la richiesta. Riprovate fra poco oppure scriveteci a wip15775@gmail.com.", piede:"WIP · World in Pocket — fatta in Italia" },
+EN: { titolo:"Your town or region inside WIP, free", sotto:"WIP is the audio guide that starts by itself as you approach a place: over 9 million places in 196 countries, in 7 languages. For councils, tourist offices, museums, parishes and local associations the collaboration is free.",
+ cosa_h:"What we do for you", p1_t:"We add your places", p1:"You tell us which places are worth a visit: we add them to the map and highlight them.", p2_t:"Audio guide for churches and museums", p2:"We prepare, free of charge, the audio guide for your churches, museums or any other feature you wish to promote.", p3_t:"Museum guide", p3:"For museums, a guide room by room and work by work, to listen to during the visit.",
+ nota:"No costs and no obligations. To begin with we take up to 3 places per organisation. We write only from verifiable sources, which is why we ask for the material you have (a leaflet, a fact sheet, a page of your website). We do not promise delivery times or visitor numbers.",
+ modulo_h:"Free registration", f_tipo:"Who you are", t_comune:"Municipality / council", t_pro_loco:"Local tourism association", t_ufficio:"Tourist office / visitor centre", t_museo:"Museum", t_chiesa:"Parish or church", t_parco:"Park or reserve", t_associazione:"Association / society", t_altro:"Other",
+ f_ente:"Organisation name *", f_localita:"Town or area *", f_paese:"Country", f_sito:"Website", f_referente:"Contact person", f_ruolo:"Role", f_email:"Email *", f_telefono:"Phone",
+ f_servizi:"What you are interested in", s_luoghi:"Adding our places to the map", s_audioguida:"Audio guide for churches, museums or other features", s_museo:"Museum guide, work by work",
+ f_luoghi:"Which places", a_luoghi:"One place per line, with the address if you have it. Up to 3 to begin with.", f_materiale:"Material to use as a source", a_materiale:"A link to a page or document. Attachments can be sent by replying to the confirmation email.",
+ f_ricontatto:"Would you like us to contact you?", r_email:"Yes, by email", r_telefono:"Yes, by phone", r_no:"No, the confirmation is enough", f_note:"Anything else you want to tell us",
+ consenso:"I agree to the use of these details to answer this request.", privacy:"Privacy policy", invia:"Send the request",
+ ok:"Request received. We have sent you a confirmation email: you can reply to it and attach your material.", ok_senza:"Request received. We will reply to the address you gave.", manca:"Please fill in organisation name, town and email, and tick the consent box.", errore:"We could not record your request. Please try again shortly or write to wip15775@gmail.com.", piede:"WIP · World in Pocket — made in Italy" },
+FR: { titolo:"Votre territoire dans WIP, gratuitement", sotto:"WIP est l'audioguide qui démarre tout seul à l'approche d'un lieu : plus de 9 millions de lieux dans 196 pays, en 7 langues. Pour les communes, offices de tourisme, musées, paroisses et associations, la collaboration est gratuite.",
+ cosa_h:"Ce que nous faisons pour vous", p1_t:"Nous ajoutons vos lieux", p1:"Vous nous indiquez les lieux qui méritent une visite : nous les ajoutons à la carte et les mettons en avant.", p2_t:"Audioguide des églises et musées", p2:"Nous préparons gratuitement l'audioguide de vos églises, de vos musées ou d'une autre particularité que vous souhaitez faire connaître.", p3_t:"Guide du musée", p3:"Pour les musées, un guide salle par salle et œuvre par œuvre, à écouter pendant la visite.",
+ nota:"Aucun coût, aucune obligation. Pour commencer, nous suivons jusqu'à 3 lieux par organisme. Nous n'écrivons qu'à partir de sources vérifiables : c'est pourquoi nous vous demandons la documentation dont vous disposez (brochure, fiche, page de votre site). Nous ne promettons ni délais ni nombre de visiteurs.",
+ modulo_h:"Inscription gratuite", f_tipo:"Qui êtes-vous", t_comune:"Commune / mairie", t_pro_loco:"Syndicat d'initiative", t_ufficio:"Office de tourisme", t_museo:"Musée", t_chiesa:"Paroisse ou église", t_parco:"Parc ou réserve", t_associazione:"Association", t_altro:"Autre",
+ f_ente:"Nom de l'organisme *", f_localita:"Localité *", f_paese:"Pays", f_sito:"Site web", f_referente:"Personne à contacter", f_ruolo:"Fonction", f_email:"E-mail *", f_telefono:"Téléphone",
+ f_servizi:"Ce qui vous intéresse", s_luoghi:"Ajouter nos lieux sur la carte", s_audioguida:"Audioguide d'églises, de musées ou d'autres particularités", s_museo:"Guide du musée, œuvre par œuvre",
+ f_luoghi:"Quels lieux", a_luoghi:"Un lieu par ligne, avec l'adresse si vous l'avez. Jusqu'à 3 pour commencer.", f_materiale:"Documentation à utiliser comme source", a_materiale:"Un lien vers une page ou un document. Les pièces jointes peuvent être envoyées en répondant à l'e-mail de confirmation.",
+ f_ricontatto:"Souhaitez-vous être recontactés ?", r_email:"Oui, par e-mail", r_telefono:"Oui, par téléphone", r_no:"Non, la confirmation me suffit", f_note:"Autre chose à nous dire",
+ consenso:"J'accepte l'utilisation de ces données pour répondre à ma demande.", privacy:"Politique de confidentialité", invia:"Envoyer la demande",
+ ok:"Demande reçue. Nous vous avons envoyé un e-mail de confirmation : vous pouvez y répondre en joignant votre documentation.", ok_senza:"Demande reçue. Nous vous répondrons à l'adresse indiquée.", manca:"Merci d'indiquer le nom de l'organisme, la localité et l'e-mail, et de cocher le consentement.", errore:"Nous n'avons pas pu enregistrer la demande. Réessayez dans un instant ou écrivez à wip15775@gmail.com.", piede:"WIP · World in Pocket — fait en Italie" },
+ES: { titolo:"Su territorio dentro de WIP, gratis", sotto:"WIP es la audioguía que empieza sola al acercarse a un lugar: más de 9 millones de lugares en 196 países, en 7 idiomas. Para ayuntamientos, oficinas de turismo, museos, parroquias y asociaciones la colaboración es gratuita.",
+ cosa_h:"Qué hacemos por ustedes", p1_t:"Incluimos sus lugares", p1:"Nos indican los lugares que merecen una visita: los incluimos en el mapa y los destacamos.", p2_t:"Audioguía de iglesias y museos", p2:"Preparamos gratuitamente la audioguía de sus iglesias, museos u otra particularidad que quieran dar a conocer.", p3_t:"Guía del museo", p3:"Para los museos, una guía sala por sala y obra por obra, para escuchar durante la visita.",
+ nota:"Sin costes ni compromisos. Para empezar atendemos hasta 3 lugares por entidad. Escribimos solo a partir de fuentes verificables: por eso les pedimos el material que tengan (un folleto, una ficha, una página de su web). No prometemos plazos ni cifras de visitantes.",
+ modulo_h:"Registro gratuito", f_tipo:"Quiénes son", t_comune:"Ayuntamiento / municipio", t_pro_loco:"Asociación local de turismo", t_ufficio:"Oficina de turismo", t_museo:"Museo", t_chiesa:"Parroquia o iglesia", t_parco:"Parque o reserva", t_associazione:"Asociación", t_altro:"Otro",
+ f_ente:"Nombre de la entidad *", f_localita:"Localidad *", f_paese:"País", f_sito:"Sitio web", f_referente:"Persona de contacto", f_ruolo:"Cargo", f_email:"Correo electrónico *", f_telefono:"Teléfono",
+ f_servizi:"Qué les interesa", s_luoghi:"Incluir nuestros lugares en el mapa", s_audioguida:"Audioguía de iglesias, museos u otras particularidades", s_museo:"Guía del museo, obra por obra",
+ f_luoghi:"Qué lugares", a_luoghi:"Un lugar por línea, con la dirección si la tienen. Hasta 3 para empezar.", f_materiale:"Material para usar como fuente", a_materiale:"Un enlace a una página o documento. Los adjuntos pueden enviarse respondiendo al correo de confirmación.",
+ f_ricontatto:"¿Quieren que los contactemos?", r_email:"Sí, por correo", r_telefono:"Sí, por teléfono", r_no:"No, me basta la confirmación", f_note:"Algo más que quieran decirnos",
+ consenso:"Acepto el uso de estos datos para responder a la solicitud.", privacy:"Política de privacidad", invia:"Enviar la solicitud",
+ ok:"Solicitud recibida. Les hemos enviado un correo de confirmación: pueden responder adjuntando su material.", ok_senza:"Solicitud recibida. Les responderemos a la dirección indicada.", manca:"Indiquen el nombre de la entidad, la localidad y el correo, y marquen el consentimiento.", errore:"No hemos podido registrar la solicitud. Inténtenlo de nuevo en un momento o escriban a wip15775@gmail.com.", piede:"WIP · World in Pocket — hecha en Italia" },
+DE: { titolo:"Ihr Ort in WIP – kostenlos", sotto:"WIP ist der Audioguide, der von selbst startet, sobald man sich einem Ort nähert: über 9 Millionen Orte in 196 Ländern, in 7 Sprachen. Für Gemeinden, Tourist-Informationen, Museen, Pfarreien und Vereine ist die Zusammenarbeit kostenlos.",
+ cosa_h:"Was wir für Sie tun", p1_t:"Wir nehmen Ihre Orte auf", p1:"Sie nennen uns die Orte, die einen Besuch wert sind: Wir tragen sie in die Karte ein und heben sie hervor.", p2_t:"Audioguide für Kirchen und Museen", p2:"Wir erstellen kostenlos den Audioguide für Ihre Kirchen, Museen oder eine andere Besonderheit, die Sie bekannt machen möchten.", p3_t:"Museumsführer", p3:"Für Museen ein Führer Raum für Raum und Werk für Werk, zum Anhören während des Besuchs.",
+ nota:"Keine Kosten, keine Verpflichtungen. Zum Start betreuen wir bis zu 3 Orte pro Einrichtung. Wir schreiben nur aus überprüfbaren Quellen – deshalb bitten wir um Ihr vorhandenes Material (Broschüre, Datenblatt, Seite Ihrer Website). Wir versprechen weder Termine noch Besucherzahlen.",
+ modulo_h:"Kostenlose Anmeldung", f_tipo:"Wer Sie sind", t_comune:"Gemeinde / Stadt", t_pro_loco:"Verkehrs- oder Heimatverein", t_ufficio:"Tourist-Information", t_museo:"Museum", t_chiesa:"Pfarrei oder Kirche", t_parco:"Park oder Schutzgebiet", t_associazione:"Verein", t_altro:"Sonstiges",
+ f_ente:"Name der Einrichtung *", f_localita:"Ort *", f_paese:"Land", f_sito:"Website", f_referente:"Ansprechperson", f_ruolo:"Funktion", f_email:"E-Mail *", f_telefono:"Telefon",
+ f_servizi:"Was Sie interessiert", s_luoghi:"Unsere Orte in die Karte aufnehmen", s_audioguida:"Audioguide für Kirchen, Museen oder andere Besonderheiten", s_museo:"Museumsführer, Werk für Werk",
+ f_luoghi:"Welche Orte", a_luoghi:"Ein Ort pro Zeile, mit Adresse, falls vorhanden. Zum Start bis zu 3.", f_materiale:"Material als Quelle", a_materiale:"Ein Link zu einer Seite oder einem Dokument. Anhänge können Sie als Antwort auf die Bestätigungs-E-Mail senden.",
+ f_ricontatto:"Möchten Sie kontaktiert werden?", r_email:"Ja, per E-Mail", r_telefono:"Ja, telefonisch", r_no:"Nein, die Bestätigung genügt", f_note:"Was Sie uns sonst mitteilen möchten",
+ consenso:"Ich bin mit der Verwendung dieser Daten zur Beantwortung der Anfrage einverstanden.", privacy:"Datenschutzerklärung", invia:"Anfrage senden",
+ ok:"Anfrage erhalten. Wir haben Ihnen eine Bestätigung gesendet: Sie können darauf antworten und Ihr Material anhängen.", ok_senza:"Anfrage erhalten. Wir antworten an die angegebene Adresse.", manca:"Bitte Name der Einrichtung, Ort und E-Mail angeben und die Einwilligung ankreuzen.", errore:"Die Anfrage konnte nicht gespeichert werden. Bitte versuchen Sie es gleich noch einmal oder schreiben Sie an wip15775@gmail.com.", piede:"WIP · World in Pocket — in Italien entwickelt" },
+RU: { titolo:"Ваш город или край в WIP — бесплатно", sotto:"WIP — аудиогид, который включается сам, когда вы подходите к месту: более 9 миллионов мест в 196 странах, на 7 языках. Для муниципалитетов, туристических офисов, музеев, приходов и объединений сотрудничество бесплатно.",
+ cosa_h:"Что мы делаем для вас", p1_t:"Добавляем ваши места", p1:"Вы называете места, которые стоит посетить: мы добавляем их на карту и выделяем.", p2_t:"Аудиогид по храмам и музеям", p2:"Мы бесплатно готовим аудиогид по вашим храмам, музеям или другой достопримечательности, о которой вы хотите рассказать.", p3_t:"Гид по музею", p3:"Для музеев — гид по залам и по отдельным экспонатам, который слушают во время посещения.",
+ nota:"Без оплаты и обязательств. Для начала мы берём до 3 мест от одной организации. Мы пишем только по проверяемым источникам, поэтому просим прислать имеющиеся материалы (буклет, справку, страницу сайта). Мы не обещаем сроков и числа посетителей.",
+ modulo_h:"Бесплатная регистрация", f_tipo:"Кто вы", t_comune:"Муниципалитет / администрация", t_pro_loco:"Местное туристическое объединение", t_ufficio:"Туристический офис", t_museo:"Музей", t_chiesa:"Приход или храм", t_parco:"Парк или заповедник", t_associazione:"Объединение", t_altro:"Другое",
+ f_ente:"Название организации *", f_localita:"Населённый пункт *", f_paese:"Страна", f_sito:"Сайт", f_referente:"Контактное лицо", f_ruolo:"Должность", f_email:"Эл. почта *", f_telefono:"Телефон",
+ f_servizi:"Что вас интересует", s_luoghi:"Добавить наши места на карту", s_audioguida:"Аудиогид по храмам, музеям или другим достопримечательностям", s_museo:"Гид по музею, экспонат за экспонатом",
+ f_luoghi:"Какие места", a_luoghi:"По одному месту в строке, с адресом, если он есть. Для начала — до 3.", f_materiale:"Материалы в качестве источника", a_materiale:"Ссылка на страницу или документ. Вложения можно прислать ответом на письмо-подтверждение.",
+ f_ricontatto:"Хотите, чтобы мы с вами связались?", r_email:"Да, по эл. почте", r_telefono:"Да, по телефону", r_no:"Нет, достаточно подтверждения", f_note:"Что ещё вы хотите сообщить",
+ consenso:"Я согласен(на) на использование этих данных для ответа на заявку.", privacy:"Политика конфиденциальности", invia:"Отправить заявку",
+ ok:"Заявка получена. Мы отправили вам письмо-подтверждение: на него можно ответить, приложив материалы.", ok_senza:"Заявка получена. Мы ответим на указанный адрес.", manca:"Укажите название организации, населённый пункт и эл. почту и отметьте согласие.", errore:"Не удалось сохранить заявку. Попробуйте ещё раз чуть позже или напишите на wip15775@gmail.com.", piede:"WIP · World in Pocket — сделано в Италии" },
+ZH: { titolo:"让您的城镇进入 WIP，完全免费", sotto:"WIP 是一款走近景点便自动开始讲解的语音导览：覆盖 196 个国家的 900 多万个地点，支持 7 种语言。面向市镇政府、旅游局、博物馆、教堂和各类协会，合作完全免费。",
+ cosa_h:"我们为您做什么", p1_t:"收录您的地点", p1:"您告诉我们哪些地方值得一游，我们将其加入地图并重点展示。", p2_t:"教堂和博物馆语音导览", p2:"我们免费为您的教堂、博物馆或其他希望推广的特色制作语音导览。", p3_t:"博物馆导览", p3:"为博物馆制作按展厅、按展品的导览，供参观时收听。",
+ nota:"没有费用，也没有义务。起步阶段每个机构最多 3 个地点。我们只依据可核实的资料撰写，因此请您提供现有资料（宣传册、资料页或网站页面）。我们不承诺完成时间或游客数量。",
+ modulo_h:"免费登记", f_tipo:"您的身份", t_comune:"市镇政府", t_pro_loco:"地方旅游协会", t_ufficio:"旅游局 / 游客中心", t_museo:"博物馆", t_chiesa:"教区或教堂", t_parco:"公园或保护区", t_associazione:"协会", t_altro:"其他",
+ f_ente:"机构名称 *", f_localita:"所在地 *", f_paese:"国家", f_sito:"网站", f_referente:"联系人", f_ruolo:"职务", f_email:"电子邮箱 *", f_telefono:"电话",
+ f_servizi:"您感兴趣的内容", s_luoghi:"将我们的地点加入地图", s_audioguida:"教堂、博物馆或其他特色的语音导览", s_museo:"博物馆导览（逐件展品）",
+ f_luoghi:"哪些地点", a_luoghi:"每行一个地点，如有地址请一并填写。起步最多 3 个。", f_materiale:"可作为资料来源的材料", a_materiale:"页面或文档的链接。附件可通过回复确认邮件发送。",
+ f_ricontatto:"是否希望我们与您联系？", r_email:"是，通过邮件", r_telefono:"是，通过电话", r_no:"不用，收到确认即可", f_note:"其他想告诉我们的内容",
+ consenso:"我同意使用这些信息来回复本次申请。", privacy:"隐私政策", invia:"提交申请",
+ ok:"申请已收到。我们已向您发送确认邮件，您可以直接回复并附上资料。", ok_senza:"申请已收到。我们会回复到您填写的邮箱。", manca:"请填写机构名称、所在地和电子邮箱，并勾选同意。", errore:"申请未能保存。请稍后再试，或写信至 wip15775@gmail.com。", piede:"WIP · World in Pocket — 意大利制作" }
+};
+var LINGUE = ["IT","EN","FR","ES","DE","RU","ZH"];
+function linguaIniziale() {
+  var q = (new URLSearchParams(location.search).get("lang") || "").toUpperCase();
+  if (LINGUE.indexOf(q) >= 0) return q;
+  try { var s = localStorage.getItem("wip_comuni_lang"); if (s && LINGUE.indexOf(s) >= 0) return s; } catch (e) {}
+  var n = (navigator.language || "en").slice(0, 2).toUpperCase();
+  return LINGUE.indexOf(n) >= 0 ? n : "EN";
+}
+var lingua = linguaIniziale();
+// Da quale campagna arriva chi apre la pagina (?c=enti-it nel link dell'email): si conta la visita, senza cookie.
+var CAMPAGNA = (new URLSearchParams(location.search).get("c") || "").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40);
+(function () { try {
+  var s = sessionStorage.getItem("wip_sessione"); var nuova = !sessionStorage.getItem("wip_vista_comuni");
+  if (!s) { s = Math.random().toString(36).slice(2, 14); sessionStorage.setItem("wip_sessione", s); }
+  if (nuova) { sessionStorage.setItem("wip_vista_comuni", "1"); fetch("/api/enti/visita", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pagina: "comuni", c: CAMPAGNA, lingua: lingua, sessione: s }), keepalive: true }); }
+} catch (e) {} })();
+function applica(l) {
+  lingua = l; var d = T[l];
+  document.documentElement.lang = l.toLowerCase();
+  document.querySelectorAll("[data-t]").forEach(function (el) { var k = el.getAttribute("data-t"); if (d[k] != null) el.textContent = d[k]; });
+  document.title = "WIP — " + d.titolo;
+  document.getElementById("lingua").value = l;
+  try { localStorage.setItem("wip_comuni_lang", l); } catch (e) {}
+}
+applica(lingua);
+document.getElementById("lingua").addEventListener("change", function (e) { applica(e.target.value); });
+
+var modulo = document.getElementById("modulo"), esito = document.getElementById("esito"), tasto = document.getElementById("invia");
+function mostra(classe, testo) { esito.className = "esito " + classe; esito.textContent = testo; esito.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+modulo.addEventListener("submit", function (ev) {
+  ev.preventDefault();
+  var f = new FormData(modulo), d = T[lingua];
+  var dati = {
+    tipo: f.get("tipo"), ente: (f.get("ente") || "").trim(), localita: (f.get("localita") || "").trim(), paese: f.get("paese"), sito: f.get("sito"),
+    referente: f.get("referente"), ruolo: f.get("ruolo"), email: (f.get("email") || "").trim(), telefono: f.get("telefono"),
+    servizi: f.getAll("servizi"), luoghi: f.get("luoghi"), materiale: f.get("materiale"), note: f.get("note"),
+    ricontatto: f.get("ricontatto"), lingua: lingua, consenso: document.getElementById("consenso").checked, sito_azienda: f.get("sito_azienda"), campagna: CAMPAGNA
+  };
+  if (!dati.ente || !dati.localita || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(dati.email) || !dati.consenso) { mostra("no", d.manca); return; }
+  tasto.disabled = true;
+  fetch("/api/enti/richiesta", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(dati) })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (x) {
+      if (x.ok && x.j && x.j.ok) { mostra("ok", x.j.conferma_inviata === false ? d.ok_senza : d.ok); modulo.reset(); document.getElementById("lingua").value = lingua; }
+      else mostra("no", x.j && x.j.error === "dati_mancanti" ? d.manca : d.errore);
+    })
+    .catch(function () { mostra("no", d.errore); })
+    .then(function () { tasto.disabled = false; });
+});
+</script>
+</body>
+</html>

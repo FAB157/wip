@@ -162,6 +162,20 @@ export function normalizeOsmId(raw: string | number): string {
   return s;
 }
 
+/** Etichetta leggibile di una categoria del database nella lingua dell'utente (08/10/2026: a un utente
+ *  italiano le schede mostravano «CATHEDRAL», «PALACE», «Bridge»). In italiano la tabella qui sotto; nelle
+ *  altre lingue la chiave ripulita (le chiavi sono inglesi); una chiave ignota resta com'è, senza trattini. */
+export function etichettaCategoria(categoria: unknown, lingua: unknown = 'IT'): string {
+  const grezza = String(categoria || '').trim();
+  if (!grezza) return '';
+  if (String(lingua || 'IT').toUpperCase().startsWith('IT')) {
+    const it = (CATEGORY_LABELS_IT as Record<string, string>)[grezza.toLowerCase()];
+    if (it) return it;
+  }
+  const pulita = grezza.replace(/_/g, ' ');
+  return pulita.charAt(0).toUpperCase() + pulita.slice(1);
+}
+
 /** Etichette IT per la UI. */
 export const CATEGORY_LABELS_IT: Record<PoiCategory, string> = {
   museum: 'Museo',

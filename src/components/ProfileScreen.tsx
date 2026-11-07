@@ -659,12 +659,42 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     }
   };
 
-  const handleRedeemCoupon = async () => {
-    if (!couponCode.trim()) return;
+  // Codice arrivato da /riscatta?codice=… (App.tsx lo lascia in localStorage): si apre Impostazioni con il
+  // codice già scritto; l'utente preme «Riscatta» (dopo il login, se serve). Mai su iOS: il riquadro non c'è.
+  useEffect(() => {
+    try {
+      const c = localStorage.getItem('wip_coupon_da_riscattare');
+      if (c && Capacitor.getPlatform() !== 'ios') {
+        localStorage.removeItem('wip_coupon_da_riscattare');
+        setCouponCode(c);
+        setActiveTab('impostazioni');
+      }
+    } catch { /* storage assente */ }
+  }, []);
+
+  // Regalo aperto da /regalo («Attiva il regalo», 12/10/2026): il codice si riscatta DA SOLO appena c'è un
+  // account — subito se la sessione esiste, altrimenti al primo accesso. Una volta sola: la chiave si toglie
+  // prima di chiamare. Mai su iOS (Apple: il riscatto è solo sul sito).
+  useEffect(() => {
+    if (Capacitor.getPlatform() === 'ios') return;
+    const prova = (haSessione: boolean) => {
+      if (!haSessione) return;
+      let c: string | null = null;
+      try { c = localStorage.getItem('wip_coupon_regalo_auto'); if (c) localStorage.removeItem('wip_coupon_regalo_auto'); } catch { /* storage assente */ }
+      if (c) { setActiveTab('impostazioni'); void handleRedeemCoupon(c); }
+    };
+    supabase.auth.getSession().then(({ data }) => prova(!!data?.session));
+    const { data: ascolto } = supabase.auth.onAuthStateChange((_evento, sessione) => prova(!!sessione));
+    return () => { try { ascolto?.subscription?.unsubscribe(); } catch { /* niente */ } };
+  }, []);
+
+  const handleRedeemCoupon = async (codiceDiretto?: string) => {
+    const daRiscattare = (typeof codiceDiretto === 'string' ? codiceDiretto : couponCode).trim();
+    if (!daRiscattare) return;
     setCouponLoading(true);
     setCouponMessage(null);
     try {
-      const codeUpper = couponCode.trim().toUpperCase();
+      const codeUpper = daRiscattare.toUpperCase();
 
       // I voucher regalano CREDITI (i pacchetti sono solo quelli dei crediti):
       // riscatto server-side che valida, consuma e accredita earned_credits
@@ -679,7 +709,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       const res = await fetch(getApiUrl('/api/coupon/redeem'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ code: codeUpper })
+        body: JSON.stringify({ code: codeUpper, lingua: language })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -693,6 +723,12 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       });
       setCouponCode('');
       window.dispatchEvent(new CustomEvent('wip-credits-updated'));
+      // Regalo attivato dalla presentazione (/regalo): si torna lì, dove c'è la conferma e l'invito a scaricare
+      // l'app per il proprio telefono. Solo sul web: nelle app native quella pagina non serve.
+      if (typeof codiceDiretto === 'string' && !Capacitor.isNativePlatform()) {
+        window.location.href = `/regalo?codice=${encodeURIComponent(codeUpper)}&fatto=${Number(data.credits) || 0}&lang=${language}`;
+        return;
+      }
       await loadProfileData();
     } catch (e: any) {
       console.error(e);
@@ -2564,7 +2600,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       disabled={couponLoading}
                     />
                     <button
-                      onClick={handleRedeemCoupon}
+                      onClick={() => handleRedeemCoupon()}
                       disabled={couponLoading || !couponCode.trim()}
                       className="bg-primary hover:opacity-90 disabled:opacity-50 text-white px-5 rounded-xl font-black text-xs uppercase tracking-widest transition-all"
                     >

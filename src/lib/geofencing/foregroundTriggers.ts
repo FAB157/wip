@@ -56,6 +56,7 @@ import * as roadSnap from '../roadSnap';
 import { getRoadIndex, getGrafoStrade, refreshRoadTile, shouldRefreshRoads } from '../roadSnap';
 import { distanzaCheDecide, type SorgenteStrada } from './distanzaStrada';
 import { valutaGate, azzeraGate } from './bearingGate';
+import { rigaNonParla, stessoLuogoAltroAlfabeto, qidDi } from './nomiAnnunciabili';
 
 // ── Costanti (SPECULARI al canary server) ─────────────────────────
 // Soglia UNICA per decidere, condivisa con il predittore e il gate di bussola:
@@ -111,6 +112,8 @@ const PREMIUM_BONUS_M = 20;
 // 90 s di silenzio che seguono si mangiano il monumento.
 const FONTE_BONUS_M = 25;
 const ATTESA_IMPORTANTE_M = 100;
+/** 23/10/2026 (c): quanto un luogo senza peso, scattato e non ancora partito, può trattenere chi pesa. */
+const ATTESA_MINORE_MS = 15_000;
 const haFonte = (poi: any): boolean => /wiki/i.test(String(poi?.source || ''));
 const pesa = (poi: any): boolean => !!poi?.is_gem || !!poi?.premium || haFonte(poi);
 /** Il nome senza parentesi, accenti e articolo: «Pantheon (Roma)» e «The Pantheon» sono lo stesso luogo. */
@@ -273,6 +276,7 @@ export function passerebbeIlTrigger(poi: any): boolean {
     const id = String(poi?.id ?? '');
     if (!id) return false;
     if (poi?.audio_enabled === false) return false;
+    if (rigaNonParla(poi)) return false; // 23/10/2026 (a)
     if (isInCooldown(id)) return false;
     const lastTrig = (window as any).__wipLastPoiTrigger || { id: '', ts: 0 };
     if (String(lastTrig.id) === id && Date.now() - lastTrig.ts < 60_000) return false;
@@ -323,6 +327,8 @@ let lastGlobalFireTs = 0;
 // POI in attesa di conferma "audio partito" (vedi onAudioStateChange) e il
 // timer che, se la conferma non arriva, lo rilascia senza marcare il cooldown.
 let pendingConfirmId: string | null = null;
+/** 23/10/2026 (c): il luogo in attesa di conferma pesa (gemma/fonte)? */
+let pendingConfirmPesa = false;
 let pendingConfirmTimer: ReturnType<typeof setTimeout> | null = null;
 const approachStates = new Map<string, PoiApproachState>();
 // Dove e quando si è valutato l'ultima volta (vedi «non si ricalcola se non ci si è mossi»).
@@ -425,9 +431,19 @@ function seguiVoce(el: HTMLMediaElement): void {
   el.addEventListener('error', finisce);
   el.addEventListener('emptied', finisce);
 }
+// 23/10/2026 — REGOLA: una voce FERMA non è una voce. Collaudo: /api/regenerate (o il TTS) andava in timeout,
+// l'elemento audio restava «playing» senza avanzare e per 3 minuti tutto aspettava («Fermo: ascolto la guida…»,
+// nessun altro luogo parlava). Se currentTime non avanza da VOCE_FERMA_MS, la voce si considera finita.
+const VOCE_FERMA_MS = 20_000;
+const avanzamentoVoce = new WeakMap<HTMLMediaElement, { t: number; ts: number }>();
 function unaVoceSuona(): boolean {
+  const adesso = Date.now();
   for (const el of vociAttive) {
-    if (el.paused || el.ended || suonoDiServizio(el)) { vociAttive.delete(el); fineVoceTs = Date.now(); }
+    if (el.paused || el.ended || suonoDiServizio(el)) { vociAttive.delete(el); fineVoceTs = adesso; continue; }
+    const a = avanzamentoVoce.get(el);
+    const t = Number(el.currentTime) || 0;
+    if (!a || t !== a.t) avanzamentoVoce.set(el, { t, ts: adesso });
+    else if (adesso - a.ts > VOCE_FERMA_MS) { vociAttive.delete(el); fineVoceTs = adesso; }
   }
   return vociAttive.size > 0;
 }
@@ -511,7 +527,7 @@ function onLocationUpdate(e: Event): void {
     // Dieci Tappe: durante un giro l'audio lo governa lib/tour/giroDriver
     // (guida piena alle tappe, teaser agli incontri). Se questo modulo
     // continuasse a scattare, la stessa tappa parlerebbe due volte.
-    if (tourService.inCorso()) { diagUscita('giro in corso: parla il giro'); return; }
+    if (tourService.zittisceAudioguida()) { diagUscita('giro avviato: parla il giro'); return; } // 23/10/2026: solo un giro AVVIATO zittisce (zittisceAudioguida)
     // WIP Nav verso una meta (05/10/2026): parlano solo i luoghi scelti nel suo
     // modale, e li fa scattare lui (useWalkingNavigation.checkRoutePois). Senza
     // questa uscita i due motori facevano partire due luoghi nello stesso momento.
@@ -626,6 +642,9 @@ function onLocationUpdate(e: Event): void {
       const pLon = Number(poi?.lon);
       if (!poi?.id || !Number.isFinite(pLat) || !Number.isFinite(pLon)) continue;
       if (poi.audio_enabled === false) continue;
+      // 23/10/2026 — REGOLA (a): città, entità amministrative e metropolitane non parlano mai
+      // (Bruxelles: `wd-Q239` «Bruxelles»; «area metropolitana…», «metropolitana di…»). nomiAnnunciabili.rigaNonParla.
+      if (rigaNonParla(poi)) continue;
       const id = String(poi.id);
       // Gia' ascoltato (wip_played_pois): il commento in locationService lo
       // prometteva da sempre, ma qui nessuno lo leggeva. "Azzera storico" nel
@@ -658,10 +677,18 @@ function onLocationUpdate(e: Event): void {
       const radius = triggerRadiusFor(poi, modo, fiducia);
       // (CONSUMO) Oltre il limite in linea d'aria la strada non può essere più
       // corta: niente ricerca sulla rete, il luogo è «lontano» e basta.
-      let dist = aria > limiteStrada ? aria : distanzaCheDecide(aria, sorgenteStrada ? sorgenteStrada.verso(arrivo.lat, arrivo.lon) : null);
+      // (12/10/2026) Provata e NON adottata la regola «fine strada» nel motore (`sorgente.decide`): su 380 gemme mute ne
+      // faceva parlare 53, ma su 251 gemme giuste ne anticipava 4 di 70–100 m (Duomo, Pinacoteca di Bologna). Resta la
+      // regola di prima; i punti si correggono nei dati, con simulazione e confronto con l'ingresso.
+      // (30/10/2026) IN AUTO SÌ, a piedi no: chi guida non percorre gli ultimi metri fuori rete (la Cattedrale di
+      // Palermo a 49 m dalla via, il Castel dell'Ovo a 176) e con i soli metri di strada la guida taceva in 42
+      // percorsi su 60 (`sim-auto2`). Decide dove finisce la strada; gli anticipi del 12/10 erano a piedi.
+      const misura = (s: SorgenteStrada | null, d: number) =>
+        modo === 'car' && s ? s.decide(arrivo.lat, arrivo.lon, d) : distanzaCheDecide(d, s ? s.verso(arrivo.lat, arrivo.lon) : null);
+      let dist = aria > limiteStrada ? aria : misura(sorgenteStrada, aria);
       if (sorgenteLibera && dist <= radius) {
         const ariaLibera = haversineMeters(latLibero, lonLibero, arrivo.lat, arrivo.lon);
-        dist = Math.max(dist, distanzaCheDecide(ariaLibera, sorgenteLibera.verso(arrivo.lat, arrivo.lon)));
+        dist = Math.max(dist, misura(sorgenteLibera, ariaLibera));
       }
 
       // GEOCODIFICA AL MOMENTO DELL'AVVISO, UNA VOLTA PER POI. Chiedere la
@@ -695,6 +722,11 @@ function onLocationUpdate(e: Event): void {
       const senzaPorta = luogoSenzaPorta(poi);
       const reteSicurezza = !senzaPorta && modo !== 'car' && pesa(poi);
       const distPerimetro = (senzaPorta || reteSicurezza) ? distanzaDalPerimetro(id, lat, lon) : Infinity;
+      // 23/10/2026 — REGOLA (f): un luogo SENZA PORTA (piazza, parco, ponte…) senza perimetro noto si misura in
+      // LINEA D'ARIA dal suo punto, non in metri di strada. St Peter's Square (Manchester), gemma, non scattava
+      // mai: il punto sta in mezzo alla piazza, la rete stradale la gira attorno e la «strada lunga» (> 120 m,
+      // regola dell'11/10) batteva la guardia dei 15 m. In una piazza si cammina attraverso, non lungo la via.
+      if (senzaPorta && !Number.isFinite(distPerimetro)) dist = Math.min(dist, aria);
       const alPerimetro = distPerimetro <= (senzaPorta && modo === 'car' ? PERIMETER_TRIGGER_CAR_M : PERIMETER_TRIGGER_WALK_M);
       const inside = distPerimetro === 0;
 
@@ -763,7 +795,10 @@ function onLocationUpdate(e: Event): void {
       }
       const dentroRaggio = dist <= radius && !st.passed && (approaching || inAttesa.has(id));
       // Un luogo che pesa sta arrivando (non ancora nel raggio): chi non pesa gli cede il passo.
-      if (!dentroRaggio && !alPerimetro && approaching && !st.passed && dist <= ATTESA_IMPORTANTE_M && pesa(poi) && !isInCooldown(id)) importantiInArrivo += 1;
+      // 23/10/2026 — REGOLA (b): conta ogni luogo che pesa entro 100 m di strada e non ancora superato, anche se
+      // in questo fix non «si avvicina» (fermi, o di fianco): a Bruxelles «Musée en forme» (Overture, art_museum,
+      // senza fonte) parlava prima del Manneken Pis, che non risultava «in avvicinamento».
+      if (!dentroRaggio && !alPerimetro && !st.passed && dist <= ATTESA_IMPORTANTE_M && pesa(poi) && !isInCooldown(id) && !isPlayed(id)) importantiInArrivo += 1;
       // ORDINE DEI RAMI, dal piu' certo al piu' inferito: perimetro (misurato),
       // cerchio (com'e' sempre stato), predizione (inferita). Il `!st.passed`
       // vale anche per la predizione: un POI gia' superato resta superato.
@@ -909,7 +944,10 @@ function onLocationUpdate(e: Event): void {
       ultimaVoceVistaTs = Math.max(ultimaVoceVistaTs, fineVoceTs);
       // «Sta per partire» vale 75 s dallo scatto (il testo più lento visto: 66 s): oltre,
       // la guida non è partita e non si tiene muto tutto il resto.
-      const inPartenza = !!pendingConfirmId && now - lastGlobalFireTs < 75_000;
+      // 23/10/2026 — REGOLA (c): un luogo SENZA PESO la cui guida non parte (nessun testo, richiesta fallita)
+      // blocca chi pesa al più ATTESA_MINORE_MS, non 75–92 s (Manchester: la Whitworth taceva dietro un minore).
+      const attesaMax = davanti.some(c => pesa(c.poi)) && !pendingConfirmPesa ? ATTESA_MINORE_MS : 75_000;
+      const inPartenza = !!pendingConfirmId && now - lastGlobalFireTs < attesaMax;
       // (prova a Parigi) La pausa era 20 s: finita la guida della piazza, Notre-Dame
       // aspettava ancora e intanto si usciva dal suo raggio. 10 s bastano a staccare.
       // Un luogo che pesa e sta aspettando il suo turno parte dopo 3 s: la Sainte-Chapelle,
@@ -931,7 +969,8 @@ function onLocationUpdate(e: Event): void {
     let eccezioneImportante = false;
     // Dopo uno scatto di un ALTRO motore non si sa se la sua guida è partita e finita:
     // lì l'eccezione non vale, si aspettano i 90 secondi interi.
-    if (now - lastGlobalFireTs < GLOBAL_THROTTLE_MS && now - lastGlobalFireTs >= 20_000 && !pendingConfirmId
+    if (now - lastGlobalFireTs < GLOBAL_THROTTLE_MS && now - lastGlobalFireTs >= 20_000
+        && (!pendingConfirmId || !pendingConfirmPesa) // 23/10/2026 (c): un minore muto non trattiene chi pesa
         && lastGlobalFireTs !== ultimoEsternoTs) {
       let parla = true;
       try { parla = locationService.getAudioState().isPlaying; } catch { parla = true; }
@@ -958,6 +997,9 @@ function onLocationUpdate(e: Event): void {
         c.dist - ((c.poi.is_gem || c.poi.premium) ? GEM_BONUS_M + PREMIUM_BONUS_M : 0) - (haFonte(c.poi) ? FONTE_BONUS_M : 0);
       return score(a) - score(b);
     });
+    // 23/10/2026 — REGOLA (b): se fra i pronti c'è chi pesa, parla uno di loro — mai un luogo senza peso, a
+    // qualunque distanza relativa (il bonus in metri non bastava quando il minore era sotto i piedi).
+    if (davanti.some(c => pesa(c.poi)) && !pesa(davanti[0].poi)) davanti = davanti.filter(c => pesa(c.poi) || c.poi?.isFromItinerary === true);
     const winner = davanti[0];
     // Il vincitore non pesa e un luogo che pesa è a meno di 100 m: si aspetta
     // quello. Niente cooldown, niente throttle consumato: se il luogo importante
@@ -979,6 +1021,7 @@ function onLocationUpdate(e: Event): void {
     // un doppio dispatch mentre si aspetta la conferma.
     if (pendingConfirmTimer) clearTimeout(pendingConfirmTimer);
     pendingConfirmId = winner.id;
+    pendingConfirmPesa = pesa(winner.poi);
     pendingConfirmTimer = setTimeout(() => {
       if (pendingConfirmId === winner.id) pendingConfirmId = null;
       pendingConfirmTimer = null;
@@ -1017,6 +1060,19 @@ function onLocationUpdate(e: Event): void {
           const sp = approachStates.get(idp);
           if (sp) sp.passed = true;
         }
+      }
+      // 23/10/2026 — REGOLA (e): lo stesso luogo in un altro ALFABETO (o con lo stesso QID) tace con il vincitore:
+      // a Belgrado «Трг републике» parlava dopo «Piazza della Repubblica». nomeNudo cancella le lettere non latine,
+      // quindi qui si confronta l'alfabeto (nomiAnnunciabili.stessoLuogoAltroAlfabeto).
+      for (const p of candidates) {
+        const idp = String(p?.id ?? '');
+        if (!idp || idp === winner.id) continue;
+        const m = haversineMeters(Number(p.lat), Number(p.lon), Number(winner.poi.lat), Number(winner.poi.lon));
+        if (!stessoLuogoAltroAlfabeto(p, winner.poi, m)) continue;
+        if (pesa(p) && !pesa(winner.poi) && !qidDi(p)) continue; // un gemello che pesa non lo zittisce un minore
+        markFired(idp);
+        const sp = approachStates.get(idp);
+        if (sp) sp.passed = true;
       }
     } catch { /* un nome strano non ferma lo scatto */ }
     inAttesa.delete(winner.id);
@@ -1083,6 +1139,9 @@ export function startForegroundTriggers(): void {
   window.addEventListener('wip-location-update', boundOnLocationUpdate);
   window.addEventListener('wip-audio-state-change', onAudioStateChange);
   window.addEventListener('wip-audio-bloccato', onAudioBloccato);
+  // 23/10/2026: la scheda dice «per questo luogo la guida non parte» (nessun testo, solo una riga dati,
+  // /api/regenerate in timeout): il luogo si considera servito e non trattiene più gli altri.
+  window.addEventListener('wip-guida-non-partita', onAudioBloccato);
   battitoAttesa = setInterval(rivalutaDaFermi, 5000);
   // Riacceso da fermi: si rivaluta subito l'ultima posizione nota (vedi stopForegroundTriggers).
   if (ultimoFix) setTimeout(() => { try { ultimaValutazione = null; rivalutaDaFermi(); } catch { /* al prossimo battito */ } }, 1500);
@@ -1107,6 +1166,7 @@ export function stopForegroundTriggers(): void {
   window.removeEventListener('wip-location-update', boundOnLocationUpdate);
   window.removeEventListener('wip-audio-state-change', onAudioStateChange);
   window.removeEventListener('wip-audio-bloccato', onAudioBloccato);
+  window.removeEventListener('wip-guida-non-partita', onAudioBloccato);
   if (pendingConfirmTimer) { clearTimeout(pendingConfirmTimer); pendingConfirmTimer = null; }
   if (battitoAttesa) { clearInterval(battitoAttesa); battitoAttesa = null; }
   // `ultimoFix` resta (07/10/2026): è la posizione, non uno stato del trigger. Chi riaccende il motore

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { teaserLeggibile } from '../lib/geofencing/nomiAnnunciabili';
 import { tracciaEvento } from "../lib/pageviewTracker";
 import {
   BookOpen, Star, Compass, Play, Pause, ChevronDown, ChevronUp,
@@ -15,7 +16,7 @@ import { fetchCityNameQueued } from "../lib/nominatimQueue";
 import { Language, getTranslation } from "../lib/i18n";
 import { getApiUrl, bearerHeaders } from '../lib/api';
 import { fotoPrincipale } from '../lib/fotoUrl';
-import { displayName } from '../lib/poiDisplay';
+import { displayName, ricordaNomeTradotto } from '../lib/poiDisplay';
 import AttribuzioneFoto from './AttribuzioneFoto';
 import { getGuideCharacter } from '../lib/guideSettings';
 import { datiBeneCulturale, chiaveTematica, etichettaTipoTematico } from '../lib/poiTaxonomy';
@@ -291,8 +292,8 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
   const chiavePopup = (id: any) => linguaUi === 'it' ? String(id) : `${id}::${linguaUi.toUpperCase()}`;
   /** Teaser nella lingua della UI, se la RPC lo porta (teaser_text_*). */
   const teaserUi = (p: any): string | null => {
-    const v = p?.[`teaser_text_${linguaUi}`] || (linguaUi !== 'it' ? p?.teaser_text_en : null) || p?.teaser_text_it;
-    return typeof v === 'string' && v.trim() ? v.trim() : null;
+    // 23/10/2026 (8e): mai il segnaposto, mai l'inglese travestito da italiano (nomiAnnunciabili.teaserLeggibile).
+    return teaserLeggibile(p, linguaUi, { riservaInglese: true });
   };
 
   useEffect(() => {
@@ -428,6 +429,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
 
           if (dbRes?.ok) {
             const dbData = await dbRes.json();
+            ricordaNomeTradotto(poi?.id, dbData?.name_translated);
             const hasDesc = dbData?.description_ai || dbData?.description_long || dbData?.description_short;
             const hasImg = migliorFoto(dbData);
 
@@ -493,7 +495,10 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
 
         const mainCat = getTranslation(poi.category, language) || poi.category;
         const subCat = (poi as any).subCategory || (poi as any).originalCategory;
-        const subLabel = subCat ? (getTranslation(subCat, language) || subCat.replace(/_/g, " ")) : mainCat;
+        // (24/10/2026, Palau: «Ngerusar · isolated») Una chiave tecnica senza traduzione non si mostra: al suo posto
+        // la categoria tradotta. `isolated` è il tipo SCONOSCIUTO dell'import, mai un'etichetta.
+        const subTradotta = subCat && subCat !== 'isolated' ? getTranslation(subCat, language) : '';
+        const subLabel = subTradotta && subTradotta !== subCat ? subTradotta : mainCat;
         const subtext = [cityName, subLabel].filter(Boolean).join(" · ");
 
         // ── STEP 3: Groq on-the-fly (SOLO GROQ IN STREAMING) ──────────
@@ -1134,17 +1139,21 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
             style={{ background: catHex }}
           />
           <div className="flex-1 min-w-0">
+            {/* (09/10/2026) Il titolo è il nome nella lingua dell'utente quando c'è; l'originale resta sotto, piccolo. */}
             <h3 className="font-bold text-[15px] text-gray-900 leading-tight break-words">
-              {poi.name}
+              {displayName(poi, language)}
             </h3>
+            {displayName(poi, language) !== poi.name && (
+              <p className="text-[11px] italic text-gray-400 leading-tight break-words mt-0.5">{poi.name}</p>
+            )}
             {/* Traduzione del nome nella lingua UI (stile "— St. Vitalis Square").
                 Priorità: Wikidata/Wikipedia (nameTranslation, più autorevole,
                 richiede un riferimento sul POI) → traduzione AI salvata da
                 /api/poi/enrich (poi.name_translated, copre anche i POI senza
                 wikidata/wikipedia, la maggioranza — vedi src/lib/poiNameI18n.ts). */}
-            {(nameTranslation || displayName(poi, language) !== poi.name) && (
+            {nameTranslation && displayName(poi, language) === poi.name && (
               <p className="text-[11px] italic text-gray-400 leading-tight break-words mt-0.5">
-                {nameTranslation || displayName(poi, language)}
+                {nameTranslation}
               </p>
             )}
             {data?.subtext && (

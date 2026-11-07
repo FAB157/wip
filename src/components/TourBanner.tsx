@@ -198,11 +198,23 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
   // buttava via tappe fatte e percorso. Ora chiede conferma. Chi vuole solo
   // piu` mappa ha il tasto «riduci»: resta una barretta con tappa e svolta,
   // e un tocco la riapre.
+  // (22/10/2026, collaudo Milano/Madrid/Vienna) Niente window.confirm: blocca la pagina — e con essa la voce e il
+  // GPS del giro — finché qualcuno non risponde, e su iOS a schermo spento non si vede. La conferma sta nel cruscotto:
+  // primo tocco sulla X = la domanda nella riga degli avvisi; secondo tocco entro 6 s = chiude.
+  const [chiusuraArmata, setChiusuraArmata] = useState(false);
+  const timerChiusura = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timerChiusura.current) clearTimeout(timerChiusura.current); }, []);
   const chiudiGiro = () => {
-    const ok = typeof window !== 'undefined' && typeof window.confirm === 'function'
-      ? window.confirm(t('gr_chiudi_giro_conferma'))
-      : true;
-    if (!ok) return;
+    if (!chiusuraArmata) {
+      setChiusuraArmata(true);
+      setAvviso(`${t('gr_chiudi_giro_conferma')} ${t('gr_tocca_ancora_per_chiudere')}`);
+      if (timerChiusura.current) clearTimeout(timerChiusura.current);
+      timerChiusura.current = setTimeout(() => { setChiusuraArmata(false); setAvviso(null); }, 6000);
+      return;
+    }
+    if (timerChiusura.current) clearTimeout(timerChiusura.current);
+    setChiusuraArmata(false);
+    setAvviso(null);
     tourService.termina();
     onChiudi?.();
   };
@@ -344,7 +356,7 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
             </div>
           </div>
         ) : (
-          <div className="px-4 py-3 flex items-center gap-3">
+          <div className="pl-4 pr-10 py-3 flex items-center gap-3">
             <div className="flex-1 min-w-0">
               <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">
                 {t('tour_tappa')} {Math.min(v.tappeFatte + 1, v.tappeTotali)} / {v.tappeTotali}
@@ -405,8 +417,11 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
             {/* PRONTO, NON PARTITO (28/08/2026): un solo tasto grande,
                 «Avvia la navigazione», e la X. Pausa, riascolta e salta
                 appartengono a un giro in cammino. */}
+            {/* 23/10/2026 — REGOLA: i tasti non si spostano sotto il dito. La domanda «tocca ancora per
+                chiudere» allunga la colonna di sinistra e, con items-center, la X scendeva: il secondo tocco
+                cadeva nel vuoto. I gruppi di tasti stanno in alto (self-start), fermi. */}
             {!v.avviato ? (
-              <div className="flex items-center gap-1.5 flex-shrink-0">
+              <div className="flex items-center gap-1.5 flex-shrink-0 self-start mt-1">
                 <button
                   onClick={() => {
                     // Le svolte si scaricano adesso, col Day Pass: se manca il
@@ -430,7 +445,7 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
                 </button>
               </div>
             ) : (
-            <div className="flex items-center gap-1.5 flex-shrink-0">
+            <div className="flex items-center gap-1.5 flex-shrink-0 self-start mt-1">
               {/* Pausa/riprendi dallo STATO del giro, non da uno stato locale
                   (03/09/2026): il tasto sulla lock screen mette in pausa da
                   fuori, e il cruscotto deve mostrarlo. */}
@@ -479,6 +494,22 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
               </button>
             </div>
             )}
+          </div>
+        )}
+
+        {/* VAI ALLA PROSSIMA TAPPA (09/10/2026, committente, dopo il giro di San Pietroburgo): arrivati a una
+            tappa il giro resta lì finché non ci si allontana — giusto per chi entra a visitare, ma a guida finita
+            chi aspetta fermo non vedeva come proseguire. Un tasto con scritto dove si va; la tappa risulta fatta. */}
+        {!finito && v.avviato && !v.inPausa && v.stato === 'ALL_INGRESSO' && v.nomeProssima && (
+          <div className="px-4 pb-3 -mt-1">
+            <button
+              onClick={() => tourService.completaTappa()}
+              title={t('tour_prossima_tappa')}
+              className="w-full h-10 px-4 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-[12px] font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95"
+            >
+              <SkipForward className="w-4 h-4 flex-shrink-0" />
+              <span className="truncate">{t('tour_prossima_tappa')}: {v.nomeProssima}</span>
+            </button>
           </div>
         )}
 

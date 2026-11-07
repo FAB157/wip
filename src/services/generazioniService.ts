@@ -95,8 +95,11 @@ export async function registraPush(lingua: string): Promise<void> {
     const mod: any = await import('@capacitor/push-notifications').catch(() => null);
     const Push = mod?.PushNotifications;
     if (!Push) return;
-    let perm = await Push.checkPermissions();
-    if (perm.receive === 'prompt' || perm.receive === 'prompt-with-rationale') perm = await Push.requestPermissions();
+    // Il permesso notifiche NON si chiede da qui (07/11/2026, rifiuto Play
+    // «Prominent Disclosure»): partiva 4 s dopo il login, senza spiegazione.
+    // Lo chiede solo il tasto «Attiva» della schermata dei permessi; qui si
+    // registra il token se il permesso c'è già, altrimenti niente.
+    const perm = await Push.checkPermissions();
     if (perm.receive !== 'granted') return;
     await Push.removeAllListeners();
     await Push.addListener('registration', async (t: { value: string }) => {

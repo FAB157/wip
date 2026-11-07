@@ -33,6 +33,7 @@
 // fetch live com'era prima: nessuna rottura durante il riempimento.
 // =====================================================================
 import { supabase } from './supabase';
+import { linguaCorrente } from './i18n';
 
 export type TipoArea = 'n2k_habitat' | 'n2k_uccelli' | 'nazionale';
 
@@ -47,6 +48,8 @@ export interface AreaProtetta {
   iucn?: string | null;
   designazione?: string | null;
   paese?: string | null;
+  /** Origine della riga: 'eea' (Europa), 'ca', 'au', 'nz', 'us', …, 'osm'. Decide l'attribuzione nel fumetto. */
+  fonte?: string | null;
   /** GeoJSON Polygon/MultiPolygon in WGS84, già semplificato dal server */
   geometry: any;
 }
@@ -68,6 +71,35 @@ export const COLORE_AREA: Record<TipoArea, string> = {
   n2k_uccelli: '#0e7490', // verde-azzurro
   nazionale: '#b45309',   // ambra
 };
+
+/**
+ * FUORI EUROPA (11/10/2026, committente: «deve essere in tutto il mondo»). Mai WDPA / Protected Planet (uso
+ * commerciale vietato senza permesso scritto): fonti primarie nazionali con licenza aperta e, dove mancano,
+ * OpenStreetMap. L'attribuzione è quella che ogni licenza chiede, scritta nel fumetto dell'area. Una fonte nuova
+ * caricata in tabella senza voce qui mostra la sua sigla: aggiungere la riga.
+ */
+export const FONTI_AREE: Record<string, string> = {
+  ca: 'Environment and Climate Change Canada, CPCAD — Open Government Licence – Canada',
+  au: 'CAPAD 2024, Commonwealth of Australia 2025 — CC BY 4.0',
+  nz: 'Department of Conservation, New Zealand — CC BY 4.0',
+  us: 'U.S. Geological Survey (USGS) Gap Analysis Project (GAP), PAD-US 3.0 — public domain',
+  ru: 'БД по федеральным ООПТ РФ, 2004–2011. © НП «Прозрачный мир», WRI, МСоЭС, ЦОДП — CC BY 3.0',
+  br: 'MMA, Cadastro Nacional de Unidades de Conservação — CC BY',
+  ar: 'FUENTE: Instituto Geográfico Nacional de la República Argentina (2019)',
+  cl: 'Biblioteca del Congreso Nacional de Chile',
+  co: 'Parques Nacionales Naturales de Colombia, RUNAP — CC BY 4.0',
+  uy: 'DINABISE, Ministerio de Ambiente, Uruguay',
+  tw: '內政部國家公園署 / 農業部 — Open Government Data License, Taiwan',
+  kr: '국립공원공단 (KNPS), data.go.kr',
+  sg: 'National Parks Board — Singapore Open Data Licence',
+  osm: '© OpenStreetMap contributors — ODbL',
+};
+/** L'attribuzione da scrivere per una riga; null = Europa (EEA), che ha già la sua riga tradotta. */
+export const attribuzioneArea = (fonte?: string | null): string | null =>
+  !fonte || fonte === 'eea' ? null : (FONTI_AREE[fonte] || fonte.toUpperCase());
+
+/** L'EEA copre solo l'Europa: fuori da questo riquadro la chiamata dal vivo non parte nemmeno. */
+const inEuropa = (lat: number, lon: number) => lat > 27 && lat < 72 && lon > -32 && lon < 45;
 
 /** Scheda ufficiale del sito Natura 2000 (Standard Data Form dell'EEA) */
 export const schedaNatura2000 = (codice: string) =>
@@ -129,7 +161,14 @@ async function interroga(url: string, params: Record<string, string>): Promise<a
 export async function fetchAreeProtette(bounds: MapBounds, fine: boolean): Promise<AreaProtetta[]> {
   const centerLat = (bounds.south + bounds.north) / 2;
   const centerLon = (bounds.west + bounds.east) / 2;
-  const chiave = chiaveCella(centerLat, centerLon, fine);
+  // (10/10/2026, committente: «velocizza anche tutte le altre mappe che si colorano») Il confine si alleggerisce
+  // PER LA VISTA, come le zone del gusto: un seicentesimo della larghezza del riquadro (meno di un pixel su un
+  // telefono), a gradini perché la cache per cella resti riusabile. Prima da lontano (il livello parte dallo
+  // zoom 4) arrivavano fino a 240 aree con un punto ogni 50 m. Da vicino resta ±10 / ±50 m com'era.
+  const larghezzaM = (bounds.east - bounds.west) * 111000 * Math.max(0.2, Math.cos(centerLat * Math.PI / 180));
+  const semplificaM = [3200, 1600, 800, 400, 200, 100].find((g) => larghezzaM / 600 >= g) || (fine ? 10 : 50);
+  // La lingua entra nella chiave: i nomi delle aree sono tradotti.
+  const chiave = `${chiaveCella(centerLat, centerLon, fine)}${semplificaM > 50 ? `_${semplificaM}` : ''}_${linguaCorrente()}`;
 
   const m = memoria.get(chiave);
   if (m && Date.now() - m.ts < CACHE_TTL_MS) return m.aree;
@@ -139,24 +178,62 @@ export async function fetchAreeProtette(bounds: MapBounds, fine: boolean): Promi
   // ── Nostra cache prima di tutto: se lo script l'ha già riempita per
   // questa zona, niente chiamata all'EEA. `p_semplifica_m` rispecchia i
   // due livelli di dettaglio del fetch live (±10/±50 m).
+  // (11/10/2026) Prima la lettura MONDIALE: dalla più grande alla più piccola, senza le aree più piccole di ~3 px
+  // sulla vista (un centocinquantesimo della larghezza). Se la funzione non c'è ancora, quella europea di prima.
+  const minKmq = Math.pow(larghezzaM / 1000 / 150, 2);
+  // (16/10/2026) Il nome nella lingua dell'utente (`nomi`, dalle etichette di Wikidata): il Serengeti usciva in
+  // lituano, il Baikal in cirillico. Poi l'inglese, poi il nome della fonte.
+  const lingua = linguaCorrente();
+  const nomeInLingua = (r: any): string => {
+    const n = r.nomi && typeof r.nomi === 'object' ? r.nomi : null;
+    return (n && (n[lingua] || n.EN)) || r.nome || r.codice;
+  };
+  const daRighe = (righe: any[]): AreaProtetta[] => righe.map((r: any) => ({
+    id: r.id, nome: nomeInLingua(r), tipo: r.tipo as TipoArea, codice: r.codice,
+    kmq: r.kmq != null ? Number(r.kmq) : null, iucn: r.iucn ?? null,
+    designazione: r.designazione ?? null, paese: r.paese ?? null, fonte: r.fonte ?? 'eea',
+    geometry: JSON.parse(r.geometria),
+  })).filter((a) => a.geometry);
+  let mondoRisponde = false;
   try {
-    const { data: dallaCache, error } = await supabase.rpc('aree_protette_vicine', {
+    const argomenti = {
       p_south: bounds.south, p_west: bounds.west, p_north: bounds.north, p_east: bounds.east,
-      p_semplifica_m: fine ? 10 : 50,
+      p_semplifica_m: semplificaM, p_min_kmq: minKmq,
       p_limit: MAX_PER_LAYER * 2,
-    });
-    if (!error && Array.isArray(dallaCache) && dallaCache.length > 0) {
-      const aree: AreaProtetta[] = dallaCache.map((r: any) => ({
-        id: r.id, nome: r.nome || r.codice, tipo: r.tipo as TipoArea, codice: r.codice,
-        kmq: r.kmq != null ? Number(r.kmq) : null, iucn: r.iucn ?? null,
-        designazione: r.designazione ?? null, paese: r.paese ?? null,
-        geometry: JSON.parse(r.geometria),
-      }));
-      memoria.set(chiave, { ts: Date.now(), aree });
-      inLocalStorage(chiave, aree);
-      return aree;
+    };
+    // v2 = con i nomi per lingua; se la funzione non c'è ancora, quella di prima.
+    let { data: dalMondo, error } = await supabase.rpc('aree_protette_mondo_v2', argomenti);
+    if (error) ({ data: dalMondo, error } = await supabase.rpc('aree_protette_mondo', argomenti));
+    if (!error && Array.isArray(dalMondo)) {
+      mondoRisponde = true;
+      if (dalMondo.length > 0) {
+        const aree = daRighe(dalMondo);
+        memoria.set(chiave, { ts: Date.now(), aree });
+        inLocalStorage(chiave, aree);
+        return aree;
+      }
     }
-  } catch { /* cache non ancora riempita per questa zona, o RPC non presente: si ripiega sul vivo */ }
+  } catch { /* funzione non ancora presente: si prova quella europea */ }
+  if (!mondoRisponde) {
+    try {
+      const { data: dallaCache, error } = await supabase.rpc('aree_protette_vicine', {
+        p_south: bounds.south, p_west: bounds.west, p_north: bounds.north, p_east: bounds.east,
+        p_semplifica_m: semplificaM,
+        p_limit: MAX_PER_LAYER * 2,
+      });
+      if (!error && Array.isArray(dallaCache) && dallaCache.length > 0) {
+        const aree = daRighe(dallaCache);
+        memoria.set(chiave, { ts: Date.now(), aree });
+        inLocalStorage(chiave, aree);
+        return aree;
+      }
+    } catch { /* cache non ancora riempita per questa zona, o RPC non presente: si ripiega sul vivo */ }
+  }
+  // Fuori Europa l'EEA non ha niente: zona senza aree in tabella = nessuna area, senza chiamate a vuoto.
+  if (!inEuropa(centerLat, centerLon)) {
+    memoria.set(chiave, { ts: Date.now(), aree: [] });
+    return [];
+  }
 
   const envelope = [
     (centerLon - BOX_HALF_LON).toFixed(4), (centerLat - BOX_HALF_LAT).toFixed(4),
@@ -165,7 +242,7 @@ export async function fetchAreeProtette(bounds: MapBounds, fine: boolean): Promi
   const comuni = {
     f: 'geojson', geometry: envelope, geometryType: 'esriGeometryEnvelope', inSR: '4326', outSR: '4326',
     spatialRel: 'esriSpatialRelIntersects', returnGeometry: 'true', geometryPrecision: '4',
-    maxAllowableOffset: fine ? '0.0001' : '0.0005', resultRecordCount: String(MAX_PER_LAYER),
+    maxAllowableOffset: semplificaM > 50 ? (semplificaM / 111000).toFixed(4) : fine ? '0.0001' : '0.0005', resultRecordCount: String(MAX_PER_LAYER),
   };
 
   const [habitat, uccelli, nazionali] = await Promise.allSettled([

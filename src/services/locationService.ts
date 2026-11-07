@@ -9,6 +9,7 @@ import { recordListening } from '../lib/listeningHistory';
 import type { GeofencePoi } from '../types/poi';
 import { getApiUrl } from '../lib/api';
 import { postForAudioBlob } from '../lib/audioFetch';
+import { guidaLeggibile } from '../lib/guidaTesto';
 import { radiiForTransport, resolveTransportMode, resetTransportHysteresis, getTransportPreference, markPlayed, isCategoryAllowed, CHIAVI_NATIVO_AUDIOGUIDA } from '../lib/guideSettings';
 import { isBearingGateEnabled } from '../lib/geofencing/bearingGate';
 // La mappa voci Azure vive in UN posto solo (ttsService.azureVoiceName): qui
@@ -23,7 +24,7 @@ import { Geolocation } from '@capacitor/geolocation';
 // Import statico: il vecchio require() non esiste nel bundle ESM e lanciava
 // ReferenceError su device, lasciando il player bloccato in stato "playing".
 import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
-import { ItaintaBackgroundPoi, pushUserContextToNative } from '../plugins/ItaintaBackgroundPoi';
+import { ItaintaBackgroundPoi, pushUserContextToNative, assicuraSessioneFrescaPerIlNativo } from '../plugins/ItaintaBackgroundPoi';
 import { apiFetch } from '../lib/api';
 
 // Wrapper tipizzato condiviso: null sul web, cosi' ogni `if (plugin)` sotto
@@ -209,6 +210,9 @@ class LocationService {
     // Lingua dell'override (tour di gruppo, testo del leader): se assente si
     // ricade su this.language al momento di ogni singola battuta.
     language?: Language;
+    // Follower del tour di gruppo (25/10/2026): solo MP3 già in cache (204
+    // altrimenti), mai una sintesi a suo carico.
+    soloCache?: boolean;
   } | null = null;
 
   // ── 🤫 Trigger geofencing: origine del play (per silenziosa + feedback) ──
@@ -1413,7 +1417,12 @@ class LocationService {
       const soloApprossimativa = (x: { location?: string; coarseLocation?: string }) =>
         x.coarseLocation === 'granted' && x.location !== 'granted';
       if (!soloApprossimativa(p)) return true;
-      try { p = await Geolocation.requestPermissions({ permissions: ['location'] }); } catch { /* resta com'era */ }
+      // Stessa regola della disclosure (07/11/2026): il dialogo solo col consenso dato.
+      try {
+        const { chiediPermessoPosizione } = await import('../lib/permessi/consensoPosizione');
+        const r = await chiediPermessoPosizione({ precisa: true });
+        if (r) p = r;
+      } catch { /* resta com'era */ }
       if (!soloApprossimativa(p)) return true;
       const testo = getTranslation('nav_serve_posizione_precisa', linguaCorrente());
       import('../lib/toast').then(({ notify }) => { notify(testo, 'info', 8000); }).catch(() => {});
@@ -1439,6 +1448,10 @@ class LocationService {
           // tornava — il servizio non partiva affatto e l'utente vedeva «tocco
           // le cuffie e non succede niente». Ora: posizione grossolana, anche
           // vecchia di un minuto, e comunque non piu' di 3 secondi di attesa.
+          // Il plugin chiederebbe il permesso da solo se manca (policy Play,
+          // 07/11/2026): senza permesso si parte senza seme.
+          const perm = await Geolocation.checkPermissions().catch(() => null);
+          if (perm && perm.location !== 'granted' && perm.coarseLocation !== 'granted') throw new Error('permesso posizione assente');
           const pos = await Geolocation.getCurrentPosition({
             enableHighAccuracy: false,
             timeout: 3000,
@@ -1497,6 +1510,9 @@ class LocationService {
         ? 'driving'
         : 'walking';
 
+      // (25/10/2026) Il servizio può restare solo a schermo spento per ore: parte con una sessione fresca,
+      // perché il rinnovo del token lo fa solo il JS (vedi assicuraSessioneFrescaPerIlNativo).
+      await assicuraSessioneFrescaPerIlNativo();
       await ItaintaBackgroundPoiPlugin.startBackgroundPoiService({
         isAutomaticMode,
         guideMode: travelMode,
@@ -1835,13 +1851,23 @@ class LocationService {
         try {
           const perm = await Geolocation.checkPermissions();
           if (perm.location !== 'granted' && perm.coarseLocation !== 'granted') {
+            // PROMINENT DISCLOSURE (07/11/2026, rifiuto Play 1.3.10): qui si
+            // chiedeva il permesso di sistema da soli, appena la mappa si
+            // iscriveva — e il dialogo compariva SOPRA la schermata dei
+            // permessi prima che l'utente toccasse «Attiva». Ora il dialogo
+            // parte solo col consenso già dato (chiediPermessoPosizione);
+            // senza consenso la schermata dei permessi resta/si apre e il
+            // watch non si avvia: lo riavvierà chi tocca «Attiva» o la mappa.
+            const { chiediPermessoPosizione } = await import('../lib/permessi/consensoPosizione');
+            const res = await chiediPermessoPosizione();
+            if (!res) return;
             // L'esito NON si butta via (MAP-06): a permesso negato si avvisa
             // e non si apre un watch che restera' muto per sempre.
-            const res = await Geolocation.requestPermissions({ permissions: ['location'] });
             if (res.location === 'denied' && (res.coarseLocation ?? 'denied') === 'denied') {
               this.segnalaPosizioneNegata();
               return;
             }
+            if (res.location !== 'granted' && res.coarseLocation !== 'granted') return;
           }
         } catch (permErr) {
           console.warn('[LocationService] Permission check failed', permErr);
@@ -2027,8 +2053,38 @@ class LocationService {
    * truthy. Chi addebita deve guardare 'started' o passare `authorize`, che
    * viene chiamata solo al vero avvio anche per le tracce accodate.
    */
-  public async playAudio(text: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante', authorize?: () => Promise<boolean>, poiPhotoUrl?: string, languageOverride?: Language): Promise<'started' | 'queued' | 'resumed' | false> {
+  /**
+   * REGOLA 23/10/2026 (MASI: Chiedi non trovava un fatto che la guida appena letta diceva). Il testo EFFETTIVAMENTE
+   * letto per ogni luogo (quello mandato alla sintesi, o quello accanto all'MP3 salvato): «Chiedi» lo manda al server
+   * come materiale insieme alla riga del luogo.
+   */
+  private testiLetti = new Map<string, string>();
+  public ricordaTestoLetto(poiId: string, testo: string): void {
+    if (!poiId || !testo) return;
+    if (this.testiLetti.size > 100) this.testiLetti.clear();
+    this.testiLetti.set(String(poiId), String(testo));
+  }
+  public testoLettoPer(poiId: unknown): string | null {
+    return poiId == null ? null : (this.testiLetti.get(String(poiId)) || null);
+  }
+
+  public async playAudio(text: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante', authorize?: () => Promise<boolean>, poiPhotoUrl?: string, languageOverride?: Language, opzioniTts?: { kind?: 'guida'; voice?: string; soloCache?: boolean }): Promise<'started' | 'queued' | 'resumed' | false> {
     if (this.isGuideMuted || !text) return false;
+    // TOUR DI GRUPPO, lato follower (25/10/2026): `opzioniTts` ripete i parametri ESATTI del leader (kind, voce) così la
+    // chiave di cache di /api/tts/smart combacia, e `soloCache` fa rispondere 204 invece di sintetizzare: il follower
+    // non paga mai una sintesi né una quota (sul 204 si cade sulla voce del telefono, più sotto).
+    const kindTts: 'guida' | undefined = opzioniTts?.kind || (poiId ? 'guida' : undefined);
+    const soloCache = !!opzioniTts?.soloCache;
+
+    // REGOLA 23/10/2026 (ricollaudo Lugano: Piazza della Riforma, riga dati sintetizzata e Day Pass scalato; MASI,
+    // guida con formule vietate). La guida di un LUOGO si legge solo se è una guida vera (guidaLeggibile): una riga
+    // di dati, una scheda di frasi-modello, un testo da rifare NON partono — e quindi niente Day Pass né addebito,
+    // che stanno più sotto. Chi aspettava questa guida (motore libero, giro) viene liberato.
+    if (poiId && !parseDuetLines(text) && !guidaLeggibile(text, character || this.guideMode)) {
+      console.warn('[LocationService] testo non leggibile come guida (riga dati / formule / ragionamento): non parte', poiId);
+      try { window.dispatchEvent(new CustomEvent('wip-guida-non-partita', { detail: { poiId: String(poiId), motivo: 'testo_non_guida' } })); } catch { /* niente */ }
+      return false;
+    }
 
     // 🤫 «Solo vibrazione + testo»: se il play nasce da un trigger geofencing
     // e la modalità silenziosa è attiva, NIENTE audio (né addebito: siamo
@@ -2071,6 +2127,13 @@ class LocationService {
         this.checkAudioQueue();
         return false;
       }
+    } else if (poiId) {
+      // DAY PASS CONTATO A OGNI VERO AVVIO (19/10/2026): una guida che parte
+      // senza cancello (giro, testo pre-scaricato, cambio lingua, riascolto
+      // dal widget) si conta sul pass se il luogo non è già acquistato — il
+      // server la conta una volta sola per luogo. Prima contava solo il tasto
+      // «Ascolta» della scheda e il banner restava a 40 per sempre.
+      void import('./dayPassService').then((m) => m.registraAscoltoConPass(String(poiId))).catch(() => { /* best-effort */ });
     }
 
     // Interrompe l'eventuale narrazione avviata da ttsService (PoiCard / popup mappa)
@@ -2102,10 +2165,12 @@ class LocationService {
       // pre-caricando la successiva mentre suona la corrente.
       const duetLines = parseDuetLines(text);
       if (duetLines) {
-        const okDuet = await this.playDuet(duetLines, languageOverride);
+        const okDuet = await this.playDuet(duetLines, languageOverride, soloCache);
         if (okDuet) {
+          // Duetto: il follower riceve il testo INTERO e lo rispezza con lo stesso parseDuetLines → stesse battute,
+          // stessa voce per personaggio (fetchDuetBlob, senza kind) = stesse chiavi di cache del leader (25/10/2026).
           window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
-            detail: { textToSpeak: text, poiName, character: character || this.guideMode, language: languageOverride || this.language }
+            detail: { textToSpeak: text, poiName, character: character || this.guideMode, language: languageOverride || this.language, kind: null, voice: null }
           }));
           return 'started';
         }
@@ -2121,11 +2186,21 @@ class LocationService {
       // lingua del follower: chiave di cache diversa da quella già pagata dal
       // leader (quindi rigenerazione a carico del follower, o un 429 e il
       // silenzio) e una voce inglese che legge un testo italiano.
-      const voice = azureVoiceName(languageOverride || this.language, character || this.guideMode);
+      const voice = opzioniTts?.voice || azureVoiceName(languageOverride || this.language, character || this.guideMode);
       // postForAudioBlob: su nativo la fetch patchata da CapacitorHttp
       // corrompeva il corpo binario (MP3 → 0 byte, "click a vuoto" su iPhone).
       // Manda anche il Bearer di sessione: quota/addebito per utente sul server.
-      const { ok, status, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text, voice });
+      // kind 'guida' (23/10/2026): il server pulisce le formule o risponde 422 invece di sintetizzare/servire un MP3 vecchio.
+      // Il corpo è lo STESSO che il leader ritrasmette al gruppo (kind, character, voice): stessa chiave di cache (25/10/2026).
+      const { ok, status, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text, voice, ...(kindTts ? { kind: 'guida', character: character || this.guideMode } : {}), ...(soloCache ? { soloCache: true } : {}) });
+      if (status === 422) {
+        // Riga di dati o guida da rifare: NON si legge con la voce di sistema (sarebbe leggerla lo stesso).
+        try { window.dispatchEvent(new CustomEvent('wip-guida-non-partita', { detail: { poiId: String(poiId ?? ''), motivo: 'tts_422' } })); } catch { /* niente */ }
+        if (this.ambientPlayer) this.ambientPlayer.volume = 0.15;
+        this.audioState.isPlaying = false;
+        this.notifyAudioState();
+        return false;
+      }
       if (!ok || !blob) throw new Error(`TTS ${status}`);
       // Un blob vuoto o una risposta JSON scambiata per audio produceva un
       // player "fantasma" con durata 0:00: meglio fallire esplicitamente.
@@ -2134,6 +2209,7 @@ class LocationService {
       }
 
       const started = await this.playAudioBlob(blob, text);
+      if (started && poiId) this.ricordaTestoLetto(String(poiId), text);
       if (started) {
         // Live Tour: se l'utente è leader di una sessione, useLiveTour
         // ritrasmette questo audio ai follower via canale realtime.
@@ -2142,8 +2218,10 @@ class LocationService {
         // riproduceva col proprio (Nicky o Dante), quindi il gruppo sentiva
         // voci diverse davanti allo stesso monumento — e, chiave di cache
         // diversa, ognuno faceva rigenerare l'audio a proprio carico.
+        // (25/10/2026) Viaggiano anche `kind` e `voice`: il testo è quello grezzo appena mandato al server, che lo
+        // pulisce secondo `kind` PRIMA della chiave di cache — stessi parametri dal follower = colpo di cache.
         window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
-          detail: { textToSpeak: text, poiName, character: character || this.guideMode, language: languageOverride || this.language }
+          detail: { textToSpeak: text, poiName, character: character || this.guideMode, language: languageOverride || this.language, kind: kindTts || null, voice }
         }));
       }
       return started ? 'started' : false;
@@ -2155,8 +2233,10 @@ class LocationService {
       const spoken = (await this.speakWithNativeVoice(text, character || this.guideMode, languageOverride))
         || this.speakWithWebSpeech(text, character || this.guideMode, languageOverride);
       if (spoken) {
+        // Il leader ha letto con la voce del telefono: nessun MP3 in cache. Il follower (soloCache) riceve 204 e legge
+        // anche lui con la voce del telefono — mai una sintesi a suo carico (25/10/2026).
         window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
-          detail: { textToSpeak: text, poiName, character: character || this.guideMode, language: languageOverride || this.language }
+          detail: { textToSpeak: text, poiName, character: character || this.guideMode, language: languageOverride || this.language, kind: kindTts || null, voice: opzioniTts?.voice || azureVoiceName(languageOverride || this.language, character || this.guideMode) }
         }));
         return 'started';
       }
@@ -2294,7 +2374,8 @@ class LocationService {
       // lingua. Prima qui si cadeva sempre su this.language (lingua del
       // follower): voce sbagliata e chiave di cache diversa da quella del leader.
       const voice = azureVoiceName(languageOverride || this.language, line.speaker);
-      const { ok, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text: line.text, voice });
+      // soloCache (25/10/2026): follower del tour di gruppo, solo battute già sintetizzate dal leader (204 altrimenti).
+      const { ok, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text: line.text, voice, ...(this.duetState?.soloCache ? { soloCache: true } : {}) });
       if (!ok || !blob || blob.size < 500 || blob.type.includes('json')) return null;
       return blob;
     } catch { return null; }
@@ -2310,8 +2391,8 @@ class LocationService {
    * personaggio. Ritorna false se nemmeno la prima battuta parte (il
    * chiamante ricade sulla lettura mono-voce del testo intero).
    */
-  private async playDuet(lines: Array<{ speaker: 'nicky' | 'dante'; text: string }>, languageOverride?: Language): Promise<boolean> {
-    this.duetState = { lines, index: 0, nextBlob: null, nextBlobIndex: -1, language: languageOverride };
+  private async playDuet(lines: Array<{ speaker: 'nicky' | 'dante'; text: string }>, languageOverride?: Language, soloCache = false): Promise<boolean> {
+    this.duetState = { lines, index: 0, nextBlob: null, nextBlobIndex: -1, language: languageOverride, soloCache };
     const ok = await this.playDuetLine(0);
     if (!ok) this.clearDuetState();
     return ok;

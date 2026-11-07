@@ -61,6 +61,7 @@ import { SUBCATEGORY_DETAILS } from "../data/subcategoryDetails";
 import ActionButton from "./ui/ActionButton";
 import NavChoiceSheet from "./NavChoiceSheet";
 import IngressoQuiButton from "./IngressoQuiButton";
+import AudioGratisSelettore from "./AudioGratisSelettore";
 import { BottoneGiro } from "./PoiPopupContent";
 
 import {
@@ -70,8 +71,9 @@ import {
   setCachedCityName,
 } from "../lib/poiCache";
 import { Language, getTranslation } from "../lib/i18n";
+import { etichettaCategoria } from "../lib/poiCategories";
 import { datiBeneCulturale, chiaveTematica, etichettaTipoTematico } from "../lib/poiTaxonomy";
-import { displayName } from "../lib/poiDisplay";
+import { displayName, ricordaNomeTradotto } from "../lib/poiDisplay";
 import {
   CATEGORY_COLORS,
   CATEGORY_EMOJIS,
@@ -120,6 +122,19 @@ function triggerManualePer(poiId: string): boolean {
 // Dal 28/08/2026 delega ad apiFetch: stesso timeout + Bearer automatico
 // (il server esige il login su /api/poi/details, /api/poi/enrich,
 // /api/regenerate quando deve generare).
+/**
+ * 23/10/2026 — Un testo è una GUIDA da leggere solo se ha almeno 80 caratteri e almeno una frase: non una
+ * riga dati («tipo · via · città»), non un teaser segnaposto («Sei vicino a … Apri l'app per scoprire la sua
+ * storia.»). Usata da toggleSpeech (8c) e dalla lettura dei teaser (8e).
+ */
+export function textoEGuida(t: any): boolean {
+  const s = String(t || '').trim();
+  if (s.length < 80) return false;
+  if (/apri l'app per scoprire|open the app to discover/i.test(s)) return false;
+  if (!/[.!?…]/.test(s) && s.includes(' · ')) return false;
+  return true;
+}
+
 const fetchWithTimeout = (url: string, opts: any = {}, ms = 12000): Promise<Response> =>
   apiFetch(url, opts, ms);
 
@@ -127,6 +142,7 @@ import { apiFetch, bearerHeaders } from '../lib/api';
 import { mapItineraryCategoryToMapCategory, getAudioguide, ensureSharedPoi } from "../services/poiRepository";
 import { getAudioguideForPlayback } from "../services/audioguideService";
 import PoiAudioPlayer from "./poi/PoiAudioPlayer";
+import { guidaLeggibile } from "../lib/guidaTesto";
 import PoiExtraDetails from "./poi/PoiExtraDetails";
 import PoiBiodiversity from "./poi/PoiBiodiversity";
 import DenominazioniZona from "./DenominazioniZona";
@@ -389,6 +405,7 @@ export default function PoiDetailSheet({
   // RPC del radar ha colonne fisse e non la restituisce, quindi `poi.source`
   // e' spesso assente e non ci si puo' contare. Vedi AttribuzioneDati.
   const [fonteDati, setFonteDati] = useState<string | null>(null);
+  const [audioGratis, setAudioGratis] = useState(false);
 
   const [technicalData, setTechnicalData] = useState<{
     inception?: string;
@@ -695,8 +712,15 @@ export default function PoiDetailSheet({
   // più la sequenza (vecchio bug: il timer veniva ripulito dal cleanup e
   // hasAutoPlayedRef impediva di ricrearlo → l'autoplay non partiva quasi mai).
   const autoplayCtxRef = useRef<any>({});
+  // REGOLA 23/10/2026 (collaudo Lugano, Villa Ciani): nel PRIMO render dopo il cambio di POI il testo
+  // generato, wikiData e la toggleSpeech di quel render sono ancora quelli del POI PRECEDENTE (gli stati si
+  // azzerano negli effect, cioè al render dopo). L'autoplay sul web parte subito e mandava a /api/tts/smart
+  // la guida del MASI mentre la scheda mostrava il parco. Quel render è marcato «vecchio» e l'autoplay aspetta.
+  const poiDelRenderPrecRef = useRef<string | null>(null);
+  const contestoDiAltroPoi = poiDelRenderPrecRef.current !== String(poi?.id);
   useEffect(() => {
-    autoplayCtxRef.current = { isLoading, isRegenerating, generatedText, wikiData, toggleSpeech };
+    poiDelRenderPrecRef.current = String(poi?.id);
+    autoplayCtxRef.current = { isLoading, isRegenerating, generatedText, wikiData, toggleSpeech, vecchio: contestoDiAltroPoi };
   });
 
   // LOGICA AUTOPLAY (Arrivo al POI o click su banner "Ascolta").
@@ -714,6 +738,7 @@ export default function PoiDetailSheet({
 
     let cancelled = false;
     let started = false;
+    let attesaVecchio = 0;
     let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -734,6 +759,9 @@ export default function PoiDetailSheet({
       const attempt = () => {
         if (cancelled) return;
         const ctx = autoplayCtxRef.current;
+        // REGOLA 23/10/2026: contesto del render col POI precedente → si riprova al render successivo.
+        // (Tetto 3 s: se nessuno stato cambia React non ri-renderizza, e lì non c'è niente di vecchio.)
+        if (ctx.vecchio && attesaVecchio++ < 20) { retryTimer = setTimeout(attempt, 150); return; }
         const textToSpeak = poi?.audioScript || ctx.generatedText || ctx.wikiData?.extract || poi?.description || (poi as any)?.spiegazione_audio;
 
         // Se sta già suonando questo POI, non fare nulla
@@ -964,7 +992,7 @@ export default function PoiDetailSheet({
         const wikiPayload = {
           extract: desc,
           thumbnail: migliorFoto(poi) || undefined,
-          description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
+          description: (etichettaCategoria(poi.category, language) || getTranslation('sk_luogo', language)),
           pageUrl: "#"
         };
 
@@ -990,7 +1018,7 @@ export default function PoiDetailSheet({
         setWikiData({
           extract: shortDesc,
           thumbnail: migliorFoto(poi) || undefined,
-          description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
+          description: (etichettaCategoria(poi.category, language) || getTranslation('sk_luogo', language)),
           pageUrl: "#"
         });
         // setDisplayedText(shortDesc); // Removed to allow typewriter effect to run
@@ -1004,7 +1032,7 @@ export default function PoiDetailSheet({
            setWikiData({
               extract: cached.descriptionLong || cached.description || cached.audioScript || "",
               thumbnail: cached.imageUrl || migliorFoto(cached) || migliorFoto(poi) || undefined,
-              description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
+              description: (etichettaCategoria(poi.category, language) || getTranslation('sk_luogo', language)),
               pageUrl: "#"
            });
            setDisplayedText(cached.descriptionLong || cached.description || cached.audioScript || "");
@@ -1104,6 +1132,7 @@ export default function PoiDetailSheet({
               const detailsRes = await fetchWithTimeout(`/api/poi/details?id=${encodeURIComponent(poiIdStr)}&lang=${String(language || 'IT').toLowerCase()}`, {}, 15000);
               if (detailsRes.ok) {
                 const dbData = await detailsRes.json();
+                ricordaNomeTradotto(poi?.id, dbData?.name_translated);
 
                 if (dbData.status === 'processing' || dbData.description_ai === 'processing') {
                    console.warn(`[PoiDetailSheet] POI ${poiIdStr} is currently being processed by Edge Function.`);
@@ -1126,6 +1155,8 @@ export default function PoiDetailSheet({
                 // Provenienza del dato: dal DB, che e' l'unica versione
                 // attendibile (il POI del radar spesso non ce l'ha).
                 if (active && dbData.source) setFonteDati(String(dbData.source));
+                // Selettore «audioguida gratis» (22/10/2026): luoghi segnalati dagli enti, niente crediti.
+                if (active) setAudioGratis(dbData.technical_data?.audioguida_gratis === true || dbData.technical_data?.audioguida_gratis === 'true');
 
                 const fullDesc = dbData.full_description || dbData.description_long || dbData.description_ai;
                 const techData = dbData.technical_data || {};
@@ -1173,7 +1204,7 @@ export default function PoiDetailSheet({
                   const wikiPayload = {
                     extract: finalDesc,
                     thumbnail: migliorFoto(dbData) || migliorFoto(poi) || undefined,
-                    description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
+                    description: (etichettaCategoria(poi.category, language) || getTranslation('sk_luogo', language)),
                     pageUrl: techData.wikipedia_url || techData.wikivoyage_url || '#',
                   };
                   const tripPayload = { address: '', phone, website, tags: [poi.category], rating: null, numReviews: 0, reviews: [] };
@@ -1221,7 +1252,7 @@ export default function PoiDetailSheet({
                   const wikiPayload = {
                     extract: rigaDati,
                     thumbnail: foto,
-                    description: poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language),
+                    description: etichettaCategoria(poi.category, language) || getTranslation('sk_luogo', language),
                     pageUrl: '#',
                   };
                   const tripPayload = { address: String(dbData.address || ''), phone: '', website: '', tags: [poi.category], rating: null, numReviews: 0, reviews: [] };
@@ -1310,7 +1341,7 @@ export default function PoiDetailSheet({
             // scheda: tolto insieme al cancello qui sopra. La scheda non costa.
 
             if (active) {
-              const categoryLabel = poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language);
+              const categoryLabel = etichettaCategoria(poi.category, language) || getTranslation('sk_luogo', language);
               
               const wikiPayload = {
                 extract: currentExtract,
@@ -1538,7 +1569,7 @@ export default function PoiDetailSheet({
                 extract: isRejected
                   ? getTranslation('sk_non_rilevante', language)
                   : getTranslation('sk_poi_registrato', language).replace('{name}', poi.name || getTranslation('sk_questo_luogo', language)),
-                description: isRejected ? getTranslation('sk_non_approvato', language) : (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
+                description: isRejected ? getTranslation('sk_non_approvato', language) : (etichettaCategoria(poi.category, language) || getTranslation('sk_luogo', language)),
                 thumbnail: undefined
               });
               setTripData({
@@ -1581,6 +1612,27 @@ export default function PoiDetailSheet({
     let textToSpeak = guideRegister !== 'standard'
       ? (generatedText || poi?.audioScript || wikiData?.extract || poi?.description || (poi as any)?.spiegazione_audio)
       : (poi?.audioScript || generatedText || wikiData?.extract || poi?.description || (poi as any)?.spiegazione_audio);
+
+    // 23/10/2026 — REGOLA (8c): una RIGA DATI non è mai una guida. «Plaza de la Administración · Guayaquil» veniva
+    // letta come «Ciao! Sono Nicky…», anche al tocco manuale. Se l'unico testo è una riga dati (o meno di 80
+    // caratteri) si dice «poche informazioni» e non si legge nulla; il motore libero viene liberato.
+    // REGOLA 23/10/2026 (ricollaudo Lugano, MASI): la guida letta all'arrivo era il vecchio `audio_script` della riga
+    // (formule vietate: «ricca di storia», «punto di riferimento»…) mentre la scheda mostrava — e Chiedi mandava — la
+    // narrazione di poi_audioguides. Si legge il PRIMO testo che è una guida vera (guidaLeggibile: niente righe dati,
+    // frasi-modello, formule che la pulizia non toglie, ragionamento), con la narrazione generata davanti allo script
+    // vecchio; solo se nessuno lo è si prende il più lungo fra quelli leggibili.
+    if (!guidaLeggibile(textToSpeak, localGuideMode)) {
+      const candidati = [generatedText, (poi as any)?.audioScript, wikiData?.extract, (poi as any)?.description_long, (poi as any)?.description_ai, poi?.description]
+        .map(x => String(x || '').trim());
+      const migliore = candidati.find(x => guidaLeggibile(x, localGuideMode))
+        || candidati.filter(textoEGuida).sort((a, b) => b.length - a.length)[0];
+      if (migliore) textToSpeak = migliore;
+    }
+    if (!guidaLeggibile(textToSpeak, localGuideMode) && !(audioState.isPlaying && audioState.poiId === String(poi?.id))) {
+      notify(getTranslation('sk_descrizione_non_disponibile', language));
+      try { window.dispatchEvent(new CustomEvent('wip-guida-non-partita', { detail: { poiId: String(poi?.id ?? '') } })); } catch { /* niente */ }
+      return;
+    }
 
     // Silenziosa PRIMA del paywall: un play automatico (trigger) con la
     // silenziosa attiva non suona e non apre il modale. Il ▶ dell'utente
@@ -1642,12 +1694,23 @@ export default function PoiDetailSheet({
       // MP3 del bundle acquistato: è uno sblocco valido E la sorgente audio
       // preferita (voce premium, zero rete) — prima veniva ignorato e il
       // POI si ripagava/rigenerava ogni volta.
-      const ownedUrl = await getOfflineAudioUrl(`${poiIdStr}_${localGuideMode}`).catch(() => null);
+      // REGOLA 23/10/2026 (MASI): l'MP3 sul telefono si suona solo se il testo da cui è fatto è una guida valida;
+      // un MP3 del pre-scarico del giro fatto da un testo con formule vietate si scarta (si rifà al prossimo giro).
+      const { testoAudioSalvato, togliAudioOffline } = await import('../lib/offlineStorage');
+      const testoMp3 = await testoAudioSalvato(`${poiIdStr}_${localGuideMode}`);
+      let ownedUrl = await getOfflineAudioUrl(`${poiIdStr}_${localGuideMode}`).catch(() => null);
+      if (ownedUrl && testoMp3 && !guidaLeggibile(testoMp3, localGuideMode)) {
+        ownedUrl = null;
+        void togliAudioOffline(`${poiIdStr}_${localGuideMode}`);
+      }
+      if (ownedUrl) locationService.ricordaTestoLetto(poiIdStr, testoMp3 || String(textToSpeak || ''));
 
       // Le gemme NON sono gratuite: costano come ogni altra categoria.
       const alreadyUnlocked = history.some(h => String(h.poi_id) === poiIdStr) ||
                               poi?.isFromItinerary === true ||
                               !!ownedUrl ||
+                              // Audioguida resa gratis dal selettore (luoghi segnalati dagli enti, 22/10/2026).
+                              audioGratis ||
                               // TEST VIRTUALE dell'admin: l'ascolto di prova parte senza il modale crediti.
                               (isAdmin === true && (window as any).__wipTestVirtuale === true);
 
@@ -1686,7 +1749,7 @@ export default function PoiDetailSheet({
       const pass = await getDayPassState().catch(() => null);
       if (pass?.active) {
         if (language !== 'IT' && !generatedText) {
-          if (await consumeDayPassGuide()) {
+          if (await consumeDayPassGuide(String(poi?.id))) {
             await regenerateWithGemini(true, localGuideMode);
             return;
           }
@@ -1702,7 +1765,7 @@ export default function PoiDetailSheet({
             textToSpeak, poi?.name, poi?.category, String(poi?.id), localGuideMode,
             async () => {
               let ok = false;
-              try { ok = await consumeDayPassGuide(); } catch { ok = false; }
+              try { ok = await consumeDayPassGuide(String(poi?.id)); } catch { ok = false; }
               if (!ok) passEsaurito = true;
               return ok;
             },
@@ -1743,7 +1806,17 @@ export default function PoiDetailSheet({
 
   const regenerateWithGemini = async (autoPlay: boolean = true, forceMode?: "nicky" | "dante") => {
     if (!poi?.id) return;
-    if (!wikiData?.extract || isRegenerating) return;
+    if (isRegenerating) return;
+    // 23/10/2026 — REGOLA (8a): «Ascolta Approfondimento» non esce MAI muto. Le righe `wd-` non hanno
+    // wikiData.extract: la base è la guida salvata, poi la descrizione lunga/breve della riga. Senza nessuna
+    // base si dice «poche informazioni» invece di non fare nulla.
+    const baseTesto = [wikiData?.extract, generatedText, (poi as any)?.audioScript, (poi as any)?.description_long, (poi as any)?.description_ai, poi?.description]
+      .map(x => String(x || '').trim()).filter(x => x.length >= 80).sort((a, b) => b.length - a.length)[0] || '';
+    if (!baseTesto) {
+      if (autoPlay) notify(getTranslation('sk_descrizione_non_disponibile', language));
+      try { window.dispatchEvent(new CustomEvent('wip-guida-non-partita', { detail: { poiId: String(poi.id) } })); } catch { /* niente */ }
+      return;
+    }
 
     const modeToUse = forceMode || localGuideMode;
     const isDeepDive = !!generatedText; // "Chiedi di più": mai cachato (per policy)
@@ -1756,7 +1829,8 @@ export default function PoiDetailSheet({
       if (!isDeepDive) {
         try {
           const cachedGuide = await getAudioguide(String(poi.id), String(language), charKeyFor(modeToUse) as any);
-          if (cachedGuide?.audio_text) {
+          // REGOLA 23/10/2026: una guida in cache da rifare (formule/ragionamento) non si legge: la rigenera il server.
+          if (cachedGuide?.audio_text && guidaLeggibile(cachedGuide.audio_text, modeToUse)) {
             console.log("[DetailSheet] Audioguida da cache poi_audioguides:", poi?.name);
             setGeneratedText(cachedGuide.audio_text);
             if (autoPlay) {
@@ -1774,7 +1848,7 @@ export default function PoiDetailSheet({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          text: wikiData.extract,
+          text: baseTesto,
           poiName: poi?.name,
           location: locationName || undefined,
           // Personaggio + registro (es. "nicky_breve"): il server ne ricava
@@ -1826,6 +1900,9 @@ export default function PoiDetailSheet({
       }
     } catch (error: any) {
       console.error("Regeneration error:", error);
+      // 23/10/2026 — REGOLA (8d): un timeout/errore di /api/regenerate LIBERA lo stato — chi aspettava questa guida
+      // (motore libero, test virtuale) non resta «in ascolto» per minuti.
+      try { window.dispatchEvent(new CustomEvent('wip-guida-non-partita', { detail: { poiId: String(poi?.id ?? '') } })); } catch { /* niente */ }
       if (autoPlay) {
         // Azione esplicita dell'utente: avvisiamo
         notify(getTranslation('sk_rigenerazione_errore', language));
@@ -2127,7 +2204,7 @@ export default function PoiDetailSheet({
       if (p) {
         const types = p.types || [];
         let specificType =
-          (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language));
+          (etichettaCategoria(poi.category, language) || getTranslation('sk_luogo', language));
 
         if (poi.category === "locali") {
           if (types.includes("restaurant")) specificType = "Ristorante";
@@ -2545,7 +2622,7 @@ export default function PoiDetailSheet({
         extract = getTranslation('sk_offre_specialita', language).replace('{name}', poi.name || getTranslation('sk_questo_locale', language));
         if (description === "Punto di interesse" || !description) {
           description =
-            (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language));
+            (etichettaCategoria(poi.category, language) || getTranslation('sk_luogo', language));
         }
       }
 
@@ -2560,7 +2637,7 @@ export default function PoiDetailSheet({
         description:
           description !== "Punto di interesse" && description
             ? description
-            : (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
+            : (etichettaCategoria(poi.category, language) || getTranslation('sk_luogo', language)),
         thumbnail,
         pageUrl,
       });
@@ -2678,7 +2755,7 @@ export default function PoiDetailSheet({
               thumbnail,
               description:
                 description ||
-                (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
+                (etichettaCategoria(poiItem.category, language) || getTranslation('sk_luogo', language)),
               pageUrl,
             });
             setCachedPoiDetails(chiaveScheda(poiItem.id), {
@@ -2687,7 +2764,7 @@ export default function PoiDetailSheet({
                 thumbnail,
                 description:
                   description ||
-                  (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
+                  (etichettaCategoria(poiItem.category, language) || getTranslation('sk_luogo', language)),
                 pageUrl,
               },
             });
@@ -2798,10 +2875,10 @@ export default function PoiDetailSheet({
 
       let finalDescription =
         description ||
-        (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language));
+        (etichettaCategoria(poiItem.category, language) || getTranslation('sk_luogo', language));
       if (finalDescription === "Punto di interesse") {
         finalDescription =
-          (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language));
+          (etichettaCategoria(poiItem.category, language) || getTranslation('sk_luogo', language));
       }
 
       setWikiData({
@@ -2862,7 +2939,7 @@ export default function PoiDetailSheet({
       setWikiData({
         extract: getTranslation('sk_poi_registrato_errore', language).replace('{name}', title || getTranslation('sk_questo_luogo', language)),
         description:
-          (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
+          (etichettaCategoria(poiItem.category, language) || getTranslation('sk_luogo', language)),
         thumbnail: undefined,
       });
     } finally {
@@ -2962,7 +3039,7 @@ export default function PoiDetailSheet({
                       tradotta con la sua emoji, non la chiave grezza. */}
                   {chiaveTematica(poi)
                     ? `${CATEGORY_EMOJIS[chiaveTematica(poi)] || "🧭"} ${getTranslation(chiaveTematica(poi), language)}`
-                    : poi.category}
+                    : etichettaCategoria(poi.category, language)}
                 </span>
               </div>
 
@@ -3399,6 +3476,7 @@ export default function PoiDetailSheet({
             {/* SOLO ADMIN (03/09/2026): «L'ingresso e` qui» scrive la
                 posizione GPS come porta del luogo. Vedi IngressoQuiButton. */}
             {isAdmin && <IngressoQuiButton poi={poi} language={language} />}
+            {isAdmin && poi?.id && <AudioGratisSelettore poiId={String(poi.id)} valore={audioGratis} onCambio={setAudioGratis} />}
 
             <div className="grid grid-cols-2 gap-3 mb-6">
               <ActionButton

@@ -133,7 +133,15 @@ object AudioPrefetchManager {
      * Avvio del prefetch in background (chiamato da handleApproach al primo
      * avviso). Fire-and-forget: mai eccezioni verso il chiamante.
      */
-    fun prefetch(context: Context, poiId: String, lang: String, guideCharacter: String?) {
+    /**
+     * (25/10/2026) `soloCache`: true quando l'utente NON ha diritto alla guida
+     * di questo luogo (ne' Day Pass che lo copre, ne' acquistato — la stessa
+     * condizione di ArrivalWorker, in DayPassLocale.haDiritto). Allora si
+     * prendono solo testo gia' scritto e voce gia' sintetizzata (204 se
+     * mancano): l'avvicinamento di chi non pagherebbe non deve far generare
+     * testo ne' sintetizzare audio. Con diritto: come prima.
+     */
+    fun prefetch(context: Context, poiId: String, lang: String, guideCharacter: String?, soloCache: Boolean = false) {
         val appContext = context.applicationContext
         scope.launch {
             try {
@@ -141,8 +149,8 @@ object AudioPrefetchManager {
                 val character = resolveCharacter(appContext, guideCharacter)
                 if (cachedFile(appContext, poiId, lang, character) != null) return@launch
                 if (!com.itaintasca.app.offline.ConnectivityMonitor.isOnline(appContext)) return@launch
-                val text = resolveAudioText(appContext, poiId, lang, character) ?: return@launch
-                downloadBlocking(appContext, poiId, lang, character, text)
+                val text = resolveAudioText(appContext, poiId, lang, character, soloCache = soloCache) ?: return@launch
+                downloadBlocking(appContext, poiId, lang, character, text, soloCache = soloCache)
             } catch (e: Exception) {
                 Log.w(TAG, "prefetch failed for $poiId: ${e.message}")
             }

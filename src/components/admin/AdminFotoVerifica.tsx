@@ -25,8 +25,38 @@ import { RefreshCw, Check, X, ExternalLink, MapPin, ImageOff, LayoutGrid, Rows3,
 type Candidata = {
   id: number; poi_id: string; poi_nome: string; foto_url: string; fonte_url: string;
   fonte_dominio: string; fonte_tipo: string; stato: string; creato_at: string;
-  luogo: { city?: string | null; country?: string | null; category?: string | null; lat?: number | null; lon?: number | null; image_url?: string | null } | null;
+  luogo: { city?: string | null; country?: string | null; category?: string | null; lat?: number | null; lon?: number | null; image_url?: string | null; nascosto?: boolean } | null;
+  /** Solo per le approvate: il pin visibile dell'app che si apre e se porta QUESTA foto; null = nessun pin visibile. */
+  in_app?: { id: string; nome: string; lat: number; lon: number; foto: boolean } | null;
+  deciso_at?: string | null;
 };
+
+/**
+ * «Apri in app» (24/10/2026, committente: «ho approvato, come vedo se sono nei pin?»): porta alla mappa e apre la
+ * scheda del pin, la stessa che vede l'utente. Se la mappa non è ancora visibile, MapArea la apre appena lo è.
+ */
+const apriInApp = (p: NonNullable<Candidata['in_app']>) => {
+  window.dispatchEvent(new CustomEvent('wip-open-map-area', { detail: { lat: p.lat, lon: p.lon, zoom: 17 } }));
+  window.dispatchEvent(new CustomEvent('focus-poi', { detail: { id: p.id, name: p.nome, lat: p.lat, lon: p.lon } }));
+};
+
+/** La riga «in app» di una foto approvata: dov'è e il tasto per aprirla. */
+function RigaInApp({ c }: { c: Candidata }) {
+  if (c.in_app === undefined) return null;
+  const p = c.in_app;
+  if (!p) return <p className="text-[10px] font-bold text-red-700 bg-red-50 rounded-lg px-2 py-1">Nessun pin visibile in app porta questa foto.</p>;
+  return (
+    <div className={`flex items-center gap-2 rounded-lg px-2 py-1 ${p.foto ? 'bg-emerald-50' : 'bg-amber-50'}`}>
+      <p className={`flex-1 text-[10px] font-bold ${p.foto ? 'text-emerald-700' : 'text-amber-700'}`}>
+        {p.foto ? 'In app sul pin visibile' : 'Il pin visibile ha un\'altra foto'}{p.id !== c.poi_id ? ' (gemello con lo stesso nome)' : ''}
+      </p>
+      <button type="button" onClick={() => apriInApp(p)}
+        className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg bg-primary text-white text-[10px] font-black">
+        <MapPin className="w-3 h-3" /> Apri in app
+      </button>
+    </div>
+  );
+}
 type Stato = 'da_verificare' | 'approvata' | 'rifiutata';
 type Vista = 'schede' | 'miniature';
 
@@ -43,6 +73,10 @@ const ETICHETTA_TIPO: Record<string, { testo: string; classe: string }> = {
   social: { testo: 'Social', classe: 'bg-red-50 text-red-600' },
   terzi: { testo: 'Sito di terzi', classe: 'bg-slate-100 text-slate-600' },
 };
+
+// Esito di approva/rifiuta (23/10/2026, committente: «i banner devono rimanere in basso, con 3 coprono i tasti»):
+// una riga sola, il nuovo sostituisce il precedente.
+const AVVISO_DECISIONE = { chiave: 'foto-decisione', compatto: true };
 
 const PAGINA_SCHEDE = 40;
 const DIMENSIONI = [20, 50, 100] as const;
@@ -118,7 +152,14 @@ export default function AdminFotoVerifica() {
       setRighe(prev => prev.filter(x => x.id !== c.id && !(decisione === 'approva' && x.poi_id === c.poi_id)));
       setSelezione(prev => { const n = new Set(prev); n.delete(c.id); return n; });
       setTotale(t => Math.max(0, t - 1));
-      notify(decisione === 'approva' ? `Pubblicata: ${c.poi_nome}` : `Rifiutata: ${c.poi_nome}`);
+      // Dove è andata davvero (23/10/2026): la riga della candidata può essere un doppione nascosto; il server scrive
+      // anche sui pin visibili con lo stesso nome che non hanno foto.
+      const pin = j?.pin;
+      const dove = !pin ? '' : pin.gemelliScritti?.length ? ` (anche su ${pin.gemelliScritti.length} pin visibili con lo stesso nome)`
+        : pin.rigaVisibile ? '' : pin.gemelliConFotoPropria?.length ? ' — attenzione: il pin visibile ha già una sua foto, resta quella'
+        : ' — attenzione: questo pin non si vede in app';
+      notify(decisione === 'approva' ? `Pubblicata: ${c.poi_nome}${dove}` : `Rifiutata: ${c.poi_nome}`,
+        decisione === 'approva' ? 'success' : 'info', dove ? 5000 : 2500, AVVISO_DECISIONE);
     } catch (e: any) {
       notify(`Decisione non salvata: ${e?.message || 'errore'}`);
     } finally {
@@ -145,7 +186,7 @@ export default function AdminFotoVerifica() {
       : `Rifiutare ${scelte.length} foto? Non compariranno mai in app.`;
     if (!window.confirm(testo)) return;
     setLottoInCorso(true);
-    let fatte = 0, errori = 0, giaDecise = 0;
+    let fatte = 0, errori = 0, giaDecise = 0, gemelli = 0, nascosti = 0;
     try {
       const headers = await adminHeaders();
       for (let i = 0; i < scelte.length; i += MAX_LOTTO) {
@@ -154,8 +195,9 @@ export default function AdminFotoVerifica() {
         const j = await r.json();
         if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
         fatte += Number(j.fatte) || 0; errori += (j.errori || []).length; giaDecise += Number(j.giaDecise) || 0;
+        gemelli += Number(j.gemelliScritti) || 0; nascosti += Number(j.suPinNascosto) || 0;
       }
-      notify(`${decisione === 'approva' ? 'Pubblicate' : 'Rifiutate'} ${fatte} foto${errori ? ` · ${errori} NON riuscite (restano in coda)` : ''}${giaDecise ? ` · ${giaDecise} già decise` : ''}`);
+      notify(`${decisione === 'approva' ? 'Pubblicate' : 'Rifiutate'} ${fatte} foto${gemelli ? ` · ${gemelli} copiate anche su pin visibili con lo stesso nome` : ''}${nascosti ? ` · ${nascosti} su pin che non si vedono in app` : ''}${errori ? ` · ${errori} NON riuscite (restano in coda)` : ''}${giaDecise ? ` · ${giaDecise} già decise` : ''}`, errori ? 'error' : 'success', 5000, AVVISO_DECISIONE);
     } catch (e: any) {
       notify(`Decisione in blocco non completata: ${e?.message || 'errore'} (${fatte} già fatte)`);
     } finally {
@@ -244,8 +286,9 @@ export default function AdminFotoVerifica() {
             const selezionabile = stato === 'da_verificare';
             return (
               <div key={c.id} className={`relative group rounded-xl overflow-hidden bg-slate-100 aspect-square border-2 ${scelta ? 'border-emerald-500 ring-2 ring-emerald-300' : 'border-transparent'}`}>
-                <button type="button" onClick={() => selezionabile && alterna(c.id)} disabled={!selezionabile}
-                  aria-pressed={scelta} aria-label={`${scelta ? 'Togli dalla selezione' : 'Seleziona'}: ${c.poi_nome}`}
+                <button type="button" onClick={() => { if (selezionabile) alterna(c.id); else if (c.in_app) apriInApp(c.in_app); }}
+                  disabled={!selezionabile && !c.in_app}
+                  aria-pressed={scelta} aria-label={selezionabile ? `${scelta ? 'Togli dalla selezione' : 'Seleziona'}: ${c.poi_nome}` : `Apri in app: ${c.poi_nome}`}
                   className="absolute inset-0 w-full h-full text-left">
                   {rotta ? (
                     <div className="w-full h-full grid place-items-center text-slate-400 text-[10px] font-bold px-1 text-center"><span className="flex flex-col items-center gap-1"><ImageOff className="w-5 h-5" />Non si carica</span></div>
@@ -267,7 +310,15 @@ export default function AdminFotoVerifica() {
                   </span>
                 )}
                 <span className={`absolute top-1 right-7 px-1 rounded text-[8px] font-black uppercase pointer-events-none ${tipo.classe}`}>{c.fonte_tipo}</span>
-                {c.luogo?.image_url && stato === 'da_verificare' && (
+                {stato === 'approvata' && c.in_app !== undefined && (
+                  <span title={c.in_app ? 'Tocca per aprire il pin in app' : 'Nessun pin visibile in app porta questa foto'}
+                    className={`absolute top-6 left-1 px-1 rounded text-[8px] font-black pointer-events-none ${c.in_app?.foto ? 'bg-emerald-600 text-white' : c.in_app ? 'bg-amber-100 text-amber-800' : 'bg-red-600 text-white'}`}>
+                    {c.in_app?.foto ? 'in app' : c.in_app ? 'altra foto' : 'nessun pin'}
+                  </span>
+                )}
+                {c.luogo?.nascosto && stato === 'da_verificare' ? (
+                  <span title="Questo pin ha coordinate sbagliate: la foto va anche ai pin con lo stesso nome nel posto giusto, se ce ne sono" className="absolute top-6 left-1 px-1 rounded bg-slate-800 text-white text-[8px] font-black pointer-events-none">coordinate errate</span>
+                ) : c.luogo?.image_url && stato === 'da_verificare' && (
                   <span title="Il luogo ha già una foto in app: approvando la sostituisci" className="absolute top-6 left-1 px-1 rounded bg-amber-100 text-amber-800 text-[8px] font-black pointer-events-none">sostituisce</span>
                 )}
                 <a href={c.foto_url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title="Apri la foto intera e la fonte"
@@ -311,9 +362,13 @@ export default function AdminFotoVerifica() {
                       </a>
                     )}
                   </div>
-                  {c.luogo?.image_url && stato === 'da_verificare' && (
+                  {c.luogo?.nascosto && stato === 'da_verificare' && (
+                    <p className="text-[10px] font-bold text-white bg-slate-800 rounded-lg px-2 py-1">Questo pin ha coordinate sbagliate. Approvando, la foto va anche ai pin con lo stesso nome nel posto giusto, se ce ne sono.</p>
+                  )}
+                  {!c.luogo?.nascosto && c.luogo?.image_url && stato === 'da_verificare' && (
                     <p className="text-[10px] font-bold text-amber-700 bg-amber-50 rounded-lg px-2 py-1">Il luogo ha già una foto in app: approvando la sostituisci.</p>
                   )}
+                  {stato === 'approvata' && <RigaInApp c={c} />}
                   {stato === 'da_verificare' && (
                     <div className="mt-auto flex gap-2 pt-1">
                       <button type="button" onClick={() => void decidi(c, 'approva')} disabled={inCorso === c.id || rotte.has(c.id)}

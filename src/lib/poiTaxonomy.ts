@@ -326,6 +326,56 @@ export const ENO_PRODUTTORI = [
   // sono tappe quanto una cantina.
   "risaia", "salina", "frutteto", "piantagione", "mulino", "pastificio",
 ];
+/**
+ * I CAMPI (10/10/2026): vigneti, uliveti e frutteti vengono da OpenStreetMap come
+ * appezzamenti (landuse=vineyard/orchard) con un nome, non come aziende da visitare.
+ * Sulla mappa stanno con le botteghe (dallo zoom a piedi) e solo con un nome vero.
+ */
+export const ENO_CAMPI = ["vigneto", "uliveto", "frutteto"];
+
+/**
+ * «NOMI GENERICI MAI» (committente, 10/10/2026): un pin del gusto si mostra solo
+ * con un nome PROPRIO. «Uliveto», «Cantina», «Azienda agricola», «Frantoio»,
+ * «Olive grove», «Winery» sono l'etichetta del tipo, non un luogo: fuori, di
+ * qualunque tipo siano. Un nome è generico quando TUTTE le sue parole sono
+ * parole di tipo o articoli/preposizioni.
+ */
+const PAROLE_GENERICHE_GUSTO = new Set([
+  // campi
+  "uliveto", "oliveto", "oliveti", "frutteto", "frutteti", "vigneto", "vigneti", "vigna", "vigne", "orchard", "orchards",
+  "olive", "olives", "grove", "trees", "vineyard", "vineyards", "verger", "vignoble", "vignes", "oliveraie", "olivar", "olivos",
+  "viñedo", "viña", "huerto", "pomar", "obstgarten", "weinberg", "weingarten", "olivenhain", "agrumeto", "noccioleto",
+  "mandorleto", "castagneto", "meleto", "pescheto", "kiwi", "campo", "campi", "terreno", "podere", "field",
+  // produttori e botteghe
+  "cantina", "cantine", "winery", "wineries", "cave", "bodega", "weingut", "weinkellerei", "enoteca", "wine", "vino", "vini",
+  "frantoio", "frantoi", "oleificio", "oil", "mill", "moulin", "almazara", "ölmühle",
+  "caseificio", "caseifici", "latteria", "dairy", "fromagerie", "quesería", "käserei", "formaggi", "cheese", "fromage",
+  "birrificio", "brewery", "brasserie", "cervecería", "brauerei", "distilleria", "distillery", "distillerie",
+  "azienda", "agricola", "agricolo", "farm", "farms", "fattoria", "ferme", "granja", "finca", "bauernhof", "hof",
+  "agriturismo", "agriturismi", "tenuta", "masseria", "cascina",
+  "mercato", "mercati", "market", "marché", "mercado", "markt", "bottega", "shop", "store", "negozio",
+  "panificio", "forno", "bakery", "boulangerie", "panadería", "bäckerei", "macelleria", "butcher", "boucherie", "carnicería",
+  "metzgerei", "pescheria", "fishmonger", "poissonnerie", "pescadería", "ortofrutta", "frutta", "verdura", "greengrocer",
+  "pasticceria", "pastry", "pâtisserie", "pastelería", "konditorei", "gelateria", "cioccolateria", "chocolate", "caffè",
+  "caffe", "coffee", "café", "torrefazione", "tè", "tea", "thé", "miele", "honey", "miel", "spezie", "spices", "épices",
+  "gastronomia", "delicatessen", "deli", "alimentari", "supermercato", "supermarket", "minimarket",
+  "risaia", "risaie", "salina", "saline", "piantagione", "plantation", "mulino", "pastificio", "museo", "museum",
+  // articoli, preposizioni, riempitivi
+  "di", "del", "della", "dei", "delle", "degli", "la", "il", "lo", "le", "i", "gli", "e", "ed", "a", "al", "alla",
+  "the", "of", "and", "de", "des", "du", "le", "les", "la", "el", "los", "las", "y", "der", "die", "das", "und", "zum", "zur",
+  "s.r.l", "srl", "snc", "sas", "spa", "ltd", "llc", "gmbh", "sa", "sl",
+  // «salina» in coreano e «risaia» in cinese: 59 e 14 pin si chiamavano così.
+  "염전", "稻田",
+]);
+export function nomeGustoVero(nome: unknown): boolean {
+  const n = String(nome || "").trim();
+  // Due caratteri cinesi/giapponesi/coreani sono un nome intero («京樽»): il minimo di 3 vale per l'alfabeto latino.
+  if (n.length < (/[　-鿿가-힯]/.test(n) ? 2 : 3)) return false;
+  const parole = n.toLowerCase().replace(/[().,'’"&/\-–—]/g, " ").split(/\s+/).filter(Boolean);
+  if (!parole.length) return false;
+  // Una lettera sola («s r l», «& c») e i numeri non fanno un nome.
+  return parole.some((p) => p.length > 1 && !PAROLE_GENERICHE_GUSTO.has(p) && !/^\d+$/.test(p));
+}
 export const ENO_BOTTEGHE = [
   "enoteca", "formaggi", "gastronomia", "fattoria", "pasticceria",
   "cioccolato", "caffe", "te", "miele", "spezie", "frutta_secca",

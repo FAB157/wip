@@ -170,7 +170,7 @@ export interface ItaintaBackgroundPoiPlugin {
 
   setDayPass(options: { expiresAt: number; cap: number; used: number }): Promise<void>;
   getDayPassState(): Promise<{ active?: boolean; expiresAt?: number; used?: number; cap?: number }>;
-  consumeDayPassGuide(): Promise<{ ok?: boolean }>;
+  consumeDayPassGuide(options?: { poiId?: string }): Promise<{ ok?: boolean }>;
   getOfflineSpendState(): Promise<{ pendingCredits?: number }>;
   markSpendReconciled(): Promise<void>;
   setWalletBalance(options: { credits: number }): Promise<void>;
@@ -310,6 +310,45 @@ export async function pushUserContextToNative(ctx?: Partial<NativeUserContext>):
   } catch {
     // Metodo assente su build vecchie o plugin non raggiungibile: best-effort.
     return false;
+  }
+}
+
+/**
+ * (25/10/2026) Verifica a schermo spento: il servizio nativo lavora col JWT che gli passa il JS e, se il server
+ * risponde 401, emette solo `tokenExpired` — il rinnovo lo fa il JS, che a schermo spento è congelato. Con un JWT
+ * da un'ora, dopo un'ora di cammino a schermo spento il nativo non ottiene più guide nuove dal cloud. Il nativo
+ * NON rinnova da sé per scelta: la rotazione dei refresh token di Supabase è a uso singolo, e due rinnovatori
+ * (nativo e supabase-js) si invaliderebbero a vicenda, fino al logout dell'utente.
+ * Regola quindi: PRIMA che lo schermo possa spegnersi (avvio, ripresa dell'app, avvio dell'audioguida) il JS
+ * rinnova la sessione se le restano meno di `ORE_MINIME_SESSIONE` ore e la rispinge al nativo. Con la scadenza
+ * del JWT alzata a 24 h nel pannello Supabase (Authentication › Sessions › JWT expiry) un giro intero a schermo
+ * spento resta coperto; con la scadenza di un'ora il rinnovo avviene a ogni ripresa, e copre un'ora.
+ */
+const ORE_MINIME_SESSIONE = 12;
+let ultimoRinnovoForzatoTs = 0;
+export async function assicuraSessioneFrescaPerIlNativo(): Promise<'rinnovata' | 'fresca' | 'assente' | 'fallita'> {
+  if (!isNative()) return 'assente';
+  try {
+    const { supabase } = await import('../lib/supabase');
+    const { data } = await supabase.auth.getSession();
+    const s = data?.session;
+    if (!s?.user?.id || !s.access_token) return 'assente';
+    const restanoMs = (Number(s.expires_at) || 0) * 1000 - Date.now();
+    if (restanoMs > ORE_MINIME_SESSIONE * 3600_000) {
+      await ItaintaBackgroundPoi.setUserContext({ userId: s.user.id, accessToken: s.access_token });
+      return 'fresca';
+    }
+    // Al massimo un rinnovo forzato ogni 5 minuti: supabase-js ruota il refresh token a ogni chiamata.
+    if (Date.now() - ultimoRinnovoForzatoTs < 5 * 60_000) return 'fresca';
+    ultimoRinnovoForzatoTs = Date.now();
+    const r = await supabase.auth.refreshSession();
+    const nuova = r.data?.session;
+    if (!nuova?.access_token) return 'fallita';
+    // onAuthStateChange(TOKEN_REFRESHED) la rispinge già; qui subito, senza aspettare l'evento.
+    await ItaintaBackgroundPoi.setUserContext({ userId: nuova.user.id, accessToken: nuova.access_token });
+    return 'rinnovata';
+  } catch {
+    return 'fallita';
   }
 }
 

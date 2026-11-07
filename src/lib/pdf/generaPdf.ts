@@ -63,6 +63,17 @@ export const ET_ITINERARIO: Record<Lang, import('./ItinerarioPdf').ItinerarioPdf
   ES: { pagina: 'Página', giorno: 'Día', giorni: 'días', giornoSingolo: 'día', curatoDa: 'de viaje seleccionado por World in Pocket', intro: 'Bienvenido a tu guía de viaje seleccionada por World in Pocket. Este itinerario te lleva por una selección especial de paradas y puntos de interés. Usa la aplicación «World in Pocket» durante tu visita para desbloquear las audioguías interactivas.', consiglioGuida: 'Consejo de la guía', tempoVisita: 'Tiempo de visita', spostamento: 'Traslado', budgetGiorno: 'Presupuesto del día', totaleGiorno: 'Total del día', consigli: 'Consejos', suggerimenti: 'Sugerencias', precauzioni: 'Precauciones', zoneDaEvitare: 'Zonas a evitar', totaleViaggio: 'Total estimado del viaje', mappa: 'Mapa del recorrido', mezzi: 'Transporte público' },
   DE: { pagina: 'Seite', giorno: 'Tag', giorni: 'Tage', giornoSingolo: 'Tag', curatoDa: 'Reise, kuratiert von World in Pocket', intro: 'Willkommen zu deinem Reiseführer, kuratiert von World in Pocket. Diese Route führt dich zu einer besonderen Auswahl von Stationen und Sehenswürdigkeiten. Nutze die App „World in Pocket“ während des Besuchs, um interaktive Audioguides freizuschalten.', consiglioGuida: 'Tipp des Guides', tempoVisita: 'Besuchsdauer', spostamento: 'Transfer', budgetGiorno: 'Tagesbudget', totaleGiorno: 'Tagessumme', consigli: 'Tipps', suggerimenti: 'Weitere Hinweise', precauzioni: 'Vorsichtsmaßnahmen', zoneDaEvitare: 'Zu meidende Gegenden', totaleViaggio: 'Geschätzte Reisekosten', mappa: 'Routenkarte', mezzi: 'Öffentliche Verkehrsmittel' },
 };
+// Riga del tragitto fra una tappa e la successiva (08/10/2026, committente: «nel pdf dell'itinerario
+// indicare il tempo e la distanza da una tappa all'altra»).
+const ET_TRATTE: Record<string, { tratta: string; aPiedi: string; inAuto: string }> = {
+  // (20/10/2026) La riga sta PRIMA della tappa che raggiunge: «Per arrivare qui», non «Alla prossima tappa».
+  IT: { tratta: 'Per arrivare qui', aPiedi: 'a piedi', inAuto: 'in auto' },
+  EN: { tratta: 'Getting here', aPiedi: 'on foot', inAuto: 'by car' },
+  FR: { tratta: 'Pour arriver ici', aPiedi: 'à pied', inAuto: 'en voiture' },
+  ES: { tratta: 'Para llegar aquí', aPiedi: 'a pie', inAuto: 'en coche' },
+  DE: { tratta: 'Anreise hierher', aPiedi: 'zu Fuß', inAuto: 'mit dem Auto' },
+};
+for (const l of Object.keys(ET_ITINERARIO)) Object.assign((ET_ITINERARIO as any)[l], ET_TRATTE[l] || ET_TRATTE.EN);
 
 /**
  * COMMONS «Special:FilePath» NON SI SCARICA DAL BROWSER (20/09/2026, collaudo in

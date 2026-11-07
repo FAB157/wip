@@ -146,6 +146,15 @@
   @apply !m-0;
 }
 
+/* (10/10/2026, committente: «anche queste nuvole sono tagliate, risolvi per tutte») Il fumetto ha margine 0 e
+   angoli molto tondi: i fumetti di SOLO TESTO dei livelli (gusto, sentieri, ciclabili, neve, spiagge, aree…)
+   finivano con l'emoji e la prima lettera sotto la curva. Tutti cominciano con lo stesso div «system-ui»:
+   prendono qui il loro margine interno. Le schede dei luoghi (React) hanno la loro impaginazione e non cambiano. */
+.leaflet-popup-content > div[style*="font-family:system-ui"] {
+  padding: 4px 10px 4px 12px;
+  box-sizing: border-box;
+}
+
 .leaflet-popup-tip {
   @apply !bg-white/90;
 }

@@ -305,6 +305,13 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
     } finally {
       setOccupato(null);
       void rileggi();
+      // Il watch della mappa non parte più da solo senza consenso
+      // (07/11/2026): ora che il consenso c'è, e se il permesso è arrivato,
+      // lo si avvia da qui — altrimenti il mirino resterebbe fermo finché
+      // non si tocca la mappa.
+      import('../services/locationService')
+        .then(({ locationService }) => locationService.startWatching().catch(() => { /* permesso negato */ }))
+        .catch(() => { /* niente */ });
     }
   };
 

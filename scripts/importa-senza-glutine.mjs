@@ -33,6 +33,7 @@ const RADICE = process.env.WIP_RADICE || 'C:/progetti/itainta';
 const args = process.argv.slice(2);
 const fileCsv = args.find((a) => !a.startsWith('--'));
 const SCRIVI = args.includes('--scrivi');
+const SOLO_MANCANTI = args.includes('--solo-mancanti');
 const PAUSA_MS = Number((args.find((a) => a.startsWith('--pausa=')) || '').split('=')[1]) || 150;
 const LIMITE = Number((args.find((a) => a.startsWith('--limite=')) || '').split('=')[1]) || 0;
 if (!fileCsv) { console.error('Uso: node scripts/importa-senza-glutine.mjs <csv> [--scrivi] [--pausa=ms] [--limite=N]'); process.exit(1); }
@@ -148,6 +149,16 @@ async function saluteSitoOk() {
     const t0 = Date.now();
     const res = await fetch('https://www.wip.guide/api/health', { signal: AbortSignal.timeout(8000) });
     const ms = Date.now() - t0;
+    // (28/10/2026) 429 = il limitatore per IP del sito (100/min, Oracle lo condivide con gli altri lavori), non il
+    // database in affanno: tre 429 fermavano l'import, che ripartiva da riga 0 e non finiva mai. Davanti a un 429 si
+    // misura il database direttamente; solo se è lento ci si ferma.
+    if (res.status === 429) {
+      const t1 = Date.now();
+      try { await cl.query('select 1'); } catch { console.log('[salute] 429 dal sito e database non risponde'); return false; }
+      const dbMs = Date.now() - t1;
+      if (dbMs > 2500) { console.log(`[salute] 429 dal sito e database lento (${dbMs} ms)`); return false; }
+      return true;
+    }
     if (!res.ok || ms > 2500) { console.log(`[salute] /api/health non ok o lento (status ${res.status}, ${ms} ms)`); return false; }
     return true;
   } catch (e) { console.log(`[salute] /api/health irraggiungibile: ${e.message}`); return false; }
@@ -167,6 +178,9 @@ for (let i = 0; i < daFare.length; i++) {
   try {
     let idRiga = giaFatte.get(v.link) || null;
     let subRiga = null;
+    // --solo-mancanti (22/10/2026): al rilancio i già fatti non si riscrivono (180k righe: sarebbero 180k
+    // aggiornamenti su locali_pois, 10M di righe, per niente).
+    if (idRiga && SOLO_MANCANTI) { conta.ritrovati++; continue; }
     if (idRiga) conta.ritrovati++;
     else {
       const vicini = (await cl.query(

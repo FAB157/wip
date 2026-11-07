@@ -240,6 +240,11 @@ export default function PoiAudioPlayer({
           mode: localGuideMode,
           previousText: displayText || undefined,
           lang: language,
+          // REGOLA 23/10/2026 (MASI): la domanda a parte, la riga del luogo (poi_id) e il testo EFFETTIVAMENTE letto
+          // dalla voce (`guida`): Chiedi risponde da tutti e tre, non solo dal testo mostrato.
+          question: q,
+          guida: locationService.testoLettoPer(poi?.id) || undefined,
+          poi_id: poi?.id != null ? String(poi.id) : undefined,
         }),
       }, 45000);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

@@ -1,3 +1,4 @@
+import { normalizzaPoiMinimo } from '../lib/poiDisplay';
 import {
   useState,
   useRef,
@@ -49,7 +50,7 @@ import { fetchServicesAround, SERVICE_EMOJI, SERVICE_LABEL } from "../lib/servic
 import { markVisited, getVisitedCells, cityCoveragePercent, FOG_CELL_DEG } from "../lib/visitedFog";
 import { startZtlWatch, stopZtlWatch, fetchZtlZonesAround } from "../lib/ztlAlert";
 import { tasteRoutesInBounds, TASTE_KIND_LABELS } from "../lib/wineRoutesCatalog";
-import { ENO_PRODUTTORI, ENO_BOTTEGHE, TEMATICI_KEYS, ENO_SUB_BY_TYPE, MERCATI_TYPES } from "../lib/poiTaxonomy";
+import { ENO_PRODUTTORI, ENO_BOTTEGHE, ENO_CAMPI, nomeGustoVero, TEMATICI_KEYS, ENO_SUB_BY_TYPE, MERCATI_TYPES } from "../lib/poiTaxonomy";
 import { fetchRouteLines, drawRouteLines, drawRouteStops, creaGruppoPercorsi, livelloDaZoom, setRouteAttribution, ATTRIB_SENTIERI, ATTRIB_GUSTO } from "../lib/routeLines";
 import { TASTE_ROUTE_LINES } from "../lib/tasteRouteLines";
 import { decodeSegments } from "../lib/polyline";
@@ -63,8 +64,10 @@ import { orariSole, oraBreve, mancaAllOraOro, fusoDelPunto } from "../lib/sunTim
 import type { OrariSole } from "../lib/sunTimes";
 import { fetchBathingSites, aggiungiMisure, BATHING_QUALITY_COLOR } from "../lib/bathingWater";
 import { fetchValanghe, VALANGHE_COLORE } from "../lib/valanghe";
-import { fetchAreeProtette, COLORE_AREA, schedaNatura2000 } from "../lib/areeProtette";
-import { fetchAreeDenominazioni } from "../lib/denominazioniAree";
+import { fetchAreeProtette, COLORE_AREA, schedaNatura2000, attribuzioneArea } from "../lib/areeProtette";
+import { fetchSpecieSullaMappa, listaRossa, miniatura, fotoGrande, FOTO_DELLA_SPECIE, type SpecieSullaMappa } from "../lib/specieMappa";
+import { fetchAreeDenominazioni, famigliaGusto, famiglieDellaZona, riempimentoGusto, COLORI_GUSTO, nomeFamigliaGusto, type AreaDenominazione } from "../lib/denominazioniAree";
+import { ordinaAreeGrandiPrima, kmqAnello } from "../lib/areeOrdine";
 
 import type { PoiCategory } from "../types/poi";
 
@@ -809,6 +812,16 @@ function weatherEmoji(code: number): string {
   return "🌡️";
 }
 
+// (20/10/2026, collaudo Torino col telefono virtuale) RAFFICA DI RICHIESTE: con la mappa in «segui» ogni fix GPS
+// muove la mappa → moveend → questa funzione; un 503 del server non veniva ricordato, quindi la richiesta
+// ripartiva A OGNI POSIZIONE: 179 chiamate a /api/meteo/punto in pochi minuti, la pagina congelata e il server
+// spinto a rispondere 503 anche agli altri. Ora: un fallimento si ricorda 5 minuti (per cella), una richiesta in
+// corso viene condivisa, e fra due richieste della stessa cella passano almeno 60 s.
+const METEO_FALLITO_MS = 5 * 60 * 1000;
+const METEO_MIN_INTERVALLO_MS = 60 * 1000;
+const meteoInCorso = new Map<string, Promise<MeteoData | null>>();
+const meteoUltimaRichiesta = new Map<string, number>();
+const meteoFallitoFinoA = new Map<string, number>();
 async function fetchMeteoCached(lat: number, lon: number): Promise<MeteoData | null> {
   const key = `wip_meteo_${lat.toFixed(1)}_${lon.toFixed(1)}`;
   try {
@@ -820,27 +833,40 @@ async function fetchMeteoCached(lat: number, lon: number): Promise<MeteoData | n
       }
     }
   } catch { /* cache corrotta: rifetch */ }
+  const ora = Date.now();
+  if ((meteoFallitoFinoA.get(key) || 0) > ora) return null;
+  if (ora - (meteoUltimaRichiesta.get(key) || 0) < METEO_MIN_INTERVALLO_MS) return null;
+  const gia = meteoInCorso.get(key);
+  if (gia) return gia;
+  meteoUltimaRichiesta.set(key, ora);
 
-  try {
-    // Il server fa da tramite verso MET Norway (che pretende uno User-Agent
-    // che il browser non può mandare) e traduce i simboli MET nei codici WMO
-    // che questa interfaccia già usa.
-    const res = await fetch(getApiUrl(`/api/meteo/punto?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`),
-      { signal: AbortSignal.timeout(12000) });
-    if (!res.ok) return null;
-    const j = await res.json();
-    if (typeof j?.temp !== "number") return null;
+  const richiesta = (async (): Promise<MeteoData | null> => {
+    try {
+      // Il server fa da tramite verso MET Norway (che pretende uno User-Agent
+      // che il browser non può mandare) e traduce i simboli MET nei codici WMO
+      // che questa interfaccia già usa.
+      const res = await fetch(getApiUrl(`/api/meteo/punto?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`),
+        { signal: AbortSignal.timeout(12000) });
+      if (!res.ok) { meteoFallitoFinoA.set(key, Date.now() + METEO_FALLITO_MS); return null; }
+      const j = await res.json();
+      if (typeof j?.temp !== "number") { meteoFallitoFinoA.set(key, Date.now() + METEO_FALLITO_MS); return null; }
 
-    const data: MeteoData = {
-      temp: j.temp,
-      code: typeof j.code === "number" ? j.code : 0,
-      rainProb: typeof j.rainProb === "number" ? j.rainProb : 0,
-    };
-    try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data })); } catch { /* quota piena */ }
-    return data;
-  } catch {
-    return null;
-  }
+      const data: MeteoData = {
+        temp: j.temp,
+        code: typeof j.code === "number" ? j.code : 0,
+        rainProb: typeof j.rainProb === "number" ? j.rainProb : 0,
+      };
+      try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data })); } catch { /* quota piena */ }
+      return data;
+    } catch {
+      meteoFallitoFinoA.set(key, Date.now() + METEO_FALLITO_MS);
+      return null;
+    } finally {
+      meteoInCorso.delete(key);
+    }
+  })();
+  meteoInCorso.set(key, richiesta);
+  return richiesta;
 }
 
 // Modalità "al coperto": evidenziazione VISIVA temporanea dei POI indoor
@@ -899,6 +925,120 @@ function arricchisciFumetto(
       const esito = { testo: String(j?.description_short || j?.riga_dati || '').trim(), foto: String(j?.thumbnail || '').trim() };
       cacheFumetti.set(chiave, esito);
       disegna(esito);
+    } catch { /* rete assente: il fumetto resta com'era */ }
+  });
+}
+
+/**
+ * SPECIE OSSERVATE NEL FUMETTO DI UN'AREA PROTETTA (11/10/2026, committente: «meglio inserire riga»). Stessa rotta del
+ * riquadro «Biodiversità» della scheda dei parchi (GBIF, foto solo con licenza libera, cache 24 h per cella di ~1 km):
+ * si chiede attorno al PUNTO TOCCATO, non al centro dell'area — un parco di 700 km² ha specie diverse da un capo
+ * all'altro. Nessuna specie con foto sicura → nessuna riga. L'autore della foto resta scritto (CC BY lo chiede).
+ */
+const cacheSpecieArea = new Map<string, any[]>();
+
+/**
+ * Foto grande di una specie (11/10/2026, committente: «se si clicca aprire la foto grande, frecce per scorrere le
+ * specie e tasto X per tornare indietro»). Un velo sopra tutta l'app, fuori dalla mappa: il fumetto sotto resta aperto.
+ * Scorre TUTTE le specie della zona (fino a 12), non solo le 4 del fumetto; frecce, tasti ← → Esc, e il dito.
+ */
+function apriFotoSpecie(specie: any[], da: number, lingua: string = 'IT') {
+  if (!specie.length) return;
+  document.querySelector('[data-wip-foto-specie]')?.remove();
+  let i = Math.max(0, Math.min(da, specie.length - 1));
+  const velo = document.createElement('div');
+  velo.setAttribute('data-wip-foto-specie', '1');
+  velo.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,sans-serif;touch-action:none;';
+  const tasto = 'position:absolute;width:44px;height:44px;border-radius:22px;border:0;background:rgba(255,255,255,.16);color:#fff;font-size:24px;line-height:44px;text-align:center;padding:0;cursor:pointer;';
+  velo.innerHTML = `<img alt="" referrerpolicy="no-referrer" style="max-width:min(86vw,760px);max-height:58vh;object-fit:contain;border-radius:10px;background:#111;">
+    <div data-nome style="color:#fff;font-size:17px;font-weight:700;font-style:italic;margin-top:14px;text-align:center;padding:0 60px;"></div>
+    <div data-rossa style="display:none;color:#fff;font-size:11px;font-weight:800;margin-top:6px;padding:3px 10px;border-radius:999px;"></div>
+    <div data-autore style="color:rgba(255,255,255,.6);font-size:11px;margin-top:4px;text-align:center;padding:0 60px;"></div>
+    <div data-conto style="color:rgba(255,255,255,.5);font-size:11px;margin-top:8px;"></div>
+    <button type="button" data-x aria-label="×" style="${tasto}top:calc(env(safe-area-inset-top, 0px) + 14px);right:14px;">×</button>
+    ${specie.length > 1 ? `<button type="button" data-prima aria-label="‹" style="${tasto}left:10px;top:50%;margin-top:-22px;">‹</button>
+    <button type="button" data-dopo aria-label="›" style="${tasto}right:10px;top:50%;margin-top:-22px;">›</button>` : ''}`;
+  const img = velo.querySelector('img') as HTMLImageElement;
+  const mostra = () => {
+    const s = specie[i];
+    img.src = fotoGrande(fotoSicura(String(s.foto_url || '')) || '');
+    (velo.querySelector('[data-nome]') as HTMLElement).textContent = String(s.specie || '');
+    // Lista Rossa IUCN: l'etichetta solo se la specie è minacciata o quasi (CR, EN, VU, NT).
+    const rossa = listaRossa(s.lista_rossa, lingua);
+    const elRossa = velo.querySelector('[data-rossa]') as HTMLElement;
+    elRossa.style.display = rossa ? 'inline-block' : 'none';
+    if (rossa) { elRossa.style.background = rossa.colore; elRossa.textContent = `${rossa.sigla} · ${rossa.nome} — IUCN Red List`; }
+    const autore = String(s.foto_autore || '').trim();
+    // Quando la foto è della specie (Wikimedia Commons) e non di questo avvistamento, lo si dice.
+    const nota = s.foto_della_specie ? ` · ${FOTO_DELLA_SPECIE[String(lingua).toUpperCase()] || FOTO_DELLA_SPECIE.EN}` : '';
+    (velo.querySelector('[data-autore]') as HTMLElement).textContent = (autore ? `© ${autore}${s.foto_fonte ? ` / ${s.foto_fonte}` : ''}` : String(s.foto_fonte || 'GBIF')) + nota;
+    (velo.querySelector('[data-conto]') as HTMLElement).textContent = specie.length > 1 ? `${i + 1} / ${specie.length}` : '';
+  };
+  const vai = (passo: number) => { i = (i + passo + specie.length) % specie.length; mostra(); };
+  const suTasto = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') chiudi();
+    else if (e.key === 'ArrowLeft') vai(-1);
+    else if (e.key === 'ArrowRight') vai(1);
+  };
+  const chiudi = () => { document.removeEventListener('keydown', suTasto); velo.remove(); };
+  let xInizio: number | null = null;
+  velo.addEventListener('touchstart', (e) => { xInizio = e.touches[0]?.clientX ?? null; }, { passive: true });
+  velo.addEventListener('touchend', (e) => {
+    const x = e.changedTouches[0]?.clientX;
+    if (xInizio != null && x != null && Math.abs(x - xInizio) > 45 && specie.length > 1) vai(x < xInizio ? 1 : -1);
+    xInizio = null;
+  }, { passive: true });
+  velo.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    e.stopPropagation();
+    if (t.closest('[data-prima]')) vai(-1);
+    else if (t.closest('[data-dopo]')) vai(1);
+    else if (t.closest('[data-x]') || t === velo) chiudi();
+  });
+  document.addEventListener('keydown', suTasto);
+  mostra();
+  document.body.appendChild(velo);
+}
+function specieNelFumettoArea(strato: L.Layer, language: string) {
+  strato.on('popupopen', async (ev: any) => {
+    const radice = ev?.popup?.getElement?.()?.querySelector?.('.leaflet-popup-content > div') as HTMLElement | null;
+    const dove = ev?.popup?.getLatLng?.();
+    if (!radice || !dove || radice.querySelector('[data-wip-specie]')) return;
+    const box = document.createElement('div');
+    box.setAttribute('data-wip-specie', '1');
+    radice.appendChild(box);
+    const chiave = `${dove.lat.toFixed(2)}_${dove.lng.toFixed(2)}`;
+    const disegna = (specie: any[]) => {
+      if (!box.isConnected || !specie.length) return;
+      // Tutte le specie in una fila che scorre col dito (committente 11/10/2026: «su 12 se ne vedono 4»).
+      const prime = specie;
+      const autori = [...new Set(prime.map((s) => String(s.foto_autore || '').trim()).filter(Boolean))];
+      const firma = autori.slice(0, 4).join(', ') + (autori.length > 4 ? '…' : '');
+      box.innerHTML = `<div style="font-size:10px;font-weight:700;color:#065f46;margin-top:6px;">🐾 ${escapeHtml(getTranslation('sk_biodiversita_fonte', language as any))}${specie.length > 4 ? ` · ${specie.length} ›` : ''}</div>
+        <div class="no-scrollbar" style="display:flex;gap:5px;margin-top:4px;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;touch-action:pan-x;">${prime.map((s, n) => `<div data-wip-specie-n="${n}" style="width:50px;flex:none;cursor:pointer;">
+          <img src="${escapeHtml(miniatura(fotoSicura(String(s.foto_url || '')) || ''))}" alt="" referrerpolicy="no-referrer" style="display:block;width:50px;height:50px;object-fit:cover;border-radius:6px;background:#dcfce7;" onerror="this.onerror=null;var p=this.parentElement;if(p)p.remove()">
+          <div style="font-size:9px;font-style:italic;color:#374151;line-height:1.15;margin-top:2px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">${escapeHtml(String(s.specie || ''))}</div>
+          ${(() => { const lr = listaRossa(s.lista_rossa, language); return lr ? `<div title="${escapeHtml(lr.nome)} — IUCN Red List" style="display:inline-block;font-size:8px;font-weight:800;color:#fff;background:${lr.colore};border-radius:4px;padding:0 4px;margin-top:2px;">${lr.sigla}</div>` : ''; })()}
+        </div>`).join('')}</div>
+        ${firma ? `<div style="font-size:8px;color:#9ca3af;margin-top:3px;line-height:1.2;">© ${escapeHtml(firma)} / GBIF</div>` : ''}`;
+      box.addEventListener('click', (e) => {
+        const quale = (e.target as HTMLElement).closest('[data-wip-specie-n]') as HTMLElement | null;
+        if (!quale) return;
+        e.stopPropagation();
+        apriFotoSpecie(specie, Number(quale.getAttribute('data-wip-specie-n')) || 0, language);
+      });
+      // MAI popup.update() da solo: con un contenuto a stringa Leaflet lo riscrive da capo e la riga sparisce.
+      // Il contenuto diventa il nodo stesso, così resta anche alla riapertura.
+      ev.popup.setContent?.(radice);
+    };
+    if (cacheSpecieArea.has(chiave)) { disegna(cacheSpecieArea.get(chiave) || []); return; }
+    try {
+      const r = await fetch(getApiUrl(`/api/biodiversita/vicino?lat=${dove.lat.toFixed(4)}&lon=${dove.lng.toFixed(4)}`));
+      if (!r.ok) return;
+      const j = await r.json();
+      const specie = Array.isArray(j?.specie) ? j.specie : [];
+      if (j?.fonte !== 'errore') cacheSpecieArea.set(chiave, specie);
+      disegna(specie);
     } catch { /* rete assente: il fumetto resta com'era */ }
   });
 }
@@ -1143,7 +1283,17 @@ function MapArea({
 
   useEffect(() => {
     const handleFocusPoi = (e: any) => {
-      if (e.detail) focusPoiOnMap(e.detail);
+      // 23/10/2026: anche qui il POI può essere minimo (giro, TourRouteLayer): sempre normalizzato.
+      if (!e.detail) return;
+      const poi = normalizzaPoiMinimo(e.detail) as any;
+      if (!Number.isFinite(poi.lat) || !Number.isFinite(poi.lon)) return;
+      // 24/10/2026: un link «?poi=» arriva spesso prima che la mappa abbia una misura (accesso, schermata
+      // iniziale, tab nascosto): flyTo su una mappa di 0×0 dava «Invalid LatLng (NaN, NaN)» e la scheda non si
+      // apriva. Allora si mette in attesa e lo apre l'effetto più sotto, appena la mappa è visibile.
+      const s = mapRef.current?.getSize?.();
+      if (!s || !s.x || !s.y) { (window as any).__wipFocusPoiInAttesa = poi; return; }
+      (window as any).__wipFocusPoiInAttesa = null;
+      focusPoiOnMap(poi);
     };
     window.addEventListener('focus-poi', handleFocusPoi);
     // Chiusa la scheda POI, il popup del pin restava aperto sopra i tasti
@@ -1627,9 +1777,66 @@ function MapArea({
   const userLocationRef = useRef<[number, number] | null>(null);
   useEffect(() => { userLocationRef.current = userLocation; }, [userLocation]);
 
+  // ── DUE REGOLE PER OGNI LIVELLO DELLA MAPPA (10/10/2026, committente: «sistema tutti i livelli e le nuvole») ──
+  // (1) UN LIVELLO GIÀ ACCESO PARTE DA SOLO. All'apertura dell'app i livelli ricordati sono accesi ma la
+  //     mappa non esiste ancora: ogni effetto usciva su `if (!map) return` e non ripartiva più («devo
+  //     deselezionare e riselezionare»). `mappaPronta` passa a 1 quando la mappa c'è ed è fra le dipendenze
+  //     di TUTTI gli effetti dei livelli: un livello nuovo DEVE metterla fra le sue.
+  const [mappaPronta, setMappaPronta] = useState(0);
+  useEffect(() => {
+    if (mapRef.current) return;
+    const attesa = setInterval(() => { if (mapRef.current) { clearInterval(attesa); setMappaPronta(1); } }, 400);
+    return () => clearInterval(attesa);
+  }, []);
+  // Il luogo chiesto da un link «?poi=» (App.tsx) o da un 'focus-poi' arrivato con la mappa ancora senza misura:
+  // si apre appena la mappa c'è ed è visibile, entro 60 s. Prima il link apriva l'app e basta.
+  useEffect(() => {
+    if (!mappaPronta || activeTab !== 'map') return;
+    let giri = 0;
+    const prova = setInterval(() => {
+      const poi = (window as any).__wipFocusPoiInAttesa;
+      if (!poi || ++giri > 150) { clearInterval(prova); return; }
+      const s = mapRef.current?.getSize?.();
+      if (!s || !s.x || !s.y) return;
+      (window as any).__wipFocusPoiInAttesa = null;
+      clearInterval(prova);
+      focusPoiOnMap(poi);
+    }, 400);
+    return () => clearInterval(prova);
+  }, [mappaPronta, activeTab]);
+  // (2) UN FUMETTO APERTO NON SI CHIUDE DA SOLO («dovrebbe rimanere finché non si tocca altra zona»). Aprire
+  //     un fumetto sposta la mappa per farlo entrare nello schermo, lo spostamento rilegge il livello, e
+  //     svuotare il livello chiude il fumetto. Finché un fumetto è aperto la RILETTURA di un livello già in
+  //     vista si rimanda (`rimandaSeFumetto`) e parte quando il fumetto si chiude. Un livello appena acceso
+  //     (ancora nulla in vista) non aspetta. Un caricatore nuovo DEVE chiamarla prima di svuotare il gruppo.
+  const fumettoApertoSullaMappa = (m: L.Map): boolean => { const p = (m as any)._popup; return !!(p && m.hasLayer(p)); };
+  const rilettureSospeseRef = useRef<Record<string, () => void>>({});
+  const rimandaSeFumetto = (chiave: string, strato: L.Layer | null | undefined, rilancia: () => void): boolean => {
+    const m = mapRef.current;
+    if (!m || !strato || !m.hasLayer(strato) || !fumettoApertoSullaMappa(m)) return false;
+    rilettureSospeseRef.current[chiave] = rilancia;
+    return true;
+  };
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const allaChiusura = () => {
+      // un attimo dopo: toccando un'altra zona il fumetto nuovo si apre subito dopo la chiusura del vecchio
+      setTimeout(() => {
+        const daFare = Object.keys(rilettureSospeseRef.current).map((k) => rilettureSospeseRef.current[k]) as Array<() => void>;
+        if (fumettoApertoSullaMappa(map) || !daFare.length) return;
+        rilettureSospeseRef.current = {};
+        for (const f of daFare) { try { f(); } catch { /* una rilettura fallita non ferma le altre */ } }
+      }, 250);
+    };
+    map.on('popupclose', allaChiusura);
+    return () => { map.off('popupclose', allaChiusura); };
+  }, [mappaPronta]);
+
   const loadServices = useCallback(async (lat: number, lon: number): Promise<boolean> => {
     const map = mapRef.current;
     if (!map) return false;
+    if (rimandaSeFumetto('servizi', servicesLayerRef.current, () => { void loadServices(lat, lon); })) return false;
     setServicesLoading(true);
     try {
       const points = await fetchServicesAround(lat, lon);
@@ -1694,7 +1901,7 @@ function MapArea({
       setServicesActive(false);
       try { localStorage.setItem('wip_servizi_enabled', '0'); } catch { /* storage pieno */ }
     }
-  }, [servicesActive, loadServices]);
+  }, [servicesActive, loadServices, mappaPronta]);
 
   // Aggiornamento del layer quando l'utente sposta la mappa di molto
   // (>1,5 km dal centro dell'ultima query) mentre il toggle è attivo
@@ -1721,7 +1928,7 @@ function MapArea({
     };
     map.on("moveend", onMoveEnd);
     return () => { map.off("moveend", onMoveEnd); };
-  }, [servicesActive, loadServices]);
+  }, [servicesActive, loadServices, mappaPronta]);
 
   // ── Turismo dello Shopping e Turismo di Lusso (06/09/2026) ─────────────
   // STESSA scelta di Vino e Gusto qui sopra: `resolvePoiTaxonomy` (che filtra
@@ -1807,6 +2014,7 @@ function MapArea({
   const loadShopping = useCallback(async (bounds: L.LatLngBounds) => {
     const map = mapRef.current;
     if (!map) return;
+    if (rimandaSeFumetto('shopping', shoppingLayerRef.current, () => { void loadShopping(map.getBounds()); })) return;
     setShoppingLoading(true);
     try {
       if (!shoppingLayerRef.current) shoppingLayerRef.current = L.layerGroup();
@@ -1823,6 +2031,7 @@ function MapArea({
   const loadLusso = useCallback(async (bounds: L.LatLngBounds) => {
     const map = mapRef.current;
     if (!map) return;
+    if (rimandaSeFumetto('lusso', lussoLayerRef.current, () => { void loadLusso(map.getBounds()); })) return;
     setLussoLoading(true);
     try {
       if (!lussoLayerRef.current) lussoLayerRef.current = L.layerGroup();
@@ -1898,7 +2107,7 @@ function MapArea({
     aggiorna();
     map.on('moveend', aggiorna);
     return () => { map.off('moveend', aggiorna); };
-  }, [shoppingActive, loadShopping]);
+  }, [shoppingActive, loadShopping, mappaPronta]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1917,7 +2126,7 @@ function MapArea({
     aggiorna();
     map.on('moveend', aggiorna);
     return () => { map.off('moveend', aggiorna); };
-  }, [lussoActive, loadLusso]);
+  }, [lussoActive, loadLusso, mappaPronta]);
 
   // ── Fog of war dei luoghi visitati (src/lib/visitedFog.ts) ────────────
   // Toggle 👣 nei controlli mappa: layer canvas di rettangoli Leaflet
@@ -2034,7 +2243,7 @@ function MapArea({
       }
       setFogCoverage(null);
     };
-  }, [fogActive, fogTick, renderFog]);
+  }, [fogActive, fogTick, renderFog, mappaPronta]);
 
   // Pannello dei servizi mappa: chiuso di default, si apre dal tasto ⓘ.
   // Non persiste: è un menù, non una preferenza — gli stati dei singoli
@@ -2124,6 +2333,7 @@ function MapArea({
   const caricaSentieri = useCallback(async (bounds: L.LatLngBounds) => {
     const map = mapRef.current;
     if (!map) return;
+    if (rimandaSeFumetto('sentieri', sentieriLayerRef.current, () => { void caricaSentieri(map.getBounds()); })) return;
     setSentieriLoading(true);
     try {
       // Filtro per riquadro sull'indice lat/lon, poi per fonte: è la stessa
@@ -2318,7 +2528,7 @@ function MapArea({
     };
     map.on('moveend', onMoveEnd);
     return () => { map.off('moveend', onMoveEnd); };
-  }, [sentieriActive, caricaSentieri]);
+  }, [sentieriActive, caricaSentieri, mappaPronta]);
 
   // ── BICI ──────────────────────────────────────────────────────────────
   //
@@ -2365,6 +2575,7 @@ function MapArea({
   const caricaCiclabili = useCallback(async (bounds: L.LatLngBounds) => {
     const map = mapRef.current;
     if (!map) return;
+    if (rimandaSeFumetto('ciclabili', ciclabiliLayerRef.current, () => { void caricaCiclabili(map.getBounds()); })) return;
     const seq = ++ciclabiliSeqRef.current;
     setCiclabiliLoading(true);
     try {
@@ -2498,7 +2709,7 @@ function MapArea({
       // Le chiamate ancora in volo non devono ridisegnare un layer spento.
       ciclabiliSeqRef.current++;
     };
-  }, [ciclabiliActive, caricaCiclabili]);
+  }, [ciclabiliActive, caricaCiclabili, mappaPronta]);
 
   // ── VINO E GUSTO ──────────────────────────────────────────────────────
   //
@@ -2519,10 +2730,15 @@ function MapArea({
     try { return localStorage.getItem('wip_strade_gusto_enabled') === '1'; } catch { return false; }
   });
   const [stradeGustoLoading, setStradeGustoLoading] = useState(false);
+  // Una rilettura rimandata perché c'era un fumetto aperto: parte quando il fumetto si chiude.
+  const gustoSospesoRef = useRef(false);
   const stradeGustoLayerRef = useRef<L.LayerGroup | null>(null);
   const stradeGustoActiveRef = useRef(false);
   useEffect(() => { stradeGustoActiveRef.current = stradeGustoActive; }, [stradeGustoActive]);
   const stradeGustoLineeRef = useRef<L.LayerGroup | null>(null);
+  // Numero della lettura in corso: una lettura vecchia che finisce dopo una nuova non deve
+  // scambiare i gruppi (pan veloci).
+  const stradeGustoGenRef = useRef(0);
   // BUGFIX 26/08/2026: stessa correzione di SENTIERI_MIN_ZOOM sopra.
   const STRADE_GUSTO_MIN_ZOOM = 2;
   // GUSTO_PRODUTTORI_ZOOM tolto il 26/09/2026: i pin del gusto si vedono ora
@@ -2559,12 +2775,44 @@ function MapArea({
     if (!map) return;
     setStradeGustoLoading(true);
     try {
-      if (!stradeGustoLayerRef.current) stradeGustoLayerRef.current = creaGruppoPercorsi('#7f1d1d', GUSTO_ZOOM_APERTURA);
-      if (!stradeGustoLineeRef.current) stradeGustoLineeRef.current = L.layerGroup();
-      const group = stradeGustoLayerRef.current;
-      const linee = stradeGustoLineeRef.current;
-      group.clearLayers();
-      linee.clearLayers();
+      // (10/10/2026, committente: «la colorazione delle zone si toglie quando si muove la mappa o si
+      // clicca un POI») Si costruisce in gruppi NUOVI e si scambia alla fine. Prima `clearLayers()`
+      // all'inizio cancellava zone, tracciati e pin a ogni pan oltre 400 m e a ogni clic su un POI (che
+      // ricentra la mappa), e il colore tornava solo quando TUTTE le letture erano finite: secondi di
+      // mappa nuda, e nulla se una lettura falliva.
+      const gen = ++stradeGustoGenRef.current;
+      const group = creaGruppoPercorsi('#7f1d1d', GUSTO_ZOOM_APERTURA);
+      const linee = L.layerGroup();
+      // (10/10/2026 pomeriggio, committente: «non funziona il livello, non appare nulla») Lo scambio alla
+      // fine, da solo, lasciava la mappa VUOTA per tutta la durata delle letture (10 s misurati: 5 + 3,5 +
+      // 1,5, una dopo l'altra) e ogni spostamento ricominciava da capo. Due rimedi: (a) se sulla mappa non
+      // c'è ancora nulla del gusto, i gruppi nuovi si mettono SUBITO e si riempiono man mano; lo scambio
+      // alla fine vale solo quando c'è già qualcosa da tenere a vista; (b) le tre letture partono insieme.
+      const giaInVista = [stradeGustoLayerRef, stradeGustoLineeRef].some((r) => r.current && map.hasLayer(r.current));
+      if (!giaInVista && stradeGustoActiveRef.current && map.getZoom() >= STRADE_GUSTO_MIN_ZOOM) {
+        stradeGustoLayerRef.current = group;
+        stradeGustoLineeRef.current = linee;
+        linee.addTo(map);
+        group.addTo(map);
+      }
+      const zoomLettura = map.getZoom();
+      const tipiLettura = zoomLettura >= GUSTO_BOTTEGHE_ZOOM
+        ? [...ENO_PRODUTTORI, ...ENO_BOTTEGHE]
+        : ENO_PRODUTTORI.filter((t) => !ENO_CAMPI.includes(t));
+      const pAree: Promise<AreaDenominazione[]> = zoomLettura >= GUSTO_AREE_ZOOM
+        ? fetchAreeDenominazioni({ south: bounds.getSouth(), west: bounds.getWest(), north: bounds.getNorth(), east: bounds.getEast() }).catch(() => [])
+        : Promise.resolve([]);
+      const pLuoghi = Promise.resolve(supabase.rpc('pin_mappa_servizi_per_categoria', {
+        p_south: bounds.getSouth(), p_west: bounds.getWest(), p_north: bounds.getNorth(), p_east: bounds.getEast(),
+        p_category: 'enogastronomia', p_sub_categories: tipiLettura, p_limit: zoomLettura >= GUSTO_BOTTEGHE_ZOOM ? 350 : 200,
+      })).catch(() => ({ data: null as any }));
+      const pPercorsi = Promise.resolve(supabase
+        .from('shared_pois')
+        .select('id,name,lat,lon,description_short,contact_website,is_hidden,status')
+        .eq('poi_type', 'strada_del_vino')
+        .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
+        .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
+        .limit(150)).catch(() => ({ data: null as any }));
 
       // 1) Catalogo curato: nessuna rete, sempre disponibile.
       const curate = tasteRoutesInBounds(bounds.getSouth(), bounds.getWest(), bounds.getNorth(), bounds.getEast());
@@ -2590,13 +2838,62 @@ function MapArea({
       }
 
       // 2) I percorsi importati (relazioni OSM + directory ufficiali).
-      const { data: percorsi } = await supabase
-        .from('shared_pois')
-        .select('id,name,lat,lon,description_short,contact_website,is_hidden,status')
-        .eq('poi_type', 'strada_del_vino')
-        .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
-        .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
-        .limit(150);
+      // 1-bis) LE ZONE per prime: rispondono in meno di due secondi e sono lo sfondo di tutto il resto.
+      {
+        const aree = await pAree;
+        // (10/10/2026, committente: «perché il basilico prende zone e sovrasta il vermentino?») La RPC
+        // le dà dalla PIÙ PICCOLA: regola di ordinaAreeGrandiPrima (vale per ogni livello ad aree).
+        // La grande, che è una campitura di sfondo, è anche più chiara.
+        const areeOrdinate = ordinaAreeGrandiPrima(aree, (a) => a.area_kmq);
+        for (const a of areeOrdinate) {
+          if (!a.geom) continue;
+          try {
+            const ufficiale = a.qualita === 'ufficiale';
+            const grande = (Number(a.area_kmq) || 0) > 2000;
+            // (10/10/2026, committente: «le zone colorano tutto di rosso? anche i formaggi?») Il rosso è del
+            // VINO; formaggi, olio, carni e il resto del cibo hanno ciascuno il suo colore (`famigliaGusto`).
+            const { bordo, emoji } = COLORI_GUSTO[famigliaGusto(a)];
+            const altri = Array.isArray(a.altri) ? a.altri : [];
+            // Più famiglie sullo stesso confine (vino e formaggio): strisce, una per famiglia, bordo neutro e
+            // riempimento un po' più carico perché le strisce a 0,07 non si leggono.
+            const famiglie = famiglieDellaZona(a);
+            const mista = famiglie.length > 1;
+            const poly = L.geoJSON(a.geom, {
+              style: {
+                // Il tratteggio su un confine di migliaia di punti è ciò che il telefono disegna più lentamente:
+                // le zone grandi hanno la linea continua e sottile, e Leaflet sfoltisce di più i punti a schermo.
+                color: mista ? '#44403c' : bordo, weight: ufficiale ? 1.2 : grande ? 0.6 : 0.8, opacity: grande ? 0.5 : 0.7, dashArray: ufficiale || grande ? undefined : '4 4',
+                ...({ smoothFactor: 2.5 } as any),
+                fillColor: riempimentoGusto(famiglie), fillOpacity: (grande ? 0.035 : 0.07) * (mista ? 2.5 : 1),
+              },
+              interactive: true,
+            });
+            const rigaAltri = altri.slice(0, 14).map((x) => {
+              const c = COLORI_GUSTO[famigliaGusto(x)];
+              return `<div style="font-size:11px;color:#111827;margin-top:2px;">${c.emoji} ${escapeHtml(x.nome)}${x.tipo ? ` <span style="font-size:9px;color:${c.bordo};">${escapeHtml(x.tipo)}</span>` : ''}</div>`;
+            }).join('') + (altri.length > 14 ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;">+ ${altri.length - 14}</div>` : '');
+            // (10/10/2026, committente: «nella nuvola non si vede bene che prodotto è, è tagliata») Il fumetto
+            // ha gli angoli molto tondi: senza un margine suo il testo finiva sotto la curva (l'emoji e la
+            // prima lettera tagliate). E in cima va detto CHE COSA è: «Vino», «Formaggio», non solo il nome.
+            const cheCosa = famiglie.map((f) => `${COLORI_GUSTO[f].emoji} ${nomeFamigliaGusto(f, language)}`).join(' · ');
+            poly.bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:170px;max-width:250px;padding:4px 10px 4px 12px;box-sizing:border-box;">
+                <div style="font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:${mista ? '#44403c' : bordo};">${cheCosa}</div>
+                <div style="font-size:13px;font-weight:800;color:${bordo};margin-top:2px;line-height:1.25;">${escapeHtml(a.nome)}${a.tipo ? ` <span style="font-size:9px;color:${bordo};">${escapeHtml(a.tipo)}</span>` : ''}</div>
+                ${rigaAltri}
+                <div style="font-size:11px;color:#374151;margin-top:3px;">${getTranslation('mp_denominazione_area', language)}${a.area_kmq ? ` · ${Math.round(a.area_kmq).toLocaleString()} km²` : ''}</div>
+                <div style="font-size:10px;color:${ufficiale ? '#166534' : '#9a3412'};margin-top:2px;">${getTranslation(ufficiale ? 'mp_area_ufficiale' : 'mp_area_indicativa', language)}</div>
+                ${a.url ? `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener" style="font-size:10px;color:#7f1d1d;font-weight:700;display:block;margin-top:4px;">${getTranslation('mp_sito_ufficiale', language)} ↗</a>` : ''}
+                ${a.attribuzione ? `<div style="font-size:9px;color:#6b7280;margin-top:4px;line-height:1.3;">${escapeHtml(a.attribuzione)}</div>` : ''}
+              </div>`);
+            linee.addLayer(poly);
+          } catch (e) {
+            // Una zona che non si disegna (geometria rotta) non deve spegnere tutto il livello.
+            console.warn('[StradeGusto] zona saltata:', a?.nome, e);
+          }
+        }
+      }
+
+      const { data: percorsi } = await pPercorsi;
       for (const s of percorsi || []) {
         if (s.is_hidden === true || s.status === 'needs_revision') continue;
         const icon = L.divIcon({
@@ -2667,14 +2964,15 @@ function MapArea({
       // resta solo culturale, «perfetta, non toccarla»).
       const zoom = map.getZoom();
       {
-        const tipi = zoom >= GUSTO_BOTTEGHE_ZOOM
-          ? [...ENO_PRODUTTORI, ...ENO_BOTTEGHE]
-          : ENO_PRODUTTORI;
-        const { data: luoghi } = await supabase.rpc('pin_mappa_servizi_per_categoria', {
-          p_south: bounds.getSouth(), p_west: bounds.getWest(), p_north: bounds.getNorth(), p_east: bounds.getEast(),
-          p_category: 'enogastronomia', p_sub_categories: tipi, p_limit: zoom >= GUSTO_BOTTEGHE_ZOOM ? 350 : 200,
-        });
+        // (10/10/2026, committente: «tanti frutteti e oliveti, ma cosa sono? alcuni non hanno il nome»)
+        // Vigneti, uliveti e frutteti sono APPEZZAMENTI di OpenStreetMap (landuse=vineyard/orchard) con
+        // un nome, non aziende: 13.342 frutteti, 7.523 vigneti e 667 uliveti nei pin, 1.195 col nome
+        // generico («uliveto», «Oliveto», «Vigna») o vuoto e solo 934 con un sito o un telefono. Si
+        // vedono solo dallo zoom delle botteghe, come un campo si vede a piedi, e mai senza un nome vero.
+        const { data: luoghi } = await pLuoghi;   // partita in cima, insieme alle altre letture
         for (const p of luoghi || []) {
+          // «Nomi generici mai» (committente 10/10/2026): vale per OGNI pin del gusto.
+          if (!nomeGustoVero(p.nome)) continue;
           const emoji = SUB_CATEGORY_EMOJIS[String(p.sub_category)] || '🍷';
           const produttore = ENO_PRODUTTORI.includes(String(p.sub_category));
           const icon = L.divIcon({
@@ -2703,31 +3001,24 @@ function MapArea({
       // UE derivate dai comuni collegati su Wikidata (indicative, e il popup
       // lo dice). Campitura bordeaux leggera sotto le linee delle strade, da
       // zoom 8: più lontano una regione vinicola è una macchia senza nome.
-      if (map.getZoom() >= GUSTO_AREE_ZOOM) {
-        const aree = await fetchAreeDenominazioni({
-          south: bounds.getSouth(), west: bounds.getWest(), north: bounds.getNorth(), east: bounds.getEast(),
-        });
-        for (const a of aree) {
-          if (!a.geom) continue;
-          const ufficiale = a.qualita === 'ufficiale';
-          const poly = L.geoJSON(a.geom, {
-            style: { color: '#7f1d1d', weight: ufficiale ? 1.2 : 0.8, opacity: 0.7, dashArray: ufficiale ? undefined : '4 4', fillColor: '#9f1239', fillOpacity: 0.07 },
-            interactive: true,
-          });
-          poly.bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:160px;max-width:240px;">
-              <div style="font-size:12px;font-weight:800;color:#7f1d1d;">🍷 ${escapeHtml(a.nome)}${a.tipo ? ` <span style="font-size:9px;color:#9f1239;">${escapeHtml(a.tipo)}</span>` : ''}</div>
-              <div style="font-size:11px;color:#374151;margin-top:3px;">${getTranslation('mp_denominazione_area', language)}${a.area_kmq ? ` · ${Math.round(a.area_kmq).toLocaleString()} km²` : ''}</div>
-              <div style="font-size:10px;color:${ufficiale ? '#166534' : '#9a3412'};margin-top:2px;">${getTranslation(ufficiale ? 'mp_area_ufficiale' : 'mp_area_indicativa', language)}</div>
-              ${a.url ? `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener" style="font-size:10px;color:#7f1d1d;font-weight:700;display:block;margin-top:4px;">${getTranslation('mp_sito_ufficiale', language)} ↗</a>` : ''}
-              ${a.attribuzione ? `<div style="font-size:9px;color:#6b7280;margin-top:4px;line-height:1.3;">${escapeHtml(a.attribuzione)}</div>` : ''}
-            </div>`);
-          linee.addLayer(poly);
-        }
-      }
+      // (le zone si disegnano per prime, al punto 1-bis)
 
+      // Una lettura più nuova è partita nel frattempo: questa si butta, i gruppi vecchi restano.
+      if (gen !== stradeGustoGenRef.current) return;
+      // Messi subito in vista all'inizio (prima accensione): sono già al loro posto.
+      if (stradeGustoLayerRef.current === group && stradeGustoLineeRef.current === linee) return;
+      // (10/10/2026, committente: «la nuvola scompare da sola, dovrebbe rimanere finché non si tocca altra
+      // zona») Togliere i gruppi vecchi chiude il fumetto aperto su uno dei loro pin o zone. Finché un
+      // fumetto è aperto non si scambia nulla: si rilegge quando si chiude.
+      if (fumettoApertoSullaMappa(map)) { gustoSospesoRef.current = true; return; }
+      for (const r of [stradeGustoLayerRef, stradeGustoLineeRef]) {
+        if (r.current && map.hasLayer(r.current)) map.removeLayer(r.current);
+      }
+      stradeGustoLayerRef.current = group;
+      stradeGustoLineeRef.current = linee;
       if (stradeGustoActiveRef.current && map.getZoom() >= STRADE_GUSTO_MIN_ZOOM) {
-        if (!map.hasLayer(group)) group.addTo(map);
-        if (!map.hasLayer(linee)) linee.addTo(map);
+        linee.addTo(map);
+        group.addTo(map);
       }
     } catch (e) {
       console.warn('[StradeGusto] fetch fallito:', e);
@@ -2748,7 +3039,7 @@ function MapArea({
       setRouteAttribution(map, ATTRIB_GUSTO, false);
       return;
     }
-    if (!map) return;
+    if (!map) return;   // riparte da solo quando la mappa c'è: `mappaPronta` è fra le dipendenze
     setRouteAttribution(map, ATTRIB_GUSTO, true);
     const aggiorna = () => {
       if (map.getZoom() < STRADE_GUSTO_MIN_ZOOM) {
@@ -2768,13 +3059,23 @@ function MapArea({
       if (z === ultimoZoom && getDistanceFromLatLonInM(ultimoCentro.lat, ultimoCentro.lng, c.lat, c.lng) < 400) {
         return;
       }
+      // Con un fumetto aperto la mappa si sposta da sola per farlo entrare nello schermo: non è un motivo
+      // per rileggere (e chiuderlo). Si rilegge alla chiusura.
+      if (fumettoApertoSullaMappa(map)) { gustoSospesoRef.current = true; return; }
       ultimoCentro = c;
       ultimoZoom = z;
       aggiorna();
     };
+    const onPopupClose = () => {
+      if (!gustoSospesoRef.current) return;
+      gustoSospesoRef.current = false;
+      // un attimo dopo: toccando un'altra zona il fumetto nuovo si apre subito dopo la chiusura del vecchio
+      setTimeout(() => { if (!fumettoApertoSullaMappa(map)) { ultimoCentro = map.getCenter(); ultimoZoom = map.getZoom(); aggiorna(); } else gustoSospesoRef.current = true; }, 250);
+    };
     map.on('moveend', onMoveEnd);
-    return () => { map.off('moveend', onMoveEnd); };
-  }, [stradeGustoActive, caricaStradeGusto]);
+    map.on('popupclose', onPopupClose);
+    return () => { map.off('moveend', onMoveEnd); map.off('popupclose', onPopupClose); };
+  }, [stradeGustoActive, caricaStradeGusto, mappaPronta]);
 
   // ── Neve: località sciistiche e rifugi ────────────────────────────────
   // 32.789 località importate da OSM in tutto il mondo: 3.620 comprensori,
@@ -2850,7 +3151,7 @@ function MapArea({
     chiedi();
     const id = setInterval(chiedi, 5 * 60 * 1000);
     return () => { annullato = true; clearInterval(id); };
-  }, [satelliteActive]);
+  }, [satelliteActive, mappaPronta]);
 
   const toggleSatellite = useCallback(() => {
     setSatelliteActive((prev) => {
@@ -2871,6 +3172,7 @@ function MapArea({
   const caricaNeve = useCallback(async (bounds: L.LatLngBounds) => {
     const map = mapRef.current;
     if (!map) return;
+    if (rimandaSeFumetto('neve', neveLayerRef.current, () => { void caricaNeve(map.getBounds()); })) return;
     setNeveLoading(true);
     try {
       const { data } = await supabase
@@ -3013,7 +3315,7 @@ function MapArea({
     };
     map.on('moveend', onMoveEnd);
     return () => { map.off('moveend', onMoveEnd); };
-  }, [neveActive, caricaNeve]);
+  }, [neveActive, caricaNeve, mappaPronta]);
 
   // ── Sole: UV e caldo percepito (src/lib/sunIndex.ts) ──────────────────
   // Sostituisce l'avviso ZTL, tolto il 19/08/2026: scattava solo sopra i
@@ -3078,7 +3380,7 @@ function MapArea({
       map?.off('moveend', onMoveEnd);
       clearInterval(timer);
     };
-  }, [soleActive]);
+  }, [soleActive, mappaPronta]);
 
   // ── Clima: il periodo migliore per visitare (src/lib/climaIndex.ts) ───
   // Medie 2001-2020 di NASA POWER per la cella di 0,5° al centro della
@@ -3133,7 +3435,7 @@ function MapArea({
     };
     map?.on('moveend', onMoveEnd);
     return () => { vivo = false; map?.off('moveend', onMoveEnd); };
-  }, [climaActive, language]);
+  }, [climaActive, language, mappaPronta]);
 
   // ── Allarme ZTL (src/lib/ztlAlert.ts) ─────────────────────────────────
   // Toggle 🚫 nei controlli mappa: in auto (>20 km/h) avvisa quando la
@@ -3221,8 +3523,11 @@ function MapArea({
         if (!ztlLayerRef.current) ztlLayerRef.current = L.layerGroup();
         const group = ztlLayerRef.current;
         group.clearLayers();
-        for (const z of zones) {
-          for (const ring of z.rings) {
+        // Regola di ogni livello ad aree (10/10/2026): dalla più grande alla più piccola, così una ZTL
+        // piccola dentro una grande resta toccabile.
+        const anelli = ordinaAreeGrandiPrima(zones.flatMap((z) => z.rings.map((ring) => ({ z, ring }))), (x) => kmqAnello(x.ring as any));
+        for (const { z, ring } of anelli) {
+          {
             const poly = L.polygon(ring, {
               color: '#dc2626',
               weight: 1.5,
@@ -3263,7 +3568,7 @@ function MapArea({
       if (ztlBannerTimerRef.current) clearTimeout(ztlBannerTimerRef.current);
       setZtlBanner(null);
     };
-  }, [ztlActive, ztlTick, onZtlAlert]);
+  }, [ztlActive, ztlTick, onZtlAlert, mappaPronta]);
 
   // ── «Si può fare il bagno qui?» (src/lib/bathingWater.ts) ─────────────
   // Toggle 🏖 nei controlli mappa: marker colorati con la classificazione
@@ -3294,6 +3599,7 @@ function MapArea({
   const loadBathingSites = useCallback(async (bounds: L.LatLngBounds) => {
     const map = mapRef.current;
     if (!map) return;
+    if (rimandaSeFumetto('spiagge', bathingLayerRef.current, () => { void loadBathingSites(map.getBounds()); })) return;
     setBathingLoading(true);
     try {
       const grezzi = await fetchBathingSites({
@@ -3411,7 +3717,7 @@ function MapArea({
       }
       bathingCenterRef.current = null; // al riaccendersi si ricarica subito
     };
-  }, [bathingActive, bathingTick, loadBathingSites]);
+  }, [bathingActive, bathingTick, loadBathingSites, mappaPronta]);
 
   // ── Aree protette: Natura 2000 + aree nazionali CDDA (EEA, CC BY 4.0) ──
   // 27/08/2026. Confini, non pin: un poligono per sito, colorato per tipo
@@ -3437,6 +3743,7 @@ function MapArea({
   const loadAreeProtette = useCallback(async (bounds: L.LatLngBounds, fine: boolean) => {
     const map = mapRef.current;
     if (!map) return;
+    if (rimandaSeFumetto('aree', areeLayerRef.current, () => { void loadAreeProtette(map.getBounds(), fine); })) return;
     setAreeLoading(true);
     try {
       const aree = await fetchAreeProtette({
@@ -3446,17 +3753,22 @@ function MapArea({
       if (!areeLayerRef.current) areeLayerRef.current = L.layerGroup();
       const group = areeLayerRef.current;
       group.clearLayers();
-      for (const a of aree) {
+      // Regola di ogni livello ad aree (10/10/2026): dalla più grande alla più piccola — un SIC di
+      // 3 km² dentro un parco nazionale di 700 km² deve restare toccabile.
+      for (const a of ordinaAreeGrandiPrima(aree, (x) => x.kmq)) {
         const colore = COLORE_AREA[a.tipo];
+        // Fuori Europa (11/10/2026): la riga dice il tipo di area com'è scritto dalla fonte («National Park»),
+        // niente codice interno, e in fondo l'attribuzione che la licenza di QUELLA fonte chiede.
+        const altraFonte = attribuzioneArea(a.fonte);
         const etichetta = a.tipo === 'n2k_habitat'
           ? getTranslation('mp_n2k_habitat', language)
           : a.tipo === 'n2k_uccelli'
             ? getTranslation('mp_n2k_uccelli', language)
-            : `${getTranslation('mp_cdda_nazionale', language)}${a.iucn ? ` · IUCN ${escapeHtml(a.iucn)}` : ''}`;
+            : `${altraFonte && a.designazione ? escapeHtml(a.designazione) : getTranslation('mp_cdda_nazionale', language)}${a.iucn ? ` · IUCN ${escapeHtml(a.iucn)}` : ''}`;
         const link = a.tipo === 'nazionale' ? '' :
           `<div style="font-size:10px;margin-top:4px;"><a href="${schedaNatura2000(a.codice)}" target="_blank" rel="noopener" style="color:${colore};font-weight:700;">${getTranslation('mp_n2k_scheda', language)} ↗</a></div>`;
         const poly = L.geoJSON(a.geometry, {
-          style: { color: colore, weight: 1.5, opacity: 0.9, fillColor: colore, fillOpacity: 0.12 },
+          style: { color: colore, weight: 1.5, opacity: 0.9, fillColor: colore, fillOpacity: 0.12, ...({ smoothFactor: 2.5 } as any) },
           interactive: true,
         });
         poly.bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:160px;max-width:230px;">
@@ -3465,10 +3777,11 @@ function MapArea({
               <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${colore};flex:none;"></span>
               ${etichetta}
             </div>
-            ${a.kmq != null ? `<div style="font-size:11px;color:#374151;margin-top:2px;">${a.kmq} km² · ${escapeHtml(a.codice)}</div>` : ''}
+            ${a.kmq != null ? `<div style="font-size:11px;color:#374151;margin-top:2px;">${a.kmq} km²${altraFonte ? '' : ` · ${escapeHtml(a.codice)}`}</div>` : ''}
             ${link}
-            <div style="font-size:9px;color:#6b7280;margin-top:4px;line-height:1.3;">${getTranslation('mp_n2k_fonte', language)}</div>
+            <div style="font-size:9px;color:#6b7280;margin-top:4px;line-height:1.3;">${altraFonte ? escapeHtml(altraFonte) : getTranslation('mp_n2k_fonte', language)}</div>
           </div>`);
+        specieNelFumettoArea(poly, language);
         group.addLayer(poly);
       }
       if (areeActiveRef.current && !map.hasLayer(group) && map.getZoom() >= AREE_MIN_ZOOM) group.addTo(map);
@@ -3531,7 +3844,81 @@ function MapArea({
       if (areeLayerRef.current && map.hasLayer(areeLayerRef.current)) map.removeLayer(areeLayerRef.current);
       areeCenterRef.current = null;
     };
-  }, [areeActive, areeTick, loadAreeProtette]);
+  }, [areeActive, areeTick, loadAreeProtette, mappaPronta]);
+
+  // ── Specie sulla mappa (11/10/2026, committente: «le specie devono apparire dove sono: se ci sono aree
+  // protette bene, altrimenti devono essere mostrate lo stesso»). Stesso interruttore delle aree protette: un
+  // tondino con la foto nel punto dell'avvistamento, dentro o fuori dalle aree, in tutto il mondo (GBIF, solo
+  // foto con licenza libera — src/lib/specieMappa.ts). Da vicino (zoom ≥ 11): da lontano un riquadro è un
+  // paese intero e 40 specie non dicono niente. Il gruppo nuovo sostituisce il vecchio a lettura finita.
+  const SPECIE_MIN_ZOOM = 11;
+  const specieLayerRef = useRef<L.LayerGroup | null>(null);
+  const specieGenRef = useRef(0);
+  const specieCentroRef = useRef<{ lat: number; lon: number; zoom: number } | null>(null);
+  useEffect(() => {
+    if (!areeActive) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const togli = () => {
+      if (specieLayerRef.current && map.hasLayer(specieLayerRef.current)) map.removeLayer(specieLayerRef.current);
+      specieLayerRef.current = null;
+      specieCentroRef.current = null;
+    };
+    const carica = async () => {
+      const b = map.getBounds();
+      const gen = ++specieGenRef.current;
+      let specie: SpecieSullaMappa[] = [];
+      try {
+        specie = await fetchSpecieSullaMappa({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() });
+      } catch { return; } // GBIF giù: i pin restano com'erano, si riprova al prossimo spostamento
+      if (gen !== specieGenRef.current || !areeActiveRef.current || map.getZoom() < SPECIE_MIN_ZOOM) return;
+      const gruppo = L.layerGroup();
+      specie.forEach((s, n) => {
+        // Lista Rossa: il bordo prende il colore della categoria e un bollino con la sigla (CR, EN, VU, NT).
+        const rossa = listaRossa(s.lista_rossa, language);
+        const bordo = rossa ? rossa.colore : '#15803d';
+        const mk = L.marker([s.lat, s.lon], {
+          icon: L.divIcon({
+            className: '',
+            iconSize: [40, 40], iconAnchor: [20, 20],
+            html: `<div style="position:relative;width:40px;height:40px;"><div data-wip-pin-specie style="width:40px;height:40px;border-radius:20px;border:2px solid #fff;outline:${rossa ? 3 : 2}px solid ${bordo};box-shadow:0 2px 6px rgba(0,0,0,.35);overflow:hidden;background:#dcfce7;">
+              <img src="${escapeHtml(s.foto_piccola)}" alt="" loading="lazy" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;display:block;" onerror="this.style.display='none'"></div>
+              ${rossa ? `<div style="position:absolute;right:-6px;bottom:-4px;font:800 9px system-ui,sans-serif;color:#fff;background:${rossa.colore};border:1.5px solid #fff;border-radius:7px;padding:0 4px;">${rossa.sigla}</div>` : ''}</div>`,
+          }),
+          title: s.specie,
+          zIndexOffset: -200, // sotto i pin dei luoghi: una specie non deve coprire un monumento
+        });
+        mk.on('click', (ev: any) => { L.DomEvent.stopPropagation(ev); apriFotoSpecie(specie, n, language); });
+        gruppo.addLayer(mk);
+      });
+      const vecchio = specieLayerRef.current;
+      gruppo.addTo(map);
+      specieLayerRef.current = gruppo;
+      if (vecchio && map.hasLayer(vecchio)) map.removeLayer(vecchio);
+    };
+    let attesa: ReturnType<typeof setTimeout> | null = null;
+    const aggiorna = () => {
+      if (map.getZoom() < SPECIE_MIN_ZOOM) { specieGenRef.current++; togli(); return; }
+      const c = map.getCenter();
+      const z = map.getZoom();
+      const u = specieCentroRef.current;
+      const b = map.getBounds();
+      const larghezzaM = getDistanceFromLatLonInM(c.lat, b.getWest(), c.lat, b.getEast());
+      // Si rilegge quando ci si è spostati di un terzo di schermo o si è cambiato zoom.
+      if (u && u.zoom === z && getDistanceFromLatLonInM(u.lat, u.lon, c.lat, c.lng) < larghezzaM / 3) return;
+      specieCentroRef.current = { lat: c.lat, lon: c.lng, zoom: z };
+      if (attesa) clearTimeout(attesa);
+      attesa = setTimeout(() => { void carica(); }, 500);
+    };
+    aggiorna();
+    map.on('moveend', aggiorna);
+    return () => {
+      map.off('moveend', aggiorna);
+      if (attesa) clearTimeout(attesa);
+      specieGenRef.current++;
+      togli();
+    };
+  }, [areeActive, mappaPronta, language]);
 
   // ── Meteo sulla mappa + modalità "al coperto" ─────────────────────────
   const [meteo, setMeteo] = useState<MeteoData | null>(null);
@@ -6072,12 +6459,13 @@ function MapArea({
         // Fallback al locationService per richiedere la posizione attuale
         import('@capacitor/geolocation').then(async ({ Geolocation }) => {
           // Su iOS/Android senza permesso concesso getCurrentPosition fallisce
-          // subito: chiediamolo qui, è il gesto esplicito dell'utente.
+          // subito: chiediamolo qui, è il gesto esplicito dell'utente — ma
+          // sempre DOPO la disclosure (07/11/2026, rifiuto Play): senza
+          // consenso si apre la schermata dei permessi e non il dialogo.
           try {
-            const perm = await Geolocation.checkPermissions();
-            if (perm.location !== 'granted' && perm.coarseLocation !== 'granted') {
-              await Geolocation.requestPermissions({ permissions: ['location'] });
-            }
+            const { chiediPermessoPosizione } = await import('../lib/permessi/consensoPosizione');
+            const perm = await chiediPermessoPosizione();
+            if (!perm) return;
           } catch { /* su web il check non esiste: si prosegue */ }
           Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 8000 }).then(pos => {
             const lat = pos.coords.latitude;

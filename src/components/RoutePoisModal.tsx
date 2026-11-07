@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Navigation, Loader2, MapPin, Crosshair, Search, Info } from 'lucide-react';
 import { getTranslation, Language } from '../lib/i18n';
+import { etichettaCategoria } from '../lib/poiCategories';
 import { getApiUrl } from '../lib/api';
 import { haversineMeters } from '../lib/geo';
 import { notify } from '../lib/toast';
@@ -373,7 +374,7 @@ export default function RoutePoisModal({
                   </div>
                   <div>
                     <h4 className="font-bold text-gray-900 dark:text-white">{poi.nome || poi.name}</h4>
-                    <p className="text-xs text-gray-500 capitalize">{poi.category}</p>
+                    <p className="text-xs text-gray-500 capitalize">{etichettaCategoria(poi.category, language)}</p>
                   </div>
                 </div>
               ))}

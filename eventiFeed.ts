@@ -377,6 +377,11 @@ export async function festivalDaWikidata(lat: number, lon: number, raggioKm: num
   const chiave = `festival_wd_${lat.toFixed(1)}_${lon.toFixed(1)}_${r}_${lingua}`;
   const hit = await cacheLeggi(chiave, 7 * 86400_000);
   if (Array.isArray(hit)) return hit;
+  // (08/10/2026) Nelle metropoli questa domanda a Wikidata non risponde nei tempi: la rotta dei mercati e
+  // delle feste restava ferma 15 secondi a OGNI apertura (Londra, Parigi, New York, Tokyo: 15–19 s, col
+  // telefono che chiude a 20) e poi tornava senza festival lo stesso. Il fallimento si ricorda 6 ore.
+  const chiaveKo = `${chiave}_ko`;
+  if (await cacheLeggi(chiaveKo, 6 * 3600_000)) return [];
   const anno = new Date().getUTCFullYear();
   const lingue = [lingua, 'en', linguaLocale, 'it'].filter((x, i, a) => x && a.indexOf(x) === i).join(',');
   const sparql = `SELECT DISTINCT ?item ?itemLabel ?itemDescription ?luogoLabel ?coord ?giornoLabel ?mese ?sito ?img ?inizio ?fine WHERE {
@@ -400,7 +405,7 @@ export async function festivalDaWikidata(lat: number, lon: number, raggioKm: num
     const resp = await axios.get('https://query.wikidata.org/sparql', {
       params: { query: sparql, format: 'json' },
       headers: { 'User-Agent': 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)', Accept: 'application/sparql-results+json' },
-      timeout: 15000,
+      timeout: 9000,
     });
     const righe: any[] = resp.data?.results?.bindings || [];
     const visti = new Set<string>();
@@ -442,6 +447,7 @@ export async function festivalDaWikidata(lat: number, lon: number, raggioKm: num
     return out;
   } catch (e: any) {
     console.warn('[festival] wikidata non risponde:', e?.message);
+    cacheScrivi(chiaveKo, 'festival_wd_ko', { quando: Date.now() });
     return [];
   }
 }

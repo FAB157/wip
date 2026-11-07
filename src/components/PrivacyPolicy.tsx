@@ -164,7 +164,7 @@ export default function PrivacyPolicy({ language }: PrivacyPolicyProps) {
             <p>
               In conformità al Regolamento UE 2016/679 (GDPR) hai diritto di: accedere ai tuoi dati, chiederne la rettifica o la
               cancellazione, limitarne od opporti al trattamento, e riceverne una copia in formato portabile.
-              Il titolare del trattamento è <strong>Davide Musetti</strong> (WIP &mdash; World in Pocket), Via Vignaletto 50, 54033 Carrara (MS).
+              Il titolare del trattamento è <strong>Fabrizio Musetti</strong> (WIP &mdash; World in Pocket), Via Vignaletto 50, 54033 Carrara (MS).
               Per esercitare questi diritti scrivi a <a href="mailto:support@wip.guide" className="text-blue-600 font-bold">support@wip.guide</a>:
               rispondiamo entro 30 giorni. Hai inoltre il diritto di proporre reclamo al Garante per la Protezione dei Dati Personali.
             </p>

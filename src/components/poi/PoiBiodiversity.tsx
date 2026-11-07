@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { PawPrint } from 'lucide-react';
 import { getApiUrl } from '../../lib/api';
 import { getTranslation, Language } from '../../lib/i18n';
+import { listaRossa, miniatura } from '../../lib/specieMappa';
 
 // Stessi valori di PARCHI_TYPES in src/lib/poiTaxonomy.ts — solo i parchi
 // (richiesta utente 28/08/2026: "aggiungi le biodiversità nella scheda dei
@@ -19,6 +20,7 @@ interface Specie {
   foto_autore: string | null;
   foto_fonte: string | null;
   data_avvistamento: string | null;
+  lista_rossa?: string | null;
 }
 
 interface PoiBiodiversityProps {
@@ -59,9 +61,14 @@ export default function PoiBiodiversity({ poi, language }: PoiBiodiversityProps)
         {specie.map((s) => (
           <div key={s.specie} className="shrink-0 w-28">
             <div className="w-28 h-28 rounded-2xl overflow-hidden bg-[#f8f5f0]">
-              <img src={s.foto_url} alt={s.specie} loading="lazy" className="w-full h-full object-cover" />
+              <img src={miniatura(s.foto_url)} alt={s.specie} className="w-full h-full object-cover" />
             </div>
             <div className="mt-1.5 text-[11px] font-bold text-[#1e3a8a] italic leading-tight line-clamp-2">{s.specie}</div>
+            {/* Lista Rossa IUCN (11/10/2026): solo se minacciata o quasi (CR, EN, VU, NT). */}
+            {(() => {
+              const lr = listaRossa(s.lista_rossa, language);
+              return lr ? <span className="inline-block mt-0.5 px-1.5 rounded text-[9px] font-black text-white" style={{ background: lr.colore }} title="IUCN Red List">{lr.sigla} · {lr.nome}</span> : null;
+            })()}
             {s.foto_autore && (
               <div className="text-[9px] text-[#1e3a8a]/40 truncate">
                 © {s.foto_autore}{s.foto_fonte ? ` / ${s.foto_fonte}` : ''}

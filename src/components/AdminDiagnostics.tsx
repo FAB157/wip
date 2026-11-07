@@ -492,6 +492,116 @@ function TriggerTelemetrySection() {
 // ── TEST VIRTUALE (04/10/2026) ───────────────────────────────────────────
 // Sempre pronto: un tasto apre la barra del test sopra la mappa di WIP. Da lì
 // un telefono finto cammina dentro l'app vera (vedi src/lib/testVirtuale.ts).
+// ── CARTELLE «COLLAUDI» E «MAESTRE» (09/10/2026, committente: «cartella collaudi e cartella maestre — quelle
+// definitive —, non insieme») ─────────────────────────────────────────────────────────────────────────────
+// Stessa fonte (/api/admin/collaudo/maestre: una riga per giorno-zona di una città), due cartelle:
+//  · COLLAUDI = i giorni in lavorazione (bozza o collaudato) con la pagella, il rapporto e lo storico delle prove;
+//  · MAESTRE  = solo i giorni APPROVATI: il timbro lo mette una persona da qui, mai uno script.
+// Dentro ogni cartella le righe sono raggruppate per città.
+function CartelleCollaudiMaestre() {
+  const [righe, setRighe] = useState<any[]>([]);
+  const [cartella, setCartella] = useState<'collaudi' | 'maestre'>('collaudi');
+  const [aperta, setAperta] = useState<string | null>(null);
+  const [stato, setStato] = useState('');
+  const carica = async () => {
+    try {
+      const res = await fetch(getApiUrl('/api/admin/collaudo/maestre'), { headers: await adminAuthHeaders() });
+      const j = await res.json();
+      setRighe(Array.isArray(j?.maestre) ? j.maestre : []);
+      setStato(res.ok ? '' : `Non letto: ${j?.error || res.status}`);
+    } catch (e: any) { setStato(`Non letto: ${e?.message || 'errore'}`); }
+  };
+  useEffect(() => { void carica(); }, []);
+  const cambiaStato = async (m: any, nuovo: 'bozza' | 'collaudato' | 'approvato') => {
+    setStato('Salvo…');
+    try {
+      const res = await fetch(getApiUrl('/api/admin/collaudo/maestra'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
+        body: JSON.stringify({ citta: m.citta, giorno: m.giorno, stato: nuovo }),
+      });
+      const j = await res.json().catch(() => ({}));
+      setStato(res.ok ? (nuovo === 'approvato' ? `${m.citta}, giorno ${m.giorno}: approvata, ora è nella cartella Maestre.` : `${m.citta}, giorno ${m.giorno}: riportata fra i collaudi.`) : `Non salvato: ${j?.error || res.status}`);
+      await carica();
+    } catch (e: any) { setStato(`Non salvato: ${e?.message || 'errore'}`); }
+  };
+  const diCartella = righe.filter((m) => (cartella === 'maestre') === (m.stato === 'approvato'));
+  const perCitta: Record<string, any[]> = {};
+  for (const m of diCartella) (perCitta[m.citta] ||= []).push(m);
+  const nMaestre = righe.filter((m) => m.stato === 'approvato').length;
+  const voce = (p: any) => !p ? 'nessuna pagella' : [p.scatti_giusti_pct != null ? `${p.scatti_giusti_pct}% scatti giusti` : '', p.guide ? `guide ${p.guide}` : '', p.svolte ? `svolte ${p.svolte}` : '', p.km != null ? `${p.km} km` : ''].filter(Boolean).join(' · ');
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <BookOpen className="w-4 h-4 text-primary" />
+        <h3 className="font-black text-primary text-sm">Giri per città</h3>
+        <button onClick={() => void carica()} className="ml-auto px-2 py-1 rounded-lg bg-gray-100 text-[11px] font-black text-gray-600">Aggiorna</button>
+      </div>
+      <div className="flex gap-2">
+        <button onClick={() => { setCartella('collaudi'); setAperta(null); }} className={`flex-1 px-3 py-2 rounded-xl text-xs font-black ${cartella === 'collaudi' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-700'}`}>
+          📁 Collaudi ({righe.length - nMaestre})
+        </button>
+        <button onClick={() => { setCartella('maestre'); setAperta(null); }} className={`flex-1 px-3 py-2 rounded-xl text-xs font-black ${cartella === 'maestre' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-700'}`}>
+          🏅 Maestre ({nMaestre})
+        </button>
+      </div>
+      <p className="text-[11px] text-gray-500">
+        {cartella === 'collaudi'
+          ? 'Giorni-zona in lavorazione: ogni riga ha l’ultima pagella, il rapporto e lo storico delle prove. Quando un giorno è a posto, «Approva» lo sposta fra le Maestre.'
+          : 'Giorni-zona definitivi, approvati da una persona: sono quelli da cui parte l’itinerario di chi chiede quella città.'}
+      </p>
+      {stato && <p className="text-[11px] font-bold text-amber-700">{stato}</p>}
+      {Object.keys(perCitta).length === 0 && <p className="text-xs text-gray-400">{cartella === 'collaudi' ? 'Nessun collaudo in corso.' : 'Nessuna maestra approvata, per ora.'}</p>}
+      {Object.entries(perCitta).sort((a, b) => a[0].localeCompare(b[0])).map(([citta, lista]) => (
+        <div key={citta} className="rounded-xl border border-gray-100">
+          <p className="px-3 py-2 text-xs font-black text-gray-800 bg-gray-50 rounded-t-xl">{citta}{lista[0]?.paese ? ` · ${lista[0].paese}` : ''} <span className="font-bold text-gray-400">· {lista.length} {lista.length === 1 ? 'giorno' : 'giorni'}</span></p>
+          {lista.sort((a, b) => (a.giorno || 0) - (b.giorno || 0)).map((m) => {
+            const k = `${m.citta}|${m.giorno}`;
+            const su = aperta === k;
+            return (
+              <div key={k} className="px-3 py-2 border-t border-gray-100 space-y-1.5">
+                <button onClick={() => setAperta(su ? null : k)} className="w-full text-left">
+                  <p className="text-xs font-black text-primary">Giorno {m.giorno} · {m.zona || 'zona senza nome'} <span className="font-bold text-gray-400">· v{m.versione || 1} · {m.stato}</span></p>
+                  <p className="text-[11px] text-gray-600">{voce(m.pagella)}{m.aggiornata ? ` · ${new Date(m.aggiornata).toLocaleString()}` : ''}</p>
+                </button>
+                {su && (
+                  <div className="space-y-2">
+                    {Array.isArray(m.tappe) && m.tappe.length > 0 && (
+                      <p className="text-[11px] text-gray-700">{m.tappe.map((t: any, i: number) => `${i + 1}. ${t.nome}`).join(' → ')}</p>
+                    )}
+                    {Array.isArray(m.aperti) && m.aperti.length > 0 && (
+                      <div className="rounded-lg bg-amber-50 border border-amber-100 px-2 py-1.5">
+                        <p className="text-[10px] font-black text-amber-800 uppercase">Ancora aperto</p>
+                        {m.aperti.map((x: string, i: number) => <p key={i} className="text-[11px] text-amber-900">· {x}</p>)}
+                      </div>
+                    )}
+                    {Array.isArray(m.collaudi) && m.collaudi.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-black text-gray-500 uppercase">Prove fatte</p>
+                        {m.collaudi.slice().reverse().map((c: any, i: number) => (
+                          <p key={i} className="text-[11px] text-gray-600">{new Date(c.quando).toLocaleString()} · v{c.versione} · {voce(c.pagella)}{c.nota ? ` — ${c.nota}` : ''}</p>
+                        ))}
+                      </div>
+                    )}
+                    {m.rapporto && <pre className="text-[10px] text-gray-700 whitespace-pre-wrap bg-gray-50 rounded-lg p-2 max-h-72 overflow-auto">{m.rapporto}</pre>}
+                    <div className="flex flex-wrap gap-2">
+                      {m.itinerario_id && (
+                        <button onClick={() => window.dispatchEvent(new CustomEvent('wip-apri-download', { detail: { tipo: 'itinerario', id: m.itinerario_id } }))} className="px-3 py-1.5 rounded-lg bg-primary text-white text-[11px] font-black">Apri l’itinerario</button>
+                      )}
+                      {m.stato !== 'approvato'
+                        ? <button onClick={() => void cambiaStato(m, 'approvato')} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-[11px] font-black">Approva: diventa maestra</button>
+                        : <button onClick={() => void cambiaStato(m, 'collaudato')} className="px-3 py-1.5 rounded-lg bg-gray-200 text-gray-700 text-[11px] font-black">Togli l’approvazione</button>}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function TestVirtualeSection() {
   const [aperto, setAperto] = useState<boolean>(() => { try { return localStorage.getItem('wip_test_virtuale') === '1'; } catch { return false; } });
   const cambia = () => {
@@ -558,13 +668,15 @@ function FollaTelefoni() {
     return () => window.removeEventListener('message', suMessaggio);
   }, []);
 
-  // Le voci di più telefoni insieme si accavallano: si prova a zittire gli audio delle copie.
+  // Le voci di più telefoni insieme si accavallano: si abbassano gli audio delle copie.
   // La voce di sistema del browser (ripiego senza MP3) non si può zittire da qui.
+  // (24/10/2026) Volume quasi a zero, MAI `muted` né 0: un audio muto per l'app non è una voce
+  // (`suonoDiServizio`), e il banco di prova misurerebbe «guida mai partita» su ogni luogo.
   useEffect(() => {
     if (inCorso.length === 0) return;
     const t = setInterval(() => {
       for (const n of inCorso) {
-        try { riquadri.current[n]?.contentDocument?.querySelectorAll('audio,video').forEach((m: any) => { m.muted = true; }); } catch { /* copia non pronta */ }
+        try { riquadri.current[n]?.contentDocument?.querySelectorAll('audio,video').forEach((m: any) => { m.muted = false; m.volume = 0.01; }); } catch { /* copia non pronta */ }
       }
     }, 1500);
     return () => clearInterval(t);
@@ -607,7 +719,7 @@ function FollaTelefoni() {
               return (
                 <div key={n} className="rounded-xl border border-gray-200 overflow-hidden">
                   <div className={`px-2 py-1.5 text-[11px] font-bold ${e ? (e.errore ? 'bg-red-50 text-red-700' : p?.voto == null ? 'bg-gray-50 text-gray-700' : p.voto >= 80 ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800') : 'bg-gray-50 text-gray-600'}`}>
-                    {n} — {e ? (e.errore ? `errore: ${e.errore}` : `voto ${p?.voto == null ? 'n.d.' : p.voto + '%'} · guide ${p?.guide?.giuste ?? 0}/${p?.guide?.totali ?? 0} · avvisi ${p?.avvisi?.giusti ?? 0}/${p?.avvisi?.totali ?? 0} · svolte ${p?.svolte?.giuste ?? 0}/${p?.svolte?.totali ?? 0} · frasi ripetute ${p?.frasiRipetute ?? 0}`) : 'in cammino…'}
+                    {n} — {e ? (e.errore ? `errore: ${e.errore}` : `voto ${p?.voto == null ? 'n.d.' : p.voto + '%'} · guide ${p?.guide?.giuste ?? 0}/${p?.guide?.totali ?? 0} · avvisi ${p?.avvisi?.giusti ?? 0}/${p?.avvisi?.totali ?? 0} · svolte ${p?.svolte?.giuste ?? 0}/${p?.svolte?.totali ?? 0} · frasi ripetute ${p?.frasiRipetute ?? 0}${p?.voce?.attese ? ` · voce ${p.voce.partite}/${p.voce.attese}${p.voce.silenzioMedioS != null ? `, silenzio medio ${p.voce.silenzioMedioS} s (peggiore ${p.voce.silenzioPeggioreS} s)` : ''}${p.voce.mai ? `, MAI ${p.voce.mai}` : ''}` : ''}`) : 'in cammino…'}
                   </div>
                   <iframe
                     ref={el => { riquadri.current[n] = el; }}
@@ -1484,6 +1596,36 @@ interface DiagnosticTest {
   run: () => Promise<{ status: TestStatus; message: string; solution?: string }>;
 }
 
+/**
+ * SEZIONE «COLLAUDI» DEL PANNELLO ADMIN (09/10/2026, committente: «crea una sezione apposita chiamata collaudi in
+ * cui inserisci tutti gli strumenti per il test che sono nella diagnostica»). Qui stanno le due cartelle dei giri
+ * per città e TUTTI gli strumenti di prova: telefono virtuale e folla, registro del navigatore, collaudi inviati
+ * (pagella e mappa), luoghi senza strada e voto per zona, replay GPS, telemetria degli scatti. La Diagnostica
+ * tiene la salute del sistema (canarino, monitoraggio, routing, flag, semina) e i check-up.
+ */
+export function AdminCollaudi() {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-black text-primary flex items-center gap-2">
+          <Smartphone className="w-6 h-6 text-secondary" />
+          Collaudi
+        </h2>
+        <p className="text-sm text-on-surface-variant font-medium mt-1">
+          Le prove dell'app sul campo e i giri preparati per città: le cartelle Collaudi e Maestre, il telefono virtuale e gli strumenti che misurano dove e quando l'audioguida parla.
+        </p>
+      </div>
+      <CartelleCollaudiMaestre />
+      <TestVirtualeSection />
+      <CollaudoRegistriSection />
+      <NavLogSection />
+      <SenzaStradaSection />
+      <GpsReplaySection />
+      <TriggerTelemetrySection />
+    </div>
+  );
+}
+
 export default function AdminDiagnostics() {
   const [isRunningAll, setIsRunningAll] = useState(false);
   const [tests, setTests] = useState<DiagnosticTest[]>([
@@ -2196,12 +2338,8 @@ export default function AdminDiagnostics() {
       <MonitoringSection />
       <RoutingSection />
       <FlagsSection />
-      <TriggerTelemetrySection />
-      <TestVirtualeSection />
-      <NavLogSection />
-      <CollaudoRegistriSection />
-      <SenzaStradaSection />
-      <GpsReplaySection />
+      {/* Gli strumenti di prova (telefono virtuale, collaudi inviati, registro del navigatore, luoghi senza strada,
+          replay GPS, telemetria degli scatti) stanno nella sezione «Collaudi» del pannello: vedi AdminCollaudi. */}
       <LibrarySeedSection />
 
       {/* Riepilogo esito: appare dopo il primo giro di test */}

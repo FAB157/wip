@@ -419,6 +419,16 @@ export default function PrintView({ plan, language }: PrintViewProps) {
             <div className="space-y-3">
               {giorno.tappe.map((tappa, tIdx) => (
                 <div key={`print-tappa-${tappa.id_tappa}-${tIdx}`} className="print-activity-block">
+                  {/* Lo spostamento e i mezzi PRIMA della tappa che raggiungono (20/10/2026, committente). */}
+                  {((tappa.spostamento_precedente && tappa.spostamento_precedente !== "null") || tappa.mezzi_precedente) && (
+                    <div className="print-activity-duration">
+                      {tappa.spostamento_precedente && tappa.spostamento_precedente !== "null" && (
+                        <span>{getPrintTranslation('movement', langStr)}: {tappa.spostamento_precedente}</span>
+                      )}
+                      {tappa.spostamento_precedente && tappa.spostamento_precedente !== "null" && tappa.mezzi_precedente && <span> • </span>}
+                      {tappa.mezzi_precedente && <span>🚇 {tappa.mezzi_precedente}</span>}
+                    </div>
+                  )}
                   <h4 className="print-activity-title">
                     {/* L'orario c'era a schermo ma non in stampa: su carta è
                         l'informazione più consultata */}
@@ -426,27 +436,12 @@ export default function PrintView({ plan, language }: PrintViewProps) {
                     {tappa.titolo_tappa}
                   </h4>
 
-                  {(tappa.tempo_necessario || (tappa.spostamento_precedente && tappa.spostamento_precedente !== "null")) && (
+                  {tappa.tempo_necessario && (
                     <div className="print-activity-duration">
-                      {tappa.tempo_necessario && (
-                        <span>
-                          {getPrintTranslation('visit_time', langStr)}: {tappa.tempo_necessario}
-                        </span>
-                      )}
-                      {tappa.tempo_necessario && tappa.spostamento_precedente && tappa.spostamento_precedente !== "null" && (
-                        <span> • </span>
-                      )}
-                      {tappa.spostamento_precedente && tappa.spostamento_precedente !== "null" && (
-                        <span>
-                          {getPrintTranslation('movement', langStr)}: {tappa.spostamento_precedente}
-                        </span>
-                      )}
+                      <span>{getPrintTranslation('visit_time', langStr)}: {tappa.tempo_necessario}</span>
                     </div>
                   )}
-                  {tappa.mezzi_precedente && (
-                    <div className="print-activity-duration">🚇 {tappa.mezzi_precedente}</div>
-                  )}
-                  
+
                   {/* Description */}
                   <p className="print-activity-description">{tappa.attivita}</p>
                   

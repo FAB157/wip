@@ -26,6 +26,7 @@ import com.itaintasca.app.geofence.CategoryMap
 import com.itaintasca.app.geofence.Footprints
 import com.itaintasca.app.geofence.GeofenceBroadcastReceiver
 import com.itaintasca.app.geofence.GeofenceManager
+import com.itaintasca.app.geofence.NomiAnnunciabili
 import com.itaintasca.app.geofence.NotificationStrings
 import com.itaintasca.app.geofence.PredictiveTrigger
 import com.itaintasca.app.geofence.RaggiFiducia
@@ -1586,6 +1587,10 @@ class ItaintaBackgroundPoiService : Service() {
                 val sogliaPerimetro = Footprints.triggerM(isDriving)
                 for (poi in currentPois) {
                     if (!isPoiCategorySelected(poi)) continue
+                    // (25/10/2026) Citta', entita' amministrative e metropolitane
+                    // non sono luoghi da raccontare: mai candidati, ne' per
+                    // l'avviso ne' per la guida (NomiAnnunciabili.rigaNonParla).
+                    if (NomiAnnunciabili.rigaNonParla(poi)) continue
                     Location.distanceBetween(
                         location.latitude, location.longitude,
                         poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon,
@@ -1674,12 +1679,9 @@ class ItaintaBackgroundPoiService : Service() {
                     // solo sulla carta. Linea d'aria solo dove una strada da
                     // misurare non c'e' (fuori rete, tile assente): vedi
                     // RoadGraph.cheDecide.
-                    val distNow = RoadGraph.cheDecide(
-                        pred.distanceNowMeters,
-                        try {
-                            sorgenteStrada?.verso(poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon)
-                        } catch (e: Exception) { null }
-                    ).toFloat()
+                    val distNow = try {
+                        RoadGraph.misura(pred.distanceNowMeters, sorgenteStrada, poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon, isDriving)
+                    } catch (e: Exception) { pred.distanceNowMeters }.toFloat()
 
                     // A 30 M DAL PERIMETRO (22/08/2026): la misura che governa
                     // la guida quando il POI ha il poligono. 0 = dentro.
@@ -1696,10 +1698,9 @@ class ItaintaBackgroundPoiService : Service() {
                         val pLat = poi.entranceLat ?: poi.lat
                         val pLon = poi.entranceLon ?: poi.lon
                         Location.distanceBetween(grezza.latitude, grezza.longitude, pLat, pLon, distBuf)
-                        val libera = RoadGraph.cheDecide(
-                            distBuf[0].toDouble(),
-                            try { sorgenteLibera.verso(pLat, pLon) } catch (e: Exception) { null }
-                        ).toFloat()
+                        val libera = try {
+                            RoadGraph.misura(distBuf[0].toDouble(), sorgenteLibera, pLat, pLon, isDriving)
+                        } catch (e: Exception) { distBuf[0].toDouble() }.toFloat()
                         if (libera > distArrivo) distArrivo = libera
                     }
 

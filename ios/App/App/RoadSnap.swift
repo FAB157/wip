@@ -386,8 +386,14 @@ final class RoadGraph {
     static let innestoM = 4.0
     /// Entro questi metri dal punto si è arrivati comunque (buco nei dati, piazza).
     static let sicurezzaM = 15.0
+    /// Oltre questi metri di strada NOTA la sicurezza dei 15 m in linea d'aria non vale (11/10/2026).
+    static let giroLargoM = 120.0
     /// Una componente della rete con meno metri di così è un'isola: non ci si aggancia.
     static let isolaM = 150.0
+    /// Oltre questi metri fra la via e il punto, in auto vale la regola «fine strada».
+    static let codaLiberaM = 20.0
+    /// In auto la via che chiude il viaggio si cerca fin qui (= STRADA_FINE_AUTO_MAX_M).
+    static let fineAutoMaxM = 250.0
     private static let cellaM = 60.0
     private static let mLat = 111_320.0
 
@@ -399,8 +405,17 @@ final class RoadGraph {
     /// diretta; entro `sicurezzaM` dal punto si è arrivati comunque.
     static func cheDecide(aria: Double, strada: Double?) -> Double {
         guard let s = strada else { return aria }
+        // (11/10/2026, come distanzaCheDecide sul web) Strada NOTA e più lunga di giroLargoM: i 15 m in linea d'aria
+        // non bastano (il tornante sopra, la strada sotto il muro). Infinito = buco nei dati: resta la sicurezza.
+        if aria <= sicurezzaM && s.isFinite && s > giroLargoM { return s }
         if aria <= sicurezzaM { return min(aria, s) }
         return max(aria, s)
+    }
+
+    /// La misura di ogni chiamante: in auto `decide`, a piedi `cheDecide` sui metri di strada.
+    static func misura(aria: Double, sorgente: Sorgente?, lat: Double, lon: Double, isDriving: Bool) -> Double {
+        if isDriving, let s = sorgente { return s.decide(lat: lat, lon: lon, aria: aria) }
+        return cheDecide(aria: aria, strada: sorgente?.verso(lat: lat, lon: lon))
     }
 
     private struct Segmento {
@@ -610,7 +625,7 @@ final class RoadGraph {
     }
 
     fileprivate func lunghezza(_ iSeg: Int) -> Double { seg[iSeg].len }
-    fileprivate func agganciaLuogo(lat: Double, lon: Double) -> Aggancio? { aggancia(x(lon), y(lat), RoadGraph.luogoMaxM) }
+    fileprivate func agganciaLuogo(lat: Double, lon: Double, maxM: Double = RoadGraph.luogoMaxM) -> Aggancio? { aggancia(x(lon), y(lat), maxM) }
 
     /// Prepara le distanze da una posizione. nil se attorno non c'è nessuna strada nota.
     func da(lat: Double, lon: Double, maxM: Double) -> Sorgente? {
@@ -685,6 +700,25 @@ final class RoadGraph {
             if best.isInfinite { return .infinity }
             let tot = best + arrivo.d
             return tot > maxM ? .infinity : tot
+        }
+
+        /// (30/10/2026, = `decide` di distanzaStrada.ts) SOLO IN AUTO: se la via resta a più di `codaLiberaM` dal punto,
+        /// decide la strada fino a dove finisce e quel tratto fuori rete conta `codaLiberaM`.
+        func decide(lat: Double, lon: Double, aria: Double) -> Double {
+            guard let arrivo = grafo.agganciaLuogo(lat: lat, lon: lon, maxM: RoadGraph.fineAutoMaxM) else { return aria }
+            var best = Double.infinity
+            if arrivo.seg == partenza.seg {
+                best = partenza.d + abs(arrivo.t - partenza.t) * grafo.lunghezza(arrivo.seg)
+            }
+            for (n, w) in grafo.vicini(arrivo.seg, arrivo.t) {
+                if let d = dist[n], d + w < best { best = d + w }
+            }
+            if arrivo.d > RoadGraph.codaLiberaM && best.isFinite {
+                let tot = best + RoadGraph.codaLiberaM
+                if tot <= maxM { return tot }
+            }
+            let tot = best.isFinite ? best + arrivo.d : Double.infinity
+            return RoadGraph.cheDecide(aria: aria, strada: tot > maxM ? .infinity : tot)
         }
     }
 }

@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { locationService } from '../services/locationService';
-import { fetchWalkingRoute, translateManeuver, type WalkingRoute } from '../services/osrmService';
+import { fetchWalkingRoute, translateManeuver, nomeViaPronunciabile, type WalkingRoute } from '../services/osrmService';
 import { speakInstruction, speakArrivalNative } from '../services/ttsService';
 import { haversineMeters, type LatLon } from '../lib/geo';
 import { metriDiStrada, tieniStradeAggiornate, prescaricaStrade } from '../lib/roadSnap';
@@ -628,6 +628,11 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     const utente = String(language || 'it').toLowerCase().slice(0, 2);
     // Le svolte scadono in coda dopo 20 s (NAV_TTL_MS); l'arrivo no.
     const scadenza = String(step.maneuverType || '').toLowerCase() === 'arrive' ? undefined : { ttlMs: NAV_TTL_MS };
+    // Un nome in un alfabeto che la voce dell'utente non legge (cirillico per un italiano) non si dice affatto.
+    if (step.name && !nomeViaPronunciabile(step.name, utente)) {
+      speakInstruction(translateManeuver(step.maneuverType, step.maneuverModifier, language, targetRef.current?.poiName, undefined, undefined), language, undefined, scadenza);
+      return;
+    }
     if (step.name && locale && locale !== utente) {
       // Frase SENZA il nome (la variante generica) + nome via, in UNA sola
       // chiamata (FIX WIPNAV-2): due chiamate separate si cancellavano a

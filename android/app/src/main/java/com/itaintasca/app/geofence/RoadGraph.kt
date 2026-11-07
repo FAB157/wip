@@ -65,6 +65,28 @@ class RoadGraph private constructor(
             val tot = best + arrivo.d
             return if (tot > maxM) Double.POSITIVE_INFINITY else tot
         }
+
+        /**
+         * (30/10/2026, = `decide` di distanzaStrada.ts) SOLO IN AUTO: se la via resta a piu' di CODA_LIBERA_M dal punto,
+         * decide la strada fino a dove finisce e quel tratto fuori rete conta CODA_LIBERA_M.
+         */
+        fun decide(lat: Double, lon: Double, aria: Double): Double {
+            val arrivo = aggancia(x(lon), y(lat), FINE_AUTO_MAX_M) ?: return aria
+            var best = Double.POSITIVE_INFINITY
+            if (arrivo.seg == partenza.seg) {
+                best = partenza.d + abs(arrivo.t - partenza.t) * seg[arrivo.seg].len
+            }
+            vicini(arrivo.seg, arrivo.t) { n, w ->
+                val d = dist[n]
+                if (d != null && d + w < best) best = d + w
+            }
+            if (arrivo.d > CODA_LIBERA_M && best.isFinite()) {
+                val tot = best + CODA_LIBERA_M
+                if (tot <= maxM) return tot
+            }
+            val tot = if (best.isFinite()) best + arrivo.d else Double.POSITIVE_INFINITY
+            return cheDecide(aria, if (tot > maxM) Double.POSITIVE_INFINITY else tot)
+        }
     }
 
     private fun x(lon: Double) = (lon - lon0) * mLon
@@ -131,8 +153,14 @@ class RoadGraph private constructor(
         const val INNESTO_M = 4.0
         /** Entro questi metri in linea d'aria si e' arrivati comunque (buco nei dati). */
         const val SICUREZZA_M = 15.0
+        /** Oltre questi metri di strada NOTA la sicurezza dei 15 m in linea d'aria non vale (11/10/2026). */
+        const val GIRO_LARGO_M = 120.0
         /** Una componente della rete con meno metri di cosi' e' un'isola: non ci si aggancia. */
         const val ISOLA_M = 150.0
+        /** Oltre questi metri fra la via e il punto, in auto vale la regola «fine strada». */
+        const val CODA_LIBERA_M = 20.0
+        /** In auto la via che chiude il viaggio si cerca fin qui (= STRADA_FINE_AUTO_MAX_M). */
+        const val FINE_AUTO_MAX_M = 250.0
         private const val CELLA_M = 60.0
         private const val M_LAT = 111_320.0
 
@@ -154,9 +182,17 @@ class RoadGraph private constructor(
          */
         fun cheDecide(aria: Double, strada: Double?): Double {
             if (strada == null) return aria
+            // (11/10/2026, come distanzaCheDecide sul web) Strada NOTA e più lunga di GIRO_LARGO_M: i 15 m in linea
+            // d'aria non bastano (il tornante sopra, la strada sotto il muro). Infinito = buco nei dati: resta la sicurezza.
+            if (aria <= SICUREZZA_M && strada.isFinite() && strada > GIRO_LARGO_M) return strada
             if (aria <= SICUREZZA_M) return min(aria, strada)
             return max(aria, strada)
         }
+
+        /** La misura di ogni chiamante: in auto `decide`, a piedi `cheDecide` sui metri di strada. */
+        fun misura(aria: Double, sorgente: Sorgente?, lat: Double, lon: Double, isDriving: Boolean): Double =
+            if (isDriving && sorgente != null) sorgente.decide(lat, lon, aria)
+            else cheDecide(aria, sorgente?.verso(lat, lon))
 
         /** Grafo dalle polilinee di una rete: ogni polilinea e' [lat0, lon0, lat1, lon1, ...]. */
         fun crea(polilinee: List<DoubleArray>): RoadGraph? {

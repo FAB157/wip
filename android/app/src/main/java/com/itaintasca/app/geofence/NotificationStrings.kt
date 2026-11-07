@@ -44,6 +44,8 @@ object NotificationStrings {
             // (28/08/2026) 402 dal server: la guida completa richiede crediti.
             "credits_required_title" to "Crediti insufficienti",
             "credits_required_text" to "L'audioguida completa richiede crediti o un Day Pass: apri l'app per sbloccarla.",
+            // (25/10/2026) Senza rete e senza MP3 gia' scaricato la guida non puo' partire: si dice.
+            "network_required_text" to "Serve la rete per ascoltare la guida: riprova quando sei connesso, oppure scarica l'area offline.",
             // (28/08/2026) Prominent disclosure Play sulla posizione in background:
             // era italiano fisso nel plugin, mostrato a tutto il mondo.
             "bg_disclosure_title" to "Posizione in background",
@@ -75,6 +77,7 @@ object NotificationStrings {
             "pkg_lang_text" to "This offline package is in %1\$s, the app is in %2\$s. Download the area in your language, or listen in %1\$s.",
             "credits_required_title" to "Not enough credits",
             "credits_required_text" to "The full audio guide needs credits or a Day Pass: open the app to unlock it.",
+            "network_required_text" to "You need a network connection to listen to the guide: try again when online, or download the offline area.",
             "bg_disclosure_title" to "Background location",
             "bg_disclosure_text" to "WIP collects your location data in the background to play audio guides automatically when you get close to a point of interest, even when the app is closed or not in use (screen off or phone in your pocket). Your location is never used for advertising. To turn the feature on, go to Settings → Permissions → Location and choose 'Allow all the time'.",
             "bg_disclosure_settings" to "Open Settings",
@@ -100,6 +103,7 @@ object NotificationStrings {
             "pkg_lang_text" to "Ce paquet hors ligne est en %1\$s, l'application en %2\$s. Téléchargez la zone dans votre langue, ou écoutez en %1\$s.",
             "credits_required_title" to "Crédits insuffisants",
             "credits_required_text" to "L'audioguide complet nécessite des crédits ou un Day Pass : ouvrez l'application pour le débloquer.",
+            "network_required_text" to "Il faut une connexion réseau pour écouter l'audioguide : réessayez une fois connecté, ou téléchargez la zone hors ligne.",
             "bg_disclosure_title" to "Position en arrière-plan",
             "bg_disclosure_text" to "WIP collecte les données de votre position en arrière-plan pour lancer automatiquement les audioguides lorsque vous approchez d'un point d'intérêt, même quand l'application est fermée ou inutilisée (écran éteint ou téléphone dans la poche). Votre position n'est jamais utilisée à des fins publicitaires. Pour activer la fonction, allez dans Paramètres → Autorisations → Localisation et choisissez « Toujours autoriser ».",
             "bg_disclosure_settings" to "Ouvrir les paramètres",
@@ -125,6 +129,7 @@ object NotificationStrings {
             "pkg_lang_text" to "Este paquete sin conexión está en %1\$s y la app en %2\$s. Descarga la zona en tu idioma o escucha en %1\$s.",
             "credits_required_title" to "Créditos insuficientes",
             "credits_required_text" to "La audioguía completa requiere créditos o un Day Pass: abre la app para desbloquearla.",
+            "network_required_text" to "Hace falta conexión de red para escuchar la audioguía: inténtalo de nuevo cuando estés conectado o descarga la zona sin conexión.",
             "bg_disclosure_title" to "Ubicación en segundo plano",
             "bg_disclosure_text" to "WIP recopila los datos de tu ubicación en segundo plano para reproducir automáticamente las audioguías cuando te acercas a un punto de interés, incluso con la app cerrada o sin usar (pantalla apagada o teléfono en el bolsillo). La ubicación nunca se usa con fines publicitarios. Para activar la función ve a Ajustes → Permisos → Ubicación y elige «Permitir siempre».",
             "bg_disclosure_settings" to "Ir a Ajustes",
@@ -150,6 +155,7 @@ object NotificationStrings {
             "pkg_lang_text" to "Dieses Offline-Paket ist auf %1\$s, die App auf %2\$s. Laden Sie das Gebiet in Ihrer Sprache herunter oder hören Sie auf %1\$s.",
             "credits_required_title" to "Nicht genügend Guthaben",
             "credits_required_text" to "Der vollständige Audioguide braucht Guthaben oder einen Day Pass: öffnen Sie die App, um ihn freizuschalten.",
+            "network_required_text" to "Zum Anhören des Audioguides wird eine Netzverbindung benötigt: versuchen Sie es online erneut oder laden Sie das Gebiet offline herunter.",
             "bg_disclosure_title" to "Standort im Hintergrund",
             "bg_disclosure_text" to "WIP erfasst Ihre Standortdaten im Hintergrund, um Audioguides automatisch abzuspielen, wenn Sie sich einem interessanten Ort nähern – auch wenn die App geschlossen oder nicht in Gebrauch ist (Bildschirm aus oder Telefon in der Tasche). Der Standort wird nie für Werbung verwendet. Um die Funktion zu aktivieren, gehen Sie zu Einstellungen → Berechtigungen → Standort und wählen Sie „Immer zulassen“.",
             "bg_disclosure_settings" to "Zu den Einstellungen",
@@ -181,6 +187,7 @@ object NotificationStrings {
             "pkg_lang_text" to "Этот офлайн-пакет на языке %1\$s, приложение — на %2\$s. Скачайте область на своём языке или слушайте на %1\$s.",
             "credits_required_title" to "Недостаточно кредитов",
             "credits_required_text" to "Полный аудиогид требует кредитов или Day Pass: откройте приложение, чтобы разблокировать его.",
+            "network_required_text" to "Для прослушивания аудиогида нужна сеть: повторите попытку при подключении или скачайте область для офлайн-режима.",
             "bg_disclosure_title" to "Геолокация в фоновом режиме",
             "bg_disclosure_text" to "WIP собирает данные о вашем местоположении в фоновом режиме, чтобы автоматически включать аудиогид, когда вы приближаетесь к интересному месту, — даже если приложение закрыто или не используется (экран выключен или телефон в кармане). Местоположение никогда не используется для рекламы. Чтобы включить функцию, откройте Настройки → Разрешения → Местоположение и выберите «Разрешать всегда».",
             "bg_disclosure_settings" to "Открыть настройки",
@@ -206,6 +213,7 @@ object NotificationStrings {
             "pkg_lang_text" to "此离线包为%1\$s，应用为%2\$s。请下载你所用语言的区域，或以%1\$s收听。",
             "credits_required_title" to "积分不足",
             "credits_required_text" to "完整语音导览需要积分或 Day Pass：打开应用即可解锁。",
+            "network_required_text" to "收听语音导览需要网络：请联网后重试，或下载离线区域。",
             "bg_disclosure_title" to "后台定位",
             "bg_disclosure_text" to "WIP 会在后台收集你的位置数据，以便你靠近兴趣点时自动播放语音导览，即使应用已关闭或未在使用（息屏或手机放在口袋里）也一样。位置数据绝不会用于广告。要开启该功能，请前往 设置 → 权限 → 位置信息，选择「始终允许」。",
             "bg_disclosure_settings" to "前往设置",

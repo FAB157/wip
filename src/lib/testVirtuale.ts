@@ -75,6 +75,8 @@ const ora = () => { const d = new Date(orologio || Date.now()); return `${due(d.
 const scrivi = (riga: string) => { registro.push(`${ora()} ${riga}`); if (registro.length > 4000) registro.splice(0, registro.length - 4000); };
 
 export const statoTest = (): StatoTest => stato;
+/** Guide scattate di cui non si sa ancora se la voce è partita (al più 90 s ciascuna): la pagella va letta a zero. */
+export const vociInAttesa = (): number => vociAttese.size;
 export const righeTest = (): string[] => registro.slice();
 export function ascoltaTest(f: () => void): () => void { ascoltatori.add(f); return () => { ascoltatori.delete(f); }; }
 
@@ -179,6 +181,8 @@ function parla(testo: string): Promise<void> {
 }
 
 let seguendoGiro = false;
+/** Arrivati a una tappa del giro: fino a quando si aspetta, fermi, che la guida cominci (0 = non si aspetta). */
+let attesaGuidaFinoA = 0;
 let geometriaSeguita: number[][] | null = null;
 // Rotta del navigatore a tappa singola (Itinerario › Naviga › WipNav, `useWalkingNavigation`): non passa da
 // tourService, la si riceve da `wip-nav-route` e «Segui il giro» la usa quando non c'è un giro (07/10/2026).
@@ -193,6 +197,58 @@ let luoghiInVolo = false;
 const avvisati = new Set<string>();
 let dettoSpenta = false;
 let teaserInCorso = false;
+
+// ── QUANDO PARTE LA VOCE (24/10/2026, banco di prova) ────────────────────
+// Dopo ogni scatto di una guida si guarda quando la voce di QUEL luogo comincia davvero (un elemento audio che
+// avanza — `__wipVoceInCorso`, lo stesso segno che usano navigatore e arrivo alla meta — con il luogo giusto nello
+// stato audio). Si scrive una riga VOCE-GUIDA: i secondi dallo scatto e il SILENZIO che sente l'utente (dalla fine
+// del teaser, o dallo scatto se il teaser non c'era). Se l'app dice perché non parla ('wip-guida-non-partita') è
+// «non-partita» col motivo; se in 90 s non succede niente è «mai». Orologio vero: il fattore ×2/×4 accelera solo
+// il cammino. Serve a sapere se preparare la voce prima di arrivare vale la spesa (idea del 24/10).
+const VOCE_TETTO_MS = 90_000;
+const vociAttese = new Map<string, { nome: string; ts: number; fineTeaser: number | null }>();
+let timerVoci: ReturnType<typeof setTimeout> | null = null;
+const secondi = (ms: number) => (Math.round(ms / 100) / 10).toFixed(1);
+function chiudiAttesaVoce(id: string, esito: 'partita' | 'mai' | 'non-partita', motivo = '') {
+  const a = vociAttese.get(id);
+  if (!a) return;
+  vociAttese.delete(id);
+  const adesso = Date.now();
+  const nome = a.nome.replace(/"/g, "'");
+  const silenzio = adesso - (a.fineTeaser ?? a.ts);
+  const coda = esito === 'partita' ? ` dopo=${secondi(adesso - a.ts)} silenzio=${secondi(silenzio)}` : '';
+  scrivi(`VOCE-GUIDA ${esito} "${nome}" id=${id}${coda}${motivo ? ` motivo=${motivo.replace(/\s+/g, '_').slice(0, 40)}` : ''}`);
+  evento(esito === 'partita' ? `VOCE della guida: ${a.nome} dopo ${secondi(adesso - a.ts)} s (silenzio ${secondi(silenzio)} s)` : `VOCE della guida ${esito === 'mai' ? 'MAI partita' : 'non partita'}: ${a.nome}${motivo ? ` (${motivo})` : ''}`);
+  avvisa();
+}
+function guardaVoci() {
+  timerVoci = null;
+  if (!vociAttese.size) return;
+  let suona = false, chi = '';
+  try { suona = (window as any).__wipVoceInCorso?.() === true; } catch { suona = false; }
+  try { chi = String(locationService.getAudioState()?.poiId ?? ''); } catch { chi = ''; }
+  const adesso = Date.now();
+  for (const [id, a] of [...vociAttese]) {
+    if (suona && chi === id) chiudiAttesaVoce(id, 'partita');
+    else if (adesso - a.ts > VOCE_TETTO_MS) chiudiAttesaVoce(id, 'mai');
+  }
+  if (vociAttese.size) timerVoci = setTimeout(guardaVoci, 250);
+}
+function attendiVoce(id: string, nome: string) {
+  if (!id) return;
+  vociAttese.set(id, { nome, ts: Date.now(), fineTeaser: null });
+  if (!timerVoci) timerVoci = setTimeout(guardaVoci, 250);
+}
+const suFineTeaser = (e: Event) => {
+  const id = String((e as CustomEvent).detail?.poiId ?? '');
+  const a = vociAttese.get(id);
+  if (a && a.fineTeaser == null) a.fineTeaser = Date.now();
+};
+const suGuidaNonPartita = (e: Event) => {
+  const d: any = (e as CustomEvent).detail || {};
+  const id = String(d.poiId ?? '');
+  if (vociAttese.has(id)) chiudiAttesaVoce(id, 'non-partita', String(d.motivo || 'senza_testo'));
+};
 
 async function aggiornaLuoghi(lat: number, lon: number) {
   if (luoghiInVolo) return;
@@ -356,6 +412,22 @@ function passo() {
       }
     } catch { /* nessun giro: si prosegue sulla linea che c'è */ }
   }
+  // CHI ASCOLTA STA FERMO (09/10/2026, giro maestro San Pietroburgo): il telefono finto continuava a camminare
+  // mentre la guida della Piazza del Palazzo suonava (160 s), superava il punto dell'Ermitage e il giro lo chiudeva
+  // come «sfiorato» a 291 m — un «presto» che un visitatore vero non vedrebbe mai. In un giro, mentre una voce
+  // suona, il passo è zero: si riparte a guida finita.
+  if (seguendoGiro) {
+    let ascolta = false;
+    try { ascolta = (window as any).__wipVoceInCorso?.() === true; } catch { ascolta = false; }
+    if (ascolta) attesaGuidaFinoA = 0;
+    if (ascolta || Date.now() < attesaGuidaFinoA) {
+      stato = { ...stato, messaggio: 'Fermo: ascolto la guida…' };
+      inietta(stato.lat, stato.lon, 0, 0);
+      avvisa();
+      timer = setTimeout(passo, 1000 / Math.max(1, stato.fattore));
+      return;
+    }
+  }
   let daFare = VELOCITA[stato.modo]; // metri in un secondo simulato
   let lat = stato.lat, lon = stato.lon, heading = 0;
   while (daFare > 0 && linea.length) {
@@ -411,7 +483,17 @@ function suTrigger(e: Event) {
   avvisa();
   // Il teaser prima della guida, come sul telefono. Nel giro lo dice il giro; un tocco manuale non ha teaser.
   const idLuogo = String(d.poiId ?? poi.id ?? '');
+  if (idLuogo && !d.manual && d.autoPlay !== false) attendiVoce(idLuogo, nome);
   if (idLuogo && !d.manual && !d.fromTour && d.autoPlay !== false) { avvisati.add(idLuogo); void diTeaser(idLuogo, nome); }
+  // NEL GIRO NON C'È TEASER DA ASPETTARE (09/10/2026, giro maestro San Pietroburgo): la scheda, a test acceso,
+  // aspetta 'wip-teaser-finished' con un tetto di 25 s — e per le tappe di un giro nessuno lo mandava. Fra «Sei
+  // arrivato» e la guida passavano 26 s di silenzio che sul telefono non esistono, e il telefono finto intanto
+  // camminava via (Sant'Isacco: 90 m, tappa chiusa prima che la guida cominciasse). Il via si dà subito, e chi
+  // è arrivato aspetta fermo che la voce cominci (15 s al massimo).
+  else if (idLuogo && d.fromTour && !d.manual && d.autoPlay !== false) {
+    attesaGuidaFinoA = Date.now() + 15000;
+    setTimeout(() => { try { window.dispatchEvent(new CustomEvent('wip-teaser-finished', { detail: { poiId: idLuogo } })); } catch { /* niente */ } }, 600);
+  }
 }
 function suVoce(e: Event) {
   if (!stato.attivo || stato.lat == null || stato.lon == null) return;
@@ -436,6 +518,9 @@ export function avviaTest(lat: number, lon: number, modo: ModoTest = 'piedi') {
     window.addEventListener('wip-poi-trigger', suTrigger);
     window.addEventListener('wip-nav-instruction', suVoce);
     window.addEventListener('wip-nav-route', suRottaNavigatore);
+    window.addEventListener('wip-teaser-finished', suFineTeaser);
+    window.addEventListener('wip-guida-non-partita', suGuidaNonPartita);
+    vociAttese.clear();
     registro = []; orologio = Date.now(); ultimaPos = 0;
     film = []; eventiDelSecondo = []; galleriaFinoA = 0; saltoProssimo = 0;
     avvisati.clear(); luoghi = []; luoghiA = null; dettoSpenta = false;
@@ -588,6 +673,11 @@ export function fermaTest() {
   window.removeEventListener('wip-poi-trigger', suTrigger);
   window.removeEventListener('wip-nav-instruction', suVoce);
   window.removeEventListener('wip-nav-route', suRottaNavigatore); rottaNavigatore = null;
+  window.removeEventListener('wip-teaser-finished', suFineTeaser);
+  window.removeEventListener('wip-guida-non-partita', suGuidaNonPartita);
+  // Le voci ancora attese a test fermato non si giudicano: il test è finito prima di saperlo.
+  if (timerVoci) { clearTimeout(timerVoci); timerVoci = null; }
+  vociAttese.clear();
   try { delete (window as any).__wipTestVirtuale; window.speechSynthesis?.cancel(); } catch { /* niente */ }
   fingiGeolocalizzazione(false);
   linea = [];

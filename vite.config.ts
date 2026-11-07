@@ -74,7 +74,7 @@ export default defineConfig(({mode}) => {
           // pagina, perché il navigateFallback intercetta ogni navigazione
           // non nella denylist. Nota: /scopri (senza lingua, l'italiano) è un
           // file statico vero e non ha questo problema — resta fuori apposta.
-          navigateFallbackDenylist: [/^\/privacy/, /^\/terms/, /^\/support/, /^\/delete-account/, /^\/api\//, /^\/luogo\//, /^\/sitemap/, /^\/robots\.txt/, /^\/llms\.txt/, /^\/scopri\//],
+          navigateFallbackDenylist: [/^\/privacy/, /^\/terms/, /^\/support/, /^\/delete-account/, /^\/api\//, /^\/luogo\//, /^\/sitemap/, /^\/robots\.txt/, /^\/llms\.txt/, /^\/scopri\//, /^\/press/, /^\/comuni/, /^\/hotel/, /^\/riscatta/, /^\/regalo/,/^\/presentazione/, /^\/scarica/],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,

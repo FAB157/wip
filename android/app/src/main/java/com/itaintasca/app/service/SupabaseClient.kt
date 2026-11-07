@@ -547,10 +547,21 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
 
             // Prima il teaser nella lingua dell'utente, poi i fallback:
             // prima sceglieva solo it/en anche per utenti FR/ES/DE.
-            val teaser = map["teaser_text_$lang"]?.toString()
-                ?: map["teaser_text_it"]?.toString()
-                ?: map["teaser_text_en"]?.toString()
-                ?: map["teaser_text"]?.toString()
+            // (08/10/2026, committente: «se l'utente ha lingua non italiana, teaser nella sua
+            // lingua?») SOLO la lingua dell'utente. Il ripiego sull'italiano faceva sentire a un
+            // tedesco il teaser italiano letto con voce tedesca, e — peggio — il luogo risultava
+            // «con teaser», quindi non veniva mai chiesto a /api/poi/batch-teaser nella sua lingua
+            // (970.000 teaser in italiano, ~100.000 in tedesco). Senza testo nella lingua giusta il
+            // campo resta vuoto: il servizio lo chiede al server e fino ad allora dice solo il nome.
+            // Stessa regola in WipSupabaseClient.swift.
+            val teaserGrezzo = map["teaser_text_$lang"]?.toString()?.takeIf { it.isNotBlank() && it != "null" }
+                ?: (if (lang == "it") map["teaser_text"]?.toString()?.takeIf { it.isNotBlank() && it != "null" } else null)
+            // (25/10/2026) Solo un teaser LEGGIBILE (NomiAnnunciabili.teaserLeggibile):
+            // mai il segnaposto «Apri l'app per scoprire…», mai una colonna italiana
+            // che porta il testo inglese, mai un alfabeto che la voce non sa. Scartato
+            // qui = campo vuoto = il servizio lo richiede al server, come per i mancanti.
+            val teaserEn = map["teaser_text_en"]?.toString()?.takeIf { it.isNotBlank() && it != "null" }
+            val teaser = com.itaintasca.app.geofence.NomiAnnunciabili.teaserLeggibile(teaserGrezzo, teaserEn, lang)
 
             // IL PUNTO D'ARRIVO PRIMA DELLA PORTA (05/09/2026, committente: «il
             // punto d'arrivo sara' quello da cui partono i trigger dei 150 m /

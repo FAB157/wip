@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Phone, Globe, Clock, ChevronDown } from 'lucide-react';
-import { getApiUrl } from '../lib/api';
+import { getApiUrl, apiFetch } from '../lib/api';
 import { getTranslation, type Language } from '../lib/i18n';
 
 /**
@@ -61,7 +61,9 @@ export default function PoiContactButtons({ poi, language }: Props) {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(getApiUrl('/api/poi/contacts'), {
+        // 23/10/2026 — REGOLA: ogni rotta /api/poi/* si chiama con apiFetch (Bearer della sessione). Con la fetch
+        // nuda l'admin riceveva 401 e i contatti non comparivano.
+        const res = await apiFetch(getApiUrl('/api/poi/contacts'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

@@ -543,11 +543,15 @@ final class WipSupabaseClient {
             else if let s = map["is_gem"] as? String { isGem = s.lowercased() == "true" }
             else { isGem = cat == "gemme" || (map["premium"] as? Bool == true) }
 
-            // Prima il teaser nella lingua dell'utente, poi i fallback
-            let teaser = (map["teaser_text_\(lang)"] as? String)
-                ?? (map["teaser_text_it"] as? String)
-                ?? (map["teaser_text_en"] as? String)
-                ?? (map["teaser_text"] as? String)
+            // (08/10/2026) SOLO la lingua dell'utente: il ripiego sull'italiano faceva sentire a un
+            // tedesco il teaser italiano e il luogo risultava «con teaser», quindi non veniva mai
+            // chiesto a /api/poi/batch-teaser nella sua lingua. Stessa regola in SupabaseClient.kt.
+            let nonVuoto: (Any?) -> String? = { v in
+                guard let s = v as? String, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                return s
+            }
+            let teaser = nonVuoto(map["teaser_text_\(lang)"])
+                ?? (lang == "it" ? nonVuoto(map["teaser_text"]) : nil)
 
             // IL PUNTO D'ARRIVO PRIMA DELLA PORTA (05/09/2026, committente: «il
             // punto d'arrivo sara' quello da cui partono i trigger dei 150 m /
@@ -610,7 +614,13 @@ final class WipSupabaseClient {
                 // Stessa regola di SupabaseClient.kt.
                 source: map.keys.contains("enrichment_source")
                     ? (map["enrichment_source"] as? String)
-                    : (map["source"] as? String)
+                    : (map["source"] as? String),
+                // (25/10/2026) Per NomiAnnunciabili (nome tradotto, QID, città,
+                // teaser inglese di confronto): nil se la RPC non li porta.
+                nameTranslated: nonVuoto(map["name_translated"]),
+                wikidata: nonVuoto(map["wikidata"] ?? map["wikidata_id"]),
+                city: nonVuoto(map["city"]),
+                teaserTextEn: nonVuoto(map["teaser_text_en"])
             )
         }
 

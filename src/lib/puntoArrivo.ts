@@ -32,7 +32,13 @@ export function puntoArrivo(p: any): { lat: number; lon: number } {
   const aLon = Number(p?.arrival_lon ?? p?.arrivalLon);
   if (Number.isFinite(aLat) && Number.isFinite(aLon) && (aLat !== 0 || aLon !== 0)) {
     const cLat = Number(p?.lat), cLon = Number(p?.lon);
-    const troppoLontano = Number.isFinite(cLat) && Number.isFinite(cLon)
+    // FINE STRADA (11/10/2026, committente: «dove finisce la strada far partire a fine strada»). Una cima, un
+    // ghiacciaio, la laguna, un'isola: a piedi non ci si arriva, e il punto d'arrivo VERIFICATO è dove finisce il
+    // percorso (`arrival_method = 'fine_strada'`, scritto solo dopo la simulazione dello scatto). Per quello la
+    // guardia dei 250 m non vale: è lontano per natura, non per un abbinamento sbagliato. I nativi non hanno mai
+    // avuto questa guardia sul punto d'arrivo (lo posano nel campo dell'ingresso così com'è).
+    const fineStrada = String(p?.arrival_method ?? p?.arrivalMethod ?? '') === 'fine_strada';
+    const troppoLontano = !fineStrada && Number.isFinite(cLat) && Number.isFinite(cLon)
       && metri(cLat, cLon, aLat, aLon) > MAX_DISTANZA_PUNTO_INDIRIZZO_M;
     if (!troppoLontano) return { lat: aLat, lon: aLon };
   }

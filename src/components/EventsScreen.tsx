@@ -818,14 +818,16 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   // biglietto. Vanno nella vista Mostre «In corso», prima delle altre.
   const loadTiqetsMostre = async (lat: number, lon: number, searchRadius: number) => {
     const genAvvio = fetchGenRef.current;
-    const key = `${lat.toFixed(2)}_${lon.toFixed(2)}_${Math.min(searchRadius, 50)}_${language}`;
+    // (10/10/2026) Il raggio scelto vale anche qui (prima era fermo a 50 km): il server ripiega da solo
+    // se Tiqets rifiuta un raggio largo.
+    const key = `${lat.toFixed(2)}_${lon.toFixed(2)}_${searchRadius}_${language}`;
     if (tiqetsMostreKeyRef.current === key) return;
     tiqetsMostreKeyRef.current = key;
     logApiCall('tiqets', 'temporary_events');
     setLoadingSources(prev => ({ ...prev, tiqets_mostre: true }));
     setSourceErrors(prev => ({ ...prev, tiqets_mostre: null }));
     try {
-      const r = await fetch(getApiUrl(`/api/tiqets/mostre?lat=${lat}&lon=${lon}&radius_km=${Math.min(searchRadius, 50)}&lang=${langParam}`), { signal: AbortSignal.timeout(20000) });
+      const r = await fetch(getApiUrl(`/api/tiqets/mostre?lat=${lat}&lon=${lon}&radius_km=${searchRadius}&lang=${langParam}`), { signal: AbortSignal.timeout(20000) });
       if (!r.ok) throw new Error(`Tiqets mostre ${r.status}`);
       const data = await r.json();
       const oggi = isoOggiLocale();

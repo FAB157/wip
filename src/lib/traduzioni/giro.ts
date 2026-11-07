@@ -140,6 +140,10 @@ export const TRAD_GIRO: Record<string, Partial<Record<Language, string>>> = {
     RU: 'Завершить маршрут? Пройденные точки и путь будут потеряны. Чтобы просто скрыть, нажмите стрелку внизу.',
     ZH: '结束路线？已完成的站点和路径将丢失。只想隐藏请用底部箭头。',
   },
+  gr_tocca_ancora_per_chiudere: {
+    IT: 'Tocca di nuovo la X per chiudere.', EN: 'Tap the X again to end it.', FR: 'Touchez à nouveau le X pour terminer.',
+    ES: 'Toca de nuevo la X para terminar.', DE: 'Zum Beenden das X noch einmal tippen.', RU: 'Нажмите X ещё раз, чтобы завершить.', ZH: '再点一次 X 即可结束。',
+  },
   gr_giro_non_riuscito: {
     IT: 'Giro non riuscito.',
     EN: 'Could not create the tour.',

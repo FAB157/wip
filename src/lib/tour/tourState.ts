@@ -14,7 +14,7 @@
  *   DEVIATO a 120 m per 30 s — sotto, e` un marciapiede sbagliato; il tempo
  *                        serve a non ricalcolare per un rimbalzo del GPS
  */
-import { radiiForTransport } from '../guideSettings';
+import { radiiForTransport, luogoSenzaPorta } from '../guideSettings';
 
 export type StatoGiro =
   | 'IN_CAMMINO'
@@ -120,6 +120,32 @@ export function sogliaArrivo(livello: LivelloIngresso | undefined, raggioEdifici
 }
 
 /**
+ * REGOLA 23/10/2026 (collaudo Lugano: Piazza della Riforma «presto» a 61 m). Una tappa SENZA PORTA (piazza,
+ * parco, ponte, belvedere… stessa lista di luogoSenzaPorta) senza punto d'arrivo NON è il centro di un
+ * edificio: il suo punto è il luogo stesso, e la soglia è il raggio d'arrivo dell'utente (30 m a piedi),
+ * mai i 70 m del centroide né il raggio d'avviso. Tutte le chiamate che hanno la tappa passano da qui.
+ */
+/**
+ * REGOLA 23/10/2026 (ricollaudo Lugano, LAC: «Sei arrivato» e poi né scheda né guida). Dopo l'arrivo a una tappa
+ * con guida, se la scheda non si è aperta (il nativo ha taciuto) il giro la apre: aspetta 8 s e la fine della
+ * guida in corso, rinuncia dopo 3 minuti o se il giro non è più su quella tappa. Pura, per il collaudo.
+ */
+export function serveAprireScheda(apertaIlTs: number, arrivoTs: number, ora: number, guidaInCorso: boolean, giroAttivoSullaTappa: boolean): 'aperta' | 'aspetta' | 'apri' | 'scaduta' {
+  // Il nativo può aprirla qualche secondo PRIMA che il giro dichiari l'arrivo: vale un'apertura dell'ultimo minuto.
+  if (apertaIlTs > 0 && apertaIlTs >= arrivoTs - 60000) return 'aperta';
+  if (!giroAttivoSullaTappa || ora - arrivoTs > 180000) return 'scaduta';
+  if (guidaInCorso || ora - arrivoTs < 8000) return 'aspetta';
+  return 'apri';
+}
+
+export function sogliaArrivoTappa(tappa: Pick<TappaGiro, 'ingresso' | 'categoria' | 'nome'> | null | undefined, raggioEdificio?: number | null): number {
+  if (tappa && !tappa.ingresso && luogoSenzaPorta({ category: tappa.categoria ?? null, name: tappa.nome ?? null })) {
+    return sogliaArrivo('dichiarato');
+  }
+  return sogliaArrivo(tappa?.ingresso?.livello, raggioEdificio);
+}
+
+/**
  * A quanti metri dalla tappa parte il teaser breve (stato IN_ARRIVO).
  * (05/10/2026, committente: sì a «anche il teaser del percorso segua il
  * GeoControl») È l'AVVISO A PIEDI scelto dall'utente — 150 m se non l'ha mai
@@ -203,7 +229,7 @@ export function prossimoStato(
     return cambia('DEVIATO', { fuoriPercorsoDa: fuoriDa, fermoDa });
   }
 
-  const soglia = sogliaArrivo(tappa.ingresso?.livello, raggioEdificio);
+  const soglia = sogliaArrivoTappa(tappa, raggioEdificio);
   if (o.distanzaTappa <= soglia) return cambia('ALL_INGRESSO', { fermoDa, fuoriPercorsoDa: null });
   if (o.distanzaTappa <= sogliaAvviso(soglia)) return cambia('IN_ARRIVO', { fermoDa, fuoriPercorsoDa: null });
   return cambia('IN_CAMMINO', { fermoDa, fuoriPercorsoDa: fuoriDa });

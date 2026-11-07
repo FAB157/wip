@@ -11,6 +11,11 @@ import './index.css';
 import { installNativeApiFetch } from './lib/api';
 installNativeApiFetch();
 
+// Nessun dialogo di posizione prima della sua spiegazione (07/11/2026,
+// rifiuto Play «Prominent Disclosure»): vedi lib/permessi/consensoPosizione.
+import { installaGuardiaGeolocation } from './lib/permessi/consensoPosizione';
+installaGuardiaGeolocation();
+
 // TRADUTTORE DEL BROWSER (23/09/2026, Sentry fatal ripetuto: «Failed to
 // execute 'insertBefore' on 'Node'», Chrome Mobile, pagina aperta su Mardin).
 // Chi legge in una lingua che l'app non ha (turco, arabo…) si vede proporre da

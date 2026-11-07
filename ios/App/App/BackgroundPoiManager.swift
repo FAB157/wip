@@ -1641,6 +1641,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     private var ultimaValLoc: CLLocation?
     private var ultimaValGrezza: CLLocation?
     private var ultimaValMs: Double = 0
+    /// (25/10/2026) L'ultima volta che l'avviso dei 150 m è andato a VOCE: al
+    /// massimo uno ogni `avvisoVoceOgniMs` (NomiAnnunciabili, regola 8).
+    private var ultimoAvvisoVoceMs: Double = 0
+    private static let avvisoVoceOgniMs: Double = 20_000
     /// Registro di collaudo: una riga per attesa / per aggancio dubbio, non una per fix.
     private var ultimaAttesaAnnotata = ""
     private var ultimoAggancioDubbio = ""
@@ -1727,12 +1731,18 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// «Piazza Navona» finisce e 20 s dopo riparte con un'altra riga). La stessa
     /// riga non passa di qui: la ferma già il suo stato ARRIVED_FIRED, e dopo un
     /// «Azzera storico» deve poter riparlare subito.
+    /// (25/10/2026) Vale anche per il GEMELLO IN UN ALTRO ALFABETO (entro 150 m
+    /// dall'ultimo arrivo) e per lo STESSO QID: il nome nudo di «Трг републике»
+    /// è vuoto e la regola del nome non lo vedeva (NomiAnnunciabili).
     private func nomeAppenaDetto(_ poi: Poi) -> Bool {
         caricaArbitrato()
         let eta = nowMs() - ultimoArrivoMs
-        return !ultimoArrivoNome.isEmpty && poi.id != ultimoArrivoPoi &&
-            eta >= 0 && eta < Arbitrato.nomeAppenaDettoMs &&
-            Arbitrato.nomeNudo(poi.nome) == ultimoArrivoNome
+        guard poi.id != ultimoArrivoPoi, eta >= 0, eta < Arbitrato.nomeAppenaDettoMs else { return false }
+        if !ultimoArrivoNome.isEmpty, Arbitrato.nomeNudo(poi.nome) == ultimoArrivoNome { return true }
+        guard let ultimo = currentPois.first(where: { $0.id == ultimoArrivoPoi }) else { return false }
+        let d = CLLocation(latitude: ultimo.lat, longitude: ultimo.lon)
+            .distance(from: CLLocation(latitude: poi.lat, longitude: poi.lon))
+        return NomiAnnunciabili.stessoLuogoAltroAlfabeto(ultimo, poi, metri: d)
     }
 
     /// (05/10/2026) I DOPPIONI DELLO STESSO LUOGO: le altre righe del radar con
@@ -1742,16 +1752,26 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// di un giro non si toccano mai. Il riquadro in gradi (~220 m) viene prima
     /// del nome (che costa tre espressioni regolari) e scarta anche le
     /// coordinate NaN. Stessa regola di GeofenceBroadcastReceiver.silenziaDoppioni.
+    /// (25/10/2026) Oltre al nome nudo: il GEMELLO IN UN ALTRO ALFABETO entro
+    /// 150 m («Трг републике» dopo «Piazza della Repubblica») e la riga con lo
+    /// STESSO QID, a qualunque distanza (NomiAnnunciabili.stessoLuogoAltroAlfabeto).
     private func silenziaDoppioni(di vincitore: Poi) {
         let nudo = Arbitrato.nomeNudo(vincitore.nome)
-        guard nudo.count >= 4 else { return }
+        let qidVincitore = NomiAnnunciabili.qidDi(vincitore)
         let centro = CLLocation(latitude: vincitore.lat, longitude: vincitore.lon)
         for p in currentPois {
             if p.id == vincitore.id || p.isFromItinerary { continue }
-            guard abs(p.lat - vincitore.lat) < 0.002, abs(p.lon - vincitore.lon) < 0.004 else { continue }
-            guard Arbitrato.stessoLuogo(nudoVincitore: nudo, nudoAltro: Arbitrato.nomeNudo(p.nome)) else { continue }
-            let d = centro.distance(from: CLLocation(latitude: p.lat, longitude: p.lon))
-            guard d <= Arbitrato.doppioneM else { continue }
+            var gemello = false
+            if let q = qidVincitore, NomiAnnunciabili.qidDi(p) == q {
+                gemello = true
+            } else if abs(p.lat - vincitore.lat) < 0.002, abs(p.lon - vincitore.lon) < 0.004 {
+                let d = centro.distance(from: CLLocation(latitude: p.lat, longitude: p.lon))
+                if d <= Arbitrato.doppioneM {
+                    gemello = (nudo.count >= 4 && Arbitrato.stessoLuogo(nudoVincitore: nudo, nudoAltro: Arbitrato.nomeNudo(p.nome)))
+                        || NomiAnnunciabili.stessoLuogoAltroAlfabeto(vincitore, p, metri: d)
+                }
+            }
+            guard gemello else { continue }
             if store.getTriggerState(p.id)?.state != .arrivedFired {
                 store.setTriggerState(p.id, .arrivedFired)
                 NSLog("[WIP] doppione di \(vincitore.nome) messo a tacere: \(p.nome) (\(p.id))")
@@ -1954,6 +1974,11 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         esaminati.reserveCapacity(32)
         for (indice, poi) in currentPois.enumerated() {
             guard PoiCategories.isActive(poi: poi, selected: selectedCategories) else { continue }
+            // (25/10/2026) CITTÀ, ENTITÀ AMMINISTRATIVE E METROPOLITANE NON
+            // PARLANO MAI (NomiAnnunciabili.rigaNonParla, regola del collaudo di
+            // 7 città): né avviso, né teaser, né guida — fuori dai candidati.
+            // Le tappe di un giro le ha scelte l'utente: restano.
+            if !poi.isFromItinerary, NomiAnnunciabili.rigaNonParla(poi) { continue }
             let statoAcceso: Bool
             if let st = activeStates[poi.id]?.state {
                 statoAcceso = (st == .approachFired || st == .arrivedFired || st == .passed)
@@ -1987,9 +2012,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             let aria = location.distance(from: punto)
             let dIngresso = aria > ricercaStrada
                 ? aria
-                : RoadGraph.cheDecide(
-                    aria: aria,
-                    strada: sorgenteStrada?.verso(lat: punto.coordinate.latitude, lon: punto.coordinate.longitude))
+                : RoadGraph.misura(
+                    aria: aria, sorgente: sorgenteStrada,
+                    lat: punto.coordinate.latitude, lon: punto.coordinate.longitude, isDriving: isDriving)
             let dMuro = haPerimetro
                 ? PoiFootprints.distanzaDalPerimetro(
                     poiId: poi.id, footprint: poi.footprint,
@@ -2001,9 +2026,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             var liberaM: Double? = nil
             if let libera = sorgenteLibera, let g = grezza,
                dIngresso <= effectiveRadii(for: poi, isDriving: isDriving).arrival {
-                liberaM = RoadGraph.cheDecide(
-                    aria: g.distance(from: punto),
-                    strada: libera.verso(lat: punto.coordinate.latitude, lon: punto.coordinate.longitude))
+                liberaM = RoadGraph.misura(
+                    aria: g.distance(from: punto), sorgente: libera,
+                    lat: punto.coordinate.latitude, lon: punto.coordinate.longitude, isDriving: isDriving)
             }
             esaminati.append(Candidate(poi: poi, punto: punto, dist: min(dIngresso, dMuro), liberaM: liberaM))
         }
@@ -2395,15 +2420,25 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // riproduzione parte istantanea (best-effort, mai bloccante).
         prefetchAudio(for: poi)
 
+        // (25/10/2026) L'AVVISO DICE UN NOME, MAI UN'ETICHETTA GREZZA
+        // (NomiAnnunciabili.nomeDaAnnunciare: numeri soli, pietre d'inciampo,
+        // targhe, descrizioni inglesi, altro alfabeto → nil): per quella riga
+        // niente voce e niente notifica. Stato, teaser e MP3 sono già avviati
+        // sopra: la guida all'arrivo resta governata dalle sue regole.
+        guard let nomeAvviso = NomiAnnunciabili.nomeDaAnnunciare(poi, lingua: appLanguage) else {
+            RegistroCollaudo.shared.scrivi("GUIDA avviso-muto-nome-grezzo \"\(poi.nome)\" id=\(poi.id)")
+            return
+        }
+
         let approachMsg: String
         switch appLanguage {
-        case "en": approachMsg = "You are approaching \(poi.nome)"
-        case "fr": approachMsg = "Vous approchez de \(poi.nome)"
-        case "es": approachMsg = "Te estás acercando a \(poi.nome)"
-        case "de": approachMsg = "Sie nähern sich \(poi.nome)"
-        case "ru": approachMsg = "Вы приближаетесь к \(poi.nome)"
-        case "zh": approachMsg = "您正在接近\(poi.nome)"
-        default: approachMsg = "Ti stai avvicinando a \(poi.nome)"
+        case "en": approachMsg = "You are approaching \(nomeAvviso)"
+        case "fr": approachMsg = "Vous approchez de \(nomeAvviso)"
+        case "es": approachMsg = "Te estás acercando a \(nomeAvviso)"
+        case "de": approachMsg = "Sie nähern sich \(nomeAvviso)"
+        case "ru": approachMsg = "Вы приближаетесь к \(nomeAvviso)"
+        case "zh": approachMsg = "您正在接近\(nomeAvviso)"
+        default: approachMsg = "Ti stai avvicinando a \(nomeAvviso)"
         }
 
         // Prefisso PARLATO: mai emoji qui — AVSpeechSynthesizer le legge per
@@ -2438,7 +2473,18 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // esplicite, ci pensa la notifica senza suono) + notifica col testo.
         // Stato/cooldown già aggiornati sopra: nessun trigger perso.
         let silent = isSilentMode
-        if speak && !silent {
+        // (25/10/2026) AL MASSIMO UN AVVISO A VOCE OGNI 20 s (regola del collaudo
+        // di 7 città: a San Pietroburgo i 150 m leggevano 40 nomi in 1,5 km).
+        // La notifica e lo stato restano; tace solo la voce.
+        let adessoAvviso = nowMs()
+        let vocePermessa = adessoAvviso - ultimoAvvisoVoceMs >= Self.avvisoVoceOgniMs || adessoAvviso < ultimoAvvisoVoceMs
+        // (01/11/2026, feedback dei tester Play su 1.3.8) L'avviso si DICE solo se
+        // all'arrivo ci sarà qualcosa da ascoltare (un teaser leggibile), o per le
+        // tappe di un giro: «Ti stai avvicinando a X» e poi nulla era l'annuncio
+        // vuoto segnalato. Stesso criterio di GeofenceBroadcastReceiver.kt.
+        let haContenuto = poi.isFromItinerary || NomiAnnunciabili.teaserLeggibile(poi, lingua: appLanguage) != nil
+        if speak && !silent && vocePermessa && haContenuto {
+            ultimoAvvisoVoceMs = adessoAvviso
             SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
                 text: "\(prefix)\(approachMsg)", isGem: poi.isGem,
                 isItinerary: poi.isFromItinerary, poiId: poi.id,
@@ -2524,23 +2570,42 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// Prefetch dell'MP3 dell'audioguida (port di AudioPrefetchManager Android):
     /// testo dal pacchetto offline se c'è, altrimenti da shared_pois. Tutto
     /// best-effort, nessun errore risale al chiamante.
+    /// (25/10/2026) Il Day Pass LOCALE è attivo adesso? Stessa condizione in
+    /// handleArrival, playGuideFromNotification e prefetchAudio.
+    private func passLocaleAttivo() -> Bool {
+        BillingLogic.isPassActive(
+            nowMs: nowMs(),
+            expiresAtMs: prefs.double(forKey: "daypass_expires_at"),
+            guidesUsed: prefs.integer(forKey: "daypass_used"),
+            cap: prefs.integer(forKey: "daypass_cap")
+        )
+    }
+
     private func prefetchAudio(for poi: Poi) {
         guard isOnline else { return }
         let lang = appLanguage
         let voice = resolveGuideVoice(fallback: poi.guideDefault)
         guard AudioPrefetchManager.cachedFile(poiId: poi.id, lang: lang, character: voice) == nil else { return }
+        // (25/10/2026) SENZA DIRITTO, SOLO CACHE. Il prefetch all'avvicinamento
+        // partiva get-or-create per chiunque: un utente senza pass e senza
+        // acquisto faceva generare testo e sintetizzare voce che poi non
+        // avrebbe mai sentito (l'arrivo gli nega la guida completa). Stessa
+        // condizione di diritto della guida completa in handleArrival: pass
+        // locale attivo o luogo già acquistato → come prima; altrimenti
+        // `soloCache` (il server risponde 204 se non c'è già tutto).
+        let soloCache = !(passLocaleAttivo() || ListeningHistoryStore.shared.isAlreadyPurchased(poi.id))
         // Testo offline SOLO se il pacchetto è nella lingua richiesta
         // (mono-lingua): altrimenti si prende il testo tradotto dal cloud.
         if let localText = store.getOfflineAudioText(poi.id, lang: lang) {
-            AudioPrefetchManager.prefetch(poiId: poi.id, lang: lang, character: voice, text: localText)
+            AudioPrefetchManager.prefetch(poiId: poi.id, lang: lang, character: voice, text: localText, soloCache: soloCache)
         } else {
             // Testo NELLA LINGUA dell'utente (get-or-create per-lingua), non i
             // campi italiani grezzi: così l'MP3 prefetchato è già tradotto.
             // Token utente se disponibile (rollout fase 1, vedi WipSupabaseClient
             // .fetchAudioguideText): mai bloccante se assente.
             let audioguideToken = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken)
-            supabase.fetchAudioguideText(poiId: poi.id, lang: lang, character: voice, accessToken: audioguideToken) { text in
-                AudioPrefetchManager.prefetch(poiId: poi.id, lang: lang, character: voice, text: text)
+            supabase.fetchAudioguideText(poiId: poi.id, lang: lang, character: voice, accessToken: audioguideToken, soloCache: soloCache) { text in
+                AudioPrefetchManager.prefetch(poiId: poi.id, lang: lang, character: voice, text: text, soloCache: soloCache)
             }
         }
     }
@@ -2654,15 +2719,32 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             return
         }
 
+        // (01/11/2026, feedback dei tester Play su 1.3.8: «place names spoken in
+        // foreign languages») Il nome si pronuncia solo se la voce lo sa leggere
+        // (NomiAnnunciabili.nomeDaAnnunciare, che preferisce nameTranslated);
+        // altrimenti «Sei arrivato.» senza nome. Le tappe di un giro: sempre.
+        let nomeDetto: String? = poi.isFromItinerary ? poi.nome : NomiAnnunciabili.nomeDaAnnunciare(poi, lingua: appLanguage)
         let arrivalMsg: String
-        switch appLanguage {
-        case "en": arrivalMsg = "You arrived at \(poi.nome)."
-        case "fr": arrivalMsg = "Vous êtes arrivés a \(poi.nome)."
-        case "es": arrivalMsg = "Has llegado a \(poi.nome)."
-        case "de": arrivalMsg = "Sie sind in \(poi.nome) angekommen."
-        case "ru": arrivalMsg = "Вы прибыли в \(poi.nome)."
-        case "zh": arrivalMsg = "您已到达\(poi.nome)。"
-        default: arrivalMsg = "Sei arrivato a \(poi.nome)."
+        if let n = nomeDetto {
+            switch appLanguage {
+            case "en": arrivalMsg = "You arrived at \(n)."
+            case "fr": arrivalMsg = "Vous êtes arrivés a \(n)."
+            case "es": arrivalMsg = "Has llegado a \(n)."
+            case "de": arrivalMsg = "Sie sind in \(n) angekommen."
+            case "ru": arrivalMsg = "Вы прибыли в \(n)."
+            case "zh": arrivalMsg = "您已到达\(n)。"
+            default: arrivalMsg = "Sei arrivato a \(n)."
+            }
+        } else {
+            switch appLanguage {
+            case "en": arrivalMsg = "You have arrived."
+            case "fr": arrivalMsg = "Vous êtes arrivés."
+            case "es": arrivalMsg = "Has llegado."
+            case "de": arrivalMsg = "Sie sind angekommen."
+            case "ru": arrivalMsg = "Вы прибыли."
+            case "zh": arrivalMsg = "您已到达。"
+            default: arrivalMsg = "Sei arrivato."
+            }
         }
 
         // Frase di ripiego quando il teaser manca: NON sempre la stessa. In un
@@ -2710,7 +2792,11 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
 
         let speakAndNotify: (Poi) -> Void = { [weak self] poi in
             guard let self = self else { return }
-            let teaser = poi.teaserText?.trimmingCharacters(in: .whitespaces)
+            // (25/10/2026) Il teaser da LEGGERE passa da NomiAnnunciabili
+            // .teaserLeggibile: mai il segnaposto «Apri l'app per scoprire…»,
+            // mai una colonna italiana col testo inglese, mai un alfabeto che
+            // la voce non legge. nil → la frase di ripiego variata qui sotto.
+            let teaser = NomiAnnunciabili.teaserLeggibile(poi, lingua: lang)
             // teaser nil/vuoto è normale (non tutti i POI hanno un teaser
             // dedicato): fallbackTeaser copre già quel caso, quindi if-let
             // invece del force-unwrap non cambia alcun comportamento.
@@ -2743,10 +2829,20 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 return
             }
 
-            SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
-                text: fullMsg, isGem: poi.isGem, isItinerary: poi.isFromItinerary,
-                poiId: poi.id, priority: priority, kind: "arrival"
-            ))
+            // (01/11/2026, feedback dei tester Play su 1.3.8: «announcements say
+            // only "You are near…" without useful information») La voce parla solo
+            // con un teaser vero; la frase di ripiego resta nella notifica scritta.
+            // Le tappe di un giro dicono comunque «Sei arrivato».
+            let testoVoce: String?
+            if let t = teaser, !t.isEmpty { testoVoce = fullMsg }
+            else if poi.isFromItinerary { testoVoce = arrivalMsg }
+            else { testoVoce = nil }
+            if let testoVoce = testoVoce {
+                SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
+                    text: testoVoce, isGem: poi.isGem, isItinerary: poi.isFromItinerary,
+                    poiId: poi.id, priority: priority, kind: "arrival"
+                ))
+            }
             self.vibrate(arrival: true)
 
             // DAY PASS hands-free: con pass attivo e app in background, dopo il
@@ -2756,18 +2852,16 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // consumare il pass — stesso ordine del web
             // (dayPassService.authorizeGuidePlayback).
             let alreadyPurchased = ListeningHistoryStore.shared.isAlreadyPurchased(poi.id)
-            let passUsed = self.prefs.integer(forKey: "daypass_used")
-            let passActive = BillingLogic.isPassActive(
-                nowMs: nowMs(),
-                expiresAtMs: self.prefs.double(forKey: "daypass_expires_at"),
-                guidesUsed: passUsed,
-                cap: self.prefs.integer(forKey: "daypass_cap")
-            )
+            let passActive = self.passLocaleAttivo()
+            // (25/10/2026) Già contato in questo pass: si riascolta col pass anche
+            // a tetto raggiunto — una volta per luogo, come il server.
+            let giaContatoNelPass = DayPassContatore.giaContato(poi.id, prefs: self.prefs)
+                && self.prefs.double(forKey: "daypass_expires_at") > nowMs()
             // Autorizzazione calcolata UNA sola volta: decide sia l'auto-play
             // sia testo e azione della notifica (prima veniva rivalutata due
             // volte e poteva divergere a cavallo del consumo del pass).
             let willAutoPlay = self.isAutomaticMode && !Self.isAppInForeground()
-                && (alreadyPurchased || passActive)
+                && (alreadyPurchased || passActive || giaContatoNelPass)
             if willAutoPlay {
                 // CATENA FALLBACK GUIDA COMPLETA (speculare ad Android):
                 // 1) MP3 prefetchato in cache locale (partenza istantanea)
@@ -2790,9 +2884,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                         )
                         return
                     }
-                    // Il pass si consuma solo se il POI NON era già acquistato
+                    // Il pass si consuma solo se il POI NON era già acquistato,
+                    // e (25/10/2026) UNA volta per luogo: DayPassContatore.
                     if !alreadyPurchased {
-                        self.prefs.set(passUsed + 1, forKey: "daypass_used")
+                        DayPassContatore.consuma(poiId: poi.id, prefs: self.prefs)
                     }
                     SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
                         text: fullText ?? "", isGem: poi.isGem, isItinerary: poi.isFromItinerary,
@@ -3162,8 +3257,11 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         let charge: () -> String? = { [weak self] in
             guard let self = self else { return nil }
             if alreadyPurchased { return "purchased" }
-            if passActive {
-                self.prefs.set(self.prefs.integer(forKey: "daypass_used") + 1, forKey: "daypass_used")
+            // (25/10/2026) Una volta per luogo: un id già contato in questo pass
+            // passa col pass anche a tetto raggiunto, e non incrementa.
+            if passActive || (DayPassContatore.giaContato(poiId, prefs: self.prefs)
+                              && self.prefs.double(forKey: "daypass_expires_at") > nowMs()) {
+                DayPassContatore.consuma(poiId: poiId, prefs: self.prefs)
                 return "day_pass"
             }
             let snapshot = self.prefs.integer(forKey: "wallet_snapshot_credits")

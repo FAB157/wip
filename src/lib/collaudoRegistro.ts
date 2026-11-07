@@ -5,6 +5,7 @@
 //   MM-dd HH:mm:ss NAV FIX lat,lon acc=N idx=N aria=N strada=N u=N v=N vicino=N JS|NATIVO|PAUSA [DICE[tipo]: frase]
 //   MM-dd HH:mm:ss GUIDA <tipo> "<nome>" id=… strada=N|inf aria=N raggio=N acc=N lat,lon punto=lat,lon
 //   MM-dd HH:mm:ss SEGNO "<nota>" [lat,lon]
+//   MM-dd HH:mm:ss VOCE-GUIDA partita|mai|non-partita "<nome>" id=… dopo=S silenzio=S [motivo=…]   (test virtuale, 24/10/2026)
 // Qui si trasformano in punti per la mappa e in una pagella: la guida è
 // partita entro il raggio di strada? L'avviso? Le svolte sono state dette in
 // tempo? Funzione PURA, usata dal server (rotta admin) e provabile senza
@@ -20,6 +21,12 @@ export interface ScattoGuida {
   nota: string;
 }
 export interface SvoltaDetta { ora: string; lat: number; lon: number; tipo: string; frase: string; strada: number | null; vicino: number; chi: string; esito: 'giusta' | 'tardi' | 'presto' }
+/**
+ * Quando la guida ha cominciato a parlare dopo lo scatto (24/10/2026, banco di prova). `dopo` = secondi dallo scatto;
+ * `silenzio` = secondi di vuoto che l'utente sente: dalla fine del teaser (o dallo scatto, se il teaser non c'era).
+ * `mai` = nessuna voce entro il tetto; `non-partita` = l'app ha detto perché (niente materiale, riga di dati…).
+ */
+export interface VoceGuida { ora: string; nome: string; id: string; esito: 'partita' | 'mai' | 'non-partita'; dopo: number | null; silenzio: number | null; motivo: string }
 export interface SegnoCollaudo { ora: string; nota: string; lat: number | null; lon: number | null; /** segno sul testo dell'audioguida, non sul trigger */ contenuto: boolean; /** il luogo la cui guida stava suonando */ poi: string | null }
 export interface Pagella {
   guide: { totali: number; giuste: number; tardi: number; presto: number };
@@ -30,14 +37,21 @@ export interface Pagella {
   segni: number;
   /** Segni sul contenuto dell'audioguida («Guida sbagliata»). */
   contenuti: number;
+  /**
+   * Le guide dopo lo scatto: quante sono partite, quante mai (né voce né motivo), quante l'app ha fermato dicendo perché;
+   * il silenzio medio e il peggiore, in secondi. Non entra nel voto (che resta confrontabile con i riferimenti già segnati).
+   */
+  voce: { attese: number; partite: number; mai: number; nonPartite: number; silenzioMedioS: number | null; silenzioPeggioreS: number | null; lente: number };
   voto: number | null; // 0-100, null se non c'è niente da giudicare
 }
 /** Consumo durante il collaudo (righe «BATT», una ogni 5 minuti). `perOra` = punti percentuali persi all'ora. */
 export interface Batteria { da: number; a: number; minuti: number; perOra: number | null; fixAlMinuto: number | null; inCarica: boolean }
-export interface RegistroLetto { traccia: PuntoTraccia[]; scatti: ScattoGuida[]; svolte: SvoltaDetta[]; segni: SegnoCollaudo[]; pagella: Pagella; batteria: Batteria | null; righeNonLette: number }
+export interface RegistroLetto { traccia: PuntoTraccia[]; scatti: ScattoGuida[]; svolte: SvoltaDetta[]; segni: SegnoCollaudo[]; voci: VoceGuida[]; pagella: Pagella; batteria: Batteria | null; righeNonLette: number }
 
 /** Quanto può sforare lo scatto prima di contare come «presto»: il GPS sbaglia di qualche metro. */
 const TOLLERANZA_M = 10;
+/** Oltre questo silenzio (secondi) una guida partita conta come «lenta»: chi è arrivato davanti al luogo aspetta. */
+export const SILENZIO_LENTO_S = 8;
 
 const num = (s: string | undefined): number | null => { const v = Number(s); return s != null && s !== '' && Number.isFinite(v) ? v : null; };
 const campo = (riga: string, nome: string): string | undefined => riga.match(new RegExp(`(?:^|\\s)${nome}=([^\\s]+)`))?.[1];
@@ -47,7 +61,7 @@ const coppia = (s: string | undefined): [number, number] | null => {
 };
 
 export function leggiRegistroCollaudo(righe: string[]): RegistroLetto {
-  const traccia: PuntoTraccia[] = [], scatti: ScattoGuida[] = [], svolte: SvoltaDetta[] = [], segni: SegnoCollaudo[] = [];
+  const traccia: PuntoTraccia[] = [], scatti: ScattoGuida[] = [], svolte: SvoltaDetta[] = [], segni: SegnoCollaudo[] = [], voci: VoceGuida[] = [];
   let nonLette = 0;
   const letture: Array<{ ora: string; livello: number; inCarica: boolean; fix: number }> = [];
   for (const grezza of righe || []) {
@@ -110,6 +124,12 @@ export function leggiRegistroCollaudo(righe: string[]): RegistroLetto {
       segni.push({ ora, nota: cont ? cont[1] : s[1], lat: c ? c[0] : null, lon: c ? c[1] : null, contenuto: !!cont, poi: cont?.[2] || null });
       continue;
     }
+    if (resto.startsWith('VOCE-GUIDA ')) {
+      const v = resto.match(/^VOCE-GUIDA (partita|mai|non-partita) "(.*?)"(.*)$/);
+      if (!v) { nonLette++; continue; }
+      voci.push({ ora, esito: v[1] as VoceGuida['esito'], nome: v[2], id: campo(v[3], 'id') || '', dopo: num(campo(v[3], 'dopo')), silenzio: num(campo(v[3], 'silenzio')), motivo: campo(v[3], 'motivo') || '' });
+      continue;
+    }
     if (resto.startsWith('BATT ')) {
       const livello = num(campo(resto, 'livello'));
       if (livello == null) { nonLette++; continue; }
@@ -144,17 +164,31 @@ export function leggiRegistroCollaudo(righe: string[]): RegistroLetto {
   const avvisi = scatti.filter(s => s.tipo === 'avviso');
   const g = conta(arrivi, 'giusto'), a = conta(avvisi, 'giusto'), v = conta(svolte, 'giusta');
   const giudicati = g.totali + a.totali + v.totali;
+  const silenzi = voci.filter(x => x.esito === 'partita' && x.silenzio != null).map(x => x.silenzio as number);
   const pagella: Pagella = {
     guide: g,
     avvisi: { totali: a.totali, giusti: a.giuste, tardi: a.tardi, presto: a.presto },
     svolte: v,
     // La stessa frase ridetta entro le tre precedenti: è il difetto tipico della ripresa dopo lo schermo spento.
-    frasiRipetute: svolte.filter((s, i) => svolte.slice(Math.max(0, i - 3), i).some(p => p.frase === s.frase)).length,
+    // (09/10/2026) …e NELLO STESSO PUNTO (entro 12 m): dove il nome della via non si dice (cirillico, vie senza
+    // nome) due svolte diverse hanno la stessa frase — a San Pietroburgo contava 19 «ripetute», tutte svolte vere
+    // (anche due «gira a sinistra» a 17 m l'una dall'altra, nei vialetti di un giardino).
+    frasiRipetute: svolte.filter((s, i) => svolte.slice(Math.max(0, i - 3), i).some(p => p.frase === s.frase
+      && Math.hypot((p.lat - s.lat) * 111320, (p.lon - s.lon) * 111320 * Math.cos((s.lat * Math.PI) / 180)) < 12)).length,
     segni: segni.filter(s => !s.contenuto).length,
     contenuti: segni.filter(s => s.contenuto).length,
+    voce: {
+      attese: voci.length,
+      partite: voci.filter(x => x.esito === 'partita').length,
+      mai: voci.filter(x => x.esito === 'mai').length,
+      nonPartite: voci.filter(x => x.esito === 'non-partita').length,
+      silenzioMedioS: silenzi.length ? Math.round((silenzi.reduce((s, x) => s + x, 0) / silenzi.length) * 10) / 10 : null,
+      silenzioPeggioreS: silenzi.length ? Math.max(...silenzi) : null,
+      lente: silenzi.filter(x => x > SILENZIO_LENTO_S).length,
+    },
     voto: giudicati ? Math.round(((g.giuste + a.giuste + v.giuste) / giudicati) * 100) : null,
   };
-  return { traccia, scatti, svolte, segni, pagella, batteria, righeNonLette: nonLette };
+  return { traccia, scatti, svolte, segni, voci, pagella, batteria, righeNonLette: nonLette };
 }
 
 /** Minuti fra due ore del registro («MM-dd HH:mm:ss» o «HH:mm:ss»); regge la mezzanotte, non il cambio d'anno. */

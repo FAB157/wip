@@ -238,6 +238,9 @@ export interface EsitoStrade { totali: number; scaricate: number; giaPresenti: n
  * due punti lontani si riempie il tratto in mezzo). Salta quelle già salvate e
  * fresche; se la rete cade si ferma. Non lancia mai.
  */
+/** 23/10/2026: oltre questo salto fra due punti del tracciato non si prescaricano strade (vedi sotto). */
+export const TRATTA_MAX_PRESCARICO_M = 50_000;
+
 export async function prescaricaStrade(
   punti: number[][],
   opz: { auto?: boolean; max?: number; onProgress?: (fatte: number, totali: number) => void } = {},
@@ -257,6 +260,10 @@ export async function prescaricaStrade(
       // fra due punti lontani (due tappe senza tracciato) si riempie il tratto
       if (prec) {
         const d = metersBetween(prec[0], prec[1], p[0], p[1]);
+        // 23/10/2026 — REGOLA: mai riempire un salto > 50 km (TRATTA_MAX_PRESCARICO_M). Guayaquil: un giro
+        // creato a Carrara aveva una «tratta» di 2.244 km e il riempimento chiedeva tile su tutto l'oceano
+        // (502 dal server). Le strade servono dove si cammina, non fra due continenti.
+        if (d > TRATTA_MAX_PRESCARICO_M) { aggiungi(p[0], p[1]); prec = p; continue; }
         const passi = Math.min(200, Math.floor(d / 400));
         for (let i = 1; i <= passi; i++) aggiungi(prec[0] + ((p[0] - prec[0]) * i) / (passi + 1), prec[1] + ((p[1] - prec[1]) * i) / (passi + 1));
       }

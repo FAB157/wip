@@ -137,11 +137,11 @@ export async function notifyVisionUpdatesNative(updates: VisionUpdates | null, l
 
     const { LocalNotifications } = await import('@capacitor/local-notifications');
     try {
+      // Mai chiedere il permesso da qui (07/11/2026, policy Play): lo chiede
+      // solo la schermata dei permessi, con la sua spiegazione. Senza
+      // permesso la notifica semplicemente non si mostra.
       const perm = await LocalNotifications.checkPermissions();
-      if (perm.display !== 'granted') {
-        const req = await LocalNotifications.requestPermissions();
-        if (req.display !== 'granted') return;
-      }
+      if (perm.display !== 'granted') return;
     } catch { /* plugin senza checkPermissions: si tenta lo schedule */ }
     await LocalNotifications.schedule({
       notifications: [{

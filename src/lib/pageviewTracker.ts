@@ -48,7 +48,9 @@ const APP_VERSION = '1.4';
 function invia(percorso: string, dati: Record<string, any>): void {
   try {
     const ing = ingressoSessione();
-    const body = JSON.stringify({ ...ing, ...dati, sessionId: sessionIdVisita(), platform: piattaforma(), appVersion: APP_VERSION, lang: contesto.lang, logged: contesto.logged });
+    // `auto`: browser pilotato da un programma (navigator.webdriver). Il server non lo conta nelle statistiche.
+    const auto = (navigator as any).webdriver === true ? true : undefined;
+    const body = JSON.stringify({ ...ing, ...dati, auto, sessionId: sessionIdVisita(), platform: piattaforma(), appVersion: APP_VERSION, lang: contesto.lang, logged: contesto.logged });
     const url = getApiUrl(percorso);
     // text/plain: niente preflight CORS (dall'app nativa l'origine è diversa da wip.guide). Il server lo legge.
     if (navigator.sendBeacon) {

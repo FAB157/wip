@@ -191,6 +191,9 @@ export async function reconcileOfflineBilling(): Promise<void> {
         .from('user_passes')
         .update({ guides_used: used })
         .eq('user_id', userId)
+        // 23/10/2026 — REGOLA: il SERVER è la fonte di verità del contatore (conta una volta per luogo). Il
+        // contatore nativo non lo abbassa mai: si scrive solo dove il valore del server è MINORE (= il massimo).
+        .lt('guides_used', used)
         .gt('expires_at', new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
     }
   } catch (e) {
@@ -212,36 +215,90 @@ async function pushWalletSnapshot(userId: string): Promise<void> {
 
 /**
  * Consuma 1 guida dal Day Pass. Nativo: contatore in prefs (vale anche
- * offline, stesso contatore del receiver). Web/PWA: contatore sul server.
+ * offline, stesso contatore del receiver). Web/PWA: lo conta il SERVER
+ * (/api/day-pass/consume, 19/10/2026): una volta per luogo e per pass, con
+ * aggiornamento atomico — prima il client scriveva `guides_used` da solo,
+ * senza controllare l'esito, e solo dal tasto «Ascolta» della scheda: il
+ * giro e i testi pre-scaricati non contavano nulla e il banner restava a 40.
  * Ritorna false se il pass non è attivo o il cap è esaurito.
  */
-export async function consumeDayPassGuide(): Promise<boolean> {
+/**
+ * 23/10/2026 — REGOLA «un luogo si conta UNA volta al giorno, anche lato client». Collaudo 7 città:
+ * «Ascolta Approfondimento» consumava il Day Pass a ogni pressione (il server conta una volta per luogo, il
+ * contatore NATIVO no, e ogni tocco era comunque una chiamata). Si ricorda in localStorage, per data locale,
+ * quali luoghi sono già stati contati: lo stesso luogo, lo stesso giorno, non richiama più il consumo.
+ */
+function chiaveContatiOggi(): string {
+  const d = new Date();
+  return `wip_daypass_contati_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+export function luogoGiaContatoOggi(poiId?: string): boolean {
+  if (!poiId) return false;
+  try { return (JSON.parse(localStorage.getItem(chiaveContatiOggi()) || '[]') as string[]).includes(String(poiId)); } catch { return false; }
+}
+function segnaContatoOggi(poiId?: string): void {
+  if (!poiId) return;
+  try {
+    const k = chiaveContatiOggi();
+    const l = JSON.parse(localStorage.getItem(k) || '[]') as string[];
+    if (!l.includes(String(poiId))) { l.push(String(poiId)); localStorage.setItem(k, JSON.stringify(l.slice(-300))); }
+    // pulizia dei giorni passati
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const kk = localStorage.key(i);
+      if (kk && kk.startsWith('wip_daypass_contati_') && kk !== k) localStorage.removeItem(kk);
+    }
+  } catch { /* storage non disponibile: si conta come prima */ }
+}
+
+export async function consumeDayPassGuide(poiId?: string): Promise<boolean> {
+  if (poiId && luogoGiaContatoOggi(poiId)) return true; // 23/10/2026: già contato oggi
+  const esitoOk = await consumeDayPassGuideDavvero(poiId);
+  if (esitoOk) segnaContatoOggi(poiId);
+  return esitoOk;
+}
+
+async function consumeDayPassGuideDavvero(poiId?: string): Promise<boolean> {
   if (isNativeOfflineSupported()) {
     try {
-      const r = await plugin.consumeDayPassGuide();
+      // (25/10/2026) Con l'id il nativo conta UNA volta per luogo, come il server (una build vecchia ignora il campo).
+      const r = await plugin.consumeDayPassGuide(poiId ? { poiId: String(poiId) } : undefined);
       return !!r?.ok;
     } catch {
       return false;
     }
   }
   try {
-    const { data: userData } = await supabase.auth.getUser();
-    const userId = userData?.user?.id;
-    if (!userId) return false;
-    const { data } = await supabase
-      .from('user_passes')
-      .select('id,guides_used,guides_cap')
-      .eq('user_id', userId)
-      .gt('expires_at', new Date().toISOString())
-      .order('expires_at', { ascending: false })
-      .limit(1);
-    const row = data?.[0];
-    if (!row || row.guides_used >= row.guides_cap) return false;
-    await supabase.from('user_passes').update({ guides_used: row.guides_used + 1 }).eq('id', row.id);
-    return true;
+    const r = await apiFetch(getApiUrl('/api/day-pass/consume'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ poiId: String(poiId || '') }),
+    });
+    if (!r.ok) return false;
+    const esito = await r.json().catch(() => ({} as any));
+    if (esito?.ok && typeof esito.used === 'number') {
+      const state: DayPassState = { active: esito.used < esito.cap, expiresAt: 0, used: esito.used, cap: esito.cap };
+      try { window.dispatchEvent(new CustomEvent(DAY_PASS_UPDATED_EVENT, { detail: state })); } catch { /* SSR */ }
+    }
+    return !!esito?.ok;
   } catch {
     return false;
   }
+}
+
+/**
+ * Una guida che PARTE senza passare da un cancello (testo già in mano: giro,
+ * pre-scarico, cambio lingua) si conta sul pass se il luogo non è già
+ * acquistato. Best-effort e idempotente: chiamata da locationService.playAudio
+ * quando nessuna `authorize` è stata passata. Sul nativo conta il plugin.
+ */
+export async function registraAscoltoConPass(poiId: string): Promise<void> {
+  if (!poiId || isNativeOfflineSupported()) return;
+  try {
+    if (await possiedePoi(poiId)) return;
+    const pass = await getDayPassState().catch(() => null);
+    if (!pass?.active) return;
+    await consumeDayPassGuide(poiId);
+  } catch { /* best-effort: il server resta l'autorità sul diritto */ }
 }
 
 /**
@@ -337,7 +394,7 @@ export async function authorizeGuidePlayback(poiId: string): Promise<{
   } catch { /* storia non disponibile: si prova col pass */ }
 
   const pass = await getDayPassState().catch(() => null);
-  if (pass?.active && (await consumeDayPassGuide())) {
+  if (pass?.active && (await consumeDayPassGuide(poiId))) {
     return { allowed: true, via: 'day_pass' };
   }
   return { allowed: false };

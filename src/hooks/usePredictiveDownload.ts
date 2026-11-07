@@ -59,6 +59,10 @@ export function usePredictiveDownload() {
       let lat = 0;
       let lon = 0;
       try {
+        // Senza permesso già concesso non si chiede (il plugin lo farebbe da
+        // solo, senza spiegazione: policy Play, 07/11/2026): niente offerta.
+        const perm = await Geolocation.checkPermissions().catch(() => null);
+        if (perm && perm.location !== 'granted' && perm.coarseLocation !== 'granted') return;
         const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: false, timeout: 5000 });
         lat = position.coords.latitude;
         lon = position.coords.longitude;

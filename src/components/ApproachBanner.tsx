@@ -15,7 +15,11 @@ import { X, Volume2, Car, Footprints } from 'lucide-react';
 import { CATEGORY_EMOJI } from '../lib/poiCategories';
 import { migliorFoto } from '../lib/fotoHttps';
 import type { PoiCategory } from '../types/poi';
-import { getTranslation, Language } from '../lib/i18n';
+import { getTranslation, Language, linguaCorrente } from '../lib/i18n';
+import { nomeDaAnnunciare } from '../lib/geofencing/nomiAnnunciabili';
+
+/** 23/10/2026: al più un avviso dei 150 m ogni 20 s (regola (d), vedi onApproach). */
+const AVVISO_MIN_INTERVALLO_MS = 20_000;
 import { puntoArrivo } from '../lib/puntoArrivo';
 import { metriDiStradaDaMostrare } from '../lib/roadSnap';
 import { vibra } from './hapticsHelper';
@@ -170,6 +174,7 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
   const ultimaPosRef = useRef<{ lat: number; lon: number } | null>(null);
   useEffect(() => { entriesRef.current = entries; }, [entries]);
   const announcedAtRef = useRef<Map<string, number>>(new Map());
+  const ultimoAvvisoTsRef = useRef(0);
   const dismissedRef = useRef<Map<string, number>>(new Map());
   const ANNOUNCE_COOLDOWN_MS = 10 * 60 * 1000;
   const DISMISS_COOLDOWN_MS = 30 * 60 * 1000;
@@ -209,6 +214,15 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
       const lastAnnounced = announcedAtRef.current.get(poiId) || 0;
       const repeatedSoon = Date.now() - lastAnnounced < ANNOUNCE_COOLDOWN_MS;
       if (!isArrival && (repeatedSoon || isDismissedRecently(poiId))) return;
+      // 23/10/2026 — REGOLA (d) degli avvisi dei 150 m: (1) al più UNO ogni AVVISO_MIN_INTERVALLO_MS (20 s) —
+      // in un centro denso arrivavano a raffica; (2) mai un nome grezzo: numeri soli («1830»), pietre d'inciampo,
+      // targhe, descrizioni inglesi usate come nome, nomi in un alfabeto che la voce dell'utente non legge
+      // (nomiAnnunciabili.nomeDaAnnunciare). L'ARRIVO non passa da qui: è governato dal trigger.
+      if (!isArrival) {
+        if (!nomeDaAnnunciare(poi.name ? poi : { ...poi, name }, linguaCorrente())) return;
+        if (Date.now() - ultimoAvvisoTsRef.current < AVVISO_MIN_INTERVALLO_MS) return;
+        ultimoAvvisoTsRef.current = Date.now();
+      }
 
       announcedAtRef.current.set(poiId, Date.now());
       playBeep(isArrival ? 2 : 1);

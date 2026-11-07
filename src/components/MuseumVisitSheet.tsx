@@ -1197,7 +1197,9 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     // server, già pagato dal leader).
     if (sonoLeader) {
       window.dispatchEvent(new CustomEvent('wip-leader-museum-stop', { detail: { index: i, nome: tappa.nome, guide: guida } }));
-      window.dispatchEvent(new CustomEvent('wip-leader-audio-start', { detail: { textToSpeak: guida.testo, poiName: tappa.nome, character: getGuideCharacter(), language: String(guida.language || language).toLowerCase() } }));
+      // (25/10/2026) kind null e voice null: speakAudioguide manda a /api/tts/smart solo { text, voice } senza kind, e la
+      // voce è azureVoiceName(lingua, personaggio) — il follower la ricalcola con gli stessi due valori: stessa chiave di cache.
+      window.dispatchEvent(new CustomEvent('wip-leader-audio-start', { detail: { textToSpeak: guida.testo, poiName: tappa.nome, character: getGuideCharacter(), language: String(guida.language || language).toLowerCase(), kind: null, voice: null } }));
       // La sala dell'opera in ascolto è dove il leader sta: si dice al gruppo.
       if (tappa.dove) window.dispatchEvent(new CustomEvent('wip-leader-museum-room', { detail: { sala: tappa.dove } }));
     }
@@ -2351,6 +2353,13 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               </div>
             );
           })()}
+          {/* FOLLOWER DEL TOUR DI GRUPPO (25/10/2026): si dice cosa è gratis e cosa no — solo l'opera che il leader
+              sceglie arriva già pagata; toccare le altre passa dal pass come sempre. */}
+          {visit.dalLeader && (
+            <p className="mb-2 px-3 py-2 rounded-2xl bg-blue-50 border border-blue-100 text-[11px] font-bold text-blue-800 leading-snug">
+              {t('vr_a_lt_museo_solo_opera_leader')}
+            </p>
+          )}
           <ol className="space-y-2">
             {ordineAttivo.map((i, posizione) => {
               const tappa = visit.guide.tappe[i];

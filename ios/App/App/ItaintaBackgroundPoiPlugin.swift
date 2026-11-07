@@ -1078,6 +1078,7 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         prefs.removeObject(forKey: "daypass_expires_at")
         prefs.removeObject(forKey: "daypass_cap")
         prefs.removeObject(forKey: "daypass_used")
+        DayPassContatore.azzera(prefs: prefs)
         call.resolve()
     }
 
@@ -1120,10 +1121,16 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         call.resolve()
     }
 
+    /// (25/10/2026) Mai ABBASSARE il contatore dello stesso pass: il JS manda
+    /// il valore che conosce lui, il nativo può averne contate altre a schermo
+    /// spento. Pass nuovo → valore ricevuto e luoghi contati azzerati
+    /// (DayPassContatore.imposta).
     @objc func setDayPass(_ call: CAPPluginCall) {
-        prefs.set(call.getDouble("expiresAt") ?? 0, forKey: "daypass_expires_at")
-        prefs.set(call.getInt("cap") ?? BillingLogic.dayPassCap, forKey: "daypass_cap")
-        prefs.set(call.getInt("used") ?? 0, forKey: "daypass_used")
+        DayPassContatore.imposta(
+            expiresAt: call.getDouble("expiresAt") ?? 0,
+            cap: call.getInt("cap") ?? BillingLogic.dayPassCap,
+            used: call.getInt("used") ?? 0,
+            prefs: prefs)
         call.resolve()
     }
 
@@ -1143,11 +1150,19 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         let expiresAt = prefs.double(forKey: "daypass_expires_at")
         let used = prefs.integer(forKey: "daypass_used")
         let cap = prefs.integer(forKey: "daypass_cap")
+        // (25/10/2026) Una volta per luogo: con `poiId` un luogo già contato in
+        // questo pass non incrementa (ok: true, contatore fermo); senza id —
+        // il JS oggi non lo manda — si incrementa come prima.
+        let poiId = (call.getString("poiId") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if DayPassContatore.giaContato(poiId, prefs: prefs), expiresAt > nowMs() {
+            call.resolve(["ok": true, "used": used, "remaining": max(0, cap - used)])
+            return
+        }
         if !BillingLogic.isPassActive(nowMs: nowMs(), expiresAtMs: expiresAt, guidesUsed: used, cap: cap) {
             call.resolve(["ok": false])
         } else {
-            prefs.set(used + 1, forKey: "daypass_used")
-            call.resolve(["ok": true, "used": used + 1, "remaining": max(0, cap - used - 1)])
+            let dopo = DayPassContatore.consuma(poiId: poiId, prefs: prefs)
+            call.resolve(["ok": true, "used": dopo, "remaining": max(0, cap - dopo)])
         }
     }
 
@@ -1204,10 +1219,14 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         // Già nello storico ascolti = già acquistato: gratis, non consuma
         // né pass né crediti (come authorizeGuidePlayback web)
         let alreadyPurchased = ListeningHistoryStore.shared.isAlreadyPurchased(poiId)
+        // (25/10/2026) Un luogo già contato in questo pass si riascolta col pass
+        // anche a tetto raggiunto: non è un consumo nuovo.
+        let giaContato = DayPassContatore.giaContato(poiId, prefs: prefs)
+            && prefs.double(forKey: "daypass_expires_at") > nowMs()
         if alreadyPurchased {
             ret["mode"] = "purchased"
-        } else if passActive {
-            prefs.set(passUsed + 1, forKey: "daypass_used")
+        } else if passActive || giaContato {
+            DayPassContatore.consuma(poiId: poiId, prefs: prefs)
             ret["mode"] = "day_pass"
         } else {
             let snapshot = prefs.integer(forKey: "wallet_snapshot_credits")
