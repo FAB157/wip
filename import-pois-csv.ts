@@ -31,7 +31,8 @@ const BATCH_SIZE = 500;
 // --------------------------------------------------------------------------
 function parseArgs(argv: string[]): { file: string; country: string; region: string | null } {
   const positional: string[] = [];
-  let country = 'Italy';
+  // Nessun paese predefinito (29/10/2026): «Italy» di default ha marcato Italia ~70.000 luoghi di tutto il mondo.
+  let country = '';
   let region: string | null = null;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--country') country = argv[++i] ?? country;
@@ -106,6 +107,10 @@ async function main() {
 
   if (!file) {
     console.error('❌ Specifica il percorso del CSV. Es:\n   npx tsx import-pois-csv.ts "italia nord.csv" --country Italy --region Nord');
+    process.exit(1);
+  }
+  if (!country) {
+    console.error('❌ Specifica il paese del file con --country (es. --country IT): nessun paese predefinito.');
     process.exit(1);
   }
   if (!SERVICE_KEY) {

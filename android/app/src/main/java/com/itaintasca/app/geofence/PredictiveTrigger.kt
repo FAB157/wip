@@ -219,13 +219,15 @@ object PredictiveTrigger {
             dCpa > corridor ->
                 Result(Decision.REJECT, tCpa, dCpa, distanceNow, true, "off-corridor d_cpa=${dCpa.toInt()}m")
 
-            // In rotta, ma non ancora nella finestra di anticipo.
-            tCpa > tLead ->
-                Result(Decision.HOLD, tCpa, dCpa, distanceNow, true, "too-early t_cpa=${tCpa.toInt()}s")
-
-            // In rotta e dentro la finestra: è il momento.
+            // (03/10/2026, committente: «la previsione la toglierei del tutto»)
+            // In rotta ma FUORI dal raggio: si aspetta. Prima, entro `tLead`
+            // secondi dal passaggio, qui si annunciava in anticipo (fino a
+            // ~30 m prima a piedi, ~190 m a 50 km/h): l'avviso e la guida ora
+            // partono solo alle distanze scelte dall'utente. tCpa/dCpa restano
+            // nel risultato perché servono a `hasPassed` e alla finestra armata.
             else ->
-                Result(Decision.FIRE, tCpa, dCpa, distanceNow, true, "predicted t_cpa=${tCpa.toInt()}s")
+                Result(Decision.HOLD, tCpa, dCpa, distanceNow, true,
+                    if (tCpa > tLead) "too-early t_cpa=${tCpa.toInt()}s" else "in-rotta t_cpa=${tCpa.toInt()}s")
         }
     }
 

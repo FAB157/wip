@@ -411,6 +411,13 @@ final class WipPackageDownloadManager {
                 if WipSupabaseClient.hiddenStatuses.contains(status) { continue }
                 if (p["is_hidden"] as? Bool) == true { continue }
                 if Self.isGenericPoiName(p["nome"] as? String) { continue }
+                // IL PUNTO D'ARRIVO prima della porta (05/09/2026, migration
+                // 20260905130000): la porta proiettata sul marciapiede davanti.
+                // Stesso posto della porta, cosi' i trigger offline partono da
+                // li' come online (vedi WipSupabaseClient). Coppia intera o niente.
+                let arrivalLat = (p["arrival_lat"] as? NSNumber)?.doubleValue
+                let arrivalLon = (p["arrival_lon"] as? NSNumber)?.doubleValue
+                let haArrivo = arrivalLat != nil && arrivalLon != nil && (arrivalLat != 0 || arrivalLon != 0)
                 pois.append(OfflinePoi(
                     id: poiId,
                     nome: p["nome"] as? String ?? "Punto di interesse",
@@ -428,8 +435,8 @@ final class WipPackageDownloadManager {
                     // Porta, perimetro e indirizzo (area_bundle_pois dal
                     // 22/08/2026). Pagine di server vecchi non li hanno: restano
                     // nil e il POI lavora al centroide come prima.
-                    entranceLat: (p["entrance_lat"] as? NSNumber)?.doubleValue,
-                    entranceLon: (p["entrance_lon"] as? NSNumber)?.doubleValue,
+                    entranceLat: haArrivo ? arrivalLat : (p["entrance_lat"] as? NSNumber)?.doubleValue,
+                    entranceLon: haArrivo ? arrivalLon : (p["entrance_lon"] as? NSNumber)?.doubleValue,
                     footprint: Self.footprintCompatto(p["footprint"]),
                     address: p["address"] as? String
                 ))

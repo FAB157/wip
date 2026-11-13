@@ -9,6 +9,12 @@ export interface PredictiveBundleState {
   lat: number;
   lon: number;
   pois: any[];
+  /**
+   * Il PERCHE' della cassa, quando la si apre da un cancello («per avviare
+   * la navigazione serve il Day Pass», 03/09/2026): fa da titolo al posto
+   * dell'offerta contestuale «N luoghi a X». Vuoto per l'offerta predittiva.
+   */
+  motivo?: string;
 }
 
 // L'offerta contestuale non deve diventare spam: al massimo una volta ogni 24h.
@@ -53,6 +59,10 @@ export function usePredictiveDownload() {
       let lat = 0;
       let lon = 0;
       try {
+        // Senza permesso già concesso non si chiede (il plugin lo farebbe da
+        // solo, senza spiegazione: policy Play, 07/11/2026): niente offerta.
+        const perm = await Geolocation.checkPermissions().catch(() => null);
+        if (perm && perm.location !== 'granted' && perm.coarseLocation !== 'granted') return;
         const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: false, timeout: 5000 });
         lat = position.coords.latitude;
         lon = position.coords.longitude;
@@ -92,7 +102,8 @@ export function usePredictiveDownload() {
         city,
         lat,
         lon,
-        pois: culturalPois
+        pois: culturalPois,
+        motivo: undefined,
       });
     } catch (e) {
       console.error('Errore nel check offerta Day Pass:', e);
@@ -107,10 +118,10 @@ export function usePredictiveDownload() {
    * PASS_RICHIESTO). Evento `wip-open-daypass` {detail:{city?}} — App.tsx lo
    * ascolta. Se il pass e' gia' attivo non si apre nulla.
    */
-  const openOffer = async (city?: string) => {
+  const openOffer = async (city?: string, motivo?: string) => {
     const pass = await getDayPassState().catch(() => null);
     if (pass?.active) return;
-    setBundleState(prev => ({ ...prev, isOpen: true, city: city || prev.city || 'questa zona' }));
+    setBundleState(prev => ({ ...prev, isOpen: true, city: city || prev.city || 'questa zona', motivo: motivo || undefined }));
   };
 
   return { bundleState, closeBundle, triggerBundleCheck, openOffer };

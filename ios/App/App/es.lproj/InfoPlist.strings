@@ -1,0 +1,21 @@
+/* NS*UsageDescription dell'Info.plist in es. La cartella es.lproj serve
+   anche perché App Store elenchi la lingua sotto «Lingue»: legge le .lproj
+   del bundle, non CFBundleLocalizations. Chiavi identiche a en.lproj. */
+
+"NSLocationWhenInUseUsageDescription" = "Tu ubicación se usa para mostrarte los puntos de interés en el mapa y calcular la ruta hacia los monumentos cercanos.";
+
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "WIP necesita tu ubicación siempre para detectar monumentos y Joyas cercanas mientras caminas o conduces, y activar la audioguía aunque el teléfono esté en el bolsillo o la app esté cerrada. Tu ubicación nunca se usa para publicidad.";
+
+"NSLocationAlwaysUsageDescription" = "El acceso continuo a tu ubicación permite que la audioguía se active sola mientras exploras la ciudad, incluso con la pantalla apagada.";
+
+"NSFaceIDUsageDescription" = "Face ID se usa para proteger tu perfil y tus contenidos premium.";
+
+"NSCameraUsageDescription" = "La cámara la usa la función Vision, que reconoce el monumento que encuadras.";
+
+"NSMicrophoneUsageDescription" = "El micrófono se usa para dictar tus preguntas a la guía IA mientras escuchas una audioguía.";
+
+"NSSpeechRecognitionUsageDescription" = "El reconocimiento de voz convierte en texto lo que le dictas al asistente WIP, para que puedas crear tu itinerario y hacer preguntas hablando en lugar de escribir.";
+
+"Audioguida" = "Se necesita la ubicación precisa para reconocer el monumento que tienes delante.";
+
+"NSMotionUsageDescription" = "Los datos de movimiento (quieto, caminando, en vehículo) se usan solo para evitar falsos avisos de la audioguía cuando la señal GPS salta mientras estás quieto. Nunca se comparten ni se usan para publicidad.";

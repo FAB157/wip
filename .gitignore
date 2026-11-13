@@ -7,6 +7,9 @@ coverage/
 *.log
 .env*
 !.env.example
+# Token GitHub usato in locale per interrogare la CI (18/09/2026): stava nella
+# root NON ignorato — un `git add .` lo avrebbe pubblicato. Mai nel repository.
+.ghtok
 
 .vercel
 
@@ -28,3 +31,14 @@ translate_trivia.cjs
 temp_db.cjs
 test_agnes.ts
 enrich_pois_wiki.cjs
+
+# Chiave privata e certificato di firma iOS: MAI nel repo (che e' pubblico).
+# Il .p12 sta nel backup su E:, come il keystore Android.
+certificati-ios/
+
+# Chiavi private Apple: MAI nel repo (che e' pubblico). Vanno nel backup,
+# insieme al keystore Android. Apple non le rilascia una seconda volta.
+AuthKey_*.p8
+SubscriptionKey_*.p8
+*.p12
+.aider*

@@ -1,0 +1,2 @@
+WIP startet an jedem Ort von selbst.
+Auch bei ausgeschaltetem Display.

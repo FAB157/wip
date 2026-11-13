@@ -38,6 +38,13 @@ export interface FonteEventi {
    * fonte gratuita puo' vietare l'uso commerciale, e WIP vende crediti.
    */
   licenza?: string;
+  /** Lingua della pagina (Accept-Language e prompt di estrazione). Default: quella del paese. */
+  lingua?: string;
+  /**
+   * Il nome della citta` da mettere in `{citta}`: 'en' (default, slug
+   * inglese), 'locale' (nome nella lingua del posto: 北京, Москва).
+   */
+  nomeCitta?: 'en' | 'locale';
 }
 
 /** Il nome della citta` come lo vogliono quasi tutti i portali. */
@@ -84,36 +91,52 @@ export const FONTI_MONDIALI: FonteEventi[] = [
 // senza toccare una riga di codice.
 export const FONTI_PAESE: FonteEventi[] = [
   // Europa
-  { id: 'virgilio', nome: 'Virgilio Eventi', paesi: ['IT'], tipo: 'entrambi', url: 'https://www.virgilio.it/italia/{citta}/eventi/' },
-  { id: 'vivaticket', nome: 'Vivaticket', paesi: ['IT'], tipo: 'entrambi', url: 'https://www.vivaticket.com/it/ricerca?q={citta_raw}' },
-  { id: 'sortiraparis', nome: 'Sortir à Paris', paesi: ['FR'], tipo: 'entrambi', url: 'https://www.sortiraparis.com/' },
-  { id: 'offi', nome: 'Offi.fr', paesi: ['FR'], tipo: 'mostre', url: 'https://www.offi.fr/expositions.html' },
-  { id: 'eventim_de', nome: 'Eventim', paesi: ['DE', 'AT', 'CH'], tipo: 'eventi', url: 'https://www.eventim.de/city/{citta}/' },
-  { id: 'museumsportal_berlin', nome: 'Museumsportal Berlin', paesi: ['DE'], tipo: 'mostre', url: 'https://www.museumsportal-berlin.de/en/exhibitions/' },
-  { id: 'timeout', nome: 'Time Out', paesi: ['GB', 'US', 'ES', 'PT', 'JP', 'HK', 'SG', 'AU', 'IL', 'GR'], tipo: 'entrambi', url: 'https://www.timeout.com/{citta}/things-to-do' },
-  { id: 'esmadrid', nome: 'esMadrid / turismo locale', paesi: ['ES'], tipo: 'entrambi', url: 'https://www.esmadrid.com/en/whats-on' },
-  { id: 'uitagenda_nl', nome: 'Uitagenda', paesi: ['NL'], tipo: 'entrambi', url: 'https://www.uitagenda.nl/' },
-  { id: 'visitportugal', nome: 'Visit Portugal', paesi: ['PT'], tipo: 'eventi', url: 'https://www.visitportugal.com/en/whats-on' },
-  { id: 'kudago', nome: 'KudaGo', paesi: ['RU'], tipo: 'entrambi', api: true, url: 'https://kudago.com/public-api/v1.4/events/' },
-  { id: 'visitsweden', nome: 'Visit Sweden', paesi: ['SE', 'NO', 'DK', 'FI'], tipo: 'eventi', url: 'https://visitsweden.com/what-to-do/' },
-  { id: 'visitpoland', nome: 'Going / Polonia', paesi: ['PL'], tipo: 'entrambi', url: 'https://goingapp.pl/' },
+  { id: 'virgilio', nome: 'Virgilio Eventi', paesi: ['IT'], tipo: 'entrambi', url: 'https://www.virgilio.it/italia/{citta}/eventi/', lingua: 'it' },
+  { id: 'vivaticket', nome: 'Vivaticket', paesi: ['IT'], tipo: 'entrambi', url: 'https://www.vivaticket.com/it/ricerca?q={citta_raw}', lingua: 'it' },
+  { id: 'sortiraparis', nome: 'Sortir à Paris', paesi: ['FR'], tipo: 'entrambi', url: 'https://www.sortiraparis.com/', lingua: 'fr' },
+  { id: 'openagenda', nome: 'OpenAgenda', paesi: ['FR', 'BE', 'CH'], tipo: 'entrambi', url: 'https://openagenda.com/search?q={citta_raw}', lingua: 'fr', licenza: 'agende pubbliche, licenza aperta per agenda' },
+  { id: 'offi', nome: 'Offi.fr', paesi: ['FR'], tipo: 'mostre', url: 'https://www.offi.fr/expositions.html', lingua: 'fr' },
+  { id: 'eventim_de', nome: 'Eventim', paesi: ['DE', 'AT', 'CH'], tipo: 'eventi', url: 'https://www.eventim.de/city/{citta}/', lingua: 'de' },
+  { id: 'museumsportal_berlin', nome: 'Museumsportal Berlin', paesi: ['DE'], tipo: 'mostre', url: 'https://www.museumsportal-berlin.de/en/exhibitions/', lingua: 'en' },
+  { id: 'timeout', nome: 'Time Out', paesi: ['GB', 'US', 'ES', 'PT', 'JP', 'HK', 'SG', 'AU', 'IL', 'GR'], tipo: 'entrambi', url: 'https://www.timeout.com/{citta}/things-to-do', lingua: 'en' },
+  { id: 'esmadrid', nome: 'esMadrid / turismo locale', paesi: ['ES'], tipo: 'entrambi', url: 'https://www.esmadrid.com/agenda-madrid', lingua: 'es' },
+  { id: 'uitagenda_nl', nome: 'Uitagenda', paesi: ['NL'], tipo: 'entrambi', url: 'https://www.uitagenda.nl/', lingua: 'nl' },
+  { id: 'visitportugal', nome: 'Visit Portugal', paesi: ['PT'], tipo: 'eventi', url: 'https://www.visitportugal.com/pt-pt/o-que-fazer', lingua: 'pt' },
+  { id: 'bol_pt', nome: 'BOL', paesi: ['PT'], tipo: 'eventi', url: 'https://www.bol.pt/Comprar/Pesquisa?q={citta_raw}', lingua: 'pt' },
+  { id: 'kudago', nome: 'KudaGo', paesi: ['RU'], tipo: 'entrambi', api: true, url: 'https://kudago.com/public-api/v1.4/events/', lingua: 'ru' },
+  { id: 'visitsweden', nome: 'Visit Sweden', paesi: ['SE', 'NO', 'DK', 'FI'], tipo: 'eventi', url: 'https://visitsweden.com/what-to-do/', lingua: 'en' },
+  { id: 'going_pl', nome: 'Going', paesi: ['PL'], tipo: 'entrambi', url: 'https://goingapp.pl/wydarzenia/{citta}', lingua: 'pl' },
+  { id: 'goout_cz', nome: 'GoOut', paesi: ['CZ', 'SK', 'PL'], tipo: 'entrambi', url: 'https://goout.net/cs/{citta}/akce/', lingua: 'cs' },
+  { id: 'viva_gr', nome: 'viva.gr', paesi: ['GR'], tipo: 'eventi', url: 'https://www.viva.gr/tickets/', lingua: 'el' },
+  { id: 'biletix_tr', nome: 'Biletix', paesi: ['TR'], tipo: 'eventi', url: 'https://www.biletix.com/anasayfa/TURKIYE/tr', lingua: 'tr' },
+  { id: 'wien_info', nome: 'wien.info', paesi: ['AT'], tipo: 'entrambi', url: 'https://www.wien.info/de/jetzt-in-wien/veranstaltungen', lingua: 'de' },
+  { id: 'entrada_hr', nome: 'Entrio', paesi: ['HR', 'SI', 'RS', 'BA'], tipo: 'eventi', url: 'https://www.entrio.hr/', lingua: 'hr' },
 
   // Americhe
-  { id: 'sympla', nome: 'Sympla', paesi: ['BR'], tipo: 'eventi', url: 'https://www.sympla.com.br/eventos/{citta}' },
-  { id: 'eventful_mx', nome: 'Boletia', paesi: ['MX'], tipo: 'eventi', url: 'https://boletia.com/' },
-  { id: 'timeout_ny', nome: 'Time Out New York', paesi: ['US'], tipo: 'mostre', url: 'https://www.timeout.com/newyork/art' },
-  { id: 'passline', nome: 'Passline', paesi: ['AR', 'CL', 'UY'], tipo: 'eventi', url: 'https://www.passline.com/' },
+  { id: 'sympla', nome: 'Sympla', paesi: ['BR'], tipo: 'eventi', url: 'https://www.sympla.com.br/eventos/{citta}', lingua: 'pt' },
+  { id: 'eventful_mx', nome: 'Boletia', paesi: ['MX'], tipo: 'eventi', url: 'https://boletia.com/', lingua: 'es' },
+  { id: 'timeout_ny', nome: 'Time Out New York', paesi: ['US'], tipo: 'mostre', url: 'https://www.timeout.com/newyork/art', lingua: 'en' },
+  { id: 'passline', nome: 'Passline', paesi: ['AR', 'CL', 'UY'], tipo: 'eventi', url: 'https://www.passline.com/', lingua: 'es' },
 
-  // Asia e Pacifico
-  { id: 'walkerplus', nome: 'Walkerplus', paesi: ['JP'], tipo: 'entrambi', url: 'https://www.walkerplus.com/' },
-  { id: 'tokyoartbeat', nome: 'Tokyo Art Beat', paesi: ['JP'], tipo: 'mostre', url: 'https://www.tokyoartbeat.com/en/events' },
-  { id: 'bookmyshow', nome: 'BookMyShow', paesi: ['IN'], tipo: 'eventi', url: 'https://in.bookmyshow.com/explore/events-{citta}' },
-  { id: 'timeout_hk', nome: 'Time Out Hong Kong', paesi: ['HK'], tipo: 'entrambi', url: 'https://www.timeout.com/hong-kong/things-to-do' },
-  { id: 'eventfinda', nome: 'Eventfinda', paesi: ['NZ', 'AU'], tipo: 'eventi', url: 'https://www.eventfinda.co.nz/whatson/events/{citta}' },
+  // Asia e Pacifico (portali in lingua locale: il nome della citta` va
+  // nell'alfabeto del posto dove il sito lo vuole)
+  { id: 'douban', nome: '豆瓣同城', paesi: ['CN'], tipo: 'entrambi', url: 'https://www.douban.com/location/{citta}/events/week-all', lingua: 'zh', nomeCitta: 'en' },
+  { id: 'damai_search', nome: '大麦', paesi: ['CN'], tipo: 'eventi', url: 'https://search.damai.cn/search.htm?keyword={citta_raw}', lingua: 'zh', nomeCitta: 'locale' },
+  { id: 'walkerplus', nome: 'Walkerplus', paesi: ['JP'], tipo: 'entrambi', url: 'https://www.walkerplus.com/event_list/', lingua: 'ja' },
+  { id: 'tokyoartbeat', nome: 'Tokyo Art Beat', paesi: ['JP'], tipo: 'mostre', url: 'https://www.tokyoartbeat.com/events/', lingua: 'ja' },
+  { id: 'interpark_kr', nome: 'Interpark', paesi: ['KR'], tipo: 'eventi', url: 'https://tickets.interpark.com/', lingua: 'ko' },
+  { id: 'visitkorea', nome: 'VisitKorea festival', paesi: ['KR'], tipo: 'eventi', url: 'https://korean.visitkorea.or.kr/list/festival.do', lingua: 'ko' },
+  { id: 'accupass_tw', nome: 'Accupass 活動通', paesi: ['TW'], tipo: 'entrambi', url: 'https://www.accupass.com/search?q={citta_raw}', lingua: 'zh', nomeCitta: 'locale' },
+  { id: 'bookmyshow', nome: 'BookMyShow', paesi: ['IN'], tipo: 'eventi', url: 'https://in.bookmyshow.com/explore/events-{citta}', lingua: 'en' },
+  { id: 'timeout_hk', nome: 'Time Out Hong Kong', paesi: ['HK'], tipo: 'entrambi', url: 'https://www.timeout.com/hong-kong/things-to-do', lingua: 'en' },
+  { id: 'eventpop_th', nome: 'Eventpop', paesi: ['TH'], tipo: 'eventi', url: 'https://www.eventpop.me/events', lingua: 'th' },
+  { id: 'ticketbox_vn', nome: 'Ticketbox', paesi: ['VN'], tipo: 'eventi', url: 'https://ticketbox.vn/', lingua: 'vi' },
+  { id: 'loket_id', nome: 'Loket', paesi: ['ID'], tipo: 'eventi', url: 'https://www.loket.com/', lingua: 'id' },
+  { id: 'eventfinda', nome: 'Eventfinda', paesi: ['NZ', 'AU'], tipo: 'eventi', url: 'https://www.eventfinda.co.nz/whatson/events/{citta}', lingua: 'en' },
 
   // Africa e Medio Oriente
-  { id: 'platinumlist', nome: 'Platinumlist', paesi: ['AE', 'SA', 'QA', 'BH', 'KW', 'OM', 'EG'], tipo: 'eventi', url: 'https://dubai.platinumlist.net/' },
-  { id: 'howzit', nome: 'Computicket', paesi: ['ZA'], tipo: 'eventi', url: 'https://www.computicket.com/' },
+  { id: 'platinumlist', nome: 'Platinumlist', paesi: ['AE', 'SA', 'QA', 'BH', 'KW', 'OM', 'EG'], tipo: 'eventi', url: 'https://dubai.platinumlist.net/', lingua: 'en' },
+  { id: 'howzit', nome: 'Computicket', paesi: ['ZA'], tipo: 'eventi', url: 'https://www.computicket.com/', lingua: 'en' },
 ];
 
 /** Le fonti che valgono per un paese, mondiali comprese. */
@@ -131,12 +154,19 @@ export function fontiPer(paese: string, tipo: TipoFonte): FonteEventi[] {
  * paese, con l'URL gia` costruito per la citta` richiesta. Ordine: prima le
  * nazionali (piu` precise), poi le mondiali (la rete). Duplicati per id esclusi.
  */
-export function fontiPerPaese(cc: string, citta = ''): Array<FonteEventi & { urlPronto: string }> {
+export function fontiPerPaese(cc: string, citta = '', cittaLocale = ''): Array<FonteEventi & { urlPronto: string }> {
   const paese = (cc || '').toUpperCase();
   const viste = new Set<string>();
   return [...FONTI_PAESE.filter(f => f.paesi.includes(paese)), ...FONTI_MONDIALI]
     .filter(f => { if (viste.has(f.id)) return false; viste.add(f.id); return true; })
-    .map(f => ({ ...f, urlPronto: citta ? costruisciUrl(f, citta, paese) : f.url }));
+    // Le fonti con API (Wikidata, KudaGo) hanno un lettore loro: qui solo pagine.
+    .filter(f => !f.api)
+    .map(f => {
+      const nome = f.nomeCitta === 'locale' ? (cittaLocale || citta) : citta;
+      return { ...f, urlPronto: nome ? costruisciUrl(f, nome, paese) : f.url };
+    })
+    // Una fonte che vuole la citta` e non ce l'ha resta con le graffe: fuori.
+    .filter(f => !/\{citta/.test(f.urlPronto));
 }
 
 /**

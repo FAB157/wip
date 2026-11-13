@@ -1,0 +1,2 @@
+L'audioguide démarre tout seul.
+Même écran éteint.

@@ -26,6 +26,15 @@
 // filtro leggero per l'uso client.
 // =====================================================================
 
+// ESTENSIONE `.js` OBBLIGATORIA in ogni import relativo di questo file
+// (19/09/2026). Il server lo carica a runtime con un import dinamico
+// (server.ts, libLoadDescriptorsModule) e in produzione su Vercel gira in ESM
+// puro, che NON completa le estensioni: con `'./transitCatalog'` il modulo non
+// si caricava («Cannot find module '/var/task/src/lib/transitCatalog' imported
+// from libraryDescriptors.js», dai log di produzione), il catalogo del server
+// restava VUOTO e ogni «Genera» su un itinerario non ancora pronto rispondeva
+// 404 «slug non presente nel catalogo» — mentre quelli già in cache si aprivano
+// e nessuno se ne accorgeva. Vite, tsx e tsc risolvono `.js` → `.ts` da soli.
 import {
   CRUISE_PORTS,
   AIRPORT_LAYOVERS,
@@ -34,27 +43,27 @@ import {
   type AirportLayover,
   type PilgrimRoute,
   type StopOption,
-} from './transitCatalog';
-import { WORLD_ZONES, type WorldZone } from './libraryZonesWorld';
+} from './transitCatalog.js';
+import { WORLD_ZONES, type WorldZone } from './libraryZonesWorld.js';
 // Catalogo aggiuntivo (22/08/2026, ~5.000 descrittori in più su TUTTE le
 // categorie): zone mondiali nuove + luoghi nuovi per i 17 temi editoriali.
 // Solo dati, si fondono qui — vedi il commento in testa al file.
-import { EXTRA_WORLD_ZONES, EXTRA_THEME_PLACES } from './libraryDescriptorsExtra';
+import { EXTRA_WORLD_ZONES, EXTRA_THEME_PLACES } from './libraryDescriptorsExtra.js';
 // Secondo lotto (stesso giorno): stessa forma, altre zone e altri luoghi.
 // I due lotti si fondono insieme, il codice di merge scarta da solo i
 // doppioni fra i due (stesso taken-set/nomiEsistenti) — vedi i due punti
 // di fusione più sotto.
-import { EXTRA_WORLD_ZONES_2, EXTRA_THEME_PLACES_2 } from './libraryDescriptorsExtra2';
+import { EXTRA_WORLD_ZONES_2, EXTRA_THEME_PLACES_2 } from './libraryDescriptorsExtra2.js';
 // Le 20 città più visitate al mondo (23/08/2026): quartieri reali delle 19
 // coperte, + Pattaya (l'unica delle 20 senza itinerario di livello città).
 // Vedi il commento in testa al file per il conto e per l'esclusione di
 // Mecca. Solo dati, nessun import — stessa regola delle altre "Extra".
-import { MEGACITY_DISTRICTS, MEGACITY_TOP_LEVEL_EXTRA, type MegacityDistrict } from './libraryMostVisitedCities';
-import { TASTE_ROUTES, tasteRouteContext } from './wineRoutesCatalog';
-import { TASTE_ZONES, type TasteZone } from './tasteZonesWorld';
-import { PERCORSI_SACRI, percorsoSacroContext } from './sacredRoutesCatalog';
-import { FOOD_FESTIVALS, festivalContext } from './foodFestivalsCatalog';
-import { THEMATIC_PLACES, type ThematicKey, type ThematicPlaceSummary } from './thematicDescriptors';
+import { MEGACITY_DISTRICTS, MEGACITY_TOP_LEVEL_EXTRA, type MegacityDistrict } from './libraryMostVisitedCities.js';
+import { TASTE_ROUTES, tasteRouteContext } from './wineRoutesCatalog.js';
+import { TASTE_ZONES, type TasteZone } from './tasteZonesWorld.js';
+import { PERCORSI_SACRI, percorsoSacroContext } from './sacredRoutesCatalog.js';
+import { FOOD_FESTIVALS, festivalContext } from './foodFestivalsCatalog.js';
+import { THEMATIC_PLACES, type ThematicKey, type ThematicPlaceSummary } from './thematicDescriptors.js';
 
 // ─────────────────────────────────────────────────────────────────────
 // Tipi (contratto concordato con gli altri moduli della Biblioteca)
@@ -3233,9 +3242,10 @@ export function tasteZoneDescriptors(): LibraryDescriptor[] {
     const key = slugify(z.c);
     if (!key || taken.has(key)) continue;
     taken.add(key);
-    // Il tier 3 esce solo da 2 giorni: sono zone vere ma meno dense, e tre
-    // giorni si reggerebbero solo allungando il brodo.
-    const durate = z.t === 3 ? [2] : TASTE_ZONE_DAYS;
+    // Il tier 3 esce solo da UN giorno (07/10/2026, committente: «quelle minori fare solo 1 giorno di gusto»):
+    // sono zone vere ma meno dense, e a 2 giorni il revisore ne bocciava 6 su 7 (Busselton, Tachtamukajskij
+    // rajon: tappe senza nome proprio, produttori a 49 km). Prima del 07/10 uscivano da 2 giorni.
+    const durate = z.t === 3 ? [1] : TASTE_ZONE_DAYS;
     for (const d of durate) {
       for (const a of TASTE_ZONE_ANGLES) {
         const altri = TASTE_ZONE_ANGLES.filter(x => x.id !== a.id).map(x => x.label).join(', ');
@@ -3243,13 +3253,23 @@ export function tasteZoneDescriptors(): LibraryDescriptor[] {
           a.brief,
           `CONTESTO ZONA DEL GUSTO: ${z.c}, ${z.k}. Qui il nostro database conta ${z.n} luoghi del gusto mappati, soprattutto ${z.p}: è questo che rende la zona un itinerario e non una tappa.`,
           tasteZoneRules(z),
-          `Durata: ${d} giorni. ${
-            d === 2
-              ? 'Due giorni: il primo dà il quadro del territorio e del suo prodotto simbolo, il secondo scende in profondità su una sola valle, un solo quartiere o una sola lavorazione. Niente tappe-riempitivo.'
-              : 'Tre giorni: una sottozona al giorno, e almeno un pasto lento senza programma. Il terzo giorno è quello in cui si torna dove si è mangiato meglio, non quello in cui si aggiunge la decima cantina.'
-          }`,
-          `COMBINABILITÀ (vincolante): di ${z.c} esistono in biblioteca anche i tagli ${altri}, da 2 e da 3 giorni. Questo itinerario deve reggersi da solo MA essere sommabile agli altri senza doppioni: chi lo abbina non deve rivedere gli stessi produttori né rimangiare gli stessi piatti.`,
-          'ONESTÀ SUI PREZZI: dì sempre quanto costa davvero una degustazione in questa zona e cosa comprende, perché è la voce che fa saltare il budget di chi non se lo aspetta.',
+          d === 1
+            ? 'Durata: 1 giorno pieno. Una zona piccola: un mercato o una bottega la mattina, UN produttore o un pasto che racconta il prodotto simbolo, una passeggiata fra i luoghi dove nasce. Poche tappe vere, tutte con nome proprio preso dal materiale: se il materiale dà tre posti, l\'itinerario ha tre tappe. Nessuna tappa-riempitivo, niente giri di 50 km.'
+            : `Durata: ${d} giorni. ${
+              d === 2
+                ? 'Due giorni: il primo dà il quadro del territorio e del suo prodotto simbolo, il secondo scende in profondità su una sola valle, un solo quartiere o una sola lavorazione. Niente tappe-riempitivo.'
+                : 'Tre giorni: una sottozona al giorno, e almeno un pasto lento senza programma. Il terzo giorno è quello in cui si torna dove si è mangiato meglio, non quello in cui si aggiunge la decima cantina.'
+            }`,
+          d === 1
+            ? `COMBINABILITÀ (vincolante): di ${z.c} esistono in biblioteca anche i tagli ${altri}, da 1 giorno. Questo itinerario deve reggersi da solo MA essere sommabile agli altri senza doppioni: chi lo abbina non deve rivedere gli stessi produttori né rimangiare gli stessi piatti.`
+            : `COMBINABILITÀ (vincolante): di ${z.c} esistono in biblioteca anche i tagli ${altri}, da 2 e da 3 giorni. Questo itinerario deve reggersi da solo MA essere sommabile agli altri senza doppioni: chi lo abbina non deve rivedere gli stessi produttori né rimangiare gli stessi piatti.`,
+          // (20/09/2026) La riga sui prezzi valeva per TUTTI i tagli, anche per
+          // «gratis», dove la verifica in codice boccia ogni tappa che cita
+          // biglietti o costi: 88 scarti in 20 ore per una contraddizione
+          // nostra. Nel taglio gratis la regola e' l'opposto.
+          a.id === FREE_ANGLE.id
+            ? 'TAGLIO GRATIS — NIENTE PREZZI NELLE TAPPE: qui ogni tappa di visita è a costo zero (mercati da girare, vigneti e uliveti da attraversare a piedi, botteghe e spacci dove si entra e si guarda, belvedere, musei a ingresso libero). NON citare prezzi, biglietti, tariffe o degustazioni a pagamento nelle tappe: nemmeno per dire «costa poco». Niente funivie, battelli o navette a pagamento. I pasti restano liberi e fuori dal conto delle attrazioni.'
+            : 'ONESTÀ SUI PREZZI: dì sempre quanto costa davvero una degustazione in questa zona e cosa comprende, perché è la voce che fa saltare il budget di chi non se lo aspetta.',
           // Senza questa riga i due tagli nuovi riempivano la giornata di
           // produttori e ignoravano l'elenco prenotabile: la prima prova
           // (Verona, 20/08/2026) e' stata bocciata tre volte di fila dalla
@@ -3264,7 +3284,7 @@ export function tasteZoneDescriptors(): LibraryDescriptor[] {
           // toccare la validazione lato server senza guadagnarci nulla.
           kind: 'theme',
           theme: 'zone-del-gusto',
-          title: `${z.u ? '🍽' : '🍇'} ${z.c} del gusto in ${d} giorni — ${a.label}`,
+          title: `${z.u ? '🍽' : '🍇'} ${z.c} del gusto in ${d} ${d === 1 ? 'giorno' : 'giorni'} — ${a.label}`,
           city: z.c,
           country: z.k,
           coords: { lat: z.lat, lon: z.lon },
@@ -3669,11 +3689,11 @@ export function getPriorityDescriptors(): LibraryDescriptor[] {
         if (z.t !== tier || MERCATI_CASA.includes(z.k) !== casa) continue;
         const key = slugify(z.c);
         // Le zone dense escono subito complete; quelle di terzo livello
-        // portano solo il 2 giorni con la coppia obbligatoria, altrimenti
+        // portano solo UN giorno con la coppia obbligatoria (07/10/2026, committente), altrimenti
         // da sole occuperebbero giorni di semina prima che il resto del
         // catalogo veda un turno.
         const combos = z.t === 3
-          ? ['2g-gusto-territorio', `2g-${FREE_ANGLE.id}`, `2g-${BOOKABLE_ANGLE.id}`]
+          ? ['1g-gusto-territorio', `1g-${FREE_ANGLE.id}`, `1g-${BOOKABLE_ANGLE.id}`]
           : ['2g-gusto-territorio', `2g-${FREE_ANGLE.id}`, `2g-${BOOKABLE_ANGLE.id}`,
              '2g-gusto-produttori', '3g-gusto-territorio'];
         for (const combo of combos) push(`gustozona-${key}-${combo}`);

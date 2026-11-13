@@ -214,6 +214,41 @@ object Footprints {
      * Stesso valore in foregroundTriggers.ts e PoiFootprints.swift.
      */
     const val TRIGGER_M = 30.0
+
+    /**
+     * LUOGHI SENZA PORTA (03/10/2026, committente: «la regola del muro solo per
+     * piazze, parchi, ponti, panorami»). Per un edificio, una chiesa o un museo
+     * la guida parte SOLO a 30 m dal punto d'arrivo (50 in auto), come fanno
+     * Google Maps e Mappe: i 30 m dal muro facevano scattare sul retro o dal
+     * lato sbagliato. Il perimetro resta la misura giusta dove non c'e' una
+     * porta a cui arrivare: chi e' in mezzo alla piazza e' gia' arrivato.
+     * Stesso elenco in guideSettings.ts::luogoSenzaPorta e PoiFootprints.swift.
+     * NB: chi chiama NON deve passare `null` al posto del perimetro (la cache e'
+     * per id e ricorderebbe «senza perimetro» anche per il gate di bussola):
+     * si salta la chiamata.
+     */
+    private val TIPI_SENZA_PORTA = setOf(
+        "square", "piazza", "piazze", "bridge", "ponte", "ponti", "viewpoint", "panorami", "panorama",
+        "park", "parchi", "parco", "garden", "giardino", "botanical_garden", "national_park",
+        "nature_reserve", "riserva", "geopark", "forest", "foresta", "wood", "bosco",
+        "beach", "spiaggia", "spiagge", "bay", "baia", "island", "isola", "cliff", "falesia",
+        "coast", "costa", "dune", "lake", "lago", "laghi", "river", "fiume", "gorge", "gola",
+        "canyon", "desert", "deserto", "peak", "vetta", "vette", "volcano", "vulcano",
+        "glacier", "ghiacciaio", "natura", "trail", "scenic_road",
+        "cemetery", "war_cemetery", "archaeological_park", "archaeological_site", "archeo",
+        "ruins", "necropolis", "city_walls", "harbour", "pier", "aqueduct", "quarry",
+        "saltworks", "dam", "racetrack", "racecourse"
+    )
+    private val NOME_SENZA_PORTA = Regex(
+        "^(piazza|piazzale|piazzetta|ponte|parco|giardin[io]|belvedere|lungomare|plaza|puente|pont |place |jardin|parc )" +
+            "|( square| bridge| park| gardens?)$|platz$|brücke$",
+        RegexOption.IGNORE_CASE
+    )
+    fun senzaPorta(tipo: String?, nome: String?): Boolean {
+        if (tipo != null && tipo.trim().lowercase() in TIPI_SENZA_PORTA) return true
+        return nome != null && NOME_SENZA_PORTA.containsMatchIn(nome.trim())
+    }
+
     /** In auto 30 m sono un secondo a 50 km/h: la frase partirebbe a POI superato. */
     const val TRIGGER_CAR_M = 100.0
     fun triggerM(isDriving: Boolean): Double = if (isDriving) TRIGGER_CAR_M else TRIGGER_M

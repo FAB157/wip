@@ -39,7 +39,12 @@ interface Perimetro {
 const cache = new Map<string, Perimetro | null>();
 
 /** Quanti POI tenere in cache: oltre, si buttano i piu' vecchi. */
-const MAX_CACHE = 600;
+// (04/10/2026) 600 non bastavano: nel centro di Roma i luoghi entro 600 m sono
+// più di 600, la cache buttava i primi mentre arrivavano gli ultimi e a ogni
+// posizione ripartiva la richiesta (1.370 richieste in 26 minuti di cammino,
+// misurate col test virtuale). Una voce pesa pochi byte: 6.000 non costano nulla.
+const MAX_CACHE = 6000;
+let ultimaRichiestaTs = 0;
 /** Quanti id chiedere per volta: l'URL di PostgREST ha un limite di lunghezza. */
 const LOTTO = 80;
 
@@ -119,6 +124,13 @@ function potaCache(): void {
 export async function caricaPerimetri(poiIds: string[]): Promise<void> {
   const mancanti = poiIds.filter((id) => id && !cache.has(id));
   if (!mancanti.length) return;
+  // (04/10/2026, consumo) Camminando in un centro storico entra un luogo nuovo
+  // ogni pochi metri, e ognuno faceva partire la sua richiesta (un centinaio in
+  // tre minuti a Roma). I perimetri servono a 30 m dal muro e si chiedono a
+  // 600 m: non c'è fretta. Pochi mancanti aspettano e partono insieme, al più
+  // una richiesta ogni 10 secondi.
+  if (mancanti.length < 20 && Date.now() - ultimaRichiestaTs < 10_000) return;
+  ultimaRichiestaTs = Date.now();
   // Una richiesta alla volta: i fix GPS arrivano ogni pochi secondi e senza
   // questo si accavallerebbero chiedendo gli stessi id.
   if (inCorso) return inCorso;

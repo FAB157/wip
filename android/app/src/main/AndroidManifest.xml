@@ -5,6 +5,14 @@
          e openSystemNavigator cadeva SEMPRE sul fallback geo: generico. -->
     <queries>
         <package android:name="com.google.android.apps.maps" />
+        <!-- (08/09/2026) Stessa trappola per la DETTATURA: su Android 11+ il
+             package visibility filtering nasconde il servizio di
+             riconoscimento vocale, e SpeechRecognizer.isRecognitionAvailable()
+             torna false anche dove il servizio c'e'. Senza questo intent il
+             tasto microfono resta muto sui telefoni recenti. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
     </queries>
 
     <application
@@ -34,6 +42,30 @@
                 <data android:scheme="itainta" android:host="poi" />
             </intent-filter>
 
+            <!-- Tocco su un widget della home (14/09/2026): itainta://widget/<azione>,
+                 gestito dal listener appUrlOpen di App.tsx (azioneDaWidget). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="itainta" android:host="widget" />
+            </intent-filter>
+
+            <!-- Ritorno da "Continua con Google/Apple" nativo (09/09/2026): schema
+                 personalizzato itainta://auth/callback (vedi LoginScreen.tsx). Usato
+                 al posto dell'App Link https://wip.guide/auth/callback qui sotto perché
+                 quello richiede assetlinks.json verificato con l'impronta reale (oggi
+                 solo un placeholder, vedi commento sotto) — finché non è pubblicato,
+                 Custom Tabs non ridà mai il controllo all'app dopo l'accesso e resta
+                 aperto sulla pagina web. Uno schema custom non ha questo problema: non
+                 serve alcuna verifica di dominio, Android lo intercetta sempre. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="itainta" android:host="auth" />
+            </intent-filter>
+
             <!-- App Link (Android 6+) per i link di conferma email / reset password
                  inviati da Supabase Auth, che puntano a https://wip.guide/auth/callback
                  (vedi LoginScreen.tsx confirmRedirect / resetPasswordForEmail). Con
@@ -55,6 +87,10 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="wip.guide" android:pathPrefix="/auth" />
             </intent-filter>
+
+            <!-- Scorciatoie dell'icona (23/09/2026): «Cosa vedo?» e «Ascolta ora»,
+                 al posto dei widget da schermata di blocco che Android non ammette. -->
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
 
         <provider
@@ -83,16 +119,16 @@
             android:exported="false"
         />
 
-        <!-- Android Auto (sperimentale): app template-based, categoria POI.
-             L'host dell'auto si collega a WipCarAppService e renderizza il radar. -->
-        <meta-data android:name="com.google.android.gms.car.application" android:resource="@xml/automotive_app_desc" />
-        <meta-data android:name="androidx.car.app.minCarApiLevel" android:value="1" />
-        <service android:name=".car.WipCarAppService" android:exported="true">
-            <intent-filter>
-                <action android:name="androidx.car.app.CarAppService" />
-                <category android:name="androidx.car.app.category.POI" />
-            </intent-filter>
-        </service>
+        <!-- Android Auto RIMOSSO (29/09/2026): Google Play ha segnalato «Visual
+             info on phone» — l'app non disattiva le funzioni che richiedono
+             interazione col telefono in modalità guida (Android for Cars
+             Quality Guidelines). Regola del committente: MAI Android Auto.
+             Si esclude l'app da Android Auto rimuovendo la dichiarazione dal
+             manifest (rimedio indicato dalla stessa email di Google), invece
+             di rincorrere la conformità alle linee guida auto. WipCarAppService
+             e automotive_app_desc.xml restano nel codice ma non più collegati:
+             senza questi meta-data e questo <service>, l'host auto non trova
+             l'app e Google Play non la valuta più per Android Auto. -->
 
         <receiver android:name=".geofence.GeofenceBroadcastReceiver" android:exported="false" />
 
@@ -108,6 +144,75 @@
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_widget_info" />
+        </receiver>
+
+        <!-- I quattro widget della home (14/09/2026): itinerario di oggi, visita
+             museo, crediti e pass, vicino a te. Dati dallo snapshot dell'app
+             (WipWidgetsPlugin), tocco → itainta://widget/<azione>. -->
+        <receiver android:name=".widget.WipItinerarioWidget" android:exported="true" android:label="@string/wip_w_itinerario_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_itinerario_info" />
+        </receiver>
+        <receiver android:name=".widget.WipVisitaWidget" android:exported="true" android:label="@string/wip_w_visita_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_visita_info" />
+        </receiver>
+        <receiver android:name=".widget.WipCreditiWidget" android:exported="true" android:label="@string/wip_w_crediti_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_crediti_info" />
+        </receiver>
+        <receiver android:name=".widget.WipViciniWidget" android:exported="true" android:label="@string/wip_w_vicini_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_vicini_info" />
+        </receiver>
+
+        <!-- Undici widget nuovi (23/09/2026, WipHomeWidgets2.kt): ultima audioguida,
+             luogo del giorno, cosa vedo, meteo e garanzia, ascolta ora, eventi,
+             gemma della regione, confronto opere, altra lingua, guida stampata,
+             foto dalla community. Stesso snapshot, stesso schema di tocco. -->
+        <receiver android:name=".widget.WipUltimoAscoltoWidget" android:exported="true" android:label="@string/wip_w_ultimo_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_ultimo_info" />
+        </receiver>
+        <receiver android:name=".widget.WipLuogoGiornoWidget" android:exported="true" android:label="@string/wip_w_luogo_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_luogo_info" />
+        </receiver>
+        <receiver android:name=".widget.WipVisionWidget" android:exported="true" android:label="@string/wip_w_vision_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_vision_info" />
+        </receiver>
+        <receiver android:name=".widget.WipMeteoWidget" android:exported="true" android:label="@string/wip_w_meteo_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_meteo_info" />
+        </receiver>
+        <receiver android:name=".widget.WipAscoltaWidget" android:exported="true" android:label="@string/wip_w_ascolta_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_ascolta_info" />
+        </receiver>
+        <receiver android:name=".widget.WipEventiWidget" android:exported="true" android:label="@string/wip_w_eventi_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_eventi_info" />
+        </receiver>
+        <receiver android:name=".widget.WipGemmaRegioneWidget" android:exported="true" android:label="@string/wip_w_regione_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_regione_info" />
+        </receiver>
+        <receiver android:name=".widget.WipConfrontoWidget" android:exported="true" android:label="@string/wip_w_confronto_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_confronto_info" />
+        </receiver>
+        <receiver android:name=".widget.WipAltraLinguaWidget" android:exported="true" android:label="@string/wip_w_lingua_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_lingua_info" />
+        </receiver>
+        <receiver android:name=".widget.WipGuidaStampataWidget" android:exported="true" android:label="@string/wip_w_pdf_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_pdf_info" />
+        </receiver>
+        <receiver android:name=".widget.WipFotoCommunityWidget" android:exported="true" android:label="@string/wip_w_community_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_community_info" />
         </receiver>
 
         <!-- Transizioni Activity Recognition (Play Services, via PendingIntent):
@@ -139,6 +244,17 @@
          per policy Play (ago 2026): il watchdog usa già il fallback inesatto e
          l'arrivo al POI è una notifica heads-up, come su iOS. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- MEGAFONO (01/09/2026, collaudo: «la funzione megafono non funziona»).
+         Equalizer e LoudnessEnhancer sono AudioEffect di sistema e SENZA questo
+         permesso il costruttore lancia: applyMegaphone() finiva nel catch, che
+         logga e rilascia tutto — il tasto si accendeva e la voce restava
+         identica. E' un permesso install-time (nessuna richiesta a runtime,
+         nessuna schermata in piu' per l'utente). -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- DETTATURA (08/09/2026): il plugin chiede RECORD_AUDIO a runtime prima
+         di avviare l'ascolto. Senza la dichiarazione qui la richiesta viene
+         negata subito e il microfono dell'assistente WIP non parte. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Gating trigger con sensori (Activity Recognition transition API):
          runtime su API 29+, install-time GMS sulle versioni precedenti.
          Senza il permesso il gating si disattiva e tutto resta come oggi. -->

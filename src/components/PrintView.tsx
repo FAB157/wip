@@ -10,6 +10,8 @@ interface Tappa {
   consiglio_guida: string;
   tempo_necessario?: string;
   spostamento_precedente?: string | null;
+  /** Riga dei mezzi pubblici (Transitous) sulle tratte lunghe, già tradotta dal server. */
+  mezzi_precedente?: string | null;
   tipo: string;
 }
 
@@ -377,7 +379,9 @@ export default function PrintView({ plan, language }: PrintViewProps) {
       `}</style>
 
       {/* PRINT-ONLY RESILIENT TRAVEL GUIDE */}
-      <div className="absolute top-0 left-[-9999px] w-[800px] print:relative print:left-0 print:w-full text-black p-0 print-optimized-view">
+      {/* id: serve al PDF nativo (html2pdf lavora sull'elemento, non sulla
+          stampa del browser, che il WebView Android non ha — vedi PlanScreen). */}
+      <div id="itinerary-print-view" className="absolute top-0 left-[-9999px] w-[800px] print:relative print:left-0 print:w-full text-black p-0 print-optimized-view">
         <div className="print-page-frame"></div>
         {/* Header compatto: titolo + eyebrow + intro breve, logo discreto */}
         <div className="print-header">
@@ -415,6 +419,16 @@ export default function PrintView({ plan, language }: PrintViewProps) {
             <div className="space-y-3">
               {giorno.tappe.map((tappa, tIdx) => (
                 <div key={`print-tappa-${tappa.id_tappa}-${tIdx}`} className="print-activity-block">
+                  {/* Lo spostamento e i mezzi PRIMA della tappa che raggiungono (20/10/2026, committente). */}
+                  {((tappa.spostamento_precedente && tappa.spostamento_precedente !== "null") || tappa.mezzi_precedente) && (
+                    <div className="print-activity-duration">
+                      {tappa.spostamento_precedente && tappa.spostamento_precedente !== "null" && (
+                        <span>{getPrintTranslation('movement', langStr)}: {tappa.spostamento_precedente}</span>
+                      )}
+                      {tappa.spostamento_precedente && tappa.spostamento_precedente !== "null" && tappa.mezzi_precedente && <span> • </span>}
+                      {tappa.mezzi_precedente && <span>🚇 {tappa.mezzi_precedente}</span>}
+                    </div>
+                  )}
                   <h4 className="print-activity-title">
                     {/* L'orario c'era a schermo ma non in stampa: su carta è
                         l'informazione più consultata */}
@@ -422,24 +436,12 @@ export default function PrintView({ plan, language }: PrintViewProps) {
                     {tappa.titolo_tappa}
                   </h4>
 
-                  {(tappa.tempo_necessario || (tappa.spostamento_precedente && tappa.spostamento_precedente !== "null")) && (
+                  {tappa.tempo_necessario && (
                     <div className="print-activity-duration">
-                      {tappa.tempo_necessario && (
-                        <span>
-                          {getPrintTranslation('visit_time', langStr)}: {tappa.tempo_necessario}
-                        </span>
-                      )}
-                      {tappa.tempo_necessario && tappa.spostamento_precedente && tappa.spostamento_precedente !== "null" && (
-                        <span> • </span>
-                      )}
-                      {tappa.spostamento_precedente && tappa.spostamento_precedente !== "null" && (
-                        <span>
-                          {getPrintTranslation('movement', langStr)}: {tappa.spostamento_precedente}
-                        </span>
-                      )}
+                      <span>{getPrintTranslation('visit_time', langStr)}: {tappa.tempo_necessario}</span>
                     </div>
                   )}
-                  
+
                   {/* Description */}
                   <p className="print-activity-description">{tappa.attivita}</p>
                   

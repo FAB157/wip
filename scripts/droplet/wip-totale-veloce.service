@@ -1,0 +1,20 @@
+[Unit]
+Description=WIP arricchimento TOTALE - corsia VELOCE (26/09/2026): luoghi senza fonte e schedine (gusto, sentieri, ciclabili, shopping, lusso), server LOCALE, senza modello
+After=wip-mondo-server.service
+Requires=wip-mondo-server.service
+ConditionPathExists=/root/totale/veloce.jsonl
+
+[Service]
+WorkingDirectory=/root/totale
+Environment=WIP_BASE=http://localhost:3010
+Environment=ENVF=/root/wip-mondo/lavori/.env
+ExecStart=/usr/bin/node /root/totale/driver-totale.mjs --lista=/root/totale/veloce.jsonl --corsia=veloce --lavoratori=2 --pausa=3000
+Restart=on-failure
+RestartSec=60
+Nice=10
+MemoryMax=300M
+StandardOutput=append:/root/totale/veloce.log
+StandardError=append:/root/totale/veloce.log
+
+[Install]
+WantedBy=multi-user.target

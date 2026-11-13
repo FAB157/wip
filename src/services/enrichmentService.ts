@@ -75,6 +75,18 @@ export interface EnrichInput {
    *  invece della ricerca per coordinate (che fallisce sui luoghi estesi,
    *  dove il centroide dista chilometri dall'articolo). */
   wikidata?: string | null;
+  /** Presenti quando il chiamante passa il Poi completo: servono solo a
+   *  fotoStantia() per decidere se vale la pena ri-arricchire. */
+  image_url?: string | null;
+  photo_url?: string | null;
+}
+
+/** Una foto "source.unsplash.com" e' un link morto persistito prima del
+ *  22/08/2026 (servizio dismesso da Unsplash): conta come assente. Vedi
+ *  la stessa logica lato server in server.ts (enrich-stream, riga ~19957). */
+export function fotoStantia(poi: EnrichInput): boolean {
+  const img = poi.image_url || poi.photo_url;
+  return !img || String(img).includes('source.unsplash.com');
 }
 
 /** Chiama /api/poi/enrich (pipeline Oracle: wiki + edge + foto). */

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Loader2, Info, X, Bot, User, Mic, Coins, Volume2, VolumeX } from 'lucide-react';
+import { Send, Loader2, Info, X, Bot, User, Mic, Coins, Volume2, VolumeX, HelpCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { PRICING_LIST, getWalletBalance } from '../lib/pricing';
 import { notify } from '../lib/toast';
@@ -8,6 +8,8 @@ import CreditConfirmationModal from './CreditConfirmationModal';
 import { getTranslation, type Language } from '../lib/i18n';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
+import { avviaAscolto, type SessioneVoce } from '../lib/voceInput';
+import { chiediConsensoAi } from '../lib/aiConsent';
 
 interface AgentControlsProps {
   itineraryId: string;
@@ -17,15 +19,32 @@ interface AgentControlsProps {
   language?: string;
   onClose?: () => void;
   initialMessage?: string;
+  /**
+   * Sulla MAPPA la barra va alzata: laggiù, a 1rem dal fondo del contenitore,
+   * vive già la fila "TROVA VICINO / TUTTO / lente / mirino" (MapArea.tsx), e
+   * a quota 6rem la chat ci finiva sopra coprendo i tasti — segnalato dal
+   * committente il 09/09/2026 con schermata. Sull'itinerario quella fila non
+   * c'è e la quota resta quella standard.
+   */
+  sopraControlliMappa?: boolean;
 }
 
-export default function AgentControls({ itineraryId, userId, status, chatHistory, language = 'IT', onClose, initialMessage }: AgentControlsProps) {
+export default function AgentControls({ itineraryId, userId, status, chatHistory, language = 'IT', onClose, initialMessage, sopraControlliMappa = false }: AgentControlsProps) {
   // Tutte le stringhe visibili passano dal dizionario (23/08/2026: la chat
   // era in italiano cablato per gli utenti EN/FR/ES/DE/RU/ZH).
   const tr = (k: string) => getTranslation(k, String(language || 'IT').toUpperCase() as Language);
   const [customEvent, setCustomEvent] = useState(initialMessage || '');
   const [isLoading, setIsLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  // DA CHIUSA LA CHAT E` UN CERCHIO, NON UNA BARRA (19/09/2026, committente,
+  // sull'itinerario: «rimane sempre in prima impressione», poi: «riducila a un
+  // cerchio con scritta trasparente "chat", meno invasivo possibile»). La barra
+  // larga quanto lo schermo copriva le tappe che si stavano leggendo, e il suo
+  // testo finiva sotto il microfono (il campo riservava posto a UN tasto e ne
+  // mostrava due). Ora da chiusa c'e' solo il volto di WIP in basso a destra,
+  // semitrasparente, con l'etichetta «Chat»: un tocco apre la chat intera, dove
+  // microfono, info e aiuto ci sono gia' tutti.
+  const soloIcona = !isExpanded;
   const [showInfo, setShowInfo] = useState(false);
   const [isListening, setIsListening] = useState(false);
 
@@ -70,82 +89,69 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
       .replace(/https?:\/\/\S+/g, '')
       .replace(/[*_#`>]/g, '')
       .replace(/\s+/g, ' ').trim();
-    if (pulito) void speakAudioguide(pulito, (language || 'IT').toLowerCase(), getGuideCharacter());
+    // Etichetta "WIP": chi parla qui è l'agente, e la barra del player non deve
+    // annunciarsi come "Audioguida" (committente, 09/09/2026).
+    if (pulito) void speakAudioguide(pulito, (language || 'IT').toLowerCase(), getGuideCharacter(), undefined, 'WIP');
   };
 
-  // MICROFONO: UN'ISTANZA SOLA, in un ref. Prima `new SpeechRecognition()`
-  // stava nel corpo del componente: ogni render ne creava una nuova, e lo
-  // "stop" finiva sull'istanza dell'ultimo render — mai avviata — mentre
-  // quella avviata restava viva col microfono occupato (l'icona "in uso"
-  // che non si spegne, 23/08/2026).
-  const recRef = useRef<any>(null);
-  const getRecognition = () => {
-    if (recRef.current) return recRef.current;
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) return null;
-    const r = new SR();
-    r.continuous = false;
-    r.interimResults = false;
-    r.onresult = (event: any) => {
-      const transcript = event.results?.[0]?.[0]?.transcript;
-      if (transcript) {
-        dettatoRef.current = true; // la risposta a una domanda dettata si legge
-        setCustomEvent((prev) => prev ? `${prev} ${transcript}` : transcript);
-      }
-      setIsListening(false);
-    };
-    r.onerror = (event: any) => {
-      console.error('Speech recognition error', event?.error);
-      setIsListening(false);
-    };
-    r.onend = () => setIsListening(false);
-    recRef.current = r;
-    return r;
-  };
+  // MICROFONO: la sessione viva sta in un ref, cosi' lo "stop" arriva sempre
+  // a QUELLA avviata (prima si creava un riconoscitore per render e il
+  // microfono restava occupato, 23/08/2026). Dal 08/09/2026 la dettatura
+  // passa da voceInput.ts: nativa sull'app (la Web Speech API non esiste
+  // nella WebView di iOS/Android, il tasto sembrava morto), Web Speech API
+  // sul web.
+  const sessioneVoceRef = useRef<SessioneVoce | null>(null);
 
-  // Alla chiusura del componente il riconoscimento va ABORTITO e la voce
-  // fermata, o il microfono resta occupato a chat chiusa.
+  // Alla chiusura del componente il riconoscimento va fermato e la voce
+  // zittita, o il microfono resta occupato a chat chiusa.
   useEffect(() => () => {
-    try { recRef.current?.abort?.(); } catch { /* gia' fermo */ }
+    sessioneVoceRef.current?.annulla(); // abort: rilascia il microfono subito
     stopSpeech();
   }, []);
 
   const SPEECH_LANGS: Record<string, string> = { it: 'it-IT', en: 'en-US', fr: 'fr-FR', es: 'es-ES', de: 'de-DE', ru: 'ru-RU', zh: 'zh-CN' };
 
-  const handleMicrophoneClick = () => {
-    const recognition = getRecognition();
-    if (!recognition) {
-      notify(tr('chat_mic_unsupported'));
-      return;
-    }
-
+  const handleMicrophoneClick = async () => {
     if (isListening) {
-      // stop() consegna l'eventuale parlato gia' captato (onresult), poi onend.
-      try { recognition.stop(); } catch { /* gia' fermo */ }
+      // ferma() consegna l'eventuale parlato gia' captato, poi chiude.
+      sessioneVoceRef.current?.ferma();
       setIsListening(false);
       return;
     }
 
-    // La lingua del riconoscimento segue la UI (prima era it-IT fisso).
-    recognition.lang = SPEECH_LANGS[(language || 'IT').toLowerCase().slice(0, 2)] || 'it-IT';
     setIsListening(true);
     if (!isExpanded) setIsExpanded(true);
-    try {
-      recognition.start();
-    } catch {
-      // start() su un'istanza gia' avviata lancia: si riparte pulito.
-      try { recognition.abort(); } catch { /* niente */ }
-      setIsListening(false);
-    }
+    sessioneVoceRef.current = await avviaAscolto({
+      // La lingua del riconoscimento segue la UI (prima era it-IT fisso).
+      lingua: SPEECH_LANGS[(language || 'IT').toLowerCase().slice(0, 2)] || 'it-IT',
+      onRisultato: (testo) => {
+        dettatoRef.current = true; // la risposta a una domanda dettata si legge
+        setCustomEvent((prev) => prev ? `${prev} ${testo}` : testo);
+      },
+      onFine: () => { setIsListening(false); sessioneVoceRef.current = null; },
+      onErrore: (motivo) => notify(tr(motivo === 'permesso_negato' ? 'voce_permesso_negato' : 'voce_non_disponibile')),
+    });
   };
-  const [messages, setMessages] = useState<{ role: 'user' | 'assistant', content: string }[]>(
+  // Due modalità dentro la stessa barra "Chiedi a WIP" (10/09/2026):
+  // 'assistente' = viaggio/itinerario (a pagamento, invariato); 'aiuto' =
+  // come funziona l'app, GRATIS, basata sul manuale (/api/app-help). Storie
+  // separate perché sono due conversazioni diverse — passare da una
+  // all'altra non deve mischiare i messaggi né confondere il server su quale
+  // rotta/contesto usare per il turno successivo.
+  const [modalita, setModalita] = useState<'assistente' | 'aiuto'>('assistente');
+  const [messagesAssistente, setMessagesAssistente] = useState<{ role: 'user' | 'assistant', content: string }[]>(
     chatHistory && chatHistory.length > 0 ? chatHistory : [
-      { 
-        role: 'assistant', 
+      {
+        role: 'assistant',
         content: getTranslation(itineraryId === 'general' ? 'chat_welcome_general' : 'chat_welcome_itinerary', String(language || 'IT').toUpperCase() as Language)
       }
     ]
   );
+  const [messagesAiuto, setMessagesAiuto] = useState<{ role: 'user' | 'assistant', content: string }[]>([
+    { role: 'assistant', content: getTranslation('chat_help_welcome', String(language || 'IT').toUpperCase() as Language) }
+  ]);
+  const messages = modalita === 'aiuto' ? messagesAiuto : messagesAssistente;
+  const setMessages = modalita === 'aiuto' ? setMessagesAiuto : setMessagesAssistente;
 
   useEffect(() => {
     if (initialMessage && messages.length === 1 && itineraryId === 'general') {
@@ -156,8 +162,11 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Sempre sulla storia dell'assistente di viaggio (chatHistory arriva
+    // dall'itinerario, mai dalla modalità aiuto): setMessages qui punterebbe
+    // a quella sbagliata se l'utente ha aperto "Aiuto sull'app".
     if (chatHistory && chatHistory.length > 0) {
-      setMessages(chatHistory);
+      setMessagesAssistente(chatHistory);
     }
   }, [chatHistory]);
 
@@ -169,11 +178,75 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
     }
   }, [messages, isExpanded]);
 
+  // "Aiuto sull'app" (10/09/2026): rotta GRATUITA e separata, /api/app-help.
+  // Niente crediti, ma un tetto fisso di 15 messaggi per persona (richiesta
+  // esplicita del committente) — l'AUTORITÀ è il server (tabella
+  // app_help_usage + RPC atomica), qui il numero viene solo specchiato.
+  const HELP_MAX_MESSAGGI = 15;
+  const [helpMessagesLeft, setHelpMessagesLeft] = useState(HELP_MAX_MESSAGGI);
+  const inviaMessaggioAiuto = async (eventMessage: string) => {
+    if (helpMessagesLeft <= 0) {
+      setMessagesAiuto(prev => [...prev, { role: 'assistant', content: tr('chat_help_limit_reached') }]);
+      setCustomEvent('');
+      setIsExpanded(true);
+      return;
+    }
+    setMessagesAiuto(prev => [...prev, { role: 'user', content: eventMessage }]);
+    setCustomEvent('');
+    setIsExpanded(true);
+    setIsLoading(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      if (!accessToken) {
+        setMessagesAiuto(prev => [...prev, { role: 'assistant', content: tr('chat_login_required') }]);
+        return;
+      }
+      const res = await fetch('/api/app-help', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ message: eventMessage, chatHistory: messagesAiuto, lang: language })
+      });
+      if (res.status === 401) {
+        setMessagesAiuto(prev => [...prev.slice(0, -1), { role: 'assistant', content: tr('chat_login_required') }]);
+        return;
+      }
+      if (res.status === 403) {
+        // Tetto raggiunto (magari da un altro dispositivo nel frattempo):
+        // il server è l'autorità, si allinea il contatore locale a 0.
+        setHelpMessagesLeft(0);
+        setMessagesAiuto(prev => [...prev, { role: 'assistant', content: tr('chat_help_limit_reached') }]);
+        return;
+      }
+      if (!res.ok) throw new Error('Server or timeout error');
+      const data = await res.json();
+      if (typeof data.messagesLeft === 'number') setHelpMessagesLeft(Math.max(0, data.messagesLeft));
+      const risposta = data.message || tr('chat_error_connection');
+      setMessagesAiuto(prev => [...prev, { role: 'assistant', content: risposta }]);
+      leggiRisposta(risposta);
+      dettatoRef.current = false;
+    } catch (err) {
+      console.error(err);
+      setMessagesAiuto(prev => [...prev, { role: 'assistant', content: tr('chat_error_connection') }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // skipGate: usato da confirmPurchase, che chiama subito dopo l'acquisto —
   // nella closure di quel render messagesLeft vale ancora 0 e senza il flag
   // si riapriva il modale addebitando i 3 crediti una seconda volta.
   const handleSendEvent = async (eventMessage: string, skipGate = false) => {
     if (!eventMessage.trim() || isOptimizing) return;
+
+    // App Store 5.1.2(i): il messaggio (e, più sotto, la posizione) finisce a
+    // un'AI di terze parti — si chiede il permesso PRIMA, e senza non parte
+    // niente. Il testo resta nel campo: chi poi acconsente non lo riscrive.
+    if (!(await chiediConsensoAi())) return;
+
+    if (modalita === 'aiuto') {
+      return void inviaMessaggioAiuto(eventMessage.trim());
+    }
 
     // Check if we have messages left or need to buy a new session
     if (messagesLeft <= 0 && !skipGate) {
@@ -371,8 +444,14 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
         layout
         initial={{ y: 50, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        className={`fixed left-1/2 -translate-x-1/2 w-[95%] max-w-md rounded-3xl border border-gray-100/50 z-[1000] overflow-hidden flex flex-col transition-all duration-300 ${
-        isExpanded ? 'bg-white shadow-2xl bottom-[calc(6rem+env(safe-area-inset-bottom))] h-[65vh]' : 'bg-white/60 backdrop-blur-xl shadow-lg bottom-[calc(6rem+env(safe-area-inset-bottom))] p-1.5'
+        className={`fixed ${soloIcona ? `${sopraControlliMappa ? 'left-3' : 'right-3'} rounded-full overflow-visible` : 'left-1/2 -translate-x-1/2 w-[95%] max-w-md rounded-3xl overflow-hidden'} border border-gray-100/50 z-[1000] flex flex-col transition-all duration-300 ${
+        isExpanded
+          ? 'bg-white shadow-2xl bottom-[calc(6rem+env(safe-area-inset-bottom))] h-[65vh]'
+          : `bg-transparent border-transparent shadow-none p-0 opacity-85 hover:opacity-100 active:opacity-100 ${
+              sopraControlliMappa
+                ? 'bottom-[calc(10rem+env(safe-area-inset-bottom))]'
+                : 'bottom-[calc(6rem+env(safe-area-inset-bottom))]'
+            }`
       }`}
       >
         {/* Expanded Header */}
@@ -385,15 +464,27 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
               <div className="flex flex-col">
                 <span className="font-bold text-gray-800 leading-none">WIP</span>
                 <span className="text-[9px] font-black text-primary uppercase tracking-widest mt-1">
-                  {messagesLeft > 0
-                    ? tr('chat_messages_left').replace('{n}', String(messagesLeft))
-                    : itineraryId !== 'general'
-                      ? tr('chat_included_exhausted').replace('{c}', String(PRICING_LIST.chat_session))
-                      : tr('chat_price_for_messages').replace('{c}', String(PRICING_LIST.chat_session))}
+                  {modalita === 'aiuto'
+                    ? (helpMessagesLeft > 0 ? tr('chat_help_messages_left').replace('{n}', String(helpMessagesLeft)) : tr('chat_help_badge'))
+                    : messagesLeft > 0
+                      ? tr('chat_messages_left').replace('{n}', String(messagesLeft))
+                      : itineraryId !== 'general'
+                        ? tr('chat_included_exhausted').replace('{c}', String(PRICING_LIST.chat_session))
+                        : tr('chat_price_for_messages').replace('{c}', String(PRICING_LIST.chat_session))}
                 </span>
               </div>
             </div>
             <div className="flex items-center gap-3">
+              {/* Aiuto sull'app / Assistente di viaggio: due chat separate
+                  dentro la stessa barra (10/09/2026) — la prima è gratis e
+                  risponde solo su come funziona WIP, basandosi sul manuale. */}
+              <button
+                onClick={() => setModalita(m => m === 'aiuto' ? 'assistente' : 'aiuto')}
+                className={modalita === 'aiuto' ? 'text-primary' : 'text-gray-400 hover:text-primary'}
+                title={modalita === 'aiuto' ? tr('chat_help_toggle_back') : tr('chat_help_toggle')}
+              >
+                <HelpCircle className="w-5 h-5" />
+              </button>
               {/* 🔊 = WIP legge OGNI risposta; spento, legge solo quelle a domande dettate. */}
               <button
                 onClick={() => { const on = !voceAttiva; setVoceAttiva(on); if (!on) stopSpeech(); }}
@@ -402,10 +493,12 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
               >
                 {voceAttiva ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
               </button>
-              <button onClick={() => setShowInfo(true)} className="text-primary hover:text-primary/80">
-                <Info className="w-5 h-5" />
-              </button>
-              <button onClick={() => { setIsExpanded(false); stopSpeech(); try { recRef.current?.abort?.(); } catch { /* fermo */ } setIsListening(false); if (onClose) onClose(); }} className="text-gray-400 hover:text-gray-700">
+              {modalita === 'assistente' && (
+                <button onClick={() => setShowInfo(true)} className="text-primary hover:text-primary/80">
+                  <Info className="w-5 h-5" />
+                </button>
+              )}
+              <button onClick={() => { setIsExpanded(false); stopSpeech(); sessioneVoceRef.current?.annulla(); setIsListening(false); if (onClose) onClose(); }} className="text-gray-400 hover:text-gray-700">
                 <X className="w-6 h-6" />
               </button>
             </div>
@@ -417,7 +510,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
           <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50">
             {messages.length === 0 && !isOptimizing && (
               <div className="text-center text-gray-500 text-sm mt-10">
-                {tr('chat_empty_hint')}
+                {modalita === 'aiuto' ? tr('chat_help_welcome') : tr('chat_empty_hint')}
               </div>
             )}
             
@@ -446,16 +539,24 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
         )}
 
         {/* Input Area (always visible, style changes based on expansion) */}
-        <div className={`flex items-center gap-2 ${isExpanded ? 'bg-white p-3 border-t border-gray-100' : 'bg-transparent pl-1'}`}>
+        <div className={`flex items-center gap-2 ${isExpanded ? 'bg-white p-3 border-t border-gray-100' : 'bg-transparent'}`}>
           {!isExpanded && (
-            <div className="flex items-center pl-1 gap-2 cursor-pointer" onClick={() => setIsExpanded(true)}>
-              <div className="w-9 h-9 rounded-full bg-black flex items-center justify-center flex-shrink-0 overflow-hidden shadow-lg border border-white/20">
-                <img src="/avatar.png" alt="WIP" className="w-full h-full object-cover p-0.5" />
-              </div>
-            </div>
+            <button
+              type="button"
+              className="relative w-14 h-14 rounded-full overflow-hidden cursor-pointer shadow-lg border border-white/40 bg-black/70 backdrop-blur-sm"
+              onClick={() => setIsExpanded(true)}
+              aria-label={tr(itineraryId === 'general' ? 'chat_ask_wip_generale' : 'chat_ask_wip')}
+            >
+              <img src="/avatar.png" alt="" className="w-full h-full object-cover p-0.5 opacity-90" />
+              {/* L'etichetta sta DENTRO il cerchio, su una fascia scura
+                  trasparente: dice cos'e' senza allargare l'ingombro. */}
+              <span className="absolute bottom-0 inset-x-0 pb-1 pt-0.5 text-center text-[9px] font-black uppercase tracking-widest text-white bg-black/45">
+                {tr('chat_bubble_label')}
+              </span>
+            </button>
           )}
-          
-          <div className="flex-1 relative flex items-center">
+
+          <div className={`flex-1 relative items-center ${soloIcona ? 'hidden' : 'flex'}`}>
             <input 
               type="text" 
               value={customEvent}
@@ -465,15 +566,31 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
                 if (!isExpanded) setIsExpanded(true);
               }}
               onKeyDown={(e) => { if (e.key === 'Enter') handleSendEvent(customEvent); }}
-              onFocus={() => !isExpanded && setIsExpanded(true)}
-              placeholder={isListening ? tr('chat_listening') : isExpanded ? tr('chat_write_message') : tr('chat_ask_wip')}
-              className={`w-full ${isExpanded ? 'bg-gray-50' : 'bg-white/50 placeholder-gray-600'} border-none rounded-full py-2 pl-4 ${isExpanded ? 'pr-20' : 'pr-10'} text-sm focus:ring-2 focus:ring-primary transition-colors ${isListening ? 'ring-2 ring-red-400 bg-red-50 placeholder-red-500' : ''}`}
+              onFocus={() => {
+                if (!isExpanded) setIsExpanded(true);
+                // Il permesso si chiede appena si tocca il campo, non solo
+                // all'invio: chi apre la chat vede SUBITO quali dati partono
+                // e verso chi (è ciò che App Review va a cercare).
+                void chiediConsensoAi();
+              }}
+              placeholder={
+                isListening
+                  ? tr('chat_listening')
+                  : modalita === 'aiuto'
+                    ? tr('chat_ask_help')
+                    : isExpanded
+                      ? tr('chat_write_message')
+                      // Senza itinerario aperto WIP qui è generalista: non
+                      // promettere di ottimizzare un itinerario che non c'è.
+                      : tr(itineraryId === 'general' ? 'chat_ask_wip_generale' : 'chat_ask_wip')
+              }
+              className={`w-full ${isExpanded ? 'bg-gray-50' : 'bg-white/50 placeholder-gray-600'} border-none rounded-full py-2 pl-4 pr-20 text-ellipsis text-sm focus:ring-2 focus:ring-primary transition-colors ${isListening ? 'ring-2 ring-red-400 bg-red-50 placeholder-red-500' : ''}`}
             />
             
             <div className="absolute right-1 flex items-center gap-1">
               {!customEvent && !isListening && (
                 <button 
-                  onClick={handleMicrophoneClick}
+                  onClick={() => void handleMicrophoneClick()}
                   className="w-8 h-8 rounded-full text-gray-400 hover:text-primary hover:bg-gray-100 flex items-center justify-center transition-colors"
                   title={tr('chat_speak_btn')}
                 >
@@ -483,7 +600,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
               
               {isListening && (
                 <button 
-                  onClick={handleMicrophoneClick}
+                  onClick={() => void handleMicrophoneClick()}
                   className="w-8 h-8 rounded-full bg-red-100 text-red-500 flex items-center justify-center animate-pulse"
                   title={tr('chat_stop_listening')}
                 >

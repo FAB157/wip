@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Riscatta il tuo coupon WIP</title>
+<meta name="description" content="Riscatta il coupon regalo sul sito e usa i crediti nell'app WIP: l'audioguida che parte da sola.">
+<meta name="robots" content="noindex">
+<link rel="canonical" href="https://www.wip.guide/riscatta">
+<link rel="icon" href="/favicon.ico">
+<!--
+  Pagina di riscatto dei coupon (11/10/2026, committente: «da riscattare sul sito — Apple non accetta»; «link
+  alla pagina di riscatto quando si invia il coupon, ricordando che si potranno usare con app Android e Apple»).
+  Apple (Guideline 3.1.1) non ammette nell'app iOS un codice che regala crediti: il riscatto avviene QUI, sul
+  sito, dentro l'app web (Profilo › Impostazioni, riquadro coupon, che su iOS non esiste). I crediti sono
+  dell'account e si usano poi nell'app per iPhone e, a breve, Android. Il codice arriva con ?codice=…; il tasto
+  manda a /?coupon=… (App.tsx apre il Profilo con il codice già scritto).
+-->
+<style>
+  :root { --blu:#1e3a8a; --chiaro:#f8f5f0; --testo:#1f2937; --grigio:#6b7280; --bordo:#e5e7eb; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--testo); background:var(--chiaro); line-height:1.55; }
+  header { background:var(--blu); color:#fff; padding:24px 20px 30px; }
+  .dentro { max-width:620px; margin:0 auto; }
+  .riga-alta { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:18px; }
+  .marchio { color:#fff; text-decoration:none; font-weight:800; }
+  select#lingua { background:rgba(255,255,255,.14); color:#fff; border:1px solid rgba(255,255,255,.35); border-radius:999px; padding:6px 12px; font-size:14px; }
+  select#lingua option { color:#111; }
+  h1 { font-size:clamp(24px,5vw,34px); line-height:1.15; margin:0 0 10px; }
+  header p { margin:0; font-size:16px; opacity:.92; }
+  main { padding:24px 20px 50px; }
+  .codice { background:#fff; border:2px dashed var(--blu); border-radius:16px; padding:16px; text-align:center; font-size:28px; font-weight:900; letter-spacing:.12em; color:var(--blu); margin:0 0 16px; word-break:break-all; }
+  .codice.vuoto { font-size:15px; font-weight:600; letter-spacing:0; color:var(--grigio); border-style:solid; border-color:var(--bordo); }
+  ol { padding-left:22px; margin:0 0 18px; }
+  li { margin-bottom:8px; }
+  .tasto { display:block; text-align:center; background:var(--blu); color:#fff; text-decoration:none; border-radius:999px; padding:14px 24px; font-weight:800; font-size:16px; }
+  .nota { background:#fff; border-radius:12px; padding:12px 16px; margin-top:18px; font-size:14px; color:var(--grigio); }
+  .nota b { color:var(--testo); }
+  footer { text-align:center; color:var(--grigio); font-size:13px; padding:0 20px 40px; }
+  footer a { color:var(--blu); }
+</style>
+</head>
+<body>
+<header>
+  <div class="dentro">
+    <div class="riga-alta">
+      <a class="marchio" href="https://www.wip.guide/">WIP · World in Pocket</a>
+      <select id="lingua" aria-label="Language">
+        <option value="IT">Italiano</option><option value="EN">English</option><option value="FR">Français</option>
+        <option value="ES">Español</option><option value="DE">Deutsch</option><option value="RU">Русский</option><option value="ZH">中文</option>
+      </select>
+    </div>
+    <h1 data-t="titolo"></h1>
+    <p data-t="sotto"></p>
+  </div>
+</header>
+<main>
+  <div class="dentro">
+    <div class="codice" id="codice"></div>
+    <ol>
+      <li data-t="p1"></li>
+      <li data-t="p2"></li>
+      <li data-t="p3"></li>
+    </ol>
+    <a class="tasto" id="vai" href="/" data-t="tasto"></a>
+    <p class="nota"><b data-t="n1"></b> <span data-t="n2"></span></p>
+    <p class="nota"><span data-t="n3"></span> <a href="https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct=riscatta&mt=8">App Store</a></p>
+  </div>
+</main>
+<footer><a href="https://www.wip.guide/">wip.guide</a></footer>
+<script>
+var T = {
+IT: { titolo:"Riscatta il tuo coupon", sotto:"Un regalo per te: crediti per le audioguide complete e gli itinerari su misura di WIP.", vuoto:"Non c'è nessun codice in questo link: scrivilo tu nella pagina successiva.",
+ p1:"Premi il tasto qui sotto: si apre l'app web di WIP con il codice già inserito.", p2:"Accedi o crea un account gratuito (basta un'email).", p3:"Premi «Riscatta»: i crediti arrivano subito sul tuo account.",
+ tasto:"Riscatta sul sito", n1:"Perché sul sito?", n2:"Il riscatto dei coupon avviene qui, non dentro l'app per iPhone. I crediti sono del tuo account: una volta riscattati li usi nell'app per iPhone e, a breve, anche su Android.", n3:"Scarica l'app per iPhone:" },
+EN: { titolo:"Redeem your coupon", sotto:"A gift for you: credits for WIP's full audio guides and custom itineraries.", vuoto:"There is no code in this link: type it on the next page.",
+ p1:"Press the button below: the WIP web app opens with the code already filled in.", p2:"Sign in or create a free account (an email is enough).", p3:"Press “Redeem”: the credits land on your account right away.",
+ tasto:"Redeem on the website", n1:"Why on the website?", n2:"Coupons are redeemed here, not inside the iPhone app. The credits belong to your account: once redeemed you use them in the iPhone app and, soon, on Android too.", n3:"Download the iPhone app:" },
+FR: { titolo:"Utilisez votre coupon", sotto:"Un cadeau pour vous : des crédits pour les audioguides complets et les itinéraires sur mesure de WIP.", vuoto:"Ce lien ne contient aucun code : saisissez-le sur la page suivante.",
+ p1:"Appuyez sur le bouton ci-dessous : l'application web WIP s'ouvre avec le code déjà saisi.", p2:"Connectez-vous ou créez un compte gratuit (un e-mail suffit).", p3:"Appuyez sur « Utiliser » : les crédits arrivent aussitôt sur votre compte.",
+ tasto:"Utiliser sur le site", n1:"Pourquoi sur le site ?", n2:"Les coupons s'utilisent ici, pas dans l'application iPhone. Les crédits appartiennent à votre compte : une fois obtenus, vous les utilisez dans l'application iPhone et, bientôt, sur Android.", n3:"Téléchargez l'application iPhone :" },
+ES: { titolo:"Canjea tu cupón", sotto:"Un regalo para ti: créditos para las audioguías completas y los itinerarios a medida de WIP.", vuoto:"Este enlace no contiene ningún código: escríbelo en la página siguiente.",
+ p1:"Pulsa el botón de abajo: se abre la app web de WIP con el código ya puesto.", p2:"Inicia sesión o crea una cuenta gratuita (basta un correo).", p3:"Pulsa «Canjear»: los créditos llegan enseguida a tu cuenta.",
+ tasto:"Canjear en la web", n1:"¿Por qué en la web?", n2:"Los cupones se canjean aquí, no dentro de la app para iPhone. Los créditos son de tu cuenta: una vez canjeados los usas en la app para iPhone y, pronto, también en Android.", n3:"Descarga la app para iPhone:" },
+DE: { titolo:"Gutschein einlösen", sotto:"Ein Geschenk für Sie: Guthaben für die vollständigen Audioguides und maßgeschneiderten Routen von WIP.", vuoto:"Dieser Link enthält keinen Code: Geben Sie ihn auf der nächsten Seite ein.",
+ p1:"Tippen Sie auf die Schaltfläche unten: Die WIP-Web-App öffnet sich mit bereits eingetragenem Code.", p2:"Melden Sie sich an oder erstellen Sie ein kostenloses Konto (eine E-Mail genügt).", p3:"Tippen Sie auf „Einlösen“: Das Guthaben ist sofort auf Ihrem Konto.",
+ tasto:"Auf der Website einlösen", n1:"Warum auf der Website?", n2:"Gutscheine werden hier eingelöst, nicht in der iPhone-App. Das Guthaben gehört zu Ihrem Konto: Einmal eingelöst, nutzen Sie es in der iPhone-App und bald auch auf Android.", n3:"iPhone-App laden:" },
+RU: { titolo:"Активируйте купон", sotto:"Подарок для вас: кредиты на полные аудиогиды и индивидуальные маршруты WIP.", vuoto:"В этой ссылке нет кода: введите его на следующей странице.",
+ p1:"Нажмите кнопку ниже: откроется веб-приложение WIP с уже введённым кодом.", p2:"Войдите или создайте бесплатный аккаунт (достаточно эл. почты).", p3:"Нажмите «Активировать»: кредиты сразу поступят на ваш аккаунт.",
+ tasto:"Активировать на сайте", n1:"Почему на сайте?", n2:"Купоны активируются здесь, а не в приложении для iPhone. Кредиты принадлежат вашему аккаунту: после активации вы используете их в приложении для iPhone, а вскоре и на Android.", n3:"Скачать приложение для iPhone:" },
+ZH: { titolo:"兑换您的优惠券", sotto:"送给您的礼物：用于 WIP 完整语音导览和定制行程的积分。", vuoto:"此链接中没有代码：请在下一页输入。",
+ p1:"点击下方按钮：WIP 网页版会打开，并已填入代码。", p2:"登录或免费注册账户（一个邮箱即可）。", p3:"点击「兑换」：积分立即到账。",
+ tasto:"在网站上兑换", n1:"为什么在网站上？", n2:"优惠券在这里兑换，而不是在 iPhone 应用内。积分属于您的账户：兑换后可在 iPhone 应用中使用，不久也将支持 Android。", n3:"下载 iPhone 应用：" }
+};
+var LINGUE = ["IT","EN","FR","ES","DE","RU","ZH"];
+var q = new URLSearchParams(location.search);
+var codice = String(q.get("codice") || q.get("code") || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 30);
+function linguaIniziale() {
+  var l = (q.get("lang") || "").toUpperCase();
+  if (LINGUE.indexOf(l) >= 0) return l;
+  var n = (navigator.language || "en").slice(0, 2).toUpperCase();
+  return LINGUE.indexOf(n) >= 0 ? n : "EN";
+}
+function applica(l) {
+  var d = T[l];
+  document.documentElement.lang = l.toLowerCase();
+  document.querySelectorAll("[data-t]").forEach(function (el) { var k = el.getAttribute("data-t"); if (d[k] != null) el.textContent = d[k]; });
+  document.title = "WIP — " + d.titolo;
+  var c = document.getElementById("codice");
+  c.textContent = codice || d.vuoto;
+  c.className = "codice" + (codice ? "" : " vuoto");
+  document.getElementById("vai").href = "/" + (codice ? "?coupon=" + encodeURIComponent(codice) : "") + "#profilo";
+  document.getElementById("lingua").value = l;
+}
+applica(linguaIniziale());
+// Visita contata una volta per sessione, senza cookie: quanti arrivano alla pagina di riscatto.
+(function () { try {
+  var s = sessionStorage.getItem("wip_sessione"); var nuova = !sessionStorage.getItem("wip_vista_riscatta");
+  if (!s) { s = Math.random().toString(36).slice(2, 14); sessionStorage.setItem("wip_sessione", s); }
+  if (nuova) { sessionStorage.setItem("wip_vista_riscatta", "1"); fetch("/api/enti/visita", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pagina: "riscatta", c: (q.get("c") || "").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40), lingua: document.getElementById("lingua").value, sessione: s }), keepalive: true }); }
+} catch (e) {} })();
+document.getElementById("lingua").addEventListener("change", function (e) { applica(e.target.value); });
+</script>
+</body>
+</html>

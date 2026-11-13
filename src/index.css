@@ -139,11 +139,20 @@
 }
 
 .leaflet-popup-content-wrapper {
-  @apply bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/50 p-0 overflow-hidden;
+  @apply bg-white/95 rounded-2xl shadow-2xl border border-white/50 p-0 overflow-hidden;
 }
 
 .leaflet-popup-content {
   @apply !m-0;
+}
+
+/* (10/10/2026, committente: «anche queste nuvole sono tagliate, risolvi per tutte») Il fumetto ha margine 0 e
+   angoli molto tondi: i fumetti di SOLO TESTO dei livelli (gusto, sentieri, ciclabili, neve, spiagge, aree…)
+   finivano con l'emoji e la prima lettera sotto la curva. Tutti cominciano con lo stesso div «system-ui»:
+   prendono qui il loro margine interno. Le schede dei luoghi (React) hanno la loro impaginazione e non cambiano. */
+.leaflet-popup-content > div[style*="font-family:system-ui"] {
+  padding: 4px 10px 4px 12px;
+  box-sizing: border-box;
 }
 
 .leaflet-popup-tip {
@@ -229,6 +238,12 @@
   body:not(.printing-manual) #app-guide-print-view {
     display: none !important;
   }
+  /* La guida del museo da portarsi dietro stampata (11/09/2026): stesso
+     patto degli altri tre documenti — invisibile finché non è lei quella
+     richiesta. */
+  body:not(.printing-museum) #museum-print-view {
+    display: none !important;
+  }
 
   /* ── ISOLAMENTO: si stampa IL DOCUMENTO, non la pagina ──────────────
      Le regole qui sopra nascondono gli ALTRI documenti stampabili, ma non
@@ -247,7 +262,8 @@
      26/08/2026. */
   body.printing-itinerary,
   body.printing-guide,
-  body.printing-manual {
+  body.printing-manual,
+  body.printing-museum {
     visibility: hidden !important;
   }
   body.printing-itinerary .print-optimized-view,
@@ -255,12 +271,15 @@
   body.printing-guide #premium-guide-pdf-container,
   body.printing-guide #premium-guide-pdf-container *,
   body.printing-manual #app-guide-print-view,
-  body.printing-manual #app-guide-print-view * {
+  body.printing-manual #app-guide-print-view *,
+  body.printing-museum #museum-print-view,
+  body.printing-museum #museum-print-view * {
     visibility: visible !important;
   }
   body.printing-itinerary .print-optimized-view,
   body.printing-guide #premium-guide-pdf-container,
-  body.printing-manual #app-guide-print-view {
+  body.printing-manual #app-guide-print-view,
+  body.printing-museum #museum-print-view {
     position: absolute !important;
     left: 0 !important;
     top: 0 !important;

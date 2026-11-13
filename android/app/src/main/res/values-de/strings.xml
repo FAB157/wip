@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget-Auswahl und App-Verknüpfungen auf Deutsch (23/09/2026). Die Texte
+     IN den Widgets kommen bereits übersetzt aus dem Snapshot der App. -->
+<resources>
+    <string name="wip_widget_name">WIP — Taschenradar</string>
+    <string name="wip_widget_description">Guthaben, nächster Stopp der Reiseroute und nächster POI auf einen Blick.</string>
+
+    <string name="wip_w_itinerario_nome">WIP · Reiseroute</string>
+    <string name="wip_w_itinerario_desc">Der nächste Stopp von heute, mit Uhrzeit und Gehminuten.</string>
+    <string name="wip_w_visita_nome">WIP · Museumsbesuch</string>
+    <string name="wip_w_visita_desc">Das laufende Museum: gehörte Werke und das nächste zum Anhören.</string>
+    <string name="wip_w_crediti_nome">WIP · Guthaben und Pass</string>
+    <string name="wip_w_crediti_desc">Das Guthaben und der aktive Day Pass mit Ablaufzeit.</string>
+    <string name="wip_w_vicini_nome">WIP · In der Nähe</string>
+    <string name="wip_w_vicini_desc">Juwelen und Orte mit Audioguide in deiner Nähe: ein Tipp und die Stimme startet.</string>
+
+    <string name="wip_w_ultimo_nome">WIP · Letzter Audioguide</string>
+    <string name="wip_w_ultimo_desc">Den letzten Audioguide nochmal hören oder fortsetzen</string>
+    <string name="wip_w_luogo_nome">WIP · Ort des Tages</string>
+    <string name="wip_w_luogo_desc">Ein Juwel in der Nähe, jeden Tag ein anderes</string>
+    <string name="wip_w_vision_nome">WIP · Was sehe ich?</string>
+    <string name="wip_w_vision_desc">Kamera öffnen und erkennen, was vor dir liegt</string>
+    <string name="wip_w_vision_breve">Was sehe ich?</string>
+    <string name="wip_w_meteo_nome">WIP · Wetter</string>
+    <string name="wip_w_meteo_desc">Wetter am heutigen Stopp, beste Zeit, Regengarantie</string>
+    <string name="wip_w_ascolta_nome">WIP · Jetzt hören</string>
+    <string name="wip_w_ascolta_desc">Ein Tipp: der Audioguide des nächstgelegenen Ortes</string>
+    <string name="wip_w_ascolta_breve">Jetzt hören</string>
+    <string name="wip_w_eventi_nome">WIP · Events in der Nähe</string>
+    <string name="wip_w_eventi_desc">Events und Ausstellungen der nächsten Tage</string>
+    <string name="wip_w_regione_nome">WIP · Juwel der Region</string>
+    <string name="wip_w_regione_desc">Ein Juwel der Region, in der du dich befindest</string>
+    <string name="wip_w_confronto_nome">WIP · Werke vergleichen</string>
+    <string name="wip_w_confronto_desc">Zwei heute gehörte Werke: welches gefällt dir besser?</string>
+    <string name="wip_w_lingua_nome">WIP · In einer anderen Sprache</string>
+    <string name="wip_w_lingua_desc">Der letzte Audioguide in einer anderen Sprache</string>
+    <string name="wip_w_pdf_nome">WIP · Gedruckter Guide</string>
+    <string name="wip_w_pdf_desc">Der neueste PDF-Guide, zum erneuten Öffnen oder Teilen</string>
+    <string name="wip_w_community_nome">WIP · Community-Foto</string>
+    <string name="wip_w_community_desc">Das neueste geprüfte Foto aus deiner Nähe</string>
+</resources>

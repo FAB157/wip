@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Velo dei widget con «foto grande» (23/09/2026): trasparente in alto, blu
+     scuro in basso, perche' nome e citta' si leggano su qualunque foto. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient android:angle="270" android:startColor="#00000000" android:endColor="#CC0B1A45" />
+    <corners android:radius="16dp" />
+</shape>

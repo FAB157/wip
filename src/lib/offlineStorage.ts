@@ -49,6 +49,21 @@ export const saveOfflineAudio = async (url: string, id: string) => {
   }
 };
 
+/**
+ * REGOLA 23/10/2026 (ricollaudo Lugano, MASI): un MP3 salvato sul telefono porta con sé il TESTO da cui è fatto.
+ * Senza, il giro leggeva un MP3 di prima delle regole (formule vietate) che nessuno poteva più controllare, e
+ * «Chiedi» non sapeva cosa era stato detto. Il testo sta accanto all'audio in IndexedDB (`audio_testo_<id>`).
+ */
+export const salvaTestoAudio = async (id: string, testo: string) => {
+  try { await set(`audio_testo_${id}`, String(testo || '')); } catch { /* best-effort */ }
+};
+export const testoAudioSalvato = async (id: string): Promise<string | null> => {
+  try { const t = await get(`audio_testo_${id}`); return typeof t === 'string' && t ? t : null; } catch { return null; }
+};
+export const togliAudioOffline = async (id: string) => {
+  try { await del(`audio_${id}`); await del(`audio_testo_${id}`); } catch { /* best-effort */ }
+};
+
 export const getOfflineAudioUrl = async (id: string) => {
   const blob = await get(`audio_${id}`) as Blob;
   if (blob) {
@@ -112,6 +127,16 @@ export const mirrorPoisToDexie = async (pois: any[]) => {
         image_url: p.image_url || p.photo_url,
         photo_url: p.photo_url || p.image_url,
         status: p.status,
+        // Porta, punto d'arrivo e indirizzo: senza questi il geofencing offline
+        // (poiRepository.getGeofencePoisFromDexie) lavorava al centroide anche
+        // con l'area scaricata — il bundle li porta dal 22/08 e dal 05/09/2026.
+        entrance_lat: p.entrance_lat ?? null,
+        entrance_lon: p.entrance_lon ?? null,
+        arrival_lat: p.arrival_lat ?? null,
+        arrival_lon: p.arrival_lon ?? null,
+        arrival_method: p.arrival_method ?? null,
+        address: p.address ?? null,
+        address_source: p.address_source ?? null,
         lastUpdated: Date.now(),
       })));
   } catch (e) {

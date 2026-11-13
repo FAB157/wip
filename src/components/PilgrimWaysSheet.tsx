@@ -19,6 +19,7 @@ import {
   type PilgrimRoute, type PilgrimDifficulty, type RoutePrefill,
 } from '../lib/transitCatalog';
 import { getApiUrl, apiFetch } from '../lib/api';
+import { chiediConsensoAi } from '../lib/aiConsent';
 import { getTranslation, type Language } from '../lib/i18n';
 import { supabase } from '../lib/supabase';
 import {
@@ -129,6 +130,7 @@ export default function PilgrimWaysSheet({
 
   const generaAi = async () => {
     if (aiLoading || query.trim().length < 2) return;
+    if (!(await chiediConsensoAi())) return; // testo digitato → modello esterno (22/09/2026)
     setAiLoading(true);
     setAiError(null);
     aiAbortRef.current?.abort();

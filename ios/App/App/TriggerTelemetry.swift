@@ -42,9 +42,21 @@ enum TriggerTelemetry {
         "timestamp,poi_id,poi_name,phase,decision,reason,used_prediction," +
         "t_cpa_s,d_cpa_m,d_now_m,radius_m,fix_age_ms,accuracy_m,speed_ms,bearing_deg,mode\n"
 
-    /// Interruttore: spegnibile da UserDefaults senza ricompilare.
+    /// Interruttore: accendibile/spegnibile da UserDefaults senza ricompilare.
+    /// (23/09/2026, batteria) Default = solo nelle build di DEBUG, come
+    /// Android (`BuildConfig.DEBUG`): in produzione apriva, scriveva e
+    /// chiudeva il CSV a ogni fix per ogni candidato, per una taratura in
+    /// strada mai fatta. Per la prova in strada: `telemetryEnabled = true`.
+    private static let accesaPerDefault: Bool = {
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+    }()
+
     private static var isEnabled: Bool {
-        UserDefaults.standard.object(forKey: "telemetryEnabled") as? Bool ?? true
+        UserDefaults.standard.object(forKey: "telemetryEnabled") as? Bool ?? accesaPerDefault
     }
 
     private static let isoFormatter: DateFormatter = {
@@ -73,7 +85,7 @@ enum TriggerTelemetry {
         // veniva composta SEMPRE, anche a telemetria spenta, e per ogni POI
         // candidato a ogni fix GPS. Con l'interruttore in testa, spegnere la
         // telemetria costa davvero zero; resta accendibile a runtime dalle
-        // prefs (`telemetryEnabled`, default acceso) senza ricompilare, che
+        // prefs (`telemetryEnabled`, default solo in DEBUG) senza ricompilare, che
         // è quello che serve per la prova in strada.
         guard isEnabled else { return }
 

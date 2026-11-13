@@ -382,11 +382,21 @@ export const checkUserQuota = async (
 };
 
 /**
- * DEPRECATO — NO-OP. I contatori d'uso (*_used) sono scritti solo dal
- * server (checkAndIncrementQuota, autorità unica). Incrementarli anche dal
- * client causava DOPPIO CONTEGGIO e, con la protezione DB su *_used
- * (2026-08-09), lancerebbe un'eccezione RLS. La vecchia logica client è
- * stata rimossa (era codice morto dopo il `return`).
+ * DEPRECATO — NO-OP INTENZIONALE, NON UN BUG. I contatori d'uso (*_used) sono
+ * scritti solo dal server (checkAndIncrementQuota in server.ts, autorità
+ * unica). Incrementarli anche dal client causava DOPPIO CONTEGGIO e, con la
+ * protezione DB su *_used (2026-08-09), lancerebbe un'eccezione RLS. La
+ * vecchia logica client è stata rimossa (era codice morto dopo il `return`).
+ *
+ * ATTENZIONE A CHI LEGGE IL NOME: nonostante il nome "incrementQuota" (e
+ * l'alias incrementUserQuota sotto), questa funzione non incrementa NULLA.
+ * locationService.ts la chiama ancora (non toccare quella chiamata: è
+ * innocua, solo inutile) — non fidarsi del nome per capire dove viene
+ * applicata la quota reale. Di conseguenza anche QUOTA_LIMITS.free.* qui
+ * sopra non ha alcun effetto di enforcement dal lato client: è solo il
+ * valore usato da getQuotaStatus per un controllo ottimistico in UI: il
+ * limite che conta davvero è quello imposto da checkAndIncrementQuota lato
+ * server.
  */
 export const incrementQuota = async (
   _userId: string = "mock-user-id",

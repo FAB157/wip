@@ -35,6 +35,8 @@
     "itainta-native",
     "scripts",
     "scratch",
+    "__checks__",
+    "checkly.config.ts",
     "*.js",
     "*.cjs",
     "*.mjs"

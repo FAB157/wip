@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Scorciatoie statiche dell'app (23/09/2026): tenendo premuta l'icona WIP.
+     Sostituiscono i widget da schermata di blocco, che Android non ammette per
+     le app di terze parti. Stessi deep link dei widget (itainta://widget/…),
+     gestiti in App.tsx. API 25+: sulla 24 il sistema le ignora. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="vision"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/wip_w_vision_breve"
+        android:shortcutLongLabel="@string/wip_w_vision_nome">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="itainta://widget/vision"
+            android:targetPackage="com.itaintasca.app"
+            android:targetClass="com.itaintasca.app.MainActivity" />
+    </shortcut>
+    <!-- Senza id l'app apre la mappa dei vicini: da li' un tocco sul luogo. -->
+    <shortcut
+        android:shortcutId="ascolta"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/wip_w_ascolta_breve"
+        android:shortcutLongLabel="@string/wip_w_ascolta_nome">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="itainta://widget/vicini"
+            android:targetPackage="com.itaintasca.app"
+            android:targetClass="com.itaintasca.app.MainActivity" />
+    </shortcut>
+</shortcuts>

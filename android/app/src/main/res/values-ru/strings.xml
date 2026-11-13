@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Выбор виджетов и ярлыки приложения на русском (23/09/2026). Тексты
+     ВНУТРИ виджетов приходят из снимка приложения, уже переведённые. -->
+<resources>
+    <string name="wip_widget_name">WIP — Карманный радар</string>
+    <string name="wip_widget_description">Баланс кредитов, следующая остановка маршрута и ближайшая точка интереса с одного взгляда.</string>
+
+    <string name="wip_w_itinerario_nome">WIP · Маршрут</string>
+    <string name="wip_w_itinerario_desc">Следующая остановка на сегодня, со временем и минутами пешком.</string>
+    <string name="wip_w_visita_nome">WIP · Посещение музея</string>
+    <string name="wip_w_visita_desc">Текущий музей: прослушанные работы и следующая для прослушивания.</string>
+    <string name="wip_w_crediti_nome">WIP · Кредиты и Pass</string>
+    <string name="wip_w_crediti_desc">Баланс кредитов и активный Day Pass со сроком действия.</string>
+    <string name="wip_w_vicini_nome">WIP · Рядом с вами</string>
+    <string name="wip_w_vicini_desc">Жемчужины и места с аудиогидом рядом с вами: одно касание, и голос начинает рассказ.</string>
+
+    <string name="wip_w_ultimo_nome">WIP · Последний аудиогид</string>
+    <string name="wip_w_ultimo_desc">Послушайте снова или продолжите последний аудиогид</string>
+    <string name="wip_w_luogo_nome">WIP · Место дня</string>
+    <string name="wip_w_luogo_desc">Жемчужина рядом, каждый день новая</string>
+    <string name="wip_w_vision_nome">WIP · Что я вижу?</string>
+    <string name="wip_w_vision_desc">Откройте камеру и узнайте, что перед вами</string>
+    <string name="wip_w_vision_breve">Что я вижу?</string>
+    <string name="wip_w_meteo_nome">WIP · Погода</string>
+    <string name="wip_w_meteo_desc">Погода на сегодняшней остановке, лучшее время, гарантия от дождя</string>
+    <string name="wip_w_ascolta_nome">WIP · Слушать сейчас</string>
+    <string name="wip_w_ascolta_desc">Одно касание: аудиогид ближайшего места</string>
+    <string name="wip_w_ascolta_breve">Слушать сейчас</string>
+    <string name="wip_w_eventi_nome">WIP · События рядом</string>
+    <string name="wip_w_eventi_desc">События и выставки ближайших дней</string>
+    <string name="wip_w_regione_nome">WIP · Жемчужина региона</string>
+    <string name="wip_w_regione_desc">Жемчужина региона, в котором вы находитесь</string>
+    <string name="wip_w_confronto_nome">WIP · Сравнить работы</string>
+    <string name="wip_w_confronto_desc">Две работы, прослушанные сегодня: какая понравилась больше?</string>
+    <string name="wip_w_lingua_nome">WIP · На другом языке</string>
+    <string name="wip_w_lingua_desc">Последний аудиогид на другом языке</string>
+    <string name="wip_w_pdf_nome">WIP · Печатный гид</string>
+    <string name="wip_w_pdf_desc">Последний PDF-гид: открыть снова или поделиться</string>
+    <string name="wip_w_community_nome">WIP · Фото сообщества</string>
+    <string name="wip_w_community_desc">Последнее проверенное фото, снятое рядом с вами</string>
+</resources>

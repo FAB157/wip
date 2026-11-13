@@ -33,7 +33,8 @@ data class PoiEntity(
     // INDIRIZZO leggibile (23/08/2026), per la notifica e la voce. NON fa da
     // solo gradino nella scala di fiducia: una stringa non si può trasformare
     // in un cerchio, e un POI con l'indirizzo scritto ma senza punto resta al
-    // centroide (raggio ×2). Il gradino lo fanno le coordinate qui sotto.
+    // centroide, raggio invariato (mai ×2, vedi RaggiFiducia.calcola). Il
+    // gradino lo fanno le coordinate qui sotto.
     // `addressSource` non è decorazione: 'strada_vicina' vuol dire «la strada
     // più vicina», non l'indirizzo del luogo — una chiesa in mezzo ai campi
     // non sta al civico di quella via, e usarla porterebbe il punto altrove:
@@ -50,7 +51,8 @@ data class PoiEntity(
     // Regola dell'utente: «chi ha indirizzo, quello È l'arrivo: il trigger a
     // 30 m da lì, e il navigatore punta a quell'indirizzo».
     // La stringa `address` da sola NON basta più a fare gradino: senza queste
-    // due coordinate il POI resta al centroide (vedi RaggiFiducia.livello).
+    // due coordinate il POI resta al centroide, raggio invariato (vedi
+    // RaggiFiducia.calcola).
     // Nullable: i pacchetti e le cache già scaricati non li portano e restano
     // validi (Room usa il default), col comportamento identico a prima.
     val addressPointLat: Double? = null,
@@ -60,5 +62,15 @@ data class PoiEntity(
     // entrambi i casi — ma è l'unico appiglio se un domani una fonte peggiore
     // scriverà qui: chi legge deve poter decidere dalla qualità, non dalla
     // sola presenza.
-    val addressPointSource: String? = null
+    val addressPointSource: String? = null,
+    // LA FONTE della scheda (05/10/2026), per l'ARBITRATO fra luoghi vicini:
+    // la colonna `source` delle RPC nearby_pois / get_geofence_pois
+    // (= coalesce(enrichment_source, 'official')), lo stesso valore che il web
+    // legge in foregroundTriggers.ts. Un luogo con una voce di
+    // Wikipedia/Wikidata alle spalle «pesa» (vedi Arbitrato.pesa in
+    // GeofenceManager.kt): davanti al Pantheon parlava una targa, in Piazza
+    // Navona un locale. Nullable: tappe d'itinerario, pacchetti offline e
+    // righe gia' in cache non la portano e restano «senza peso» (salvo le
+    // gemme), cioe' col comportamento di prima. Parita' con Poi.source (Swift).
+    val source: String? = null
 )

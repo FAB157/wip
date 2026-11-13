@@ -10,5 +10,7 @@ class MainViewController: CAPBridgeViewController {
     override open func capacitorDidLoad() {
         bridge?.registerPluginInstance(WipBackgroundAudioPlugin())
         bridge?.registerPluginInstance(ItaintaBackgroundPoiPlugin())
+        // (14/09/2026) Snapshot per i widget della home (WipWidgetsPlugin.swift).
+        bridge?.registerPluginInstance(WipWidgetsPlugin())
     }
 }

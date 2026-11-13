@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WIP · World in Pocket — presentazione</title>
+<meta name="description" content="WIP è l'audioguida che parte da sola: oltre 9 milioni di luoghi in 196 paesi, itinerari su misura, guide di musei, natura, gusto, ciclovie, eventi. In 7 lingue.">
+<link rel="canonical" href="https://www.wip.guide/presentazione">
+<meta property="og:title" content="WIP · World in Pocket — presentazione">
+<meta property="og:description" content="L'audioguida che parte da sola. Tutto quello che l'app offre, in una pagina.">
+<meta property="og:image" content="https://www.wip.guide/press/og-image.jpg">
+<meta name="apple-itunes-app" content="app-id=6806769883">
+<link rel="icon" href="/favicon.ico">
+<!--
+  PAGINA DI PRESENTAZIONE (11/10/2026, committente: «pagina di presentazione con tutte le caratteristiche e i
+  numeri… grafica eccellente… i PDF in tutte le lingue da poter scaricare… metti logo e tutto»). Testi e numeri in
+  testi.js (gli stessi della scheda A4 e dei PDF). Solo ciò che l'app fa oggi; numeri letti dal database quel giorno.
+  La visita si conta come le pagine /comuni e /hotel (?c=<campagna>), senza cookie.
+-->
+<style>
+  :root { --blu:#1e3a8a; --notte:#0f2460; --chiaro:#f8f5f0; --testo:#1f2937; --grigio:#64748b; }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans","Microsoft YaHei",sans-serif; color:var(--testo); background:#fff; line-height:1.55; }
+  .dentro { max-width:1080px; margin:0 auto; padding:0 20px; }
+  header { background:linear-gradient(135deg,#0f2460 0%,#1e3a8a 55%,#2563eb 100%); color:#fff; position:relative; overflow:hidden; }
+  header::after { content:""; position:absolute; right:-160px; top:-180px; width:520px; height:520px; border-radius:50%; background:rgba(255,255,255,.07); }
+  .riga-alta { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:20px 0; position:relative; z-index:2; }
+  .marca { display:flex; align-items:center; gap:10px; color:#fff; text-decoration:none; font-weight:800; font-size:18px; }
+  .marca img { width:42px; height:42px; border-radius:11px; background:#fff; }
+  .marca span { opacity:.8; font-weight:600; }
+  select#lingua { background:rgba(255,255,255,.14); color:#fff; border:1px solid rgba(255,255,255,.35); border-radius:999px; padding:7px 12px; font-size:14px; }
+  select#lingua option { color:#111; }
+  .eroe { display:grid; grid-template-columns:1.15fr .85fr; gap:30px; align-items:center; padding:26px 0 0; position:relative; z-index:2; }
+  h1 { font-size:clamp(30px,5vw,52px); line-height:1.06; margin:0 0 16px; font-weight:800; }
+  .sotto { font-size:clamp(16px,2vw,19px); opacity:.93; margin:0 0 24px; max-width:560px; }
+  .tasti { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding-bottom:46px; }
+  .tasto { display:inline-block; text-decoration:none; border-radius:999px; padding:13px 24px; font-weight:800; font-size:15px; }
+  .tasto.bianco { background:#fff; color:var(--notte); }
+  .tasto.vetro { background:rgba(255,255,255,.14); color:#fff; border:1px solid rgba(255,255,255,.4); }
+  .nota-android { font-size:13px; opacity:.85; width:100%; margin-top:2px; }
+  .telefoni { position:relative; height:430px; }
+  .telefoni img { position:absolute; border-radius:26px; border:6px solid #0b1b4a; background:#0b1b4a; box-shadow:0 18px 40px rgba(0,0,0,.4); }
+  .telefoni img.a { width:210px; right:20px; top:10px; transform:rotate(4deg); z-index:2; }
+  .telefoni img.b { width:170px; right:190px; top:70px; transform:rotate(-7deg); }
+  .numeri { background:var(--chiaro); padding:34px 0; }
+  .griglia-n { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+  .num { background:#fff; border-radius:18px; padding:18px; box-shadow:0 1px 0 rgba(15,36,96,.06); }
+  .num b { display:block; font-size:clamp(26px,4vw,38px); line-height:1; color:var(--blu); font-weight:800; }
+  .num span { display:block; font-size:13px; color:var(--grigio); font-weight:600; margin-top:6px; }
+  section { padding:54px 0; }
+  h2 { font-size:clamp(24px,3.4vw,34px); color:var(--notte); margin:0 0 26px; font-weight:800; }
+  .funzioni { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; }
+  .f { display:flex; gap:14px; align-items:flex-start; background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:18px; transition:transform .15s, box-shadow .15s; }
+  .f:hover { transform:translateY(-2px); box-shadow:0 10px 24px rgba(15,36,96,.1); }
+  .f i { flex:none; width:46px; height:46px; border-radius:13px; background:#eef2ff; display:flex; align-items:center; justify-content:center; font-style:normal; font-size:24px; }
+  .f b { display:block; font-size:16px; color:#111827; }
+  .f span { display:block; font-size:14px; color:#4b5563; margin-top:3px; }
+  .striscia { background:var(--notte); padding:46px 0; overflow:hidden; }
+  .foto { display:flex; gap:18px; justify-content:center; flex-wrap:wrap; }
+  .foto img { width:178px; border-radius:22px; border:5px solid #0b1b4a; box-shadow:0 14px 30px rgba(0,0,0,.4); }
+  .tre { display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:16px; }
+  .box { border-radius:20px; padding:24px; background:var(--chiaro); }
+  .box.blu { background:var(--blu); color:#fff; }
+  .box.verde { background:#ecfdf5; } .box.verde b { color:#166534; }
+  .box.ambra { background:#fffbeb; } .box.ambra b { color:#92400e; }
+  .et { display:inline-block; font-style:normal; font-size:10.5px; font-weight:800; padding:2px 8px; border-radius:999px; margin-left:8px; vertical-align:2px; text-transform:uppercase; letter-spacing:.03em; }
+  .et.g { background:#dcfce7; color:#166534; } .et.c { background:#fef3c7; color:#92400e; } .et.m { background:#dbeafe; color:#1e40af; }
+  .box b { display:block; font-size:17px; margin-bottom:8px; }
+  .box p { margin:0 0 10px; font-size:15px; }
+  .box a { color:inherit; font-weight:800; }
+  .pdf { background:var(--chiaro); }
+  .lingue { display:flex; flex-wrap:wrap; gap:10px; }
+  .lingue a { text-decoration:none; background:#fff; border:1px solid #e5e7eb; color:var(--notte); border-radius:14px; padding:12px 18px; font-weight:800; font-size:15px; }
+  .lingue a small { display:block; font-weight:600; color:var(--grigio); font-size:12px; }
+  footer { background:var(--notte); color:#fff; padding:28px 0; font-size:14px; }
+  footer a { color:#fff; }
+  @media (max-width:820px) { .eroe { grid-template-columns:1fr; } .telefoni { height:300px; } .telefoni img.a { width:150px; right:calc(50% - 130px); } .telefoni img.b { width:122px; right:calc(50% + 6px); top:50px; } .griglia-n { grid-template-columns:repeat(2,1fr); } }
+</style>
+</head>
+<body>
+<header>
+  <div class="dentro">
+    <div class="riga-alta">
+      <a class="marca" href="https://www.wip.guide/"><img src="/press/logo.png" alt="WIP">WIP <span>· World in Pocket</span></a>
+      <select id="lingua" aria-label="Language">
+        <option value="IT">Italiano</option><option value="EN">English</option><option value="FR">Français</option>
+        <option value="ES">Español</option><option value="DE">Deutsch</option><option value="RU">Русский</option><option value="ZH">中文</option>
+      </select>
+    </div>
+    <div class="eroe">
+      <div>
+        <h1 id="titolo"></h1>
+        <p class="sotto" id="sotto"></p>
+        <div class="tasti">
+          <a class="tasto bianco" id="store" href="https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct=presentazione&mt=8"></a>
+          <a class="tasto vetro" id="prova" href="https://www.wip.guide/"></a>
+          <a class="tasto vetro" id="pdf" href="#pdf"></a>
+          <div class="nota-android" id="android"></div>
+        </div>
+      </div>
+      <div class="telefoni"><img class="b" src="/presentazione/02-mappa.jpg" alt=""><img class="a" src="/presentazione/01-scheda.jpg" alt=""></div>
+    </div>
+  </div>
+</header>
+
+<div class="numeri"><div class="dentro"><div class="griglia-n" id="numeri"></div></div></div>
+
+<section><div class="dentro"><h2 id="cosa"></h2><div class="funzioni" id="funzioni"></div></div></section>
+
+<div class="striscia"><div class="dentro"><div class="foto">
+  <img src="/presentazione/02-mappa.jpg" alt="" loading="lazy"><img src="/presentazione/01-scheda.jpg" alt="" loading="lazy">
+  <img src="/press/04-itinerario.webp" alt="" loading="lazy"><img src="/press/05-eventi.webp" alt="" loading="lazy">
+</div></div></div>
+
+<section><div class="dentro"><div class="tre">
+  <div class="box verde"><b id="gratis_t"></b><p id="gratis"></p></div>
+  <div class="box ambra"><b id="crediti_t"></b><p id="crediti"></p></div>
+  <div class="box"><b id="vero_t"></b><p id="vero"></p></div>
+  <div class="box blu"><b id="per_t"></b><p><span id="comuni"></span> <a id="l_comuni" href="/comuni">wip.guide/comuni →</a></p><p><span id="hotel"></span> <a id="l_hotel" href="/hotel">wip.guide/hotel →</a></p></div>
+</div></div></section>
+
+<section class="pdf" id="pdf"><div class="dentro"><h2 id="pdf_t"></h2><div class="lingue" id="lingue"></div>
+<!-- (22/10/2026, committente) Accanto alla presentazione, il foglio A4 «Scarica l'app» col QR, in ogni lingua. -->
+<h2 id="qr_t" style="margin-top:28px"></h2><div class="lingue" id="lingue_qr"></div></div></section>
+
+<footer><div class="dentro"><b>www.wip.guide</b> · <a href="mailto:marketing@wip.guide">marketing@wip.guide</a> · <span id="fatto"></span></div></footer>
+
+<script src="/presentazione/testi.js"></script>
+<script>
+var NOMI = { IT:"Italiano", EN:"English", FR:"Français", ES:"Español", DE:"Deutsch", RU:"Русский", ZH:"中文" };
+var lingua = wipLingua();
+try { var salvata = localStorage.getItem("wip_comuni_lang"); if (!new URLSearchParams(location.search).get("lang") && salvata && WIP_LINGUE.indexOf(salvata) >= 0) lingua = salvata; } catch (e) {}
+var CAMPAGNA = (new URLSearchParams(location.search).get("c") || "").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40);
+function applica(l) {
+  lingua = l; var d = WIP_T[l];
+  document.documentElement.lang = l.toLowerCase();
+  document.title = "WIP · World in Pocket — " + d.titolo;
+  ["titolo","sotto","cosa","vero_t","vero","gratis_t","gratis","crediti_t","crediti","per_t","comuni","hotel","store","android","prova","pdf","fatto"].forEach(function (k) { document.getElementById(k).textContent = d[k]; });
+  var ET = { 1: ["g", d.g], 0: ["c", d.c], 2: ["m", d.m] };
+  document.getElementById("pdf_t").textContent = d.pdf;
+  document.getElementById("numeri").innerHTML = WIP_NUMERI.map(function (n, i) { return '<div class="num"><b>' + n + '</b><span>' + d.n[i] + '</span></div>'; }).join("");
+  document.getElementById("funzioni").innerHTML = d.f.map(function (x, i) { return '<div class="f"><i>' + ICONE[i] + '</i><div><b>' + x[0] + '<em class="et ' + ET[WIP_COSTO[i]][0] + '">' + ET[WIP_COSTO[i]][1] + '</em></b><span>' + x[1] + '</span></div></div>'; }).join("");
+  var q ="?lang=" + l + (CAMPAGNA ? "&c=" + CAMPAGNA : "");
+  document.getElementById("l_comuni").href = "/comuni" + q; document.getElementById("l_hotel").href = "/hotel" + q;
+  // Il PDF della lingua scelta per primo, poi gli altri sei.
+  document.getElementById("lingue").innerHTML = [l].concat(WIP_LINGUE.filter(function (x) { return x !== l; })).map(function (x) {
+    return '<a href="/presentazione/wip-presentazione-' + x + '.pdf" download>' + NOMI[x] + '<small>PDF · A4</small></a>'; }).join("");
+  var QR_T = { IT:"Volantino «Scarica l'app» con codice QR", EN:"“Get the app” flyer with QR code", FR:"Affiche « Téléchargez l'app » avec QR code", ES:"Folleto «Descarga la app» con código QR", DE:"Flyer „App herunterladen“ mit QR-Code", RU:"Листовка «Скачайте приложение» с QR-кодом", ZH:"带二维码的“下载应用”传单" };
+  document.getElementById("qr_t").textContent = QR_T[l] || QR_T.EN;
+  document.getElementById("lingue_qr").innerHTML = [l].concat(WIP_LINGUE.filter(function (x) { return x !== l; })).map(function (x) {
+    return '<a href="/scarica/pdf/wip-scarica-' + x + '.pdf" download>' + NOMI[x] + '<small>QR · PDF · A4</small></a>'; }).join("");
+  document.getElementById("lingua").value = l;
+  try { localStorage.setItem("wip_comuni_lang", l); } catch (e) {}
+}
+applica(lingua);
+document.getElementById("lingua").addEventListener("change", function (e) { applica(e.target.value); });
+(function () { try {
+  var s = sessionStorage.getItem("wip_sessione"); var nuova = !sessionStorage.getItem("wip_vista_presentazione");
+  if (!s) { s = Math.random().toString(36).slice(2, 14); sessionStorage.setItem("wip_sessione", s); }
+  if (nuova) { sessionStorage.setItem("wip_vista_presentazione", "1"); fetch("/api/enti/visita", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pagina: "presentazione", c: CAMPAGNA, lingua: lingua, sessione: s }), keepalive: true }); }
+} catch (e) {} })();
+</script>
+</body>
+</html>

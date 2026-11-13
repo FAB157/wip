@@ -4,7 +4,7 @@
  * stampava l'itinerario — anche il fallback della Guida Premium. La classe
  * sul body attiva solo il contenitore richiesto (regole in index.css).
  */
-export function printScoped(scope: 'itinerary' | 'guide' | 'manual', fn: () => void = () => window.print()) {
+export function printScoped(scope: 'itinerary' | 'guide' | 'manual' | 'museum', fn: () => void = () => window.print()) {
   document.body.classList.add(`printing-${scope}`);
   // 'afterprint' non arriva su tutti i browser (iOS Safari/WebView quando
   // l'utente annulla): senza rete di sicurezza la classe restava sul body

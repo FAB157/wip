@@ -156,6 +156,53 @@ object BearingGate {
      * riposo: il magnetometro acceso a vuoto e' batteria.
      */
     fun disattiva() {
+        // (23/09/2026) Fine della finestra armata: la prossima accensione la
+        // decide di nuovo solo valuta(), come prima.
+        richiestaNellaFinestra = false
+        riposa()
+    }
+
+    // ── (23/09/2026, REVISIONE 3 — R-BUSSOLA) ───────────────────────────────
+    // Prima la bussola, accesa alla prima valuta() che ne aveva bisogno,
+    // restava registrata per TUTTA la finestra armata: un'ora di sosta davanti
+    // a un museo gia' raccontato = giroscopio + magnetometro a ~16 Hz per
+    // un'ora. Ora: si spegne appena il gate ha deciso per il candidato
+    // (decisa), o dopo 120 s senza candidati (spegniSeInattiva); si riaccende
+    // alla richiesta successiva del gate (valuta) oppure, se era gia' stata
+    // chiesta in questa finestra armata, un fix prima con preRiscalda — cosi'
+    // all'arrivo successivo la lettura c'e' come c'era col sensore sempre
+    // acceso, e i tempi della guida non cambiano. La PRIMA accensione della
+    // finestra resta solo di valuta(): il primo arrivo e' identico a prima.
+
+    /** Senza richieste di bussola per tanto, si spegne (stesso valore di iOS). */
+    const val INATTIVITA_BUSSOLA_MS = 120_000L
+
+    /** true dopo che valuta() ha acceso la bussola, fino a disattiva(). */
+    @Volatile private var richiestaNellaFinestra = false
+    @Volatile private var ultimaRichiestaMs = 0L
+
+    /** Il gate ha deciso per il candidato corrente: bussola spenta subito. */
+    fun decisa() = riposa()
+
+    /**
+     * C'e' ancora un candidato che potrebbe chiedere il gate: se la bussola
+     * era gia' stata chiesta in questa finestra armata, si tiene (o si
+     * riaccende) pronta. Mai la prima accensione.
+     */
+    fun preRiscalda(context: Context) {
+        if (!richiestaNellaFinestra) return
+        ultimaRichiestaMs = System.currentTimeMillis()
+        attiva(context)
+    }
+
+    /** Nessun candidato: spenta dopo 120 s dall'ultima richiesta. */
+    fun spegniSeInattiva() {
+        if (listener == null) return
+        if (System.currentTimeMillis() - ultimaRichiestaMs > INATTIVITA_BUSSOLA_MS) riposa()
+    }
+
+    /** Rilascia il sensore senza dimenticare che la finestra l'aveva chiesto. */
+    private fun riposa() {
         synchronized(lock) {
             val l = listener ?: return
             try { sensorManager?.unregisterListener(l) } catch (_: Exception) { }
@@ -388,6 +435,8 @@ object BearingGate {
             // Direzione: senza, il gate non esiste. La bussola si registra qui
             // — e solo qui — perche' e' l'unico momento in cui serve davvero.
             if (!(location.hasSpeed() && location.speed > SOGLIA_FERMO_MS && location.hasBearing())) {
+                richiestaNellaFinestra = true
+                ultimaRichiestaMs = adesso
                 attiva(context)
             }
             val dir = direzioneUtente(location)

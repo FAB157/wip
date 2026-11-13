@@ -144,6 +144,19 @@ enum NotificationStrings {
         ])
     }
 
+    /// (03/10/2026) Nella notifica unica di avvicinamento: gli altri luoghi dello stesso fix.
+    static func nearbyAlso(_ lang: String) -> String {
+        pick(lang, [
+            "it": "Vicino anche:",
+            "en": "Also nearby:",
+            "fr": "Aussi à proximité :",
+            "es": "También cerca:",
+            "de": "Ebenfalls in der Nähe:",
+            "ru": "Также рядом:",
+            "zh": "附近还有："
+        ])
+    }
+
     static func tapToListen(_ lang: String) -> String {
         pick(lang, [
             "it": "Tocca per ascoltare.",

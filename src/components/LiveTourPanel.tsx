@@ -12,7 +12,7 @@ export default function LiveTourPanel() {
   const t = (k: string) => getTranslation(k, lingua);
   // Il broadcast del leader e il canale realtime vivono dentro useLiveTour a
   // livello di modulo: il tour resta attivo anche uscendo da questo tab.
-  const { activeSession, isLeader, participantCount, loading, error, createSession, joinSession, leaveSession } = useLiveTour();
+  const { activeSession, isLeader, participantCount, members, avviso, loading, error, createSession, joinSession, leaveSession } = useLiveTour();
   const [pinInput, setPinInput] = useState('');
   const [copied, setCopied] = useState(false);
   const [sessionUser, setSessionUser] = useState<any>(null);
@@ -77,6 +77,15 @@ export default function LiveTourPanel() {
             </button>
           </div>
 
+          {/* Difetti della sessione visibili (25/10/2026): canale rifiutato,
+              leader assente da 30 s, chiusura non riuscita, secondo leader. */}
+          {avviso && (
+            <div className="mt-4 w-full bg-amber-50 border border-amber-200 text-amber-800 p-3 rounded-2xl text-xs font-bold flex items-center gap-2 text-left" aria-live="polite">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              {avviso}
+            </div>
+          )}
+
           {/* Conteggio partecipanti reale via presence Realtime */}
           <div className="mt-4 flex items-center gap-2 bg-blue-50 text-blue-700 px-4 py-2 rounded-full">
             <Users className="w-4 h-4" />
@@ -86,6 +95,34 @@ export default function LiveTourPanel() {
                 : `${participantCount} ${t('vr_a_lt_participants')}`}
             </span>
           </div>
+
+          {/* Chi c'è, per NOME (09/09/2026): il solo numero non bastava, la
+              guida deve poter fare l'appello prima di partire. Il nome arriva
+              dalla presence del canale (display_name / Google / email). */}
+          {members.length > 0 && (
+            <div className="mt-4 w-full bg-gray-50 rounded-2xl p-3 text-left">
+              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
+                {t('vr_a_lt_in_gruppo')}
+              </p>
+              <ul className="space-y-1.5">
+                {members.map(m => (
+                  <li key={m.key} className="flex items-center gap-2 min-w-0">
+                    <span className={`w-7 h-7 rounded-full shrink-0 flex items-center justify-center text-[11px] font-black ${m.role === 'leader' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-200'}`}>
+                      {(m.name?.[0] || '?').toUpperCase()}
+                    </span>
+                    <span className="text-xs font-bold text-gray-800 truncate">
+                      {m.name}{m.isMe ? ` (${t('vr_a_lt_tu')})` : ''}
+                    </span>
+                    {m.role === 'leader' && (
+                      <span className="ml-auto text-[9px] font-black uppercase tracking-widest text-blue-600 shrink-0">
+                        {t('vr_a_lt_ruolo_guida')}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {isLeader && (
             <p className="mt-3 text-[11px] font-bold text-gray-500 max-w-xs">

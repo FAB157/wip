@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WIP · World in Pocket — scheda</title>
+<meta name="robots" content="noindex">
+<!--
+  SCHEDA DI UNA PAGINA (11/10/2026, committente: «un PDF di una pagina… grafica eccellente e accattivante… in tutte
+  le lingue… metti logo e tutto»). È un foglio A4 misurato in mm (regola di stampa: mai px): da qui nascono i sette
+  PDF /presentazione/wip-presentazione-<LINGUA>.pdf, con Chrome senza finestra (scratch/presentazione-pdf.ps1).
+  Testi e numeri stanno in testi.js, gli stessi della pagina /presentazione: si corregge in un posto solo.
+  ?lang=IT|EN|FR|ES|DE|RU|ZH. Il foglio non sborda mai: .foglio ha altezza fissa e overflow nascosto.
+-->
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html, body { margin: 0; padding: 0; background: #e5e7eb; }
+  body { font-family: "Segoe UI", system-ui, -apple-system, Roboto, "Noto Sans", "Microsoft YaHei", sans-serif; color: #1f2937; }
+  .foglio { width: 210mm; height: 297mm; margin: 0 auto; background: #fff; position: relative; overflow: hidden; }
+  .testa { height: 58mm; background: linear-gradient(135deg, #0f2460 0%, #1e3a8a 55%, #2563eb 100%); color: #fff; padding: 9mm 11mm 0; position: relative; overflow: hidden; }
+  .testa::after { content: ""; position: absolute; right: -30mm; top: -34mm; width: 110mm; height: 110mm; border-radius: 50%; background: rgba(255,255,255,.07); }
+  .marca { display: flex; align-items: center; gap: 3mm; font-weight: 800; font-size: 11pt; letter-spacing: .02em; }
+  .marca img { width: 11mm; height: 11mm; border-radius: 2.6mm; background: #fff; }
+  .marca span { opacity: .8; font-weight: 600; }
+  h1 { margin: 4.4mm 0 2.2mm; font-size: 20pt; line-height: 1.1; font-weight: 800; max-width: 122mm; }
+  .sotto { margin: 0; font-size: 9.6pt; line-height: 1.4; max-width: 118mm; opacity: .93; }
+  .telefono { position: absolute; right: 16mm; top: 6mm; width: 46mm; border-radius: 6mm; border: 1.6mm solid #0b1b4a; box-shadow: 0 3mm 9mm rgba(0,0,0,.35); transform: rotate(4deg); z-index: 2; background: #0b1b4a; }
+  .telefono.due { right: 50mm; top: 17mm; width: 34mm; transform: rotate(-6deg); z-index: 1; opacity: .95; }
+  .numeri { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2mm; padding: 4mm 11mm 0; }
+  .num { background: #f1f5ff; border-radius: 2.6mm; padding: 2mm 2.6mm; }
+  .num b { display: block; font-size: 15pt; line-height: 1.05; color: #1e3a8a; font-weight: 800; }
+  .num span { display: block; font-size: 6.8pt; line-height: 1.2; color: #475569; font-weight: 600; margin-top: .6mm; }
+  h2 { margin: 4mm 11mm 2.2mm; font-size: 11pt; color: #1e3a8a; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+  .funzioni { display: grid; grid-template-columns: 1fr 1fr; column-gap: 6mm; row-gap: 1.9mm; padding: 0 11mm; }
+  .f { display: flex; gap: 2.4mm; align-items: flex-start; }
+  .f i { flex: none; width: 8.4mm; height: 8.4mm; border-radius: 2.4mm; background: #eef2ff; display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 12pt; }
+  .f b { display: block; font-size: 9.4pt; line-height: 1.2; color: #111827; }
+  .f span { display: block; font-size: 7.8pt; line-height: 1.3; color: #4b5563; margin-top: .4mm; }
+  .due { display: grid; gap: 2.6mm; padding: 2.6mm 11mm 0; }
+  .due.a { grid-template-columns: 1.7fr 1fr; padding-top: 3.6mm; }
+  .due.b { grid-template-columns: 1fr 1.7fr; }
+  .box.verde { background: #ecfdf5; } .box.verde b { color: #166534; }
+  .box.ambra { background: #fffbeb; } .box.ambra b { color: #92400e; }
+  .coppia { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; }
+  .et { display: inline-block; font-style: normal; font-size: 5.8pt; font-weight: 800; padding: .25mm 1.5mm; border-radius: 99mm; margin-left: 1.4mm; vertical-align: 1px; text-transform: uppercase; letter-spacing: .03em; }
+  .et.g { background: #dcfce7; color: #166534; } .et.c { background: #fef3c7; color: #92400e; } .et.m { background: #dbeafe; color: #1e40af; }
+  .box { border-radius: 3mm; padding: 2.4mm 3.4mm; background: #f8f5f0; }
+  .box.blu { background: #1e3a8a; color: #fff; }
+  .box b { display: block; font-size: 8.4pt; margin-bottom: 1mm; }
+  .box p { margin: 0; font-size: 7.2pt; line-height: 1.32; }
+  .box .via { display: block; font-weight: 800; margin-top: .9mm; font-size: 7.6pt; }
+  .piede { position: absolute; left: 0; right: 0; bottom: 0; height: 25mm; background: #0f2460; color: #fff; display: flex; align-items: center; justify-content: space-between; padding: 0 11mm; font-size: 8.6pt; line-height: 1.5; }
+  .qr { display: flex; align-items: center; gap: 3.4mm; }
+  .qr img { width: 21mm; height: 21mm; border-radius: 2mm; background: #fff; padding: .8mm; }
+  .qr b { display: block; font-size: 10pt; }
+  .qr span { display: block; font-size: 7.6pt; opacity: .85; }
+  .piede b { font-size: 10.5pt; }
+  .piede .pill { background: #fff; color: #0f2460; border-radius: 99mm; padding: 1.3mm 3.4mm; font-weight: 800; font-size: 8pt; }
+  @media screen { body { padding: 6mm 0; } .foglio { box-shadow: 0 2mm 10mm rgba(0,0,0,.2); } }
+  html.anteprima body { padding: 0; } html.anteprima .foglio { box-shadow: none; margin: 0; }
+</style>
+</head>
+<body>
+<div class="foglio">
+  <div class="testa">
+    <div class="marca"><img src="/press/logo.png" alt="WIP">WIP <span>· World in Pocket</span></div>
+    <h1 id="titolo"></h1>
+    <p class="sotto" id="sotto"></p>
+    <img class="telefono" src="/presentazione/01-scheda.jpg" alt="">
+  </div>
+  <div class="numeri" id="numeri"></div>
+  <h2 id="cosa"></h2>
+  <div class="funzioni" id="funzioni"></div>
+  <div class="due a">
+    <div class="box verde"><b id="gratis_t"></b><p id="gratis"></p></div>
+    <div class="box ambra"><b id="crediti_t"></b><p id="crediti"></p></div>
+  </div>
+  <div class="due b">
+    <div class="box"><b id="vero_t"></b><p id="vero"></p></div>
+    <div class="box blu"><b id="per_t"></b><div class="coppia"><p><span id="comuni"></span><span class="via">wip.guide/comuni</span></p><p><span id="hotel"></span><span class="via">wip.guide/hotel</span></p></div></div>
+  </div>
+  <div class="piede">
+    <div><b>www.wip.guide</b><br>marketing@wip.guide<br><span style="opacity:.8" id="fatto"></span></div>
+    <div class="qr"><div style="text-align:right"><b id="store"></b><span id="android"></span></div><img src="/presentazione/qr-appstore.png" alt="QR App Store"></div>
+  </div>
+</div>
+<script src="/presentazione/testi.js"></script>
+<script>
+(function () {
+  var l = wipLingua(), d = WIP_T[l];
+  if (new URLSearchParams(location.search).get("anteprima")) document.documentElement.className = "anteprima";
+  document.documentElement.lang = l.toLowerCase();
+  document.title = "WIP · World in Pocket — " + d.titolo;
+  ["titolo","sotto","cosa","vero_t","vero","gratis_t","gratis","crediti_t","crediti","per_t","comuni","hotel","store","android","fatto"].forEach(function (k) { document.getElementById(k).textContent = d[k]; });
+  var ET = { 1: ["g", d.g], 0: ["c", d.c], 2: ["m", d.m] };
+  document.getElementById("numeri").innerHTML = WIP_NUMERI.map(function (n, i) { return '<div class="num"><b>' + n + '</b><span>' + d.n[i] + '</span></div>'; }).join("");
+  document.getElementById("funzioni").innerHTML = d.f.map(function (x, i) { return '<div class="f"><i>' + ICONE[i] + '</i><div><b>' + x[0] + '<em class="et ' + ET[WIP_COSTO[i]][0] + '">' + ET[WIP_COSTO[i]][1] + '</em></b><span>' + x[1] + '</span></div></div>'; }).join("");
+})();
+</script>
+</body>
+</html>

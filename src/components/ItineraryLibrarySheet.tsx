@@ -22,6 +22,62 @@ import { Language, getTranslation } from '../lib/i18n';
 import TravelInfo from './itinerary/TravelInfo';
 import BudgetTable from './itinerary/BudgetTable';
 import LoadingQuiz from './LoadingQuiz';
+import { guidePerTappe, apriGuidaMuseo, GuidaPerTappa } from '../lib/museumVisit';
+
+/**
+ * Badge «Guida con audioguide delle opere · Pass Museo» sotto una tappa
+ * della libreria (12/09/2026, committente): compare SOLO se quel museo ha
+ * davvero una guida con opere in museum_guides; il tocco apre Visite già
+ * su quel museo. Stesso stile dei badge minuscoli che stanno sopra
+ * (consiglio, tempo): niente altro cambia nella card.
+ */
+/**
+ * Chip «☀️ Periodo migliore: apr–giu» (24/09/2026): clima NASA POWER della città, solo numeri,
+ * nessuna AI. Se la città non si trova o il clima non risponde la chip semplicemente non c'è.
+ */
+function ChipPeriodoMigliore({ city, country, coords, language }: { city?: string; country?: string; coords?: { lat: number; lon: number } | null; language: Language }) {
+  const [testo, setTesto] = useState('');
+  useEffect(() => {
+    if (!city && !coords) return;
+    let vivo = true;
+    import('../lib/climaIndex').then(async (c) => {
+      const migliori = await c.periodoMiglioreCitta(city || '', country, language, coords);
+      const t = migliori?.length ? c.testoPeriodi(migliori, language) : '';
+      if (vivo && t) setTesto(getTranslation('mp_clima_periodo_migliore', language).replace('{periodo}', t));
+    }).catch(() => {});
+    return () => { vivo = false; };
+  }, [city, country, coords?.lat, coords?.lon, language]);
+  if (!testo) return null;
+  return (
+    <span className="text-[10px] font-black bg-sky-50 text-sky-700 border border-sky-200 px-2 py-0.5 rounded-full" title="NASA POWER 2001-2020">
+      ☀️ {testo}
+    </span>
+  );
+}
+
+function BadgeGuidaMuseo({ tappa, language }: { tappa: any; language: Language }) {
+  const [guida, setGuida] = useState<GuidaPerTappa | null>(null);
+  const id = String(tappa?.poi_id || '').trim();
+  const nome = String(tappa?.titolo_tappa || tappa?.nome || '').trim();
+  useEffect(() => {
+    const sembraMuseo = /museo|museum|musée|museu|galleria|gallery|pinacoteca|palazzo|palace|castello|castle|basilica|cattedrale|cathedral|duomo/i.test(`${nome} ${tappa?.tipo || ''}`);
+    if (!id && !sembraMuseo) return;
+    let vivo = true;
+    guidePerTappe([{ id: id || null, nome }]).then(m => { if (vivo) setGuida((id && m.get(id)) || m.get(nome) || null); }).catch(() => {});
+    return () => { vivo = false; };
+  }, [id, nome]);
+  if (!guida) return null;
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); apriGuidaMuseo({ poiId: guida.poiId, venueKey: guida.venueKey, venueName: guida.venueName, lat: guida.lat, lon: guida.lon }); }}
+      className="inline-flex items-center gap-1 text-[9px] font-black text-primary mt-1.5 ml-2 underline-offset-2 hover:underline"
+      title={`${guida.venueName}: ${guida.stopsCount} opere`}
+    >
+      🎧 {getTranslation('mv_badge_guida', language)}
+    </button>
+  );
+}
 
 // ── Tipi (locali: il contratto API è la fonte di verità) ───────────────
 
@@ -423,6 +479,23 @@ export default function ItineraryLibrarySheet({
   const [searchError, setSearchError] = useState<string | null>(null);
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [using, setUsing] = useState(false);
+  // UNIONE DI PIÙ ITINERARI (10/09/2026). Gli itinerari curati sono da 1-3
+  // giorni: chi resta una settimana ne vuole due o tre, scelti PER TEMA, uniti
+  // senza tappe ripetute. Si selezionano dalla lista (solo quelli già pronti:
+  // unire non genera niente) e la barra in fondo compare da due in su.
+  const [selezionati, setSelezionati] = useState<string[]>([]);
+  const [unendo, setUnendo] = useState(false);
+  const [erroreUnione, setErroreUnione] = useState<string | null>(null);
+  // PROPOSTA AUTOMATICA: chi chiede 7 giorni non trova nulla, perché il filtro
+  // «giorni» cerca la corrispondenza ESATTA e gli itinerari curati sono da 1-3.
+  // Qui si ricarica la città SENZA quel filtro, per poter proporre una
+  // combinazione di itinerari che insieme coprano i giorni richiesti. Solo
+  // roba GIÀ in libreria: se non basta si dice, non si genera nulla.
+  const [fonteProposta, setFonteProposta] = useState<LibraryResult[]>([]);
+  // Titoli della lista tradotti (slug → titolo). Arrivano DOPO che la lista è
+  // già a schermo: la ricerca parte a ogni digitazione e non deve aspettare
+  // una traduzione. Con UI in italiano non si chiama niente.
+  const [titoliTradotti, setTitoliTradotti] = useState<Record<string, string>>({});
   // Generazione on-demand di un descrittore: slug → messaggio di stato
   const [genState, setGenState] = useState<Record<string, string>>({});
   const [genError, setGenError] = useState<string | null>(null);
@@ -818,6 +891,47 @@ export default function ItineraryLibrarySheet({
     }
   };
 
+  const commutaSelezione = (slug: string) => {
+    setErroreUnione(null);
+    setSelezionati((prev) => (prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug]));
+  };
+
+  /** Giorni totali dei selezionati: è il numero che l'utente vuole vedere. */
+  const giorniSelezionati = selezionati.reduce((tot, slug) => {
+    const r = results.find((x) => x.slug === slug);
+    return tot + (Number(r?.days) > 0 ? Number(r?.days) : 1);
+  }, 0);
+
+  /**
+   * Unione: il server prende gli itinerari già scritti, toglie le tappe
+   * doppie e ricalcola le giornate. Non genera nulla e non costa crediti —
+   * per questo il pulsante dice "gratis" come il resto della libreria.
+   */
+  const handleUnisci = async () => {
+    if (selezionati.length < 2 || unendo) return;
+    setUnendo(true);
+    setErroreUnione(null);
+    try {
+      const res = await fetch(getApiUrl('/api/library/merge'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slugs: selezionati, lang: String(language || 'IT') }),
+        signal: AbortSignal.timeout(60000),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.itinerary) {
+        setErroreUnione(String(data?.detail || data?.error || 'Unione non riuscita: riprova.'));
+        return;
+      }
+      await onUse(data.itinerary, data.meta);
+      setSelezionati([]);
+    } catch {
+      setErroreUnione('Unione non riuscita: riprova.');
+    } finally {
+      setUnendo(false);
+    }
+  };
+
   // Riga meta ben visibile: "Napoli · 8h · Gastronomica"
   const metaLine = (r: { city?: string; country?: string; hours?: number; days?: number; angle?: string; theme?: string }) => {
     const parts: string[] = [];
@@ -877,14 +991,116 @@ export default function ItineraryLibrarySheet({
     return out;
   }, [results, descriptors, query]);
 
+  // Elenco della città SENZA il filtro giorni, per costruire la proposta.
+  // Parte solo quando serve davvero (giorni ≥ 2 richiesti e una città), così
+  // non si aggiunge una chiamata a ogni digitazione.
+  useEffect(() => {
+    const giorni = Number(daysFilter);
+    const citta = cityFilter.trim() || query.trim();
+    if (!(giorni >= 2) || citta.length < 2) { setFonteProposta([]); return; }
+    let vivo = true;
+    (async () => {
+      try {
+        const p = new URLSearchParams({ limit: '200', lang: String(language) });
+        if (cityFilter.trim()) p.set('city', cityFilter.trim()); else p.set('q', citta);
+        const r = await fetch(getApiUrl(`/api/library/search?${p.toString()}`), { signal: AbortSignal.timeout(20000) });
+        const d = await r.json().catch(() => null);
+        // Il contratto server è { items, total }: leggere `results` (come
+        // facevo) restituiva sempre vuoto e la proposta non compariva mai.
+        const righe = Array.isArray(d?.items) ? d.items : d?.results;
+        if (vivo) setFonteProposta(Array.isArray(righe) ? righe.filter((x: any) => x?.slug) : []);
+      } catch { if (vivo) setFonteProposta([]); }
+    })();
+    return () => { vivo = false; };
+  }, [daysFilter, cityFilter, query, language]);
+
+  /**
+   * La combinazione proposta: si prendono gli itinerari con più punteggio
+   * preferendo TEMI DIVERSI (chi resta una settimana vuole varietà, non tre
+   * volte lo stesso taglio) finché si arriva ai giorni richiesti.
+   * Non si supera mai il numero di giorni chiesto: meglio coprirne 5 su 7 e
+   * dirlo, che proporne 9 a chi ne ha 7.
+   */
+  const proposta = useMemo(() => {
+    const target = Number(daysFilter);
+    if (!(target >= 2) || fonteProposta.length < 2) return null;
+    // Se un singolo itinerario copre già tutto, la proposta non serve.
+    if (fonteProposta.some(r => Number(r.days) === target)) return null;
+    const cand = [...fonteProposta]
+      .filter(r => Number(r.days) >= 1 && Number(r.days) <= target)
+      .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
+    const scelti: LibraryResult[] = [];
+    const temiUsati = new Set<string>();
+    let somma = 0;
+    // Primo giro: un itinerario per tema, dal più forte.
+    for (const r of cand) {
+      const g = Number(r.days) || 1;
+      const tema = String(r.theme || r.angle || r.slug).toLowerCase();
+      if (temiUsati.has(tema) || somma + g > target) continue;
+      scelti.push(r); temiUsati.add(tema); somma += g;
+      if (somma === target) break;
+    }
+    // Secondo giro: si riempiono i giorni avanzati anche ripetendo un tema.
+    if (somma < target) {
+      for (const r of cand) {
+        if (scelti.includes(r)) continue;
+        const g = Number(r.days) || 1;
+        if (somma + g > target) continue;
+        scelti.push(r); somma += g;
+        if (somma === target) break;
+      }
+    }
+    if (scelti.length < 2) return null;
+    return { scelti, giorni: somma, target, completa: somma === target };
+  }, [fonteProposta, daysFilter]);
+
   // Carte visibili: si riparte da capo a ogni cambio di ricerca o filtro.
   const [quanti, setQuanti] = useState(60);
   useEffect(() => { setQuanti(60); }, [query, kind, group, cityFilter, maxHours, daysFilter]);
   const vociVisibili = useMemo(() => voci.slice(0, quanti), [voci, quanti]);
 
+  // Traduzione dei titoli VISIBILI: si chiede solo per quelli non ancora
+  // tradotti, così scorrendo la lista non si ripete il lavoro già fatto.
+  // Sta QUI, dopo vociVisibili: metterlo più in alto darebbe un errore a
+  // runtime (variabile usata prima di essere inizializzata), lo stesso difetto
+  // che l'08/09 aveva fatto crashare la pagina Eventi.
+  useEffect(() => {
+    if (String(language).toUpperCase() === 'IT') { setTitoliTradotti({}); return; }
+    const slugs = vociVisibili
+      .filter(v => v.tipo === 'pronto')
+      .map(v => (v as any).r?.slug)
+      .filter((s: string) => s && !titoliTradotti[s])
+      .slice(0, 150);
+    if (!slugs.length) return;
+    let vivo = true;
+    (async () => {
+      try {
+        const r = await fetch(getApiUrl('/api/library/translate-titles'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slugs, lang: String(language) }),
+          signal: AbortSignal.timeout(45000),
+        });
+        const d = await r.json().catch(() => null);
+        const t = d?.titles;
+        if (vivo && t && typeof t === 'object' && Object.keys(t).length) {
+          setTitoliTradotti(prev => ({ ...prev, ...t }));
+        }
+      } catch { /* rete giù: restano i titoli italiani, senza rumore */ }
+    })();
+    return () => { vivo = false; };
+    // titoliTradotti volutamente FUORI dalle dipendenze: serve a calcolare i
+    // mancanti, ma metterlo qui creerebbe un ciclo (ogni risposta lo cambia e
+    // farebbe ripartire l'effetto).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vociVisibili, language]);
+
   const verifiedBadge = (r: LibraryResult) => {
-    const n = Array.isArray(r.verifiedBy) ? r.verifiedBy.length : Number(r.verifiedBy) || 0;
-    if (n < 2) return null;
+    // Motori DIVERSI (25/09/2026): «agnes → agnes» non sono 2 AI, è una sola.
+    const n = Array.isArray(r.verifiedBy)
+      ? new Set(r.verifiedBy.map((m) => String(m || '').toLowerCase().split(/[\s:(/]/)[0]).filter(Boolean)).size
+      : Number(r.verifiedBy) || 0;
+    if (n < 1) return null;
     return (
       <span className="shrink-0 flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
         <CheckCircle2 className="w-2.5 h-2.5" /> {t('verified_by')} {n} AI
@@ -906,8 +1122,15 @@ export default function ItineraryLibrarySheet({
           onDismiss={() => setQuizDismissed(true)}
         />
       )}
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-gray-100 shrink-0">
+      {/* Header.
+          `pt-4` fisso non bastava: su iPhone con notch o Dynamic Island la
+          barra di stato occupa la fascia alta dello schermo, e titolo e X ci
+          finivano SOTTO — la X restava sotto l'indicatore della batteria e non
+          si riusciva a premerla per chiudere (segnalato il 09/09/2026).
+          Stessa forma usata altrove nel progetto (PlanScreen, NavigationOverlay):
+          il massimo fra il margine normale e la safe area, cosi' sui dispositivi
+          senza notch non cambia niente. */}
+      <div className="flex items-center justify-between px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-3 border-b border-gray-100 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           {detail && (
             <button
@@ -959,6 +1182,16 @@ export default function ItineraryLibrarySheet({
                       ★ {Number(detail.meta.score).toFixed(1)}
                     </span>
                   )}
+                  <ChipPeriodoMigliore
+                    city={detail.meta?.city} country={detail.meta?.country} language={language}
+                    coords={(() => {
+                      // Le coordinate della prima tappa, se l'item le ha: più precise della città geocodificata.
+                      const t = (detail.itinerary?.giorni || []).flatMap((g: any) => g?.tappe || [])
+                        .map((x: any) => ({ lat: Number(x?.coordinate?.lat), lon: Number(x?.coordinate?.lng ?? x?.coordinate?.lon) }))
+                        .find((x: any) => Number.isFinite(x.lat) && Number.isFinite(x.lon) && x.lat !== 0);
+                      return t || null;
+                    })()}
+                  />
                 </div>
               </div>
 
@@ -1020,6 +1253,10 @@ export default function ItineraryLibrarySheet({
                                     <Clock className="w-2.5 h-2.5" /> {t.tempo_necessario}
                                   </span>
                                 )}
+                                {/* Badge «Guida con audioguide delle opere · Pass
+                                    Museo» (12/09/2026): solo se il museo ha la
+                                    guida in libreria; apre Visite su quel museo. */}
+                                <BadgeGuidaMuseo tappa={t} language={language} />
                               </div>
                             </div>
                           </div>
@@ -1191,16 +1428,58 @@ export default function ItineraryLibrarySheet({
                 PERTINENZA, non il tipo: a parità, quello pronto viene prima
                 perché è immediato. Il tipo resta leggibile dal bordo e dal
                 distintivo, non dalla posizione nella pagina. */}
+            {/* PROPOSTA AUTOMATICA. Chi cerca 7 giorni non trova nulla, perché
+                il filtro cerca la corrispondenza esatta e gli itinerari curati
+                sono da 1-3: invece della lista vuota, qui c'è la combinazione
+                già pronta. Solo itinerari GIÀ in libreria — se non bastano si
+                dice quanti giorni si coprono, senza generare niente. */}
+            {!loading && proposta && (
+              <div className="bg-gradient-to-br from-primary/5 to-amber-50 border border-primary/30 rounded-2xl p-3.5">
+                <p className="text-xs font-black text-primary leading-tight">
+                  {proposta.completa
+                    ? t('proposal_title_full').replace('{n}', String(proposta.target))
+                    : t('proposal_title_partial').replace('{n}', String(proposta.giorni)).replace('{t}', String(proposta.target))}
+                </p>
+                <ul className="mt-2 space-y-1">
+                  {proposta.scelti.map((r) => (
+                    <li key={`prop-${r.slug}`} className="text-[11px] font-bold text-gray-600 flex items-center gap-1.5">
+                      <span className="text-primary">•</span>
+                      <span className="truncate">{titoliTradotti[r.slug] || r.title || r.slug}</span>
+                      <span className="text-gray-400 shrink-0">· {Number(r.days) || 1} {dayWord(Number(r.days) || 1)}</span>
+                    </li>
+                  ))}
+                </ul>
+                {!proposta.completa && (
+                  <p className="mt-2 text-[10px] font-medium text-gray-500 leading-snug">
+                    {t('proposal_gap')}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  disabled={unendo}
+                  onClick={() => { setSelezionati(proposta.scelti.map((r) => r.slug)); setErroreUnione(null); }}
+                  className="mt-3 w-full py-2.5 rounded-xl text-xs font-black bg-primary text-white hover:bg-primary/90 disabled:opacity-50 transition"
+                >
+                  ✨ {t('proposal_cta')}
+                </button>
+              </div>
+            )}
+
             {!loading && vociVisibili.map(v => v.tipo === 'pronto' ? (
+              /* Contenitore: il tasto di selezione non può stare DENTRO il
+                 bottone che apre la scheda (un bottone dentro un bottone non
+                 è valido e su iOS il tocco finisce a quello sbagliato). */
+              <div key={`p-${v.r.slug}`} className="relative">
               <button
-                key={`p-${v.r.slug}`}
                 type="button"
                 onClick={() => openItem(v.r)}
-                className="w-full text-left bg-white border border-outline-variant/20 rounded-2xl p-3 shadow-sm hover:border-primary/40 hover:shadow-md transition-all active:scale-[0.99]"
+                className={`w-full text-left bg-white border rounded-2xl p-3 pr-12 shadow-sm hover:border-primary/40 hover:shadow-md transition-all active:scale-[0.99] ${
+                  selezionati.includes(v.r.slug) ? 'border-primary ring-2 ring-primary/30' : 'border-outline-variant/20'
+                }`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="text-xs font-black text-primary leading-tight">{v.r.title || v.r.slug}</div>
+                    <div className="text-xs font-black text-primary leading-tight">{titoliTradotti[v.r.slug] || v.r.title || v.r.slug}</div>
                     <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                       <span className="text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
                         ✓ Pronto
@@ -1215,6 +1494,7 @@ export default function ItineraryLibrarySheet({
                           {angleOf(v.r)}
                         </span>
                       )}
+                      <ChipPeriodoMigliore city={v.r.city} country={v.r.country} language={language} />
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
@@ -1225,6 +1505,21 @@ export default function ItineraryLibrarySheet({
                   </div>
                 </div>
               </button>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); commutaSelezione(v.r.slug); }}
+                aria-pressed={selezionati.includes(v.r.slug)}
+                aria-label={selezionati.includes(v.r.slug) ? `Togli "${v.r.title || v.r.slug}" dall'unione` : `Aggiungi "${v.r.title || v.r.slug}" all'unione`}
+                title={selezionati.includes(v.r.slug) ? 'Tolto dall\'unione' : 'Aggiungi all\'unione'}
+                className={`absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center text-sm font-black transition-colors ${
+                  selezionati.includes(v.r.slug)
+                    ? 'bg-primary text-white'
+                    : 'bg-primary/10 text-primary hover:bg-primary/20'
+                }`}
+              >
+                {selezionati.includes(v.r.slug) ? '✓' : '+'}
+              </button>
+              </div>
             ) : (
               <div
                 key={`g-${v.key}`}
@@ -1321,7 +1616,51 @@ export default function ItineraryLibrarySheet({
                 </p>
               </div>
             )}
+            {/* Spazio per non far coprire l'ultima carta dalla barra dell'unione. */}
+            {selezionati.length > 0 && <div className="h-24" aria-hidden="true" />}
           </div>
+
+          {/* BARRA DELL'UNIONE: compare appena si seleziona qualcosa, ma unisce
+              solo da due in su. Con uno solo selezionato dice cosa manca,
+              invece di mostrare un pulsante spento senza spiegazione. */}
+          {selezionati.length > 0 && (
+            <div className="absolute left-0 right-0 bottom-0 bg-white/95 backdrop-blur-xl border-t border-outline-variant/30 p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] shadow-2xl z-10">
+              {erroreUnione && (
+                <p className="text-[11px] font-bold text-red-500 text-center mb-2">{erroreUnione}</p>
+              )}
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-black text-primary leading-tight">
+                    {selezionati.length} {selezionati.length === 1 ? t('selected_one') : t('selected_many')}
+                    {giorniSelezionati > 0 && (
+                      <span className="text-gray-400"> · {giorniSelezionati} {dayWord(giorniSelezionati)}</span>
+                    )}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => { setSelezionati([]); setErroreUnione(null); }}
+                    className="text-[10px] font-bold text-gray-400 hover:text-gray-600 underline"
+                  >
+                    {t('clear_selection')}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  disabled={selezionati.length < 2 || unendo}
+                  onClick={handleUnisci}
+                  className="shrink-0 px-4 py-3 rounded-2xl text-xs font-black bg-primary text-white disabled:opacity-40 hover:bg-primary/90 transition flex items-center gap-2"
+                >
+                  {unendo ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /> {t('merging')}</>
+                  ) : selezionati.length < 2 ? (
+                    t('pick_one_more')
+                  ) : (
+                    <>✨ {t('merge_cta')}</>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
         </>
       )}
 

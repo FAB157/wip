@@ -32,6 +32,7 @@ export const SERVICE_LABEL: Record<ServiceType, string> = {
 const RADIUS_M = 2000;          // raggio massimo di ricerca
 const MAX_PER_TYPE = 60;        // tetto per tipo: le panchine in città sono migliaia
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+const PARTIAL_CACHE_TTL_MS = 3 * 60 * 1000; // 3 min: risultato parziale (una categoria e` fallita), si riprova presto
 const FETCH_TIMEOUT_MS = 20000;
 
 // Endpoint primario + fallback (stessi mirror già usati dal fetch POI di MapArea)
@@ -57,7 +58,8 @@ export async function fetchServicesAround(lat: number, lon: number): Promise<Ser
     const raw = localStorage.getItem(key);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed.ts === "number" && Date.now() - parsed.ts < CACHE_TTL_MS && Array.isArray(parsed.points)) {
+      const ttl = typeof parsed?.ttl === "number" ? parsed.ttl : CACHE_TTL_MS;
+      if (parsed && typeof parsed.ts === "number" && Date.now() - parsed.ts < ttl && Array.isArray(parsed.points)) {
         return parsed.points as ServicePoint[];
       }
     }
@@ -71,28 +73,72 @@ export async function fetchServicesAround(lat: number, lon: number): Promise<Ser
   // cinque, e dal server Vercel non risponde mai.
   try {
     const { supabase } = await import('./supabase');
-    const g = RADIUS_M / 111000; // gradi corrispondenti al raggio
-    const { data } = await supabase
+    const gLat = RADIUS_M / 111000; // gradi di latitudine per il raggio
+    // In longitudine i gradi si accorciano col coseno: a Oslo un riquadro
+    // uguale in gradi sarebbe la meta` in metri.
+    const gLon = gLat / Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+    const tipoDa: Record<string, ServiceType> = { fontanella: 'drinking_water', bagni_pubblici: 'toilets', panchina: 'bench' };
+    // Le panchine SONO nel database dal 10/09/2026 (utility_pois,
+    // sub_category='panchina', 3.321.369 righe, risposta 77-550ms) — prima si
+    // diceva che non c'erano e si chiedevano solo a Overpass. Overpass resta
+    // un fallback per le sole panchine, e solo se la query al DB non ne trova.
+    // UNA QUERY PER TIPO, CIASCUNA COL SUO TETTO (29/08/2026, collaudo: «i
+    // bagni non sono mostrati»). Prima era una sola query da 180 righe senza
+    // distinzione: in citta` entro 2 km ci sono centinaia di fontanelle, che
+    // riempivano le 180 righe da sole, e i bagni non entravano mai.
+    const risposte = await Promise.all(Object.keys(tipoDa).map((sub) => supabase
       .from('utility_pois')
       .select('id,name,lat,lon,sub_category')
-      .in('sub_category', ['fontanella', 'bagni_pubblici'])
-      .gte('lat', lat - g).lte('lat', lat + g)
-      .gte('lon', lon - g).lte('lon', lon + g)
-      .limit(MAX_PER_TYPE * 3);
-    if (data && data.length) {
-      const tipoDa: Record<string, ServiceType> = { fontanella: 'drinking_water', bagni_pubblici: 'toilets' };
-      const punti: ServicePoint[] = data
-        .map((p: any) => ({
-          id: `svc-${p.id}`,
-          type: tipoDa[String(p.sub_category)] as ServiceType,
-          lat: Number(p.lat), lon: Number(p.lon),
-          name: p.name || undefined,
-        }))
-        .filter((p) => p.type && isFinite(p.lat) && isFinite(p.lon));
-      if (punti.length) {
-        try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), points: punti })); } catch {}
-        return punti;
+      .eq('sub_category', sub)
+      .gte('lat', lat - gLat).lte('lat', lat + gLat)
+      .gte('lon', lon - gLon).lte('lon', lon + gLon)
+      .limit(MAX_PER_TYPE)));
+    // Una query fallita (errore Supabase) non deve trasformarsi in silenzio in
+    // "zero risultati" per quel tipo: si distingue "categoria interrogata e
+    // vuota" da "categoria non interrogata per errore". Riscontrato dal vivo:
+    // un rallentamento del DB ha messo in cache 24 panchine + 1 bagno + ZERO
+    // fontanelle, valido per le successive 24 ore.
+    const categorieFallite = risposte.filter((r: any) => r?.error).length;
+    const punti: ServicePoint[] = risposte
+      .flatMap((r: any) => (r?.error ? [] : (r?.data || [])))
+      .map((p: any) => ({
+        id: `svc-${p.id}`,
+        type: tipoDa[String(p.sub_category)] as ServiceType,
+        lat: Number(p.lat), lon: Number(p.lon),
+        name: p.name || undefined,
+      }))
+      .filter((p) => p.type && isFinite(p.lat) && isFinite(p.lon));
+    if (punti.length) {
+      // Fallback Overpass per le panchine, solo se il database non ne ha
+      // trovata nessuna in questa zona (stesso pattern di prima, ma non piu`
+      // sistematico: ora e` un'eccezione, non la regola).
+      if (!punti.some((p) => p.type === "bench")) {
+        try {
+          const q = `[out:json][timeout:8];nwr["amenity"="bench"](around:${RADIUS_M},${lat},${lon});out center ${MAX_PER_TYPE};`;
+          const res = await fetch(OVERPASS_ENDPOINTS[0], {
+            method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: `data=${encodeURIComponent(q)}`, signal: AbortSignal.timeout(8000),
+          });
+          if (res.ok) {
+            const j = await res.json();
+            for (const el of (j.elements || []).slice(0, MAX_PER_TYPE)) {
+              const eLat = typeof el.lat === "number" ? el.lat : el.center?.lat;
+              const eLon = typeof el.lon === "number" ? el.lon : el.center?.lon;
+              if (typeof eLat === "number" && typeof eLon === "number") {
+                punti.push({ id: `svc-${el.type}-${el.id}`, type: "bench", lat: eLat, lon: eLon, name: el.tags?.name || undefined });
+              }
+            }
+          }
+        } catch { /* niente panchine stavolta: il resto del layer non ne risente */ }
       }
+      // Risultato parziale (una o piu` categorie fallite): TTL corto, si
+      // riprova presto invece di tenere in cache 24h un tipo di servizio
+      // mancante per un guasto temporaneo del DB.
+      try {
+        const ttl = categorieFallite > 0 ? PARTIAL_CACHE_TTL_MS : CACHE_TTL_MS;
+        localStorage.setItem(key, JSON.stringify({ ts: Date.now(), points: punti, ttl }));
+      } catch {}
+      return punti;
     }
   } catch { /* database non raggiungibile: si tenta il server, poi Overpass */ }
 

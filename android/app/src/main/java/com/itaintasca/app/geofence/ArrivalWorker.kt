@@ -144,11 +144,23 @@ object ArrivalWorker {
                 }
             }
 
-            val teaser = poi?.teaserText
-            val fullMsg = if (!teaser.isNullOrBlank()) "${p.arrivalMsg} $teaser" else "${p.arrivalMsg} ${p.fallbackTeaser}"
+            // (25/10/2026) Si legge solo un teaser leggibile: mai il segnaposto
+            // «Apri l'app per scoprire…», mai un alfabeto che la voce non sa
+            // (NomiAnnunciabili.teaserLeggibile, regola 8e del 23/10/2026).
+            val teaser = NomiAnnunciabili.teaserLeggibile(poi?.teaserText, null, p.lang)
+            // (01/11/2026, feedback dei tester Play su 1.3.8: «announcements say
+            // only "You are near…" without useful information») La voce parla
+            // solo se ha qualcosa da dire: un teaser vero. Senza, niente voce
+            // (la frase di ripiego «Apri l'app per scoprire…» resta solo nella
+            // notifica scritta). Le tappe di un giro dicono comunque «Sei arrivato».
+            val fullMsg: String? = when {
+                !teaser.isNullOrBlank() -> "${p.arrivalMsg} $teaser"
+                p.isItinerary -> p.arrivalMsg
+                else -> null
+            }
 
             // 2) Voce del teaser
-            if (!p.silentMode) {
+            if (!p.silentMode && fullMsg != null) {
                 GeofenceBroadcastReceiver.enqueue(
                     appContext,
                     GeofenceBroadcastReceiver.Companion.SpeechItem(fullMsg, p.isGem, p.isItinerary, p.poiId, p.priority, kind = "arrival")
@@ -161,13 +173,9 @@ object ArrivalWorker {
 
             val alreadyPurchased = com.itaintasca.app.service.ListeningHistoryStore
                 .isAlreadyPurchased(appContext, p.poiId)
-            val passUsed = prefs.getInt("daypass_used", 0)
-            val passActive = com.itaintasca.app.offline.BillingLogic.isPassActive(
-                System.currentTimeMillis(),
-                prefs.getLong("daypass_expires_at", 0L),
-                passUsed,
-                prefs.getInt("daypass_cap", 0)
-            )
+            // (25/10/2026) Il pass copre il luogo anche a cap raggiunto se il
+            // luogo e' gia' stato contato (DayPassLocale: una volta per luogo).
+            val passActive = com.itaintasca.app.offline.DayPassLocale.copre(appContext, p.poiId)
             if (!alreadyPurchased && !passActive) return
 
             // CATENA FALLBACK GUIDA COMPLETA:
@@ -247,13 +255,29 @@ object ArrivalWorker {
                     } catch (e: Exception) {
                         Log.w(TAG, "Avviso lingua pacchetto non mostrato: ${e.message}")
                     }
+                } else if (!online) {
+                    // (25/10/2026) SENZA RETE E SENZA MP3 IN CACHE: fin qui si
+                    // usciva muti, con la notifica «Avvio audioguida di …» gia'
+                    // sullo schermo a promettere una voce che non arrivava. La
+                    // stessa notifica (stesso id: la sostituisce, mai un
+                    // doppione) ora dice che serve la rete per la guida.
+                    try {
+                        GeofenceBroadcastReceiver.showNetworkRequiredNotification(
+                            appContext, p.poiId, p.name, p.guideVoice, p.lang
+                        )
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Avviso «serve la rete» non mostrato: ${e.message}")
+                    }
+                } else {
+                    Log.w(TAG, "Arrivo ${p.poiId}: ne' testo ne' MP3 con rete presente (server senza guida)")
                 }
                 return
             }
 
-            // Il pass si consuma solo se il POI NON era già acquistato
+            // Il pass si consuma solo se il POI NON era già acquistato — e UNA
+            // volta per luogo (25/10/2026, DayPassLocale, come il server).
             if (!alreadyPurchased) {
-                prefs.edit().putInt("daypass_used", passUsed + 1).apply()
+                com.itaintasca.app.offline.DayPassLocale.consuma(appContext, p.poiId)
             }
             GeofenceBroadcastReceiver.enqueue(
                 appContext,

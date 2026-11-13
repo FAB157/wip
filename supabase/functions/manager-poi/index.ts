@@ -696,6 +696,9 @@ REGOLE PER IL CONTENUTO:
 REGOLA DI SICUREZZA ANTI-ALLUCINAZIONE:
 Affidati ESCLUSIVAMENTE alle informazioni verificate fornite nel testo delle fonti esterne. Non inventare dati, re storici o eventi se non sono esplicitamente citati nelle fonti.
 
+REGOLA FONDAMENTALE DI SPECIFICITÀ (vale per tutti e quattro i testi, ha la precedenza su tutto il resto):
+OGNI frase deve contenere un riferimento concreto al monumento o a un suo elemento preciso preso dalle fonti — un'opera, una sala, una data, un materiale, un nome di persona, un dettaglio architettonico, un fatto, una misura. Sono VIETATE le frasi generiche che varrebbero tali e quali per qualunque altro museo, monumento o luogo (niente "un luogo ricco di storia", "un'esperienza indimenticabile", "merita una visita", "un'atmosfera unica", "una tappa imperdibile", "un tuffo nel passato" e simili), così come le introduzioni e le chiusure di circostanza. Se per una frase non hai un dettaglio specifico, sostituiscila con un altro fatto concreto delle fonti, MAI con parole vuote. Per "audio_script_long" la durata minima è di 30-40 secondi di parlato (non meno di 80-100 parole): la lunghezza si guadagna con altri dettagli delle fonti, mai con riempitivi.
+
 Rispondi TASSATIVAMENTE ed esclusivamente con un singolo oggetto JSON valido avente questo esatto schema, non aggiungere markdown o spiegazioni esterne:
 {
   "name": "Nome Corretto Monumento",

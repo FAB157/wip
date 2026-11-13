@@ -46,6 +46,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         // dell'app il cruscotto del giro ne avvierebbe una seconda e la
         // vecchia resterebbe appesa sulla lock screen. Vedi LiveActivityNav.
         LiveActivityNav.shared.riaggancia()
+        // Stesso motivo, per il cruscotto della visita museo (13/09/2026).
+        LiveActivityMuseum.shared.riaggancia()
         return true
     }
 
@@ -70,6 +72,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     }
 
     func applicationWillTerminate(_ application: UIApplication) {
+        // (21/09/2026) App chiusa dal selettore: il navigatore (follower e JS)
+        // muore col processo, e dopo una chiusura forzata iOS non la rilancia
+        // per la posizione — nessun `riaggancia` potrebbe più sistemarla. Si
+        // chiude SUBITO il cruscotto del navigatore invece di lasciarlo sulla
+        // lock screen per ore, fermo sull'ultima svolta. Attesa massima ~2 s,
+        // mai sul MainActor (vedi LiveActivityNav.chiudiTutteAllaChiusura).
+        LiveActivityNav.shared.chiudiTutteAllaChiusura()
     }
 
     func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
@@ -81,6 +90,19 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
             let guide = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name == "guide" })?.value ?? "nicky"
             savePendingDeepLink(poiId: poiId, guide: guide)
+        }
+        // (03/09/2026) I tasti della Live Activity su iOS 16 sono Link
+        // itainta://nav/<azione> (WipNavIntents.swift): stessa consegna
+        // dell'intent iOS 17, il plugin la gira al JS come navBannerAction.
+        if let azione = WipNavLink.azione(da: url) {
+            WipNavConsegna.consegna(azione)
+            return true
+        }
+        // Stesso schema per il tasto "Prossima" della visita museo su iOS 16
+        // (WipMuseumIntents.swift).
+        if let azione = WipMuseumLink.azione(da: url) {
+            WipMuseumConsegna.consegna(azione)
+            return true
         }
         return ApplicationDelegateProxy.shared.application(app, open: url, options: options)
     }

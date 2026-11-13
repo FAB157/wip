@@ -1,0 +1,16 @@
+[Unit]
+Description=WIP arricchimento TOTALE - regolatore (26/09/2026): lavoratori delle due corsie secondo l'ora UTC e la salute del sito
+After=network-online.target
+
+[Service]
+WorkingDirectory=/root/totale
+ExecStart=/usr/bin/node /root/totale/regola-totale.mjs --ciclo
+Restart=always
+RestartSec=30
+Nice=10
+MemoryMax=100M
+StandardOutput=append:/root/totale/regola.log
+StandardError=append:/root/totale/regola.log
+
+[Install]
+WantedBy=multi-user.target

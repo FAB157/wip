@@ -80,10 +80,11 @@ enum AudioPrefetchManager {
     }
 
     /// Prefetch fire-and-forget (chiamato all'approach): mai errori al chiamante.
-    static func prefetch(poiId: String, lang: String, character: String?, text: String?) {
+    /// `soloCache`: vedi `download` — true solo dal pre-scarico in blocco.
+    static func prefetch(poiId: String, lang: String, character: String?, text: String?, soloCache: Bool = false) {
         guard let text = text, !text.isEmpty else { return }
         DispatchQueue.global(qos: .utility).async { cleanup() }
-        download(poiId: poiId, lang: lang, character: character, text: text) { _ in }
+        download(poiId: poiId, lang: lang, character: character, text: text, soloCache: soloCache) { _ in }
     }
 
     /**
@@ -97,6 +98,9 @@ enum AudioPrefetchManager {
         character: String?,
         text: String,
         timeout: TimeInterval = 90,
+        // (18/09/2026) Solo dal pre-scarico in blocco di un giro: voce non
+        // ancora sintetizzata = 204 dal server (→ nil qui), mai una sintesi.
+        soloCache: Bool = false,
         completion: @escaping (URL?) -> Void
     ) {
         if let cached = cachedFile(poiId: poiId, lang: lang, character: character) {
@@ -118,11 +122,13 @@ enum AudioPrefetchManager {
             completion(result)
         }
 
+        var corpo: [String: Any] = [
+            "text": text,
+            "voice": azureVoice(lang: lang, character: character)
+        ]
+        if soloCache { corpo["soloCache"] = true }
         guard let url = URL(string: ttsEndpoint),
-              let body = try? JSONSerialization.data(withJSONObject: [
-                  "text": text,
-                  "voice": azureVoice(lang: lang, character: character)
-              ]) else {
+              let body = try? JSONSerialization.data(withJSONObject: corpo) else {
             finish(nil)
             return
         }

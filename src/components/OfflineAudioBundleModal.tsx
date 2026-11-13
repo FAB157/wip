@@ -227,14 +227,18 @@ export default function OfflineAudioBundleModal({
             </button>
           </div>
           
+          {/* (08/09/2026) Non piu' "solo testo": salva il piano E scarica mappa
+              della zona + strade per la navigazione senza rete (pacchettoOffline),
+              gratis. Le audioguide restano il tasto a crediti qui sopra. */}
           <button
             onClick={() => {
               onSaveOfflineOnly();
               onClose();
             }}
-            className="w-full py-3 bg-white border-2 border-gray-200 text-gray-500 rounded-xl font-bold text-xs hover:bg-gray-50 hover:text-gray-700 transition-colors flex items-center justify-center gap-2"
+            className="w-full py-3 bg-white border-2 border-primary/30 text-primary rounded-xl font-bold text-xs hover:bg-primary/5 transition-colors flex flex-col items-center justify-center gap-0.5"
           >
-            {t('vr_b_ob_textonly')}
+            <span className="inline-flex items-center gap-2"><Download className="w-3.5 h-3.5" /> {t('dl_scarica_offline')}</span>
+            <span className="text-[10px] font-semibold text-primary/70">{t('dl_scarica_offline_sub')}</span>
           </button>
         </div>
 

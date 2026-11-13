@@ -17,7 +17,7 @@
 // GENERATO — non modificare a mano: rilancia
 // scratch/genera-cataloghi-ricerca.mjs.
 // =====================================================================
-import type { FoodFestival } from './foodFestivalsCatalog';
+import type { FoodFestival } from './foodFestivalsCatalog.js';
 
 export const FOOD_FESTIVALS_WORLD: FoodFestival[] = [
   {

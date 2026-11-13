@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { MapContainer, TileLayer, CircleMarker, Marker, Tooltip, useMapEvents, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Tooltip, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
 import { notify } from '../lib/toast';
 import { MapPin, Save, X, Search, RefreshCw, History, Loader2 } from 'lucide-react';
+import { MONUMENTI_TYPES, CHIESE_TYPES, MUSEI_TYPES, PANORAMI_TYPES } from '../lib/poiTaxonomy';
 
 /**
  * Editor POI sulla mappa (ondata 2): correggere nome, coordinate (pin
@@ -37,6 +38,42 @@ const STATUS_COLORS: Record<string, string> = {
   needs_revision: '#dc2626',
   banned: '#111827',
 };
+
+// CATEGORIE CULTURALI come nella mappa principale (25/09/2026, committente: «si possa selezionare i poi
+// culturali su quella mappa come nella mappa originale… sapendo cosa sono»). Stessi elenchi di
+// poiTaxonomy.ts: una chip filtra il caricamento e ogni pin mostra l'icona della sua categoria.
+type CatId = 'gemme' | 'monumenti' | 'chiese' | 'musei' | 'panorami';
+const CATEGORIE_CULTURALI: { id: CatId; label: string; emoji: string; tipi: string[] }[] = [
+  { id: 'gemme', label: 'Gemme', emoji: '💎', tipi: ['gemme'] },
+  { id: 'monumenti', label: 'Monumenti', emoji: '🏛️', tipi: MONUMENTI_TYPES },
+  { id: 'chiese', label: 'Chiese', emoji: '⛪', tipi: CHIESE_TYPES },
+  { id: 'musei', label: 'Musei', emoji: '🖼️', tipi: MUSEI_TYPES },
+  { id: 'panorami', label: 'Panorami', emoji: '🔭', tipi: PANORAMI_TYPES },
+];
+/** La categoria culturale di un POI (null = non culturale). Una gemma resta gemma qualunque sia la categoria. */
+function categoriaCulturale(p: { category: string | null; is_gem: boolean | null }): CatId | null {
+  if (p.is_gem === true) return 'gemme';
+  const c = String(p.category || '').toLowerCase();
+  for (const cat of CATEGORIE_CULTURALI) if (cat.tipi.includes(c)) return cat.id;
+  return null;
+}
+const iconeCategoria: Record<string, L.DivIcon> = {};
+/** Pin con l'icona della categoria e il bordo col colore dello stato (la legenda degli stati resta valida). */
+function iconaPoi(p: EditablePoi): L.DivIcon {
+  const cat = categoriaCulturale(p);
+  const emoji = CATEGORIE_CULTURALI.find(c => c.id === cat)?.emoji || '•';
+  const bordo = STATUS_COLORS[p.status || 'auto'] || '#64748b';
+  const chiave = `${emoji}|${bordo}`;
+  if (!iconeCategoria[chiave]) {
+    iconeCategoria[chiave] = L.divIcon({
+      className: '',
+      html: `<div style="width:24px;height:24px;border-radius:50%;background:white;border:3px solid ${bordo};box-shadow:0 1px 4px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;font-size:12px;line-height:1">${emoji}</div>`,
+      iconSize: [24, 24],
+      iconAnchor: [12, 12],
+    });
+  }
+  return iconeCategoria[chiave];
+}
 
 // Pin trascinabile del POI selezionato: un divIcon evita i problemi di
 // bundling delle icone di default di Leaflet.
@@ -76,20 +113,31 @@ export default function AdminPoiMapEditor() {
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<EditablePoi[]>([]);
   const [flyTarget, setFlyTarget] = useState<[number, number] | null>(null);
+  // Categorie culturali accese (tutte all'inizio). Nessuna accesa = tutti i POI della zona, come prima.
+  const [categorieAttive, setCategorieAttive] = useState<CatId[]>(CATEGORIE_CULTURALI.map(c => c.id));
   const lastReq = useRef(0);
+  const ultimaVista = useRef<{ bounds: L.LatLngBounds; zoom: number } | null>(null);
 
   const loadViewport = useCallback(async (bounds: L.LatLngBounds, zoom: number) => {
+    ultimaVista.current = { bounds, zoom };
     if (zoom < 13) { setZoomTooLow(true); return; }
     setZoomTooLow(false);
     setLoading(true);
     const reqId = ++lastReq.current;
     try {
-      const { data, error } = await supabase
+      let q = supabase
         .from('shared_pois')
         .select('id, name, lat, lon, category, status, contact_website, contact_phone, description_short, is_gem')
         .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
-        .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
-        .limit(400);
+        .gte('lon', bounds.getWest()).lte('lon', bounds.getEast());
+      if (categorieAttive.length) {
+        const tipi = [...new Set(CATEGORIE_CULTURALI.filter(c => categorieAttive.includes(c.id) && c.id !== 'gemme').flatMap(c => c.tipi))];
+        const condizioni: string[] = [];
+        if (categorieAttive.includes('gemme')) condizioni.push('is_gem.eq.true', 'category.eq.gemme');
+        if (tipi.length) condizioni.push(`category.in.(${tipi.join(',')})`);
+        q = q.or(condizioni.join(','));
+      }
+      const { data, error } = await q.limit(400);
       if (error) throw error;
       if (reqId === lastReq.current) setPois((data || []) as EditablePoi[]);
     } catch (e: any) {
@@ -97,7 +145,15 @@ export default function AdminPoiMapEditor() {
     } finally {
       if (reqId === lastReq.current) setLoading(false);
     }
-  }, []);
+  }, [categorieAttive]);
+
+  // Cambiando le chip si ricarica la zona già inquadrata.
+  useEffect(() => {
+    if (ultimaVista.current) loadViewport(ultimaVista.current.bounds, ultimaVista.current.zoom);
+  }, [loadViewport]);
+
+  const commutaCategoria = (id: CatId) =>
+    setCategorieAttive(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
 
   // Ricerca per nome (debounce): utile per raggiungere un POI segnalato
   useEffect(() => {
@@ -189,6 +245,22 @@ export default function AdminPoiMapEditor() {
         </div>
       </div>
 
+      {/* Chip delle categorie culturali, come nella mappa principale */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {CATEGORIE_CULTURALI.map(c => {
+          const on = categorieAttive.includes(c.id);
+          return (
+            <button key={c.id} type="button" onClick={() => commutaCategoria(c.id)} aria-pressed={on}
+              className={`px-3 py-1.5 rounded-full text-[11px] font-black border transition-colors ${on ? 'bg-primary text-white border-primary' : 'bg-white text-gray-600 border-gray-200 hover:border-primary/40'}`}>
+              {c.emoji} {c.label}
+            </button>
+          );
+        })}
+        <span className="text-[10px] font-bold text-gray-500 ml-1">
+          {categorieAttive.length ? `${pois.length} POI culturali nella zona${pois.length >= 400 ? ' (primi 400: avvicinati)' : ''}` : `Tutti i POI della zona (${pois.length})`}
+        </span>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         {/* Mappa */}
         <div className="lg:col-span-2 relative rounded-2xl overflow-hidden border border-gray-200" style={{ height: 520 }}>
@@ -198,15 +270,17 @@ export default function AdminPoiMapEditor() {
             <FlyTo target={flyTarget} />
             {pois.map(p => (
               p.id === selected?.id ? null : (
-                <CircleMarker
+                <Marker
                   key={p.id}
-                  center={[p.lat, p.lon]}
-                  radius={7}
-                  pathOptions={{ color: 'white', weight: 2, fillColor: STATUS_COLORS[p.status || 'auto'] || '#64748b', fillOpacity: 0.9 }}
+                  position={[p.lat, p.lon]}
+                  icon={iconaPoi(p)}
                   eventHandlers={{ click: () => openPoi(p) }}
                 >
-                  <Tooltip direction="top" offset={[0, -6]}>{p.name}</Tooltip>
-                </CircleMarker>
+                  <Tooltip direction="top" offset={[0, -12]}>
+                    {p.name}
+                    <br /><span style={{ fontSize: 10, color: '#6b7280' }}>{CATEGORIE_CULTURALI.find(c => c.id === categoriaCulturale(p))?.label || p.category || 'senza categoria'} · {p.status || 'auto'}</span>
+                  </Tooltip>
+                </Marker>
               )
             ))}
             {selected && form.lat != null && form.lon != null && (

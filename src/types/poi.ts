@@ -158,6 +158,16 @@ export interface GeofencePoi {
   alert_enabled: boolean;
   audio_enabled: boolean;
   distance_meters: number;
+  /** La porta (nodo entrance/civico OSM). Null = mai trovata. */
+  entrance_lat?: number | null;
+  entrance_lon?: number | null;
+  /** IL PUNTO D'ARRIVO (matcher v3.1, migration 20260905130000): la porta
+   *  proiettata sul marciapiede davanti, gia' sulla rete percorribile. Quando
+   *  c'e' e' il centro di avviso, teaser, trigger e navigatore (puntoArrivo.ts).
+   *  arrival_method: sidewalk | declared_street | entrance | derived. */
+  arrival_lat?: number | null;
+  arrival_lon?: number | null;
+  arrival_method?: string | null;
 }
 
 /** Scheda POI cache-first (public.poi_details). */

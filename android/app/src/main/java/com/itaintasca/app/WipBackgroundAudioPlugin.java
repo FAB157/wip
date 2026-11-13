@@ -57,6 +57,24 @@ public class WipBackgroundAudioPlugin extends Plugin {
             data.put("duration", durationMs / 1000.0);
             notifyListeners("playbackProgress", data);
         }
+
+        @Override
+        public void onMegaphoneUnavailable() {
+            // Il dispositivo non espone Equalizer/LoudnessEnhancer: il JS
+            // spegne il tasto nella scheda invece di lasciarlo acceso su un
+            // effetto che non arrivera' mai (01/09/2026).
+            notifyListeners("megaphoneUnavailable", new JSObject());
+        }
+
+        // (12/09/2026, visita museo) Stessi eventi del plugin iOS.
+        @Override
+        public void onRemoteNext() { notifyListeners("remoteNext", new JSObject()); }
+
+        @Override
+        public void onRemotePrevious() { notifyListeners("remotePrevious", new JSObject()); }
+
+        @Override
+        public void onRemotePlay() { notifyListeners("remotePlay", new JSObject()); }
     };
 
     private final ServiceConnection connection = new ServiceConnection() {
@@ -164,6 +182,9 @@ public class WipBackgroundAudioPlugin extends Plugin {
         String url = call.getString("url");
         String title = call.getString("title", "WIP");
         String subtitle = call.getString("subtitle", "Audioguida");
+        // (31/08/2026) Copertina per MediaSession: qualunque auto collegata
+        // via Bluetooth normale la mostra, senza bisogno di Android Auto.
+        String imageUri = call.getString("imageUri");
 
         if (url == null || url.isEmpty()) {
             call.reject("URL is required");
@@ -172,7 +193,7 @@ public class WipBackgroundAudioPlugin extends Plugin {
 
         ensureServiceStarted();
         withService(call, (service, c) -> {
-            service.play(url, title, subtitle);
+            service.play(url, title, subtitle, imageUri);
             JSObject ret = new JSObject();
             ret.put("playing", true);
             c.resolve(ret);
@@ -269,6 +290,30 @@ public class WipBackgroundAudioPlugin extends Plugin {
     @PluginMethod
     public void setupMediaSession(PluginCall call) {
         withService(call, (service, c) -> c.resolve());
+    }
+
+    /** Visita museo: «successiva/precedente» e banner persistente (vedi il servizio). */
+    @PluginMethod
+    public void setTrackCommands(PluginCall call) {
+        Boolean next = call.getBoolean("next", false);
+        Boolean previous = call.getBoolean("previous", false);
+        boolean enabled = (next != null && next) || (previous != null && previous);
+        withService(call, (service, c) -> {
+            service.setTrackCommands(enabled);
+            c.resolve();
+        });
+    }
+
+    /** Titolo/sottotitolo/copertina del banner senza rifar partire l'audio. */
+    @PluginMethod
+    public void updateNowPlaying(PluginCall call) {
+        String title = call.getString("title");
+        String subtitle = call.getString("subtitle");
+        String imageUri = call.getString("imageUri");
+        withService(call, (service, c) -> {
+            service.updateNowPlaying(title, subtitle, imageUri);
+            c.resolve();
+        });
     }
 
     @Override

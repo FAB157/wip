@@ -1,11 +1,36 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArrowLeft, Loader2, Fingerprint, CheckCircle2, User } from 'lucide-react';
+import { ArrowLeft, Loader2, Fingerprint, CheckCircle2, User, X } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { supabase } from '../lib/supabase';
 import { notify } from '../lib/toast';
 import { useBiometricAuth, hasSavedBiometricCredentials } from '../hooks/useBiometricAuth';
 import { getTranslation, linguaCorrente } from '../lib/i18n';
+import {
+  googleNativoDisponibile,
+  appleNativoDisponibile,
+  accediConGoogleNativo,
+  accediConAppleNativo,
+} from '../lib/accessoNativo';
+
+/**
+ * Chi chiude il foglio di sistema di Google/Apple ha DECISO di non accedere:
+ * in quel caso non si deve aprire il browser come ripiego, si torna e basta.
+ * I plugin nativi segnalano l'annullamento con messaggi diversi per piattaforma,
+ * quindi si guardano le formule ricorrenti invece di un codice solo.
+ */
+const utenteHaAnnullato = (e: any) => {
+  const m = String(e?.message || e?.errorMessage || e || '').toLowerCase();
+  return (
+    m.includes('cancel') ||
+    m.includes('canceled') ||
+    m.includes('cancelled') ||
+    m.includes('annull') ||
+    m.includes('user closed') ||
+    m.includes('the user canceled the sign-in flow') ||
+    m.includes('1001') // ASAuthorizationError.canceled su iOS
+  );
+};
 
 interface LoginScreenProps {
   onLoginSuccess: (session: any) => void;
@@ -18,13 +43,22 @@ interface LoginScreenProps {
    * (caricamento sessione / reset password), che non si chiude.
    */
   onClose?: () => void;
+  /**
+   * True quando la schermata sta SOPRA l'app (sessione scaduta, azione da
+   * account): allora la X in alto a destra ha un senso, perche' dietro c'e'
+   * qualcosa a cui tornare. All'ingresso invece dietro non c'e' niente: resta
+   * solo il tasto esplicito "Continua senza account" in fondo, che dice cosa
+   * fa. Una X che chiude il nulla e' solo un modo per farsi cliccare per
+   * sbaglio e ritrovarsi ospiti senza averlo scelto.
+   */
+  comeModale?: boolean;
 }
 
 /** Lo sblocco biometrico è un'opzione di sicurezza disattivabile dal profilo. */
 export const BIOMETRIC_PREF_KEY = 'wip_biometric_enabled';
 export const isBiometricPrefEnabled = () => localStorage.getItem(BIOMETRIC_PREF_KEY) !== 'false';
 
-export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false, forceMethod, onClose }: LoginScreenProps) {
+export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false, forceMethod, onClose, comeModale = false }: LoginScreenProps) {
   // Niente prop `language` qui: la schermata vive prima/fuori dall'albero
   // principale, quindi la lingua si legge dalla stessa chiave che App.tsx
   // scrive a ogni cambio (fallback IT).
@@ -89,6 +123,9 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
     if (msg === 'Failed to fetch') {
       return t('vr_a_err_no_conn');
     }
+    if (msg.includes('provider is not enabled') || msg.includes('Unsupported provider')) {
+      return t('vr_a_err_google_disabled');
+    }
     return msg || t('vr_a_err_auth_generic');
   };
 
@@ -152,6 +189,118 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
       setError(friendlyError(e));
     } finally {
       setLoading(false);
+    }
+  };
+
+  // "Continua con Google" (06/09/2026, corretto 09/09/2026). Due percorsi diversi:
+  // - Web: signInWithOAuth reindirizza il browser su Google e poi torna qui;
+  //   il client Supabase (detectSessionInUrl di default) legge da solo i
+  //   parametri di ritorno e onAuthStateChange in App.tsx fa il resto.
+  // - Nativo: una WebView non può aprire l'accesso Google (Google la blocca,
+  //   "disallowed_useragent"), quindi si apre il browser di sistema/Custom Tab
+  //   con @capacitor/browser (skipBrowserRedirect: true, noi apriamo l'URL a
+  //   mano). Il ritorno NON usa l'App Link https://wip.guide/auth/callback
+  //   (quello resta per conferma email/reset password, aperti da un tap vero
+  //   in Mail): un Universal Link non si attiva in modo affidabile su un
+  //   redirect automatico dentro Safari/SFSafariViewController — iOS lo
+  //   riserva ai tap reali, quindi dopo l'accesso Safari restava aperto sulla
+  //   pagina invece di ridare il controllo all'app (le barre del browser
+  //   sopra e sotto viste dal committente il 09/09). Si torna invece con lo
+  //   schema personalizzato itainta:// (già registrato in Info.plist e
+  //   nell'intent-filter Android), che Safari/Custom Tab intercetta sempre.
+  //   Il client è in PKCE (vedi supabase.ts): il ritorno porta un `?code=...`,
+  //   non un frammento con i token, e a scambiarlo con la sessione ci pensa
+  //   il listener `appUrlOpen` in App.tsx.
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const handleGoogleLogin = async () => {
+    if (googleLoading || loading) return;
+    setGoogleLoading(true);
+    setError('');
+    try {
+      // Prima strada: accesso NATIVO, nessuna finestra del browser (vedi
+      // src/lib/accessoNativo.ts). Se non e' configurato o fallisce si ricade
+      // sul percorso col browser di sistema qui sotto, che resta valido.
+      if (googleNativoDisponibile()) {
+        try {
+          const token = await accediConGoogleNativo();
+          const { error } = await supabase.auth.signInWithIdToken({ provider: 'google', token });
+          if (error) throw error;
+          return; // onAuthStateChange in App.tsx chiude la schermata
+        } catch (e: any) {
+          if (utenteHaAnnullato(e)) return;
+          console.warn('[LoginScreen] Google nativo fallito, passo al browser', e);
+        }
+      }
+      if (Capacitor.isNativePlatform()) {
+        const { data, error } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: { redirectTo: 'itainta://auth/callback', skipBrowserRedirect: true },
+        });
+        if (error) throw error;
+        if (!data?.url) throw new Error('URL di accesso Google mancante');
+        const { Browser } = await import('@capacitor/browser');
+        await Browser.open({ url: data.url });
+        // Da qui in poi il controllo torna all'app solo quando l'utente
+        // completa (o annulla) l'accesso nel browser di sistema: niente da
+        // attendere qui, il listener in App.tsx chiude la schermata da solo.
+      } else {
+        const { error } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: { redirectTo: window.location.origin },
+        });
+        if (error) throw error;
+        // Il browser sta per lasciare la pagina: nessun altro stato da aggiornare qui.
+      }
+    } catch (e: any) {
+      setError(friendlyError(e));
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  // "Continua con Apple" (07/09/2026): stesso schema di Google riga per riga
+  // (stesso ritorno itainta://auth/callback, stesso listener in App.tsx) —
+  // cambia solo il provider. Configurato lato Apple con Services ID
+  // com.itaintasca.app.signin per il web e Bundle ID com.itaintasca.app per
+  // il nativo (entrambi nei Client IDs del provider su Supabase).
+  const [appleLoading, setAppleLoading] = useState(false);
+  const handleAppleLogin = async () => {
+    if (appleLoading || loading) return;
+    setAppleLoading(true);
+    setError('');
+    try {
+      // Come Google: prima il nativo (foglio di sistema iOS), poi il browser.
+      if (appleNativoDisponibile()) {
+        try {
+          const { token, nonce } = await accediConAppleNativo();
+          const { error } = await supabase.auth.signInWithIdToken({ provider: 'apple', token, nonce });
+          if (error) throw error;
+          return;
+        } catch (e: any) {
+          if (utenteHaAnnullato(e)) return;
+          console.warn('[LoginScreen] Apple nativo fallito, passo al browser', e);
+        }
+      }
+      if (Capacitor.isNativePlatform()) {
+        const { data, error } = await supabase.auth.signInWithOAuth({
+          provider: 'apple',
+          options: { redirectTo: 'itainta://auth/callback', skipBrowserRedirect: true },
+        });
+        if (error) throw error;
+        if (!data?.url) throw new Error('URL di accesso Apple mancante');
+        const { Browser } = await import('@capacitor/browser');
+        await Browser.open({ url: data.url });
+      } else {
+        const { error } = await supabase.auth.signInWithOAuth({
+          provider: 'apple',
+          options: { redirectTo: window.location.origin },
+        });
+        if (error) throw error;
+      }
+    } catch (e: any) {
+      setError(friendlyError(e));
+    } finally {
+      setAppleLoading(false);
     }
   };
 
@@ -318,11 +467,21 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
   // but if unavailable we use a slick fallback showing WIP
   return (
     <div className="fixed inset-0 bg-surface z-50 flex flex-col items-center justify-center p-6 sm:p-12 overflow-y-auto">
-      {/* (29/08/2026) Qui c'erano la X e il link «continua senza account»:
-          l'accesso e' tornato OBBLIGATORIO per decisione del committente, e
-          una via d'uscita dal login non deve esistere. `onClose` resta nella
-          firma perche' App.tsx apre questa stessa schermata quando la sessione
-          SCADE durante l'uso — li' non si esce, si rientra. */}
+      {/* LA VIA D'USCITA (rimessa il 02/09/2026 col ritorno della modalita'
+          ospite). Compare SOLO con `onClose`, cioe' quando questa schermata e'
+          un modale sopra l'app: da li' si torna alla mappa. Al gate d'avvio
+          (caricamento sessione, reset password) `onClose` non c'e' e la via
+          d'uscita non deve esistere: non c'e' un "dietro" a cui tornare. */}
+      {onClose && comeModale && (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t('guest_continua_senza')}
+          className="absolute top-4 right-4 z-10 w-10 h-10 rounded-full bg-black/5 flex items-center justify-center active:scale-95 transition-transform"
+        >
+          <X className="w-5 h-5 text-[#1e3a8a]/70" />
+        </button>
+      )}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -506,6 +665,51 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
                 </button>
               )}
 
+              <div className="flex items-center gap-3 mt-4">
+                <div className="h-px flex-1 bg-on-surface/10" />
+                <span className="text-xs text-on-surface-variant/60 uppercase tracking-wide">{t('vr_a_login_or')}</span>
+                <div className="h-px flex-1 bg-on-surface/10" />
+              </div>
+
+              <button
+                type="button"
+                disabled={googleLoading || loading}
+                onClick={handleGoogleLogin}
+                className="w-full bg-surface text-on-surface border border-on-surface/20 font-bold py-3.5 px-4 rounded-xl mt-4 flex items-center justify-center hover:bg-surface-variant/50 transition-colors disabled:opacity-50"
+              >
+                {googleLoading ? (
+                  <Loader2 className="w-5 h-5 mr-3 animate-spin" />
+                ) : (
+                  <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24" aria-hidden="true">
+                    <path fill="#4285F4" d="M23.49 12.27c0-.79-.07-1.54-.2-2.27H12v4.51h6.47a5.6 5.6 0 0 1-2.4 3.63v3h3.87c2.26-2.09 3.56-5.17 3.56-8.87Z"/>
+                    <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.94-2.86l-3.87-3c-1.08.72-2.45 1.15-4.07 1.15-3.13 0-5.78-2.11-6.73-4.96H1.27v3.11A12 12 0 0 0 12 24Z"/>
+                    <path fill="#FBBC05" d="M5.27 14.33a7.2 7.2 0 0 1 0-4.66V6.56H1.27a12 12 0 0 0 0 10.88l4-3.11Z"/>
+                    <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.94 1.19 15.24 0 12 0A12 12 0 0 0 1.27 6.56l4 3.11C6.22 6.86 8.87 4.75 12 4.75Z"/>
+                  </svg>
+                )}
+                {t('vr_a_login_google')}
+              </button>
+
+              <button
+                type="button"
+                disabled={appleLoading || loading}
+                onClick={handleAppleLogin}
+                className="w-full bg-black text-white font-bold py-3.5 px-4 rounded-xl mt-2 flex items-center justify-center hover:bg-black/85 transition-colors disabled:opacity-50"
+              >
+                {appleLoading ? (
+                  <Loader2 className="w-5 h-5 mr-3 animate-spin" />
+                ) : (
+                  // Logo Apple UFFICIALE (22/09/2026, sesto rifiuto Apple, Guideline 4):
+                  // il tracciato e' quello del pulsante «Sign in with Apple» servito da
+                  // Apple stessa (appleid.cdn-apple.com, appleid.auth.js, modalita'
+                  // logo-only), NON un'icona di terze parti. Non ridisegnarlo.
+                  <svg className="w-[22px] h-[22px] mr-2.5" viewBox="18 14 20 22" aria-hidden="true">
+                    <path fill="#fff" fillRule="nonzero" d="M28.2226562,20.3846154 C29.0546875,20.3846154 30.0976562,19.8048315 30.71875,19.0317864 C31.28125,18.3312142 31.6914062,17.352829 31.6914062,16.3744437 C31.6914062,16.2415766 31.6796875,16.1087095 31.65625,16 C30.7304687,16.0362365 29.6171875,16.640178 28.9492187,17.4494596 C28.421875,18.06548 27.9414062,19.0317864 27.9414062,20.0222505 C27.9414062,20.1671964 27.9648438,20.3121424 27.9765625,20.3604577 C28.0351562,20.3725366 28.1289062,20.3846154 28.2226562,20.3846154 Z M25.2929688,35 C26.4296875,35 26.9335938,34.214876 28.3515625,34.214876 C29.7929688,34.214876 30.109375,34.9758423 31.375,34.9758423 C32.6171875,34.9758423 33.4492188,33.792117 34.234375,32.6325493 C35.1132812,31.3038779 35.4765625,29.9993643 35.5,29.9389701 C35.4179688,29.9148125 33.0390625,28.9122695 33.0390625,26.0979021 C33.0390625,23.6579784 34.9140625,22.5588048 35.0195312,22.474253 C33.7773438,20.6382708 31.890625,20.5899555 31.375,20.5899555 C29.9804688,20.5899555 28.84375,21.4596313 28.1289062,21.4596313 C27.3554688,21.4596313 26.3359375,20.6382708 25.1289062,20.6382708 C22.8320312,20.6382708 20.5,22.5950413 20.5,26.2911634 C20.5,28.5861411 21.3671875,31.013986 22.4335938,32.5842339 C23.3476562,33.9129053 24.1445312,35 25.2929688,35 Z"/>
+                  </svg>
+                )}
+                {t('vr_a_login_apple')}
+              </button>
+
               <p className="text-center text-sm text-on-surface-variant mt-2">
                 {isRegistering ? t('vr_a_login_have_account') : t('vr_a_login_no_account')}
                 <button
@@ -632,6 +836,22 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
             </motion.form>
           ) : null}
         </AnimatePresence>
+
+        {/* Modalita' ospite. Sta SOTTO il modulo, non sopra, e non e' un
+            bottone pieno come "Accedi": e' la seconda scelta, non la prima —
+            chi arriva qui in genere ha un account e vogliamo che lo usi. Ma
+            deve vedersi al primo colpo d'occhio, perche' e' la porta che Apple
+            e Wikicaves ci chiedono di lasciare aperta: quindi bordo pieno e
+            larghezza intera, non un link in grigetto. */}
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-full border-2 border-[#1e3a8a]/25 text-[#1e3a8a] font-bold py-3 px-4 rounded-xl mt-5 active:scale-95 transition-transform"
+          >
+            {t('guest_continua_senza')}
+          </button>
+        )}
 
         <p className="text-center text-xs text-on-surface-variant/60 mt-8 mb-4">
           {t('vr_a_login_terms_pre')}{' '}

@@ -1,0 +1,2 @@
+The audioguide starts on its own.
+Even with the screen off.

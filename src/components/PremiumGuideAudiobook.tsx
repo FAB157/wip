@@ -4,9 +4,10 @@ import { getApiUrl } from '../lib/api';
 import { postForAudioBlob } from '../lib/audioFetch';
 import { notify } from '../lib/toast';
 import { downloadGuideAsEpub, getAccessToken, saveGuideLocally } from '../services/premiumGuideService';
-import { azureVoiceName } from '../services/ttsService';
+import { azureVoiceName, speakWithSystemVoice, stopSystemVoice, pauseSystemVoice, resumeSystemVoice } from '../services/ttsService';
 import { PRICING_LIST, notifyCreditsChanged } from '../lib/pricing';
 import type { PremiumGuideContent } from '../services/premiumGuideService';
+import { getTranslation } from '../lib/i18n';
 import type { Language } from '../lib/i18n';
 
 /**
@@ -87,6 +88,7 @@ const TRANSLATE_LANGS: { code: string; label: string }[] = [
 ];
 
 export default function PremiumGuideAudiobook({ content, language, hash, onContentUpdate }: PremiumGuideAudiobookProps) {
+  const tr = (k: string) => getTranslation(k, language);
   const chapters = useMemo(() => buildChapters(content), [content]);
   const [open, setOpen] = useState(false);
   const [activeChapter, setActiveChapter] = useState<number | null>(null);
@@ -96,6 +98,24 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
   const [playing, setPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const sessionRef = useRef(0); // invalida le riproduzioni superate
+  /** Il blocco corrente è letto dalla voce di sistema (server TTS giù). */
+  const sysVoiceRef = useRef(false);
+  const sysVoicePausedRef = useRef(false);
+
+  /**
+   * (29/08/2026) Il ripiego che non muore mai: se /api/tts/smart non risponde
+   * il blocco viene letto dalla voce di sistema (TTS nativo sull'app, Web
+   * Speech nel browser) invece di interrompere la lettura. Risolve a fine
+   * lettura; false solo se il dispositivo non ha nessuna voce.
+   */
+  const leggiConVoceDiSistema = (testo: string, personaggio: 'nicky' | 'dante', session: number): Promise<boolean> =>
+    new Promise<boolean>(resolve => {
+      sysVoiceRef.current = true;
+      speakWithSystemVoice(testo, String(language), personaggio, () => {
+        sysVoiceRef.current = false;
+        resolve(sessionRef.current === session);
+      }).then(ok => { if (!ok) { sysVoiceRef.current = false; resolve(false); } });
+    });
 
   // ── Strumenti post-acquisto ──
   const [ivState, setIvState] = useState<'idle' | 'confirm' | 'loading' | 'playing'>('idle');
@@ -113,6 +133,7 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
       audioRef.current.pause();
       audioRef.current.src = '';
     }
+    if (sysVoiceRef.current) { sysVoiceRef.current = false; sysVoicePausedRef.current = false; stopSystemVoice(); }
     setPlaying(false);
     setLoading(false);
     setActiveChapter(null);
@@ -155,11 +176,17 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
         });
         URL.revokeObjectURL(url);
       } catch {
-        if (sessionRef.current === session) {
-          notify('Lettura interrotta: riprova tra qualche istante.');
+        if (sessionRef.current !== session) return;
+        // Server TTS giù: il blocco lo legge la voce di sistema, e si va avanti.
+        setLoading(false);
+        setPlaying(true);
+        const letto = await leggiConVoceDiSistema(blocks[b], 'nicky', session);
+        if (sessionRef.current !== session) return;
+        if (!letto) {
+          notify(tr('pg_ab_lettura_interrotta'));
           stop();
+          return;
         }
-        return;
       }
     }
     if (sessionRef.current === session) {
@@ -169,6 +196,13 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
   };
 
   const togglePause = () => {
+    if (sysVoiceRef.current) {
+      // Voce di sistema: pausa/ripresa di ttsService (il TTS nativo rilegge
+      // il blocco da capo alla ripresa, Web Speech riprende dal punto).
+      if (sysVoicePausedRef.current) { sysVoicePausedRef.current = false; resumeSystemVoice(); setPlaying(true); }
+      else { sysVoicePausedRef.current = true; pauseSystemVoice(); setPlaying(false); }
+      return;
+    }
     const a = audioRef.current;
     if (!a) return;
     if (a.paused) { a.play().catch(() => {}); setPlaying(true); }
@@ -210,8 +244,8 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getAccessToken()}` },
         body: JSON.stringify({ destination, pois, language }),
       });
-      if (res.status === 401) { notify('Accedi per generare l’intervista.'); setIvState('idle'); return; }
-      if (res.status === 402) { notify('Crediti insufficienti per l’intervista.'); setIvState('idle'); return; }
+      if (res.status === 401) { notify(tr('pg_ab_iv_login')); setIvState('idle'); return; }
+      if (res.status === 402) { notify(tr('pg_ab_iv_crediti')); setIvState('idle'); return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       notifyCreditsChanged();
@@ -230,14 +264,20 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
         // Segmenti brevi (battute 1-3 frasi): un file TTS per battuta,
         // riprodotti in sequenza come già fa l'audiolibro a blocchi.
         const { ok, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text: segments[i].text, voice });
-        if (!ok || !blob) throw new Error('tts');
-        await playBlob(blob, session);
+        if (ok && blob && blob.size >= 500) {
+          await playBlob(blob, session);
+        } else {
+          // Server TTS giù: la battuta la legge la voce di sistema, col
+          // genere del personaggio; solo senza nessuna voce si interrompe.
+          const letto = await leggiConVoceDiSistema(segments[i].text, segments[i].speaker === 'NICKY' ? 'nicky' : 'dante', session);
+          if (!letto) throw new Error('tts');
+        }
       }
       if (sessionRef.current === session) setIvState('idle');
     } catch (e) {
       console.error('[Intervista] errore:', e);
       if (sessionRef.current === session) {
-        notify('Intervista interrotta: riprova tra qualche istante.');
+        notify(tr('pg_ab_iv_interrotta'));
         setIvState('idle');
       }
     }
@@ -249,9 +289,9 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
     setEpubBusy(true);
     try {
       const ok = await downloadGuideAsEpub(hash, content.guida_titolo, String(language));
-      if (!ok) notify('Export EPUB non riuscito. Riprova.');
+      if (!ok) notify(tr('pg_ab_epub_errore'));
     } catch {
-      notify('Export EPUB non riuscito. Riprova.');
+      notify(tr('pg_ab_epub_errore'));
     } finally {
       setEpubBusy(false);
     }
@@ -269,8 +309,8 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getAccessToken()}` },
         body: JSON.stringify({ hash, targetLanguage: trLang }),
       });
-      if (res.status === 401) { notify('Accedi per tradurre la guida.'); setTrState('idle'); return; }
-      if (res.status === 402) { notify('Crediti insufficienti per la traduzione.'); setTrState('idle'); return; }
+      if (res.status === 401) { notify(tr('pg_ab_tr_login')); setTrState('idle'); return; }
+      if (res.status === 402) { notify(tr('pg_ab_tr_crediti')); setTrState('idle'); return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       notifyCreditsChanged();
@@ -278,12 +318,12 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
         // Copia offline della traduzione (hash derivato) + aggiornamento vista
         saveGuideLocally({ content: data.content, media_manifest: data.media_manifest || {}, hash: data.hash || `${hash}_tr_${trLang}`, fromCache: false }).catch(() => {});
         onContentUpdate?.(data.content);
-        notify(data.cached ? 'Traduzione già disponibile: nessun addebito.' : 'Guida tradotta!');
+        notify(tr(data.cached ? 'pg_ab_tr_gia' : 'pg_ab_tr_ok'));
       }
       setTrState('idle');
     } catch (e) {
       console.error('[Traduzione guida] errore:', e);
-      notify('Traduzione non riuscita: nessun credito perso, riprova.');
+      notify(tr('pg_ab_tr_errore'));
       setTrState('idle');
     }
   };
@@ -298,8 +338,8 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getAccessToken()}` },
         body: JSON.stringify({ hash, dayIndex: regenDay, language }),
       });
-      if (res.status === 401) { notify('Accedi per aggiornare la guida.'); return; }
-      if (res.status === 402) { notify('Guida non trovata: usa la generazione completa.'); return; }
+      if (res.status === 401) { notify(tr('pg_ab_giorno_login')); return; }
+      if (res.status === 402) { notify(tr('pg_ab_giorno_assente')); return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data?.content) {
@@ -307,11 +347,11 @@ export default function PremiumGuideAudiobook({ content, language, hash, onConte
         // prossima apertura ripescherebbe il giorno vecchio dalla cache locale.
         saveGuideLocally({ content: data.content, media_manifest: data.media_manifest || {}, hash, fromCache: false }).catch(() => {});
         onContentUpdate?.(data.content);
-        notify(`Giorno ${(content.giorni?.[regenDay]?.giorno) ?? regenDay + 1} aggiornato (gratuito).`);
+        notify(tr('pg_ab_giorno_ok').replace('{n}', String((content.giorni?.[regenDay]?.giorno) ?? regenDay + 1)));
       }
     } catch (e) {
       console.error('[Rigenera giorno] errore:', e);
-      notify('Aggiornamento del giorno non riuscito. Riprova.');
+      notify(tr('pg_ab_giorno_errore'));
     } finally {
       setRegenBusy(false);
     }

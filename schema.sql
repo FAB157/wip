@@ -238,7 +238,8 @@ CREATE POLICY "Allow public insert on api_usage_logs" ON public.api_usage_logs
 -- ===================================================
 
 -- 1. Add review columns to public.shared_pois
-ALTER TABLE public.shared_pois ADD COLUMN IF NOT EXISTS status TEXT CHECK (status IN ('draft', 'verified', 'needs_revision')) DEFAULT 'draft';
+-- Vincolo allargato da migrations/20260928120000_shared_pois_status_check.sql
+ALTER TABLE public.shared_pois ADD COLUMN IF NOT EXISTS status TEXT CONSTRAINT shared_pois_status_check CHECK (status IN ('draft', 'verified', 'needs_revision', 'auto', 'banned', 'approved', 'rejected', 'hidden')) DEFAULT 'draft';
 ALTER TABLE public.shared_pois ADD COLUMN IF NOT EXISTS last_reviewed_at TIMESTAMP WITH TIME ZONE DEFAULT NULL;
 ALTER TABLE public.shared_pois ADD COLUMN IF NOT EXISTS reviewed_by UUID REFERENCES public.user_profiles(id) ON DELETE SET NULL DEFAULT NULL;
 

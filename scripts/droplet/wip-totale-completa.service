@@ -1,0 +1,19 @@
+[Unit]
+Description=WIP arricchimento TOTALE - corsia COMPLETA (26/09/2026): luoghi con fonte, foto + breve + dettagliata + info, una lingua, senza audio ne traduzioni
+After=network-online.target
+ConditionPathExists=/root/totale/completa.jsonl
+
+[Service]
+WorkingDirectory=/root/totale
+Environment=WIP_BASE=https://www.wip.guide
+Environment=ENVF=/root/citta/.env
+ExecStart=/usr/bin/node /root/totale/driver-totale.mjs --lista=/root/totale/completa.jsonl --corsia=completa --lavoratori=4 --pausa=1500
+Restart=on-failure
+RestartSec=60
+Nice=10
+MemoryMax=400M
+StandardOutput=append:/root/totale/completa.log
+StandardError=append:/root/totale/completa.log
+
+[Install]
+WantedBy=multi-user.target

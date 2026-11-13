@@ -11,6 +11,7 @@ import { ReactNode, useEffect, useState } from "react";
 import { CATEGORY_COLORS } from "../lib/mapConstants";
 import { motion, AnimatePresence } from "motion/react";
 import { Language, getTranslation } from "../lib/i18n";
+import LegendaLocali, { ETICHETTA_LEGENDA } from "./LegendaLocali";
 
 export interface Category {
   id: string;
@@ -82,6 +83,14 @@ export const CATEGORIES: Category[] = [
   // stanno. La macro apre la riga dei sotto-chip: lì ogni verticale si accende
   // da solo. Spenta di default.
   { id: "tematiche", label: "Tematici", icon: <span className="text-sm">🧭</span> },
+  // SHOPPING e LUSSO (06/09/2026): STESSA scelta di Vino e Gusto qui sopra, e
+  // per lo stesso motivo — NON sono chip. `resolvePoiTaxonomy` (poiTaxonomy.ts)
+  // le risolve apposta a `macro: null`: un pin shopping/lusso non ha una macro,
+  // quindi il filtro `!!macro && activeCategories.includes(macro)` di MapArea
+  // lo scarterebbe SEMPRE, qualunque chip fosse accesa — una chip qui sarebbe
+  // stata un interruttore che non accende niente. Vivono come layer del
+  // pannello ⓘ (MapArea.tsx, LIVELLI 'shopping'/'lusso'), con la propria fetch
+  // diretta su shared_pois, esattamente come le strade del vino.
   { id: "eventi", label: "Eventi", icon: <span className="text-sm">🎪</span> }
 ];
 
@@ -107,7 +116,14 @@ const SUB_FILTER_TRANSLATIONS: Record<string, Partial<Record<Language, string>>>
   all_f: { IT: "Tutte", EN: "All", FR: "Toutes", ES: "Todas", RU: "Все", ZH: "全部" },
   all_m: { IT: "Tutti", EN: "All", FR: "Tous", ES: "Todos", RU: "Все", ZH: "全部" },
   all_n: { IT: "Tutta", EN: "All", FR: "Toute", ES: "Toda", RU: "Вся", ZH: "全部", DE: "Alle" },
+  // locali — la fila del senza glutine
+  gf_dedicato: { IT: "100% senza glutine", EN: "100% gluten-free", FR: "100 % sans gluten", ES: "100 % sin gluten", RU: "100% без глютена", ZH: "100%无麸质", DE: "100 % glutenfrei" },
+  gf_menu: { IT: "Con menu", EN: "With menu", FR: "Avec carte", ES: "Con carta", RU: "С меню", ZH: "有无麸质菜单", DE: "Mit Karte" },
+  gf_pizzeria: { IT: "Pizzerie", EN: "Pizzerias", FR: "Pizzerias", ES: "Pizzerías", RU: "Пиццерии", ZH: "比萨店", DE: "Pizzerien" },
+  gf_gelateria: { IT: "Gelaterie", EN: "Gelato", FR: "Glaciers", ES: "Heladerías", RU: "Мороженое", ZH: "冰淇淋店", DE: "Eisdielen" },
+  gf_forno: { IT: "Forni", EN: "Bakeries", FR: "Boulangeries", ES: "Panaderías", RU: "Пекарни", ZH: "面包店", DE: "Bäckereien" },
   // locali
+  michelin: { IT: "Stellati", EN: "Starred", FR: "Étoilés", ES: "Con estrella", RU: "Со звёздами", ZH: "星级餐厅", DE: "Sterneküche" },
   ristorante: { IT: "Ristoranti", EN: "Restaurants", FR: "Restaurants", ES: "Restaurantes", RU: "Рестораны", ZH: "餐厅" },
   pizzeria: { IT: "Pizza", EN: "Pizza", FR: "Pizza", ES: "Pizza", RU: "Пицца", ZH: "比萨" },
   pesce: { IT: "Pesce", EN: "Seafood", FR: "Poisson", ES: "Pescado", RU: "Рыба/Морепродукты", ZH: "海鲜" },
@@ -204,7 +220,7 @@ function SubChip({
       className={`flex-shrink-0 px-2.5 py-1 rounded-full text-[10px] font-black transition-all border relative pb-2 ${
         isSelected
           ? "bg-primary border-secondary text-secondary shadow-md active:scale-95"
-          : "bg-[#fcfaf8]/90 backdrop-blur-sm border-outline-variant text-primary hover:bg-[#fcfaf8] active:scale-95"
+          : "bg-[#fcfaf8]/90 border-outline-variant text-primary hover:bg-[#fcfaf8] active:scale-95"
       }`}
     >
       <span className="mr-1">{f.emoji}</span>
@@ -273,6 +289,8 @@ export default function CategoryChips({
 
   const [pannelloAperto, setPannelloAperto] = useState(false);
   const [infoAperta, setInfoAperta] = useState<string | null>(null);
+  // La legenda delle targhette dei locali (senza glutine / stellati), aperta dal tasto in fondo alla fila.
+  const [legenda, setLegenda] = useState<"gf" | "stellati" | null>(null);
   // "Esperienze" NON è una categoria di POI: vive solo qui. Se finisse in
   // selectedCategories arriverebbe in wip_active_subcategories, e il
   // servizio nativo proverebbe a filtrare i POI per una categoria che nel
@@ -296,6 +314,20 @@ export default function CategoryChips({
       onToggle('tematiche');
       TEMATICI_CHIPS.forEach((t) => { if (!selectedIds.includes(t.id)) onToggle(t.id); });
     }
+  };
+
+  // Riga dei Tematici, una voce alla volta come le altre righe (26/09/2026).
+  const tuttiTematiciAccesi = TEMATICI_CHIPS.every((t) => selectedIds.includes(t.id));
+  const accendiTuttiTematici = () => TEMATICI_CHIPS.forEach((t) => { if (!selectedIds.includes(t.id)) onToggle(t.id); });
+  /** Come i sotto-filtri delle altre righe: da «Tutti» un tema resta da solo (gli altri si
+   *  spengono); poi i temi si aggiungono o tolgono uno a uno; tolto l'ultimo si torna a «Tutti». */
+  const scegliSoloTematico = (id: string) => {
+    if (tuttiTematiciAccesi) {
+      TEMATICI_CHIPS.forEach((t) => { if (t.id !== id) onToggle(t.id); });
+      return;
+    }
+    if (temAccesi.length === 1 && temAccesi[0].id === id) { accendiTuttiTematici(); return; }
+    onToggle(id);
   };
 
   /** Dal pannello: portarla in barra la accende, toglierla la spegne. */
@@ -341,7 +373,7 @@ export default function CategoryChips({
                 className={`flex-shrink-0 px-3 py-2 min-h-10 rounded-full font-bold text-[13px] transition-all flex items-center gap-1.5 border shadow-sm
                   ${esperienzeAperte
                     ? "bg-primary text-secondary border-secondary shadow-md scale-105"
-                    : "bg-[#fcfaf8]/90 backdrop-blur-sm text-primary border-outline-variant hover:bg-[#fcfaf8]"}`}
+                    : "bg-[#fcfaf8]/90 text-primary border-outline-variant hover:bg-[#fcfaf8]"}`}
               >
                 <Ticket className="w-3.5 h-3.5" />
                 <span className="whitespace-nowrap">{getTranslation('vr_b_cc_experiences', language)}</span>
@@ -358,7 +390,7 @@ export default function CategoryChips({
               >
                 <div className="w-4 h-4 flex items-center justify-center shrink-0 relative">
                   {cat.icon}
-                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-red-400 rounded-full animate-ping opacity-75" />
+                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-red-400 rounded-full opacity-75" />
                   <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-red-500 rounded-full" />
                 </div>
                 <span className="whitespace-nowrap">{getTranslation(cat.id, language)}</span>
@@ -384,7 +416,7 @@ export default function CategoryChips({
                 ${
                   isActive
                     ? (isCommunity ? "bg-[#ec4899] text-white border-pink-300 shadow-md scale-105" : "bg-primary text-secondary border-secondary shadow-md scale-105")
-                    : "bg-[#fcfaf8]/90 backdrop-blur-sm text-primary border-outline-variant hover:bg-[#fcfaf8]"
+                    : "bg-[#fcfaf8]/90 text-primary border-outline-variant hover:bg-[#fcfaf8]"
                 }
               `}
             >
@@ -403,7 +435,7 @@ export default function CategoryChips({
           className={`flex-shrink-0 px-3 py-2 min-h-10 rounded-full font-bold text-[13px] transition-all flex items-center gap-1.5 border shadow-sm
             ${pannelloAperto
               ? "bg-primary text-secondary border-secondary shadow-md scale-105"
-              : "bg-[#fcfaf8]/90 backdrop-blur-sm text-primary border-outline-variant hover:bg-[#fcfaf8]"}`}
+              : "bg-[#fcfaf8]/90 text-primary border-outline-variant hover:bg-[#fcfaf8]"}`}
         >
           <span className="text-sm leading-none">{pannelloAperto ? '×' : '＋'}</span>
           <span className="whitespace-nowrap">{getTranslation('vr_b_cc_more', language)}</span>
@@ -449,7 +481,7 @@ export default function CategoryChips({
         {pannelloAperto && (
           <motion.div key="pannello" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
             className="px-3 pointer-events-auto overflow-hidden">
-            <div className="rounded-2xl border border-outline-variant bg-[#fcfaf8]/95 backdrop-blur-md shadow-lg p-2 max-w-md">
+            <div className="rounded-2xl border border-outline-variant bg-[#fcfaf8]/95 shadow-lg p-2 max-w-md">
               <p className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-primary/50">
                 {getTranslation('vr_b_cc_add_to_bar', language)}
               </p>
@@ -578,13 +610,17 @@ export default function CategoryChips({
             className="flex flex-row gap-1.5 px-3 overflow-x-auto no-scrollbar pointer-events-auto pb-1">
             {[
               { id: null, emoji: "🍽️" },
+              // (02/10/2026) «Stellati»: i ristoranti con 1-3 stelle (colonne
+              // michelin_* di locali_pois, scripts/importa-michelin.mjs). Il
+              // nome della chip e' nostro, non il marchio: versione prudente.
+              { id: "michelin", emoji: "⭐" },
               { id: "ristorante", emoji: "🍴" },
               { id: "pizzeria", emoji: "🍕" },
               { id: "pesce", emoji: "🐟" },
               { id: "carne", emoji: "🥩" },
+              { id: "glutenfree", emoji: "🌾" },
               { id: "sushi", emoji: "🍣" },
               { id: "vegetariano", emoji: "🥬" },
-              { id: "glutenfree", emoji: "🌾" },
               { id: "bar", emoji: "☕" },
               { id: "gelateria", emoji: "🍦" },
             ].map((f) => (
@@ -592,6 +628,48 @@ export default function CategoryChips({
                 label={f.id === null ? SUB_FILTER_TRANSLATIONS.all_m[language] : SUB_FILTER_TRANSLATIONS[f.id]?.[language] || f.id}
                 onSelect={() => onSetSubFilter?.(f.id)} />
             ))}
+          </motion.div>
+        )}
+
+        {/* SENZA GLUTINE — la fila in piu' (03/10/2026): con «Gluten-Free»
+            accesa si puo' stringere per livello (tabella locali_gf: dedicato,
+            menu) e per tipo di locale. Livelli e tipi si sommano fra loro
+            (100% E gelaterie); dentro lo stesso gruppo vale l'uno o l'altro. */}
+        {selectedIds.includes("locali") && !!subFilter?.includes("glutenfree") && (
+          <motion.div key="locali-gf-sub" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+            className="flex flex-row gap-1.5 px-3 overflow-x-auto no-scrollbar pointer-events-auto pb-1">
+            {[
+              { id: "gf_dedicato", emoji: "💯" },
+              { id: "gf_menu", emoji: "📋" },
+              { id: "gf_pizzeria", emoji: "🍕" },
+              { id: "gf_gelateria", emoji: "🍦" },
+              { id: "gf_forno", emoji: "🥖" },
+            ].map((f) => (
+              <SubChip key={f.id} f={f} isSelected={isSubSelected(f.id)}
+                label={SUB_FILTER_TRANSLATIONS[f.id]?.[language] || SUB_FILTER_TRANSLATIONS[f.id]?.EN || f.id}
+                onSelect={() => onSetSubFilter?.(f.id)} />
+            ))}
+            {/* (04/10/2026) In fondo alla fila: la legenda delle targhette del pin. */}
+            <SubChip key="legenda-gf" f={{ id: "legenda_gf", emoji: "ℹ️" }} isSelected={legenda === "gf"}
+              label={ETICHETTA_LEGENDA[language] || ETICHETTA_LEGENDA.EN}
+              onSelect={() => setLegenda(legenda === "gf" ? null : "gf")} />
+          </motion.div>
+        )}
+
+        {/* STELLATI — con la chip accesa, il solo tasto della legenda (★, ★★, ★★★, Bib). */}
+        {selectedIds.includes("locali") && !!subFilter?.includes("michelin") && (
+          <motion.div key="locali-stellati-sub" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+            className="flex flex-row gap-1.5 px-3 overflow-x-auto no-scrollbar pointer-events-auto pb-1">
+            <SubChip key="legenda-stellati" f={{ id: "legenda_stellati", emoji: "ℹ️" }} isSelected={legenda === "stellati"}
+              label={`${ETICHETTA_LEGENDA[language] || ETICHETTA_LEGENDA.EN} ⭐`}
+              onSelect={() => setLegenda(legenda === "stellati" ? null : "stellati")} />
+          </motion.div>
+        )}
+
+        {/* La legenda aperta: resta solo finché la sua chip è accesa. */}
+        {selectedIds.includes("locali") && ((legenda === "gf" && !!subFilter?.includes("glutenfree")) || (legenda === "stellati" && !!subFilter?.includes("michelin"))) && (
+          <motion.div key={`legenda-${legenda}`} initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
+            <LegendaLocali tipo={legenda as "gf" | "stellati"} language={language} onClose={() => setLegenda(null)} />
           </motion.div>
         )}
 
@@ -649,14 +727,19 @@ export default function CategoryChips({
         {inBarraValide.includes("tematiche") && isAcceso("tematiche") && (
           <motion.div key="tematiche-sub" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
             className="flex flex-row gap-1.5 px-3 overflow-x-auto no-scrollbar pointer-events-auto pb-1">
+            {/* COME LE ALTRE RIGHE (26/09/2026, committente: «quando selezionato Tutti deve
+                comportarsi come le altre categorie — se selezionata le altre si spengono»). «Tutti» =
+                gli otto verticali accesi, ed è l'unica chip evidenziata; da lì un tema toccato resta da
+                solo, poi si aggiungono/tolgono uno a uno, e tolto l'ultimo si torna a «Tutti».
+                Restano categorie vere (onToggle), non un subFilter. */}
             <SubChip key="all" f={{ id: null, emoji: "🧭" }}
-              isSelected={TEMATICI_CHIPS.every((t) => selectedIds.includes(t.id))}
+              isSelected={tuttiTematiciAccesi}
               label={SUB_FILTER_TRANSLATIONS.all_m[language] || "Tutti"}
-              onSelect={() => TEMATICI_CHIPS.forEach((t) => { if (!selectedIds.includes(t.id)) onToggle(t.id); })} />
+              onSelect={accendiTuttiTematici} />
             {TEMATICI_CHIPS.map((f) => (
-              <SubChip key={f.id} f={f} isSelected={selectedIds.includes(f.id)}
+              <SubChip key={f.id} f={f} isSelected={!tuttiTematiciAccesi && selectedIds.includes(f.id)}
                 label={SUB_FILTER_TRANSLATIONS[f.id]?.[language] || getTranslation(f.id, language)}
-                onSelect={() => onToggle(f.id)} />
+                onSelect={() => scegliSoloTematico(f.id)} />
             ))}
           </motion.div>
         )}

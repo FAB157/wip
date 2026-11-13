@@ -4,7 +4,7 @@
 // =====================================================================
 
 import type { LatLon } from '../lib/geo';
-import { getApiUrl } from '../lib/api';
+import { getApiUrl, apiFetch } from '../lib/api';
 
 // Base OSRM per il routing PEDONALE, condivisa da TUTTI i consumatori
 // (osrmService, routeEngine, NavigatorEngine, PlanScreen): un'unica costante.
@@ -33,7 +33,7 @@ export interface RouteStep {
   instruction: string;
   /** Coordinata del punto di manovra. */
   location: LatLon;
-  /** Distanza (m) del segmento che porta a questa manovra. */
+  /** Distanza (m) da questa manovra alla SEGUENTE (OSRM step.distance: il tratto che parte qui). */
   distance: number;
   maneuverType: string;
   maneuverModifier?: string;
@@ -157,10 +157,60 @@ const MANEUVER_LANGS: Record<string, ManeuverPhrases> = {
  * maneuver.instruction), altrimenti la traduzione da type/modifier. La usa
  * anche Dieci Tappe, che tiene le legs del server e prima non le leggeva mai.
  */
-export function istruzionePerStep(s: any, lang: string, poiName?: string): string {
+/**
+ * (09/10/2026, giro a San Pietroburgo: «Continua dritto su Садово-Невский тоннель» letto dalla voce italiana)
+ * Il nome di una via si DICE solo se la voce dell'utente lo sa leggere: stesso alfabeto. Un nome in cirillico,
+ * cinese, arabo, greco… per chi ascolta in una lingua a caratteri latini non si pronuncia — si dice la manovra
+ * senza nome. Sul cartello in alto il nome resta com'è: è quello scritto sulla targa della strada.
+ */
+const ALFABETO_NON_LATINO = /[Ͱ-ϿЀ-ԯ֐-ۿऀ-෿฀-๿ᄀ-ᇿ぀-ヿ㐀-鿿가-힯]/;
+/**
+ * 23/10/2026 — REGOLA: una via BILINGUE («Rue des Éperonniers - Spoormakersstraat», Bruxelles) si dice in UNA
+ * lingua: la parte che somiglia alla lingua dell'utente (francese, olandese/tedesco, italiano, spagnolo), altrimenti
+ * la prima. Leggere le due metà di fila suonava come due vie. Il cartello in alto resta quello della fonte.
+ */
+const SEGNI_LINGUA: Record<string, RegExp> = {
+  fr: /\b(rue|avenue|boulevard|place|quai|chauss[ée]e|impasse|all[ée]e|galerie|rond-point|porte)\b|[éèêàç]/i,
+  nl: /(straat|laan|plein|steenweg|kaai|dreef|gracht|weg|markt)\b/i,
+  de: /(stra(ss|ß)e|gasse|platz|weg|allee|ring|ufer)\b/i,
+  it: /\b(via|viale|piazza|corso|vicolo|largo|lungomare|salita)\b/i,
+  es: /\b(calle|avenida|plaza|paseo|carrer|pla[çc]a|camino)\b/i,
+};
+function parteNellaLingua(n: string, l: string): string {
+  const parti = n.split(/\s+[-–\/]\s+/).map(x => x.trim()).filter(Boolean);
+  if (parti.length < 2) return n;
+  // Le lingue che chi ascolta capisce meglio, in ordine: la sua, poi le vicine.
+  const ordine = l === 'en' ? ['en', 'fr', 'nl', 'de'] : l === 'de' ? ['de', 'nl'] : [l, 'fr'];
+  for (const lin of ordine) {
+    const re = SEGNI_LINGUA[lin];
+    const p = re ? parti.find(x => re.test(x)) : undefined;
+    if (p) return p;
+  }
+  return parti[0];
+}
+
+export function nomeViaPronunciabile(name: string | undefined | null, lang: string): string | undefined {
+  const l = String(lang || 'it').toLowerCase().slice(0, 2);
+  const n = parteNellaLingua(String(name || '').trim(), l);
+  if (!n) return undefined;
+  if (l === 'ru') return /[Ѐ-ԯ]/.test(n) || !ALFABETO_NON_LATINO.test(n) ? n : undefined;
+  if (l === 'zh') return /[㐀-鿿]/.test(n) || !ALFABETO_NON_LATINO.test(n) ? n : undefined;
+  return ALFABETO_NON_LATINO.test(n) ? undefined : n;
+}
+
+export function istruzionePerStep(s: any, lang: string, poiName?: string, prev?: any): string {
   const testoFonte = typeof s?.maneuver?.instruction === 'string' && s.maneuver.instruction.trim() ? s.maneuver.instruction.trim() : undefined;
-  if (testoFonte) return testoFonte;
-  const name: string | undefined = typeof s?.name === 'string' && s.name.trim() ? s.name.trim() : undefined;
+  // Anche la frase già scritta dalla fonte porta il nome della via: se non è pronunciabile si ricompone senza.
+  // 23/10/2026: si restituisce la frase già ridotta a UNA lingua se la via è bilingue (parteNellaLingua).
+  const fontePronunciabile = testoFonte ? nomeViaPronunciabile(testoFonte, lang) : undefined;
+  if (fontePronunciabile) return fontePronunciabile;
+  let name: string | undefined = typeof s?.name === 'string' && s.name.trim() ? s.name.trim() : undefined;
+  // REGOLA 23/10/2026 (collaudo Lugano: «Gira a destra in Via Paolo Regazzoni», poi «Fra 90 metri, gira a
+  // sinistra in Via Paolo Regazzoni»). Non era la svolta detta prima del preavviso: erano DUE manovre, e la
+  // seconda resta sulla stessa via (OSRM: step.name = la via DOPO la manovra, prev.name = quella su cui si è).
+  // Ripetere «in Via X» a chi è già in Via X fa credere a una svolta già fatta: lì il nome non si dice.
+  const prevName = typeof prev?.name === 'string' ? prev.name.trim().toLowerCase() : '';
+  if (name && prevName && prevName === name.toLowerCase()) name = undefined;
   return translateManeuver(s?.maneuver?.type ?? 'continue', s?.maneuver?.modifier, lang, poiName, s?.maneuver?.exit, name);
 }
 
@@ -177,7 +227,7 @@ export function translateManeuver(
   const t = MANEUVER_LANGS[l] || MANEUVER_LANGS.en;
   // OSRM restituisce '' (non undefined) per le strade senza nome: va trattato
   // come "assente", altrimenti si otterrebbe "gira a destra in " a vuoto.
-  const name = streetName && streetName.trim() ? streetName.trim() : undefined;
+  const name = nomeViaPronunciabile(streetName, l);
 
   if (type === 'arrive') return t.arrive(poiName || t.destination);
   if (type === 'depart') return t.depart;
@@ -211,6 +261,93 @@ export function translateManeuver(
   }
 }
 
+// EVITA SCALE (08/09/2026): preferenza dell'utente, persistente. Quando e'
+// attiva il server salta le fonti che non sanno evitare le scalinate (OSRM
+// foot, Geoapify, Mapbox) e usa Valhalla/ORS con profilo accessibile.
+const EVITA_SCALE_KEY = 'wip_nav_evita_scale';
+export function getEvitaScale(): boolean {
+  try { return typeof localStorage !== 'undefined' && localStorage.getItem(EVITA_SCALE_KEY) === '1'; } catch { return false; }
+}
+export function setEvitaScale(on: boolean): void {
+  try {
+    if (on) localStorage.setItem(EVITA_SCALE_KEY, '1'); else localStorage.removeItem(EVITA_SCALE_KEY);
+    window.dispatchEvent(new CustomEvent('wip-settings-updated', { detail: { evitaScale: on } }));
+  } catch { /* storage non disponibile */ }
+}
+
+// SVOLTE A RAFFICA (04/10/2026, test virtuale a Carrara: «gira a sinistra»,
+// «gira a sinistra», «gira a destra», «tra 70 metri gira a destra» in nove
+// secondi, su tratti di 6-12 m). Due svolte a meno di 15 m l'una dall'altra
+// non sono due istruzioni: sono una, «gira a sinistra, poi subito a destra».
+// La seconda si fonde nella prima e sparisce dall'elenco; una terza e una
+// quarta nello stesso groviglio spariscono e basta (il tracciato sulla mappa
+// le mostra). Si fa QUI, sull'elenco dei passi, così la voce della pagina e il
+// follower nativo (che riceve gli stessi passi) restano allineati.
+const MANOVRE_VICINE_M = 15;
+const POI_SUBITO: Record<string, string> = {
+  it: 'poi subito', en: 'then immediately', fr: 'puis tout de suite', es: 'y enseguida', de: 'dann sofort', ru: 'затем сразу', zh: '然后立即',
+};
+export function accorpaManovreVicine(steps: RouteStep[], lang: string): void {
+  const l2 = String(lang || 'it').slice(0, 2).toLowerCase();
+  const lega = POI_SUBITO[l2] || POI_SUBITO.en;
+  const svolta = (s: RouteStep) => { const t = String(s.maneuverType || '').toLowerCase(); return t !== 'depart' && t !== 'arrive'; };
+  const fuse = new Set<RouteStep>();
+  for (let i = 1; i < steps.length; ) {
+    const prima = steps[i - 1], dopo = steps[i];
+    // `distance` di un passo = metri dalla SUA manovra alla successiva.
+    if (svolta(prima) && svolta(dopo) && (prima.distance ?? 0) < MANOVRE_VICINE_M) {
+      // Due manovre UGUALI a pochi metri sono una sola («mantieni la destra, poi subito mantieni la destra»,
+      // San Pietroburgo 09/10/2026): si dice una volta.
+      // 23/10/2026 — REGOLA: la seconda manovra NON ripete la via della prima («…in Rue X, poi subito a destra in
+      // Rue X»): se il nome è lo stesso, la seconda si dice senza nome.
+      if (dopo.name && prima.name && dopo.name === prima.name) dopo.instruction = translateManeuver(dopo.maneuverType || 'turn', dopo.maneuverModifier, lang);
+      if (!fuse.has(prima) && dopo.instruction && String(prima.instruction || '').trim().toLowerCase() !== dopo.instruction.trim().toLowerCase()) {
+        prima.instruction = `${prima.instruction}, ${lega} ${dopo.instruction.charAt(0).toLowerCase()}${dopo.instruction.slice(1)}`;
+        fuse.add(prima);
+      }
+      prima.distance = (prima.distance ?? 0) + (dopo.distance ?? 0);
+      steps.splice(i, 1);
+      continue;
+    }
+    i += 1;
+  }
+}
+
+/**
+ * La stessa fusione, sui passi GREZZI del server (legs[].steps[] in forma OSRM): la
+ * usano il giro e il percorso su misura (tourService), che tengono le tratte del
+ * server così come arrivano. Il testo composto va in `maneuver.instruction`, che
+ * `istruzionePerStep` legge per primo: voce della pagina, cartello in alto e passi
+ * consegnati al follower nativo escono tutti dallo stesso elenco già accorciato,
+ * quindi Kotlin e Swift non cambiano. Partenza e arrivo non si toccano mai.
+ */
+export function accorpaPassiGrezzi(steps: any[], lang: string): void {
+  if (!Array.isArray(steps) || steps.length < 3) return;
+  const l2 = String(lang || 'it').slice(0, 2).toLowerCase();
+  const lega = POI_SUBITO[l2] || POI_SUBITO.en;
+  const svolta = (s: any) => { const t = String(s?.maneuver?.type || '').toLowerCase(); return t !== 'depart' && t !== 'arrive'; };
+  const fuse = new Set<any>();
+  for (let i = 1; i < steps.length; ) {
+    const prima = steps[i - 1], dopo = steps[i];
+    if (svolta(prima) && svolta(dopo) && (Number(prima?.distance) || 0) < MANOVRE_VICINE_M) {
+      if (!fuse.has(prima)) {
+        const a = istruzionePerStep(prima, lang);
+        // 23/10/2026: stessa via → la seconda manovra senza nome (vedi accorpaManovreVicine).
+        const stessaVia = !!dopo?.name && String(dopo.name).trim() !== '' && String(dopo.name).trim() === String(prima?.name || '').trim();
+        const b = stessaVia ? translateManeuver(dopo?.maneuver?.type ?? 'turn', dopo?.maneuver?.modifier, lang, undefined, dopo?.maneuver?.exit) : istruzionePerStep(dopo, lang);
+        // Due manovre uguali a pochi metri sono una sola: si dice una volta (vedi accorpaManovreVicine).
+        if (a && b && a.trim().toLowerCase() !== b.trim().toLowerCase()) { prima.maneuver = { ...(prima.maneuver || {}), instruction: `${a}, ${lega} ${b.charAt(0).toLowerCase()}${b.slice(1)}` }; fuse.add(prima); }
+        else if (a && b) prima.maneuver = { ...(prima.maneuver || {}), instruction: a };
+      }
+      prima.distance = (Number(prima.distance) || 0) + (Number(dopo?.distance) || 0);
+      if (prima.duration != null || dopo?.duration != null) prima.duration = (Number(prima.duration) || 0) + (Number(dopo?.duration) || 0);
+      steps.splice(i, 1);
+      continue;
+    }
+    i += 1;
+  }
+}
+
 /**
  * Calcola il percorso pedonale da -> a.
  * Ritorna null se OSRM non risponde o non trova rotte.
@@ -226,13 +363,18 @@ export async function fetchWalkingRoute(
     // `language`: il server la passa a Valhalla/ORS/Geoapify per le istruzioni
     // testuali; senza, usava 'it' per tutti (anche utenti EN/FR/DE).
     const langCode = String(lang || 'it').slice(0, 2).toLowerCase();
-    const url = `${OSRM_FOOT_BASE}${coords}?overview=full&geometries=geojson&steps=true&language=${encodeURIComponent(langCode)}`;
+    const evita = getEvitaScale() ? '&evita=scale' : '';
+    const url = `${OSRM_FOOT_BASE}${coords}?overview=full&geometries=geojson&steps=true&language=${encodeURIComponent(langCode)}${evita}`;
     // Timeout: senza, una richiesta appesa lasciava la navigazione bloccata in
     // "routing" all'infinito. Ma 6 s erano TROPPO POCHI: dietro /api/route/foot
     // il server prova cinque fonti in serie (6+7+8+8+8 s) e il client mollava
     // mentre la prima era ancora in corso — le quattro riserve non venivano mai
     // raggiunte (verificato il 22/08/2026). 45 s copre l'intera catena.
-    const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
+    // apiFetch, non fetch (21/09/2026): dal 10/09 la rotta esige il Bearer
+    // (audit SEC-01) e la fetch nuda prendeva 401 — il WIP Nav a piedi verso
+    // una meta sola non partiva per nessuno, loggato o no. apiFetch mette il
+    // token e, per l'ospite, propone il login invece di fallire in silenzio.
+    const res = await apiFetch(url, undefined, 45000);
     if (!res.ok) return null;
     const data = await res.json();
     const route = data?.routes?.[0];
@@ -260,6 +402,8 @@ export async function fetchWalkingRoute(
         name,
       };
     });
+
+    accorpaManovreVicine(steps, lang);
 
     const geometry: [number, number][] = (route.geometry?.coordinates ?? []).map(
       ([lon, lat]: [number, number]) => [lat, lon],

@@ -46,6 +46,57 @@ export interface WipBackgroundAudioPlugin {
    */
   setupMediaSession(): Promise<void>;
 
+  /**
+   * VISITA MUSEO (12/09/2026, committente: «sulla nativa Apple non c'è il
+   * banner quando ascolto l'audioguida del museo a display spento… con
+   * tutte le funzioni del player, nome dell'opera, prossima opera, play,
+   * pausa»). Accende i tasti «traccia successiva/precedente» della
+   * schermata di blocco (al posto dei salti di 15 s) e tiene il banner
+   * anche a fine traccia, così si può passare all'opera dopo senza aprire
+   * l'app. Spegnerli a visita chiusa.
+   */
+  setTrackCommands(options: { next: boolean; previous: boolean }): Promise<void>;
+
+  /** Aggiorna titolo/sottotitolo/copertina del banner senza rifar partire l'audio (anche a player fermo). */
+  updateNowPlaying(options: { title?: string; subtitle?: string; imageUri?: string }): Promise<void>;
+
+  /**
+   * IL CRUSCOTTO DELLA VISITA MUSEO (13/09/2026, requisito del committente:
+   * «l'opera che hai ascoltato, quella che stai ascoltando e la prossima»).
+   * Live Activity su iOS 16.1+, ignorata (ok:false) altrove: il banner Now
+   * Playing (updateNowPlaying, gia' attivo) resta comunque il ripiego, non
+   * serve gestire il caso `ok:false` in modo diverso.
+   */
+  updateMuseumBanner(options: {
+    attivo: boolean;
+    nomeMuseo?: string;
+    ascoltataTitolo?: string;
+    ascoltataSala?: string;
+    inAscoltoTitolo?: string;
+    inAscoltoSala?: string;
+    /** Miniatura dell'opera in ascolto (URL): il nativo la scarica nel container dell'App Group per la lock screen. */
+    inAscoltoFotoUrl?: string;
+    /** 0...1, assente = sconosciuto (niente barra). */
+    inAscoltoProgresso?: number;
+    inPausa?: boolean;
+    prossimaTitolo?: string;
+    prossimaSala?: string;
+    prossimaFotoUrl?: string;
+    /** 1-based. */
+    indiceTappa?: number;
+    tappeTotali?: number;
+  }): Promise<{ ok: boolean; reason?: string }>;
+
+  /** Chiude il cruscotto della visita museo: fine visita o uscita anticipata. */
+  endMuseumBanner(): Promise<void>;
+
+  /** Tasto «successiva» dalla schermata di blocco / cuffie (solo con setTrackCommands). */
+  addListener(eventName: 'remoteNext', listener: () => void): Promise<PluginListenerHandle> & PluginListenerHandle;
+  /** Tasto «precedente» dalla schermata di blocco / cuffie. */
+  addListener(eventName: 'remotePrevious', listener: () => void): Promise<PluginListenerHandle> & PluginListenerHandle;
+  /** Tasto «play» premuto a player fermo (fine traccia): il JS decide cosa far partire. */
+  addListener(eventName: 'remotePlay', listener: () => void): Promise<PluginListenerHandle> & PluginListenerHandle;
+
   /** Riproduzione terminata naturalmente (fine traccia). */
   addListener(
     eventName: 'playbackEnded',
@@ -68,6 +119,17 @@ export interface WipBackgroundAudioPlugin {
   addListener(
     eventName: 'playbackProgress',
     listener: (data: { position: number; duration: number }) => void,
+  ): Promise<PluginListenerHandle> & PluginListenerHandle;
+
+  /**
+   * Il megafono non e' applicabile su questo dispositivo: Android non espone
+   * gli audiofx (Equalizer/LoudnessEnhancer), oppure siamo su iOS dove
+   * l'effetto non esiste. Il JS spegne il tasto invece di lasciarlo acceso su
+   * un effetto che non arrivera' mai (01/09/2026).
+   */
+  addListener(
+    eventName: 'megaphoneUnavailable',
+    listener: () => void,
   ): Promise<PluginListenerHandle> & PluginListenerHandle;
 
   removeAllListeners(): Promise<void>;

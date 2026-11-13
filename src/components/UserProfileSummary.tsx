@@ -115,10 +115,43 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
     // foto: prima restavano fermi al valore del mount fino al riavvio.
     window.addEventListener('wip-gamification-badge', onCreditsUpdated);
     window.addEventListener('wip-vision-updated', onCreditsUpdated);
+    // SALDO IN DIRETTA (25/09/2026, primo acquisto reale su iOS): i crediti li
+    // accredita il webhook RevenueCat → server, non l'app, quindi nessun evento
+    // locale sa QUANDO arrivano e la home restava al saldo vecchio fino al
+    // riavvio. Qui si ascolta la riga del proprio profilo sul database
+    // (stesso canale che usava già WalletWidget): appena il server scrive il
+    // nuovo saldo, il badge cambia e si avvisano anche le altre schermate.
+    // Se il canale non è disponibile (offline, mock) non succede nulla: il
+    // ripiego resta il ri-fetch su `wip-credits-updated` e al ritorno in
+    // primo piano.
+    let canale: any = null;
+    if (session?.user?.id) {
+      try {
+        canale = supabase
+          .channel(`profilo_saldo_${session.user.id}`)
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'user_profiles', filter: `id=eq.${session.user.id}` }, (payload: any) => {
+            const nuovo = payload?.new;
+            if (!nuovo) return;
+            setProfile((prev: any) => {
+              const unito = { ...(prev || {}), ...nuovo };
+              try { localStorage.setItem('wip_user_profile', JSON.stringify(unito)); } catch { /* quota */ }
+              return unito;
+            });
+            try { window.dispatchEvent(new CustomEvent('wip-credits-updated', { detail: { userId: session.user.id, origine: 'realtime' } })); } catch { /* SSR */ }
+          })
+          .subscribe();
+      } catch { canale = null; }
+    }
+    // Al ritorno in primo piano (dopo la cassa dello store, una notifica…) si
+    // rilegge il profilo: copre anche il caso in cui il canale non consegni.
+    const onVisibile = () => { if (document.visibilityState === 'visible') fetchProfile(); };
+    document.addEventListener('visibilitychange', onVisibile);
     return () => {
       window.removeEventListener('wip-credits-updated', onCreditsUpdated);
       window.removeEventListener('wip-gamification-badge', onCreditsUpdated);
       window.removeEventListener('wip-vision-updated', onCreditsUpdated);
+      document.removeEventListener('visibilitychange', onVisibile);
+      if (canale) { try { supabase.removeChannel(canale); } catch { /* già chiuso */ } }
     };
   }, [session]);
 

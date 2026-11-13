@@ -35,6 +35,19 @@
 				<string>itainta</string>
 			</array>
 		</dict>
+		<!-- Accedi con Google NATIVO (10/09/2026): l'SDK di Google torna
+		     nell'app su questo schema, che e' il client ID iOS al contrario.
+		     Client "WIP iOS" del progetto Google Cloud wip-ita, autorizzato
+		     anche fra i Client IDs del provider Google su Supabase. Senza
+		     questo schema il foglio di accesso si apre e non torna indietro. -->
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.itaintasca.app.google</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.363241288394-ur4d52235e9mpm75mmaslt7shm4ufiae</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
@@ -84,6 +97,13 @@
 	<string>La fotocamera serve per la funzione Vision che riconosce i monumenti inquadrati.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Il microfono è usato per dettare a voce le domande alla guida AI durante l'ascolto delle audioguide.</string>
+	<!-- SFSpeechRecognizer (plugin @capacitor-community/speech-recognition,
+	     08/09/2026): senza questa chiave iOS fa crashare l'app alla prima
+	     richiesta di permesso, e App Review rifiuta l'uso non dichiarato.
+	     Va SEMPRE insieme a NSMicrophoneUsageDescription qui sopra: il
+	     riconoscimento vocale ha bisogno di entrambi. -->
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Il riconoscimento vocale trasforma in testo quello che detti all'assistente WIP, così puoi creare l'itinerario e fare domande parlando invece di scrivere.</string>
 	<!-- Gating sensori anti-teletrasporto GPS (MotionActivityGate.swift):
 	     se l'utente nega il permesso il comportamento resta identico a prima
 	     (fail-safe, nessuna soppressione dei trigger). -->
@@ -132,13 +152,19 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<!-- Universale dall'8/09/2026 (rifiuto Apple 1.3, Guideline 4 su iPad Air:
+	     l'app girava in modalita' compatibilita' iPhone, incorniciata e con
+	     l'onboarding tagliato). Su iPad solo verticale, come su iPhone: il
+	     layout e' pensato per una colonna. Chi non supporta tutte le
+	     orientazioni su iPad deve dichiarare UIRequiresFullScreen (niente
+	     Split View / Slide Over), altrimenti la validazione fallisce. -->
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>UIRequiresFullScreen</key>
+	<true/>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
 </dict>

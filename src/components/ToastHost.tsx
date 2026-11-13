@@ -21,8 +21,8 @@ export default function ToastHost({ language = 'IT' as Language }: { language?: 
     const onToast = (e: Event) => {
       const detail = (e as CustomEvent<ToastDetail>).detail;
       if (!detail?.text) return;
-      // Massimo 3 in pila: oltre, la schermata diventa illeggibile.
-      setItems(prev => [...prev.slice(-2), detail]);
+      // Massimo 3 in pila: oltre, la schermata diventa illeggibile. Stessa `chiave` = sostituisce, non si impila.
+      setItems(prev => [...prev.filter(t => !detail.chiave || t.chiave !== detail.chiave).slice(-2), detail]);
       timers.set(detail.id, setTimeout(() => dismiss(detail.id), detail.duration || 6000));
     };
 
@@ -52,6 +52,16 @@ export default function ToastHost({ language = 'IT' as Language }: { language?: 
             aria-live="polite"
             className="pointer-events-auto"
           >
+            {t.compatto ? (
+              <div className={`rounded-full shadow-lg px-4 py-2 flex items-center gap-2 text-white text-[12px] font-bold ${
+                t.tone === 'error' ? 'bg-red-600' : t.tone === 'success' ? 'bg-emerald-600' : 'bg-slate-800'
+              }`}>
+                <p className="flex-1 truncate">{t.text}</p>
+                <button type="button" onClick={() => dismiss(t.id)} aria-label={getTranslation('close', language)} className="shrink-0 opacity-80">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
             <div className={`rounded-2xl shadow-2xl border overflow-hidden bg-white ${
               t.tone === 'error' ? 'border-red-200' : t.tone === 'success' ? 'border-emerald-200' : 'border-blue-200'
             }`}>
@@ -79,6 +89,7 @@ export default function ToastHost({ language = 'IT' as Language }: { language?: 
                 </button>
               </div>
             </div>
+            )}
           </motion.div>
         ))}
       </AnimatePresence>
