@@ -53,6 +53,8 @@
 		A11A2B3C4D5E6F7080910019 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F708091001A /* PrivacyInfo.xcprivacy */; };
 		A11A2B3C4D5E6F7080910201 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910202 /* InfoPlist.strings */; };
 		A084ECDBA7D38E1E42DFC39D /* Pods_App.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AF277DCFFFF123FFC6DF26C7 /* Pods_App.framework */; };
+		D44C00000000000000000001 /* CollaudoNavigatoreTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = D44C00000000000000000002 /* CollaudoNavigatoreTest.swift */; };
+		D44C00000000000000000003 /* collaudo in Resources */ = {isa = PBXBuildFile; fileRef = D44C00000000000000000004 /* collaudo */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -111,6 +113,9 @@
 		AF277DCFFFF123FFC6DF26C7 /* Pods_App.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_App.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		AF51FD2D460BCFE21FA515B2 /* Pods-App.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-App.release.xcconfig"; path = "Pods/Target Support Files/Pods-App/Pods-App.release.xcconfig"; sourceTree = "<group>"; };
 		FC68EB0AF532CFC21C3344DD /* Pods-App.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-App.debug.xcconfig"; path = "Pods/Target Support Files/Pods-App/Pods-App.debug.xcconfig"; sourceTree = "<group>"; };
+		D44C00000000000000000002 /* CollaudoNavigatoreTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollaudoNavigatoreTest.swift; sourceTree = "<group>"; };
+		D44C00000000000000000004 /* collaudo */ = {isa = PBXFileReference; lastKnownFileType = folder; path = collaudo; sourceTree = "<group>"; };
+		D44C00000000000000000005 /* AppCollaudoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppCollaudoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXContainerItemProxy section */
@@ -120,6 +125,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = B22A0000000000000000D0D1;
 			remoteInfo = WipNavActivity;
+		};
+		D44C0000000000000000000B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 504EC3031FED79650016851F;
+			remoteInfo = App;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -153,6 +165,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D44C00000000000000000009 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -169,6 +188,7 @@
 			children = (
 				504EC3061FED79650016851F /* App */,
 				B22A0000000000000000C0C1 /* WipNavActivity */,
+				D44C00000000000000000006 /* AppCollaudoTests */,
 				504EC3051FED79650016851F /* Products */,
 				7F8756D8B27F46E3366F6CEA /* Pods */,
 				27E2DDA53C4D2A4D1A88CE4A /* Frameworks */,
@@ -180,8 +200,18 @@
 			children = (
 				504EC3041FED79650016851F /* App.app */,
 				B22A0000000000000000B0B4 /* WipNavActivity.appex */,
+				D44C00000000000000000005 /* AppCollaudoTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		D44C00000000000000000006 /* AppCollaudoTests */ = {
+			isa = PBXGroup;
+			children = (
+				D44C00000000000000000002 /* CollaudoNavigatoreTest.swift */,
+				D44C00000000000000000004 /* collaudo */,
+			);
+			path = AppCollaudoTests;
 			sourceTree = "<group>";
 		};
 		B22A0000000000000000C0C1 /* WipNavActivity */ = {
@@ -292,6 +322,24 @@
 			productReference = B22A0000000000000000B0B4 /* WipNavActivity.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		D44C00000000000000000007 /* AppCollaudoTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D44C0000000000000000000F /* Build configuration list for PBXNativeTarget "AppCollaudoTests" */;
+			buildPhases = (
+				D44C00000000000000000008 /* Sources */,
+				D44C00000000000000000009 /* Frameworks */,
+				D44C0000000000000000000A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D44C0000000000000000000C /* PBXTargetDependency */,
+			);
+			name = AppCollaudoTests;
+			productName = AppCollaudoTests;
+			productReference = D44C00000000000000000005 /* AppCollaudoTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -309,6 +357,11 @@
 					B22A0000000000000000D0D1 = {
 						CreatedOnToolsVersion = 15.0;
 						ProvisioningStyle = Automatic;
+					};
+					D44C00000000000000000007 = {
+						CreatedOnToolsVersion = 15.0;
+						ProvisioningStyle = Automatic;
+						TestTargetID = 504EC3031FED79650016851F;
 					};
 				};
 			};
@@ -335,6 +388,7 @@
 			targets = (
 				504EC3031FED79650016851F /* App */,
 				B22A0000000000000000D0D1 /* WipNavActivity */,
+				D44C00000000000000000007 /* AppCollaudoTests */,
 			);
 		};
 /* End PBXProject section */
@@ -359,6 +413,14 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D44C0000000000000000000A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D44C00000000000000000003 /* collaudo in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -451,6 +513,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D44C00000000000000000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D44C00000000000000000001 /* CollaudoNavigatoreTest.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -458,6 +528,11 @@
 			isa = PBXTargetDependency;
 			target = B22A0000000000000000D0D1 /* WipNavActivity */;
 			targetProxy = B22A0000000000000000E0E2 /* PBXContainerItemProxy */;
+		};
+		D44C0000000000000000000C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 504EC3031FED79650016851F /* App */;
+			targetProxy = D44C0000000000000000000B /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -683,6 +758,44 @@
 			};
 			name = Release;
 		};
+		D44C0000000000000000000D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 4;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
+				MARKETING_VERSION = 1.4;
+				PRODUCT_BUNDLE_IDENTIFIER = com.itaintasca.app.collaudotests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/App";
+			};
+			name = Debug;
+		};
+		D44C0000000000000000000E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 4;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
+				MARKETING_VERSION = 1.4;
+				PRODUCT_BUNDLE_IDENTIFIER = com.itaintasca.app.collaudotests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/App";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -709,6 +822,15 @@
 			buildConfigurations = (
 				B22A0000000000000000D0D6 /* Debug */,
 				B22A0000000000000000D0D7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D44C0000000000000000000F /* Build configuration list for PBXNativeTarget "AppCollaudoTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D44C0000000000000000000D /* Debug */,
+				D44C0000000000000000000E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

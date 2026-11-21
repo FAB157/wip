@@ -270,6 +270,11 @@ enum Arbitrato {
         out = out.replacingOccurrences(of: "\\([^)]*\\)", with: " ", options: .regularExpression)
         out = out.replacingOccurrences(of: "^(the|il|la|lo|le|i|gli|l')\\s+", with: "", options: .regularExpression)
         out = out.replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression)
+        // 21/11/2026 (collaudo notturno): articoli e preposizioni interni non
+        // distinguono due righe dello stesso luogo («piazza de' Peruzzi» / «Piazza
+        // dei Peruzzi»). Stessa lista di PARTICELLE_NOME in foregroundTriggers.ts.
+        out = out.replacingOccurrences(of: "\\b(di|de|dei|degli|del|della|delle|dello|d|l|des|du|of)\\b", with: " ", options: .regularExpression)
+        out = out.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -410,6 +415,15 @@ enum NomiAnnunciabili {
     static func nomeDaAnnunciare(_ poi: Poi, lingua: String?) -> String? {
         var grezzo = pulito(poi.nameTranslated)
         if grezzo.isEmpty { grezzo = pulito(poi.nome) }
+        // 21/11/2026 (collaudo notturno): la voce leggeva anche la parentesi
+        // («Museo egizio (Il Cairo)», «Mårten Trotzig (1559–1617)»). Stessa
+        // pulizia di nomeDaAnnunciare in nomiAnnunciabili.ts e NomiAnnunciabili.kt.
+        grezzo = grezzo.replacingOccurrences(of: "\\s*\\([^)]*\\)\\s*", with: " ", options: .regularExpression)
+        // (21/11/2026) «Abaj Kunanbajev Szobra, Asztana út, Budapest.»: fino alla prima virgola.
+        grezzo = String(grezzo.split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false).first ?? Substring(grezzo))
+        grezzo = grezzo.replacingOccurrences(of: "[\\s.,;:\\-–]+$", with: "", options: .regularExpression)
+        grezzo = grezzo.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        grezzo = grezzo.trimmingCharacters(in: .whitespacesAndNewlines)
         if grezzo.count < 3 { return nil }
         if combacia(grezzo, soloNumeri) { return nil }
         if combacia(grezzo, pietraOTarga) || combacia(poi.poiType ?? "", "stolperstein|plaque|targa") { return nil }

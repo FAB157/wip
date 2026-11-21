@@ -1,0 +1,284 @@
+name: Collaudo iOS su Firebase Test Lab
+
+# (21/11/2026) Il navigatore nativo iOS (NavFollower) su un iPhone VERO di Firebase Test Lab.
+# Committente: «voglio anche iphone vero». Gemello del test Android in android/app/src/androidTest.
+#
+# PARTE SOLO A MANO (Actions → «Collaudo iOS su Firebase Test Lab» → Run workflow, oppure
+# `gh workflow run ios-testlab.yml --ref <ramo>`). NON parte ai push e NON tocca TestFlight: non usa
+# fastlane, non carica nulla su App Store Connect, non cambia il numero di build.
+# Attenzione: un workflow_dispatch compare in Actions solo quando questo file e' sul ramo PREDEFINITO del repo;
+# poi si puo' lanciare su qualsiasi ramo che contenga il target AppCollaudoTests.
+#
+# Cosa fa:
+#  1. costruisce l'app con una pagina web VUOTA (niente JS dell'app che avvii servizi o tocchi l'App Group durante il
+#     test) e il target di test AppCollaudoTests (ios/App/AppCollaudoTests), Debug, iphoneos;
+#  2. toglie l'estensione Live Activity e ogni entitlement (Test Lab rifirma con il suo profilo e gli App Group non li
+#     ha: «If your test relies on app groups, your test will fail», firebase.google.com/docs/test-lab/ios/command-line);
+#  3. firma ogni pezzo col certificato gia' nei secret (APPLE_DIST_CERT_PEM; senza, firma ad-hoc) — Test Lab chiede
+#     artefatti firmati e poi li rifirma: «Test Lab re-signs your app with its own provisioning profile and certificate»;
+#  4. zippa Debug-iphoneos + .xctestrun → artifact «collaudo-ios-testlab» (collaudo-ios.zip);
+#  5. SOLO se `lancia: si` e c'e' il secret GCP_TESTLAB_SA_JSON: lancia la corsa con gcloud e allega l'esito.
+#     La via normale e' un'altra: lo zip va su Oracle (/root/collaudo-notte/test-lab/ios/collaudo-ios.zip) e lo lancia
+#     il collaudo notturno con la chiave che c'e' gia' la' (lancia-test-lab-ios.sh), dentro la quota condivisa.
+#
+# Lo schermo spento NON si puo' forzare da XCTest su iOS: vedi il commento in testa a CollaudoNavigatoreTest.swift.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lancia:
+        description: "Lanciare subito la corsa su Test Lab da qui (serve il secret GCP_TESTLAB_SA_JSON; consuma 1 delle 5 corse fisiche del giorno)"
+        type: choice
+        options: [ "no", "si" ]
+        default: "no"
+      modello:
+        description: "Modello iPhone di Test Lab (vuoto = l'iPhone con l'iOS piu' recente; elenco: gcloud firebase test ios models list)"
+        required: false
+        default: ""
+      versione:
+        description: "Versione iOS (vuoto = la piu' recente del modello)"
+        required: false
+        default: ""
+  # A orario, solo se il committente lo decide (togliere i # qui sotto). 23:15 UTC = dopo la build, prima del collaudo
+  # notturno delle 01:30 IT. Attenzione: ogni corsa costa minuti macOS di GitHub e, con `lancia`, una corsa fisica.
+  # schedule:
+  #   - cron: '15 23 * * *'
+
+concurrency:
+  group: ios-testlab
+  cancel-in-progress: false
+
+jobs:
+  collaudo:
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      # Servono i pod di Capacitor (node_modules/@capacitor/ios …), non il sito: nessun `npm run build`.
+      - name: Install Dependencies
+        run: npm install
+
+      # Pagina web VUOTA: l'app si apre senza il JS di WIP, cosi' durante il test nessun servizio parte da solo,
+      # nessun plugin tocca l'App Group e nessun fix vero del telefono del laboratorio arriva al follower.
+      - name: Pagina web vuota e sync Capacitor
+        run: |
+          rm -rf dist && mkdir -p dist
+          printf '<!doctype html><html><head><meta charset="utf-8"><title>WIP collaudo</title></head><body>collaudo</body></html>\n' > dist/index.html
+          npx cap sync ios
+
+      # Il target di test importa il modulo App, che importa Capacitor: gli servono i percorsi dei pod. Il Podfile del
+      # repo NON cambia (la consegna TestFlight resta identica): il blocco si aggiunge solo qui, sul runner.
+      - name: Podfile con il target di test (solo su questo runner)
+        working-directory: ios/App
+        run: |
+          ruby -e '
+            p = "Podfile"; s = File.read(p)
+            abort("Podfile: marcatore '# Add your Pods here' non trovato") unless s.include?("  # Add your Pods here")
+            s.sub!("  # Add your Pods here", "  # Add your Pods here\n  target %q(AppCollaudoTests) do\n    inherit! :search_paths\n  end")
+            File.write(p, s)'
+          grep -n "AppCollaudoTests" Podfile
+          pod install
+
+      # Lo schema condiviso esiste solo qui: nel repo non ci sono schemi condivisi e la consegna usa quello che Xcode
+      # genera da solo per «App». Aggiungerne uno nel repo potrebbe cambiare quali schemi Xcode genera.
+      - name: Schema di test (solo su questo runner)
+        run: |
+          mkdir -p ios/App/App.xcodeproj/xcshareddata/xcschemes
+          cat > ios/App/App.xcodeproj/xcshareddata/xcschemes/AppCollaudoTests.xcscheme <<'XML'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Scheme LastUpgradeVersion = "1500" version = "1.7">
+             <BuildAction parallelizeBuildables = "YES" buildImplicitDependencies = "YES">
+                <BuildActionEntries>
+                   <BuildActionEntry buildForTesting = "YES" buildForRunning = "YES" buildForProfiling = "NO" buildForArchiving = "NO" buildForAnalyzing = "NO">
+                      <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "504EC3031FED79650016851F" BuildableName = "App.app" BlueprintName = "App" ReferencedContainer = "container:App.xcodeproj">
+                      </BuildableReference>
+                   </BuildActionEntry>
+                </BuildActionEntries>
+             </BuildAction>
+             <TestAction buildConfiguration = "Debug" selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv = "YES">
+                <Testables>
+                   <TestableReference skipped = "NO">
+                      <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "D44C00000000000000000007" BuildableName = "AppCollaudoTests.xctest" BlueprintName = "AppCollaudoTests" ReferencedContainer = "container:App.xcodeproj">
+                      </BuildableReference>
+                   </TestableReference>
+                </Testables>
+                <MacroExpansion>
+                   <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "504EC3031FED79650016851F" BuildableName = "App.app" BlueprintName = "App" ReferencedContainer = "container:App.xcodeproj">
+                   </BuildableReference>
+                </MacroExpansion>
+             </TestAction>
+             <LaunchAction buildConfiguration = "Debug" selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB" launchStyle = "0" useCustomWorkingDirectory = "NO" ignoresPersistentStateOnLaunch = "NO" debugDocumentVersioning = "YES" debugServiceExtension = "internal" allowLocationSimulation = "YES">
+                <BuildableProductRunnable runnableDebuggingMode = "0">
+                   <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "504EC3031FED79650016851F" BuildableName = "App.app" BlueprintName = "App" ReferencedContainer = "container:App.xcodeproj">
+                   </BuildableReference>
+                </BuildableProductRunnable>
+             </LaunchAction>
+          </Scheme>
+          XML
+          xcodebuild -workspace ios/App/App.xcworkspace -list
+
+      # Si costruisce SENZA firma (niente profili da creare, niente App Group) e si firma a mano dopo.
+      - name: Build for testing (Debug, iphoneos)
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -workspace ios/App/App.xcworkspace \
+            -scheme AppCollaudoTests \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" | tail -n 200
+          ls -la build/dd/Build/Products
+
+      - name: Togli estensione ed entitlement dalla build di test
+        run: |
+          P=build/dd/Build/Products/Debug-iphoneos
+          rm -rf "$P/App.app/PlugIns/WipNavActivity.appex"
+          ls "$P/App.app/PlugIns"
+          test -d "$P/App.app/PlugIns/AppCollaudoTests.xctest" || { echo "::error::AppCollaudoTests.xctest non e' dentro App.app/PlugIns"; exit 1; }
+
+      # Stesso certificato della consegna (vedi ios-build.yml per la storia del .p12 in 3DES/SHA-1), in un portachiavi
+      # temporaneo. Nessun profilo: Test Lab rifirma con il suo. Senza secret: firma ad-hoc, con un avviso.
+      - name: Firma
+        env:
+          APPLE_DIST_CERT_PEM: ${{ secrets.APPLE_DIST_CERT_PEM }}
+        run: |
+          set -e -o pipefail
+          P=build/dd/Build/Products/Debug-iphoneos
+          ID="-"
+          if [ -n "$APPLE_DIST_CERT_PEM" ]; then
+            printf '%s' "$APPLE_DIST_CERT_PEM" | base64 --decode > "$RUNNER_TEMP/dist.pem"
+            PW="$(/usr/bin/openssl rand -hex 16)"; echo "::add-mask::$PW"
+            /usr/bin/openssl pkcs12 -export -inkey "$RUNNER_TEMP/dist.pem" -in "$RUNNER_TEMP/dist.pem" -name "WIP Collaudo" \
+              -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 -passout "pass:$PW" -out "$RUNNER_TEMP/dist.p12"
+            rm -f "$RUNNER_TEMP/dist.pem"
+            KC="$RUNNER_TEMP/collaudo.keychain-db"; KCPW="$(/usr/bin/openssl rand -hex 16)"; echo "::add-mask::$KCPW"
+            security create-keychain -p "$KCPW" "$KC"
+            security set-keychain-settings -lut 3600 "$KC"
+            security unlock-keychain -p "$KCPW" "$KC"
+            security import "$RUNNER_TEMP/dist.p12" -k "$KC" -P "$PW" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC" >/dev/null
+            security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+            ID=$(security find-identity -v -p codesigning "$KC" | grep -m1 -oE '[0-9A-F]{40}' || true)
+            [ -n "$ID" ] || { echo "::warning::identita' non trovata nel portachiavi: firma ad-hoc"; ID="-"; }
+          else
+            echo "::warning title=Firma ad-hoc::APPLE_DIST_CERT_PEM assente: firma ad-hoc. Test Lab potrebbe rifiutare il pacchetto."
+          fi
+          # get-task-allow: XCTest deve potersi agganciare all'app ospite. NIENTE App Group.
+          cat > "$RUNNER_TEMP/collaudo.entitlements" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict><key>get-task-allow</key><true/></dict></plist>
+          PLIST
+          # Dal piu' interno al piu' esterno: framework e dylib, poi il bundle di test, poi l'app.
+          find "$P" \( -name "*.framework" -o -name "*.dylib" -o -name "*.xctest" -o -name "*.appex" -o -name "*.app" \) -print \
+            | awk -F/ '{ print NF "\t" $0 }' | sort -rn | cut -f2- | while read -r f; do
+              case "$f" in
+                *.app) codesign --force --sign "$ID" --timestamp=none --entitlements "$RUNNER_TEMP/collaudo.entitlements" "$f" || exit 1 ;;
+                *)     codesign --force --sign "$ID" --timestamp=none "$f" || exit 1 ;;
+              esac
+            done
+          codesign --verify --deep --strict --verbose=2 "$P/App.app"
+          codesign -d --entitlements - "$P/App.app" 2>/dev/null | grep -c application-groups && { echo "::error::App Group ancora presente"; exit 1; } || true
+
+      - name: Pacchetto per Test Lab (Debug-iphoneos + .xctestrun)
+        run: |
+          cd build/dd/Build/Products
+          ls *.xctestrun
+          zip -qry "$GITHUB_WORKSPACE/build/collaudo-ios.zip" Debug-iphoneos *.xctestrun
+          ls -la "$GITHUB_WORKSPACE/build/collaudo-ios.zip"
+
+      - name: Artifact (per Oracle o per un lancio a mano)
+        uses: actions/upload-artifact@v4
+        with:
+          name: collaudo-ios-testlab
+          path: build/collaudo-ios.zip
+          retention-days: 30
+
+      # ── Da qui: solo con `lancia: si` e il secret del service account ──────────────────────────────────────────
+      - name: Secret del service account
+        id: sa
+        env:
+          SA: ${{ secrets.GCP_TESTLAB_SA_JSON }}
+        run: |
+          if [ "${{ inputs.lancia }}" = "si" ] && [ -n "$SA" ]; then echo "ok=si" >> "$GITHUB_OUTPUT"
+          elif [ "${{ inputs.lancia }}" = "si" ]; then echo "::warning title=Corsa non lanciata::manca il secret GCP_TESTLAB_SA_JSON"; echo "ok=no" >> "$GITHUB_OUTPUT"
+          else echo "ok=no" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Autenticazione Google Cloud
+        if: steps.sa.outputs.ok == 'si'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_TESTLAB_SA_JSON }}
+
+      - name: gcloud (con i comandi beta)
+        if: steps.sa.outputs.ok == 'si'
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: beta
+
+      # --directories-to-pull e --other-files per iOS esistono solo in «gcloud beta». Il bucket dei risultati risponde
+      # 403 al service account finche' non ha il ruolo Editor del progetto: la corsa parte lo stesso, i file no.
+      - name: Corsa su un iPhone di Test Lab
+        if: steps.sa.outputs.ok == 'si'
+        env:
+          MODELLO: ${{ inputs.modello }}
+          VERSIONE: ${{ inputs.versione }}
+        run: |
+          set +e
+          gcloud config set project wip-guide --quiet
+          if [ -z "$MODELLO" ] || [ -z "$VERSIONE" ]; then
+            SCELTA=$(gcloud firebase test ios models list --format=json | node -e '
+              let s = ""; process.stdin.on("data", (b) => s += b).on("end", () => {
+                let m = []; try { m = JSON.parse(s); } catch { }
+                const num = (v) => String(v).split(".").map(Number).reduce((a, x, i) => a + x / 100 ** i, 0);
+                const ok = m.filter((x) => (x.formFactor || "PHONE") === "PHONE" && /iphone/i.test(x.id || "") && !(x.tags || []).some((t) => /deprecated/i.test(t)));
+                let best = null;
+                for (const x of ok) for (const v of x.supportedVersionIds || []) if (!best || num(v) > num(best.v) || (num(v) === num(best.v) && x.id > best.id)) best = { id: x.id, v };
+                process.stdout.write(best ? `${best.id} ${best.v}` : "");
+              });')
+            MODELLO=${MODELLO:-${SCELTA%% *}}; VERSIONE=${VERSIONE:-${SCELTA##* }}
+          fi
+          echo "iPhone: $MODELLO iOS $VERSIONE"
+          RIS="collaudo-$(date -u +%F-%H%M)-ios-fisico-gh"
+          mkdir -p build/esito
+          gcloud beta firebase test ios run \
+            --type xctest \
+            --test build/collaudo-ios.zip \
+            --device "model=$MODELLO,version=$VERSIONE,locale=it_IT,orientation=portrait" \
+            --timeout 25m \
+            --directories-to-pull com.itaintasca.app:/Documents/collaudo \
+            --results-dir "$RIS" \
+            --no-record-video \
+            --quiet 2>&1 | tee build/esito/corsa.log
+          ESITO=${PIPESTATUS[0]}
+          BUCKET=$(grep -oE 'storage/browser/[^/]+' build/esito/corsa.log | head -1 | sed 's#storage/browser/##')
+          if [ -n "$BUCKET" ]; then
+            for f in $(gsutil ls -r "gs://$BUCKET/$RIS/**" 2>/dev/null | grep -E 'registro\.txt$|progress\.txt$|test_result_[0-9]+\.xml$'); do
+              gsutil -q cp "$f" build/esito/ || true
+            done
+          fi
+          ls -la build/esito
+          echo "Esito gcloud: $ESITO (0 passato, 10 test falliti, 15 indeterminato, 20 infrastruttura)"
+          exit 0
+
+      - name: Esito della corsa
+        if: steps.sa.outputs.ok == 'si'
+        uses: actions/upload-artifact@v4
+        with:
+          name: collaudo-ios-esito
+          path: build/esito
+          retention-days: 30

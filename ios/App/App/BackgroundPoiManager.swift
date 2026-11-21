@@ -2010,11 +2010,14 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // di ricerca del grafo la strada non può essere più corta: non si
             // chiede nemmeno.
             let aria = location.distance(from: punto)
+            // (21/11/2026) Il raggio d'arrivo dell'utente: a piedi serve a `decide` per la «fine sentiero».
+            let raggioArrivo = effectiveRadii(for: poi, isDriving: isDriving).arrival
             let dIngresso = aria > ricercaStrada
                 ? aria
                 : RoadGraph.misura(
                     aria: aria, sorgente: sorgenteStrada,
-                    lat: punto.coordinate.latitude, lon: punto.coordinate.longitude, isDriving: isDriving)
+                    lat: punto.coordinate.latitude, lon: punto.coordinate.longitude, isDriving: isDriving,
+                    raggioArrivoPiedi: raggioArrivo)
             let dMuro = haPerimetro
                 ? PoiFootprints.distanzaDalPerimetro(
                     poiId: poi.id, footprint: poi.footprint,
@@ -2025,10 +2028,11 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // solo per chi è già nel raggio d'arrivo secondo la prima.
             var liberaM: Double? = nil
             if let libera = sorgenteLibera, let g = grezza,
-               dIngresso <= effectiveRadii(for: poi, isDriving: isDriving).arrival {
+               dIngresso <= raggioArrivo {
                 liberaM = RoadGraph.misura(
                     aria: g.distance(from: punto), sorgente: libera,
-                    lat: punto.coordinate.latitude, lon: punto.coordinate.longitude, isDriving: isDriving)
+                    lat: punto.coordinate.latitude, lon: punto.coordinate.longitude, isDriving: isDriving,
+                    raggioArrivoPiedi: raggioArrivo)
             }
             esaminati.append(Candidate(poi: poi, punto: punto, dist: min(dIngresso, dMuro), liberaM: liberaM))
         }
@@ -3550,6 +3554,11 @@ final class NavFollower {
     private static let offrouteMs: Double = 20_000
     private static let backOnRouteM: Double = 40
     private static let dedupeMs: Double = 20_000
+    /// (21/11/2026) Nessun preavviso «Tra N metri» entro questo tempo dall'ultima frase detta (= NavFollower.kt).
+    private static let preavvisoPausaMs: Double = 8_000
+    /// (21/11/2026) Metri per grado di latitudine dal raggio terrestre 6.371.000 m (= RAGGIO_TERRA_M di NavFollower.kt,
+    /// R di geo.ts sul web): 111.194,9. Era 111.320.
+    static let metriPerGrado: Double = 6_371_000.0 * .pi / 180
     /// Il «60» letterale del ramo "manovra mancata" della specifica.
     private static let missedMinDistM: Double = 60
     /// (21/09/2026, REVISIONE 2) ARRIVO FINALE «NEI PARAGGI»: entro 60 m
@@ -4453,7 +4462,11 @@ final class NavFollower {
                 continue
             } else if p.tipo == "turn" && !inPausa && inAvvicinamento &&
                         (!dettiLontano.contains(idx) || (!jsVivo && !dettiLontanoDavvero.contains(idx))) &&
-                        dS >= lontanoMin && dS <= lontanoMax && !p.testo.isEmpty {
+                        dS >= lontanoMin && dS <= lontanoMax && !p.testo.isEmpty &&
+                        // (21/11/2026, = NavFollower.kt e WIP Nav web) Nessun preavviso entro `preavvisoPausaMs`
+                        // dall'ultima frase detta («Tra 50 metri…» 3–7 s dopo «Continua dritto»).
+                        // (un orologio che torna indietro non è «una frase appena detta», = NavFollower.kt)
+                        (ultimoDettoTs == 0 || nowMs - ultimoDettoTs >= Self.preavvisoPausaMs || nowMs < ultimoDettoTs) {
                 // (21/09/2026, REVISIONE 2) In pausa il preavviso NON si segna.
                 // E CONTATO ≠ DETTO anche qui: un preavviso contato in silenzio
                 // negli 8 s dopo il congelamento (JS creduto vivo, ma non l'ha
@@ -4544,10 +4557,11 @@ final class NavFollower {
     // MARK: - Interni (sempre a lock preso)
 
     /// Toglie il percorso e riporta il follower allo stato iniziale.
-    /// `ultimoDetto`/`ultimoDettoTs` restano di proposito: non sono nell'elenco
-    /// della specifica, e dopo un ricalcolo (nuovo setNavRoute con la stessa
-    /// svolta davanti) sono loro a impedire la stessa frase due volte in 20 s.
+    /// (21/11/2026, = NavFollower.kt e spec) Al cambio di percorso `ultimoDetto` si azzera: lo scarto «stessa frase,
+    /// stesso indice entro 20 s» non vale più, gli indici del percorso nuovo sono altri. `ultimoDettoTs` RESTA: la regola
+    /// «nessun preavviso entro 8 s dall'ultima frase» vale anche dopo un ricalcolo.
     private func azzeraSottoLock() {
+        ultimoDetto = ""
         routeId = ""
         passi = []
         linea = []
@@ -4631,8 +4645,10 @@ final class NavFollower {
     /// Proiezione del punto sul segmento k-1→k in un piano locale centrato
     /// sul punto: (distanza dalla linea, frazione t del segmento).
     private func proiettaSulSegmento(_ k: Int, lat: Double, lon: Double) -> (dist: Double, t: Double) {
-        let metriPerGradoLat = 111_320.0
-        let metriPerGradoLon = 111_320.0 * cos(lat * .pi / 180)
+        // (21/11/2026) Metri per grado dal raggio 6.371.000 m, come il web (geo.ts) e NavFollower.kt: con 111.320
+        // iOS diceva «Sei fuori percorso» 2 s prima di Android sullo stesso tracciato.
+        let metriPerGradoLat = NavFollower.metriPerGrado
+        let metriPerGradoLon = NavFollower.metriPerGrado * cos(lat * .pi / 180)
         let ax: Double = (linea[k - 1].lon - lon) * metriPerGradoLon
         let ay: Double = (linea[k - 1].lat - lat) * metriPerGradoLat
         let dx: Double = (linea[k].lon - lon) * metriPerGradoLon - ax
@@ -4810,8 +4826,8 @@ final class NavFollower {
     /// centrato sul fix: alle distanze che contano qui (decine di metri)
     /// l'errore rispetto alla sfera è di centimetri.
     private func distanzaDalTracciato(lat: Double, lon: Double) -> Double {
-        let metriPerGradoLat = 111_320.0
-        let metriPerGradoLon = 111_320.0 * cos(lat * .pi / 180)
+        let metriPerGradoLat = NavFollower.metriPerGrado
+        let metriPerGradoLon = NavFollower.metriPerGrado * cos(lat * .pi / 180)
         func x(_ p: Punto) -> Double {
             var dLon = p.lon - lon
             if dLon > 180 { dLon -= 360 } else if dLon < -180 { dLon += 360 }

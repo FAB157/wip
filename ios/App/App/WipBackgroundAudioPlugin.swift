@@ -260,6 +260,13 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             call.reject("Invalid URL")
             return
         }
+        // (18/11/2026) Un file del telefono che non c'è più (URI vecchio dopo un aggiornamento dell'app: l'UUID del
+        // contenitore cambia) si rifiuta SUBITO: il JS ripiega sulla voce dal cloud. Prima il play «riusciva», l'item
+        // falliva dopo e l'errore arrivava al JS come fine opera.
+        if mediaUrl.isFileURL && !FileManager.default.fileExists(atPath: mediaUrl.path) {
+            call.reject("file_not_found")
+            return
+        }
 
         DispatchQueue.main.async {
             // (AUD-01) La guida JS parte: la voce nativa cede (teaser in coda
