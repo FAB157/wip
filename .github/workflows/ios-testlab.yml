@@ -80,11 +80,12 @@ jobs:
       - name: Podfile con il target di test (solo su questo runner)
         working-directory: ios/App
         run: |
-          ruby -e '
-            p = "Podfile"; s = File.read(p)
-            abort("Podfile: marcatore '# Add your Pods here' non trovato") unless s.include?("  # Add your Pods here")
-            s.sub!("  # Add your Pods here", "  # Add your Pods here\n  target %q(AppCollaudoTests) do\n    inherit! :search_paths\n  end")
-            File.write(p, s)'
+          ruby <<'RUBY'
+          p = "Podfile"; s = File.read(p)
+          abort("Podfile: marcatore non trovato") unless s.include?("  # Add your Pods here")
+          s.sub!("  # Add your Pods here", "  # Add your Pods here\n  target 'AppCollaudoTests' do\n    inherit! :search_paths\n  end")
+          File.write(p, s)
+          RUBY
           grep -n "AppCollaudoTests" Podfile
           pod install
 
