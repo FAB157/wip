@@ -111,6 +111,10 @@ jobs:
                       <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "D44C00000000000000000007" BuildableName = "AppCollaudoTests.xctest" BlueprintName = "AppCollaudoTests" ReferencedContainer = "container:App.xcodeproj">
                       </BuildableReference>
                    </TestableReference>
+                   <TestableReference skipped = "NO">
+                      <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "D44C00000000000000000017" BuildableName = "AppCollaudoUITests.xctest" BlueprintName = "AppCollaudoUITests" ReferencedContainer = "container:App.xcodeproj">
+                      </BuildableReference>
+                   </TestableReference>
                 </Testables>
                 <MacroExpansion>
                    <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "504EC3031FED79650016851F" BuildableName = "App.app" BlueprintName = "App" ReferencedContainer = "container:App.xcodeproj">
@@ -150,6 +154,8 @@ jobs:
           rm -rf "$P/App.app/PlugIns/WipNavActivity.appex"
           ls "$P/App.app/PlugIns"
           test -d "$P/App.app/PlugIns/AppCollaudoTests.xctest" || { echo "::error::AppCollaudoTests.xctest non e' dentro App.app/PlugIns"; exit 1; }
+          # (22/11/2026) Il test di UI (app davvero in background) vive nella sua app «Runner».
+          ls -d "$P"/*-Runner.app || { echo "::error::manca AppCollaudoUITests-Runner.app"; exit 1; }
 
       # Stesso certificato della consegna (vedi ios-build.yml per la storia del .p12 in 3DES/SHA-1), in un portachiavi
       # temporaneo. Nessun profilo: Test Lab rifirma con il suo. Senza secret: firma ad-hoc, con un avviso.
@@ -260,7 +266,7 @@ jobs:
             --type xctest \
             --test build/collaudo-ios.zip \
             --device "model=$MODELLO,version=$VERSIONE,locale=it_IT,orientation=portrait" \
-            --timeout 25m \
+            --timeout 40m \
             --directories-to-pull com.itaintasca.app:/Documents/collaudo \
             --results-dir "$RIS" \
             --no-record-video \
