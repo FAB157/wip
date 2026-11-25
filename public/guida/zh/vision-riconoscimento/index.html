@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vision：通过照片识别地点、艺术品和自然 | WIP Guide</title>
+<meta name="description" content="如何使用 WIP 的 Vision：AI 扫描（地点、艺术品、自然）、AR 雷达、费用、从相册选择照片、候选项目、My Vision 以及 WIP Community。为你解释所有选项。">
+<link rel="canonical" href="https://www.wip.guide/guida/zh/vision-riconoscimento"><link rel="alternate" hreflang="it" href="https://www.wip.guide/guida/vision-riconoscimento"><link rel="alternate" hreflang="en" href="https://www.wip.guide/guida/en/vision-riconoscimento"><link rel="alternate" hreflang="fr" href="https://www.wip.guide/guida/fr/vision-riconoscimento"><link rel="alternate" hreflang="es" href="https://www.wip.guide/guida/es/vision-riconoscimento"><link rel="alternate" hreflang="de" href="https://www.wip.guide/guida/de/vision-riconoscimento"><link rel="alternate" hreflang="ru" href="https://www.wip.guide/guida/ru/vision-riconoscimento"><link rel="alternate" hreflang="zh-Hans" href="https://www.wip.guide/guida/zh/vision-riconoscimento"><link rel="alternate" hreflang="x-default" href="https://www.wip.guide/guida/vision-riconoscimento">
+<meta property="og:type" content="website"><meta property="og:title" content="Vision：通过照片识别地点、艺术品和自然"><meta property="og:description" content="如何使用 WIP 的 Vision：AI 扫描（地点、艺术品、自然）、AR 雷达、费用、从相册选择照片、候选项目、My Vision 以及 WIP Community。为你解释所有选项。"><meta property="og:url" content="https://www.wip.guide/guida/zh/vision-riconoscimento"><meta property="og:site_name" content="WIP Guide"><meta property="og:image" content="https://www.wip.guide/scopri/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/icon.png">
+<style>
+:root{--bg:#fff;--fg:#14213d;--mut:#4b5568;--brand:#1e3a8a;--brand2:#2f56c9;--card:#f4f6fb;--line:#d9dfec;--ok:#0f6b3a;--warn:#8a4b00;--warnbg:#fff4e0;--costbg:#e8f0ff;--on:#fff}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0e1424;--fg:#e8ecf7;--mut:#a9b3c9;--brand:#8fb0ff;--brand2:#b5ccff;--card:#172038;--line:#2a3555;--ok:#6fdc9c;--warn:#ffcf8a;--warnbg:#2a2014;--costbg:#16264a;--on:#0e1424}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--brand)}a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--brand2);outline-offset:2px}
+header.top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.bar{max-width:1040px;margin:0 auto;padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.logo{font-weight:800;color:var(--brand);text-decoration:none;font-size:1.15rem}
+nav.menu{display:flex;gap:4px 14px;flex-wrap:wrap;font-size:.92rem}nav.menu a{text-decoration:none;color:var(--fg);padding:6px 2px}nav.menu a:hover{color:var(--brand)}
+.apri{margin-left:auto}
+main{max-width:1040px;margin:0 auto;padding:20px 16px 56px}
+h1{font-size:clamp(1.7rem,4.5vw,2.6rem);line-height:1.15;margin:.2em 0 .4em;color:var(--brand)}
+h2{font-size:1.45rem;margin:2em 0 .5em;line-height:1.25}h3{font-size:1.1rem}
+.lead{font-size:1.2rem;color:var(--mut);max-width:62ch}
+.crumb{font-size:.9rem;color:var(--mut)}.crumb a{color:var(--mut)}
+.btn{display:inline-block;background:var(--brand);color:var(--on);padding:11px 18px;border-radius:10px;text-decoration:none;font-weight:700;margin:4px 6px 4px 0}
+.btn.sec{background:transparent;color:var(--brand);border:2px solid var(--brand)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:22px 0;padding:16px;background:var(--card);border-radius:14px}
+.stat{display:flex;flex-direction:column}.num{font-size:1.9rem;font-weight:800;color:var(--brand);font-variant-numeric:tabular-nums}.et{font-size:.88rem;color:var(--mut)}
+.nota-stat{grid-column:1/-1;font-size:.82rem;color:var(--mut);margin:4px 0 0}
+ol.passi{counter-reset:p;list-style:none;padding:0}ol.passi li{counter-increment:p;position:relative;padding:10px 12px 10px 52px;margin:8px 0;background:var(--card);border-radius:10px}
+ol.passi li::before{content:counter(p);position:absolute;left:12px;top:9px;width:30px;height:30px;border-radius:50%;background:var(--brand);color:var(--on);display:grid;place-items:center;font-weight:800}
+.nota,.costo,.manca{border-radius:10px;padding:12px 14px;margin:14px 0}.nota{background:var(--warnbg);color:var(--warn)}.costo{background:var(--costbg)}
+.manca{border:2px dashed var(--line)}.manca h2{margin-top:0;font-size:1.1rem}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:420px}th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}th{background:var(--card)}
+figure{margin:18px 0}figure img,figure video{max-width:100%;height:auto;border-radius:12px;border:1px solid var(--line)}.esempi{margin:28px 0}.es-griglia{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}.es{border:1px solid var(--linea,#ddd);border-radius:12px;padding:12px;margin:0}.es img{max-height:360px;width:100%;object-fit:contain}.es audio{width:100%;margin-top:8px}.es-nota{font-size:.9em;margin:6px 0 0;opacity:.85}.es-pdf .btn{display:inline-block;margin-bottom:6px}
+figure img{max-height:640px;width:auto;display:block}figcaption{font-size:.85rem;color:var(--mut)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;margin:18px 0}
+.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;text-decoration:none;color:var(--fg)}
+.card:hover{border-color:var(--brand)}.card .em{font-size:1.8rem}.card h3{margin:.3em 0}.card p{margin:.2em 0;color:var(--mut);font-size:.95rem}.card .cn{font-weight:700;color:var(--brand);font-size:.95rem}
+.ricerca{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.ricerca input{flex:1;min-width:220px;padding:12px 14px;border-radius:10px;border:2px solid var(--line);font:inherit;background:var(--bg);color:var(--fg)}
+.ris{list-style:none;padding:0}.ris li{margin:6px 0}.ris a{display:block;padding:10px 12px;background:var(--card);border-radius:10px;text-decoration:none}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:999px;padding:8px 14px;font:inherit;cursor:pointer}.chip:hover{background:var(--brand);color:var(--on)}
+details{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:8px 0}summary{cursor:pointer;font-weight:700}
+.letto{display:flex;align-items:center;gap:8px;margin:28px 0}.progress{font-size:.9rem;color:var(--mut)}
+.fonte{opacity:.8}.agg{font-size:.85rem;color:var(--mut);margin-top:32px}
+footer{border-top:1px solid var(--line);padding:22px 16px;text-align:center;font-size:.9rem;color:var(--mut)}
+.lingue{max-width:1040px;margin:0 auto;padding:0 16px 8px;font-size:.85rem;color:var(--mut)}.lingue a{color:var(--mut)}.lingue strong{color:var(--fg)}footer .lingue{padding-top:10px}
+@media(max-width:600px){body{font-size:16px}nav.menu{display:none}.apri{margin-left:auto}}
+</style>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"WIP","item":"https://www.wip.guide/"},{"@type":"ListItem","position":2,"name":"指南","item":"https://www.wip.guide/guida/zh/"},{"@type":"ListItem","position":3,"name":"Vision","item":"https://www.wip.guide/guida/zh/vision-riconoscimento"}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"扫描一次多少钱？","acceptedAnswer":{"@type":"Answer","text":"5 积分；如果什么也没识别出来，积分会退回。"}},{"@type":"Question","name":"可以使用相册里已有的照片吗？","acceptedAnswer":{"@type":"Answer","text":"可以：点击«从相册选择»；如果照片没有位置信息，会询问你在哪里拍摄的。"}},{"@type":"Question","name":"没有网络能用吗？","acceptedAnswer":{"@type":"Answer","text":"照片会被放入队列，并在重新联网后进行识别。"}}]}</script>
+</head><body>
+<a href="#main" style="position:absolute;left:-999px" onfocus="this.style.left='8px'">跳到正文</a>
+<header class="top"><div class="bar"><a class="logo" href="/guida/zh/">WIP · 指南</a><nav class="menu" aria-label="指南"><a href="/guida/zh/">指南</a><a href="/guida/zh/categorie">类别</a><a href="/guida/zh/audioguide">语音导览</a><a href="/guida/zh/itinerari">行程</a><a href="/guida/zh/tutorial">教程</a><a href="/guida/zh/domande-frequenti">常见问题</a></nav><a class="btn apri" href="https://wip.guide/">打开 WIP</a></div><nav class="lingue" aria-label="语言"><a lang="it" hreflang="it" href="/guida/vision-riconoscimento">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/vision-riconoscimento">English</a> · <a lang="fr" hreflang="fr" href="/guida/fr/vision-riconoscimento">Français</a> · <a lang="es" hreflang="es" href="/guida/es/vision-riconoscimento">Español</a> · <a lang="de" hreflang="de" href="/guida/de/vision-riconoscimento">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/vision-riconoscimento">Русский</a> · <strong lang="zh">中文</strong></nav></header>
+<main id="main">
+<p class="crumb"><a href="/">WIP</a> › <a href="/guida/zh/">指南</a> › Vision</p>
+<h1>Vision：通过照片识别地点、艺术品和自然</h1>
+<p class="lead">底部导航栏正中央带有相机图标的圆形按钮会打开<strong>“分析世界”</strong>：你对准某个物体拍摄，WIP 就会识别它并像导游一样为你讲解。每次扫描消耗 <strong>5 积分</strong>。</p>
+<p class="agg">译自意大利语。截图、视频和示例显示的是意大利语界面。</p>
+<div class="galleria"><figure><img src="/guida/img/vision-riconoscimento-1.jpg" alt="“分析世界”屏幕，包含“AI 扫描”、“AR 雷达”、参观记录选项卡，“地点”、“作品”、“自然”模式以及“拍照”和“从相册选择”按钮" loading="lazy" decoding="async"><figcaption>Vision：“分析世界”带有三种模式和两种获取照片的模式；下方是博物馆通票和博物馆参观卡片。 <span class="fonte">wip.guide 的真实截图 (15/11/2026)。</span></figcaption></figure></div><h2>简而言之</h2>
+<ul><li>三个选项卡：<strong>AI 扫描</strong>、<strong>AR 雷达</strong>、<strong>参观</strong>（博物馆：请参阅专门页面）。</li><li>三种扫描模式：<strong>📍 地点</strong>、<strong>🖼️ 艺术品</strong>、<strong>🌿 自然</strong>。</li><li>每次扫描消耗 <strong>5 积分</strong>；如果激活了<strong>博物馆通行证（Pass Museo）</strong>，则扫描包含在内。</li><li>如果没有识别出任何内容，<strong>积分将会返还</strong>，并且照片会保留在 My Vision 中。</li><li>首次使用：需要同意使用人工智能的<strong>授权</strong>。</li></ul><h2>AI 扫描的三种模式</h2>
+<div class="tw"><table><thead><tr><th>模式</th><th>拍摄对象</th><th>你将获得</th></tr></thead><tbody><tr><td>📍 地点（默认）</td><td>纪念碑、教堂、建筑、兴趣点。</td><td>地点卡片，保密保存在 My Vision 中。可获得 10 XP。</td></tr><tr><td>🖼️ 艺术品</td><td>画作、雕像、文物。</td><td>通过艺术史学家的解说来识别艺术品。如果你在博物馆里，还会同时在背景中播放语音导览。</td></tr><tr><td>🌿 自然</td><td>植物、动物、全景。</td><td>包含栖息地和趣闻的自然学家卡片。</td></tr></tbody></table></div>
+<aside class="nota"><strong>须知。</strong> 代码中其实也存在一种“截图”模式（从短视频到行程），但<strong>在应用中无法访问</strong>：目前不可用。</aside><h2>教程：识别一个地点</h2>
+<ol class="passi"><li>轻触底部导航栏中的<strong>带有相机的圆形按钮</strong>。“分析世界”将会在<strong>AI 选项卡</strong>上打开。</li><li>选择<strong>模式</strong>（地点、艺术品或自然）：标题下方的一句话会解释其功能。</li><li>首次使用：接受<strong>AI 授权</strong>请求。如果没有授权，照片将不会离开你的手机。</li><li>轻触<strong>“拍照”</strong>（全屏后置摄像头：白色圆圈用于拍照，X 用于关闭）或<strong>“从相册选择”</strong>。</li><li>屏幕将显示带有费用（<strong>5 积分</strong>）和你的余额的确认框：点击确认。如果已激活博物馆通行证，则不会显示此确认框。</li><li>在分析过程中，你会看到带有扫描线的照片。</li><li>打开地点的<strong>卡片</strong>：名称、描述、历史、趣闻。圆形按钮<strong>“收听卡片”</strong>会将其大声朗读出来。</li></ol><h2>相册照片：你在哪里拍的？</h2>
+<ul><li>如果照片已有<strong>位置</strong>（照片数据中的 GPS），WIP 会使用它并显示：“已从照片读取位置和日期”。</li><li>如果没有，则会显示<strong>“这张照片是在哪里拍的？”</strong>：轻触地图放置图钉，然后点击<strong>“确认位置”</strong>；或者点击<strong>“使用我的当前位置”</strong>；或者点击<strong>“不知道”</strong>以便在没有坐标的情况下进行分析。</li><li>来自相册的照片<strong>绝不会</strong>获取你手机当前的位置。</li></ul><h2>结果，各按钮功能详述</h2>
+<div class="tw"><table><thead><tr><th>元素</th><th>用途</th></tr></thead><tbody><tr><td>朗读卡片</td><td>朗读卡片（并暂停）。</td></tr><tr><td>将照片保存到设备</td><td>App：保存在“文件/WIP Vision”。</td></tr><tr><td>分享照片</td><td>分享时带有“WIP · wip.guide”字样。</td></tr><tr><td>小组件（作者、年份、风格、城市）</td><td>地点数据；如果你是第一位，则显示“首位发现者”。</td></tr><tr><td>博物馆版本</td><td>对于博物馆中的艺术品：更长的讲述，包含技法、尺寸、“观看时留意”和“你知道吗”。需要 Pass 或参观券。</td></tr><tr><td>了解更多</td><td>打开以该卡片为上下文的聊天。</td></tr><tr><td>在地图上查看</td><td>仅当卡片已在 WIP Community 中时。</td></tr><tr><td>关闭</td><td>返回相机。</td></tr></tbody></table></div><h2>当不确定或无法识别时</h2>
+<ul><li><strong>“不太确定：是下面哪一个？”</strong>：最多 3 个候选；选择正确的项，卡片将<strong>免费重写</strong>。或者选择“保留当前卡片”。</li><li><strong>“我没认出来……但它一定很特别！”</strong>：积分将退还，并且照片会被保存。选择标签（特殊全景、隐藏角落、街头艺术、当地传统、自然、旅行回忆），如果愿意，可以写一段讲述（最多 2,000 个字符）。<strong>“跳过”</strong>或<strong>“发送讲述”</strong>。</li><li>在博物馆参观中，对于艺术品会显示“是这些中的哪一个吗？”，并附有展厅中艺术品的照片。</li><li>如果照片中有人脸且可被识别，在发布时将被模糊处理。</li></ul><h2>无网无限制</h2>
+<ul><li>离线时，照片会进入<strong>队列</strong>，并在你恢复联网时被识别；在处理完成前<strong>不扣费</strong>。</li><li>队列：最多 <strong>10 张</strong>照片，有效期限 <strong>7 天</strong>，每张照片有 <strong>3 次</strong>尝试机会。</li><li>如果你看到“今天未识别的照片太多”，这是防垃圾信息保护：明天换一个主体清晰的构图再试一次。</li></ul><h2>My Vision 和 WIP Community</h2>
+<p>每次扫描都会在<strong>个人资料 › My Vision</strong> 中创建一个卡片，包含两个视图：“我的 Vision”和“WIP Community”（带有“附近”小组件，半径 50 公里，以及“最新”）。</p>
+<div class="tw"><table><thead><tr><th>状态</th><th>含义</th></tr></thead><tbody><tr><td>审核中</td><td>照片正在审核中。</td></tr><tr><td>WIP Community</td><td>已批准并发布到地图上，署名归你：你将获得积分。</td></tr><tr><td>未发布</td><td>已拒绝；请查看“原因”（地点已存在、不是兴趣点、质量不足、可辨认的人物、内容不适合、其他）。</td></tr><tr><td>首位发现者</td><td>你是第一个找到它的人。</td></tr></tbody></table></div>
+<p>没有“提交”按钮：被识别的照片会自动进入审核。系统会自动过滤掉人物、屏幕、食物以及几米内已存在的地点；随后由人工审核。欢迎信息中提到“最高 +15 积分”：此处未公布每张照片的具体金额。照片版权仍归你所有。</p>
+<p>拍摄建议：路边神龛、壁画、喷泉、洗衣槽、桥梁、塔楼、界碑、小型教堂、观景台。不建议：私人内部、可辨认的人物、以受版权保护的作品为主体的照片、商业招牌。</p><h2>AR 雷达：你周边的地点，就在相机镜头前</h2>
+<ul><li>显示 <strong>5 公里</strong>内的地点，视野内最多 <strong>12 个标签</strong>，带有照片或图标、名称和距离。点击标签即可打开详情页。</li><li><strong>2D 雷达</strong>（«列表和 2D 雷达»）：半径 2 公里，正北朝上，最近的 24 个地点，带有“距离最近”列表。配有现成文本的地点会显示“语音导览已就绪”。</li><li>在 iPhone 上会显示<strong>«开启指南针»</strong>：选择«允许»或«跳过（所有兴趣点）»。</li><li>如果不允许使用相机，雷达依然可以运行（点击«重试»可重新授予权限）。</li><li>它是免费的，且<strong>没有更改半径或分类的选项</strong>。</li></ul><section class="manca"><h2>WIP 不做什么（以免产生误解）</h2><ul><li>“截图/从 Reel 视频生成行程”模式不可用。</li><li>AR 雷达没有设置项。</li><li>详情页中的“了解更多”没有设定其他费用。</li></ul></section><h2>常见问题</h2><details><summary>扫描一次多少钱？</summary><p>5 积分；如果什么也没识别出来，积分会退回。</p></details><details><summary>可以使用相册里已有的照片吗？</summary><p>可以：点击«从相册选择»；如果照片没有位置信息，会询问你在哪里拍摄的。</p></details><details><summary>没有网络能用吗？</summary><p>照片会被放入队列，并在重新联网后进行识别。</p></details><h2>继续阅读</h2><div class="grid"><a class="card" href="/guida/zh/visita-museo"><h3>博物馆导览</h3><p>如何使用 WIP 的博物馆和教堂导览：查找博物馆、博物馆通票与博物馆导览、按展厅参观、带有图钉的平面图、逐个艺术品讲解、MP3、PDF、离线使用。…</p></a><a class="card" href="/guida/zh/musei-cultura"><h3>博物馆与文化</h3><p>如何用 WIP 查找博物馆、古迹、教堂、城堡和考古遗址，以及如何使用博物馆参观功能：逐展厅、逐作品、结合平面图。…</p></a><a class="card" href="/guida/zh/gratis-e-crediti"><h3>免费与积分</h3><p>WIP 中哪些是免费的，哪些需要消耗积分：地点卡片、地图、行程库、预告片、WipNav；完整语音导览、行程、Day Pass、博物馆参观。…</p></a></div><div class="letto"><input type="checkbox" id="letto" data-s="vision-riconoscimento"><label for="letto">我已读完本指南（仅保存在你的设备上）</label></div><p><a class="btn" href="https://wip.guide/">打开 WIP</a> <a class="btn sec" href="/guida/zh/categorie">全部类别</a></p>
+
+<p class="agg">内容已于 2026 年 11 月 16 日与应用代码核对。如有与您所见不符之处，请写信至 <a href="mailto:support@wip.guide">support@wip.guide</a>.</p>
+</main>
+<footer><a href="/guida/zh/">指南</a> · <a href="/privacy">隐私</a> · <a href="/support">支持</a> · <a href="https://wip.guide/">wip.guide</a><br><nav class="lingue" aria-label="语言"><a lang="it" hreflang="it" href="/guida/vision-riconoscimento">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/vision-riconoscimento">English</a> · <a lang="fr" hreflang="fr" href="/guida/fr/vision-riconoscimento">Français</a> · <a lang="es" hreflang="es" href="/guida/es/vision-riconoscimento">Español</a> · <a lang="de" hreflang="de" href="/guida/de/vision-riconoscimento">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/vision-riconoscimento">Русский</a> · <strong lang="zh">中文</strong></nav></footer>
+<script>(function(){
+function ready(f){document.readyState!='loading'?f():document.addEventListener('DOMContentLoaded',f)}
+ready(function(){
+ var red=matchMedia('(prefers-reduced-motion: reduce)').matches;
+ var els=document.querySelectorAll('.num[data-n]');
+ if('IntersectionObserver' in window&&!red&&els.length){var io=new IntersectionObserver(function(es){es.forEach(function(e){if(!e.isIntersecting)return;io.unobserve(e.target);var el=e.target,n=+el.dataset.n,pre=el.dataset.c||'',t0=null;function st(t){t0=t0||t;var p=Math.min((t-t0)/900,1);el.textContent=pre+Math.round(n*p).toLocaleString('zh-CN');if(p<1)requestAnimationFrame(st)}requestAnimationFrame(st)})},{threshold:.4});els.forEach(function(e){io.observe(e)})}
+ var inp=document.getElementById('q'),out=document.getElementById('ris');
+ if(inp&&out){var idx=null;fetch('/guida/zh/indice.json').then(function(r){return r.json()}).then(function(j){idx=j}).catch(function(){});
+  var norm=function(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\p{L}\p{N} ]+/gu,' ')};
+  var cerca=function(q){q=norm(q).trim();if(!q||!idx){out.innerHTML='';return}var SW='  ';var w=/[\u4e00-\u9fff]/.test(q)?Array.from(q.replace(/\s+/g,'')).reduce(function(a,c,i,s){if(i<s.length-1)a.push(c+s[i+1]);return a},[]):q.split(/\s+/).filter(function(x){return x.length>2&&SW.indexOf(' '+x+' ')<0});
+   var r=idx.map(function(d){var ks=norm(d.k),h=norm(d.t+' '+(d.r||'')+' '+(d.f||'')),s=0;w.forEach(function(x){if(ks.indexOf(x)>-1)s+=5;else if(h.indexOf(x)>-1)s+=1});for(var i=0;i<w.length-1;i++)if(ks.indexOf(w[i]+' '+w[i+1])>-1)s+=8;return {d:d,s:s}}).filter(function(x){return x.s>0}).sort(function(a,b){return b.s-a.s}).slice(0,6);
+   out.innerHTML=r.length?r.map(function(x){return '<li><a href="'+x.d.u+'"><strong>'+x.d.t+'</strong>'+(x.d.r?'<br><span class="et">'+x.d.r+'</span>':'')+'</a></li>'}).join(''):'<li>没有找到相关指南：换个词试试，或浏览类别。</li>'};
+  inp.addEventListener('input',function(){cerca(inp.value)});
+  document.querySelectorAll('[data-q]').forEach(function(b){b.addEventListener('click',function(){inp.value=b.dataset.q;cerca(b.dataset.q);inp.focus()})})}
+ var K='wip-guida-letti';function get(){try{return JSON.parse(localStorage.getItem(K)||'[]')}catch(e){return[]}}function set(a){try{localStorage.setItem(K,JSON.stringify(a))}catch(e){}}
+ var cb=document.getElementById('letto');if(cb){var a=get();cb.checked=a.indexOf(cb.dataset.s)>-1;cb.addEventListener('change',function(){var l=get().filter(function(x){return x!==cb.dataset.s});if(cb.checked)l.push(cb.dataset.s);set(l)})}
+ document.querySelectorAll('[data-lez]').forEach(function(el){var l=get();el.textContent=l.indexOf(el.dataset.lez)>-1?'✓ 已读':''});
+ document.querySelectorAll('[data-perc]').forEach(function(el){var l=get(),s=el.dataset.perc.split(','),n=s.filter(function(x){return l.indexOf(x)>-1}).length;el.textContent='已读 {n}/{t} 课'.replace('{n}',n).replace('{t}',s.length)});
+});})();</script>
+</body></html>

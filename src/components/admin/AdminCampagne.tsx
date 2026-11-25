@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { BarChart3, RefreshCw, Send, Eye, Inbox, Ticket, AlertTriangle, Search } from 'lucide-react';
+import { BarChart3, RefreshCw, Send, Eye, Inbox, Ticket, AlertTriangle, Search, Newspaper } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { getApiUrl } from '../../lib/api';
 import AdminArchivioEnti from './AdminArchivioEnti';
@@ -20,6 +20,15 @@ interface Dati {
   ultimi: Array<{ lista: string; campagna?: string; email: string; ente?: string; paese?: string; oggetto?: string; esito: string; quando: string }>;
   errori: Array<{ email: string; ente?: string; esito: string; quando: string }>;
   ricerca?: Ricerca | null;
+  giornalisti?: Giornalisti | null;
+}
+/** Giornalisti e testate di viaggio (24/11/2026): stato mandato ogni 30 minuti da Oracle (giornalisti-stato.py). */
+interface Giornalisti {
+  trovati: number; ammessi: number; inviate: number; errori: number; da_contattare: number; al_giorno: number; nuovi_24h: number;
+  per_paese: Record<string, number>; per_lingua: Record<string, number>; scarti: Record<string, number>;
+  ricerca_attiva: boolean; invio_attivo: boolean; ricerca_ultima: string;
+  contatti: Array<{ nome: string; email: string; paese: string; lingua: string; url: string; stato: string; motivo: string; quando: string }>;
+  _salvatoIl?: string;
 }
 interface ListaRicerca { totale: number; nuovi_24h: number; per_paese: Record<string, number>; }
 /** Lo stato della ricerca dei contatti su Oracle, mandato ogni ora da contatti-manda-stato.py. */
@@ -39,6 +48,7 @@ export default function AdminCampagne({ onMessage }: Props) {
   const [dati, setDati] = useState<Dati | null>(null);
   const [giorni, setGiorni] = useState(30);
   const [caricamento, setCaricamento] = useState(false);
+  const [vista, setVista] = useState<'hotel' | 'giornalisti'>('hotel');
 
   const carica = useCallback(async () => {
     setCaricamento(true);
@@ -80,6 +90,16 @@ export default function AdminCampagne({ onMessage }: Props) {
           <RefreshCw className={`w-4 h-4 ${caricamento ? 'animate-spin' : ''}`} />
         </button>
       </div>
+
+      <div className="flex gap-2">
+        {([['hotel', 'Hotel ed enti'], ['giornalisti', 'Giornalisti']] as const).map(([k, nome]) => (
+          <button key={k} type="button" onClick={() => setVista(k)} className={`px-4 py-2 rounded-2xl text-[12px] font-black ${vista === k ? 'bg-primary text-white' : 'bg-white text-primary/70 border border-gray-100'}`}>
+            {k === 'giornalisti' && <Newspaper className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />}{nome}
+          </button>
+        ))}
+      </div>
+
+      {vista === 'giornalisti' ? <PannelloGiornalisti g={dati?.giornalisti || null} /> : (<>
 
       {t && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -215,6 +235,92 @@ export default function AdminCampagne({ onMessage }: Props) {
           ))}
           {!dati?.ultimi?.length && <p className="text-[12px] text-primary/50">Nessun invio registrato: lo script di invio lascia qui una riga per ogni email partita.</p>}
         </div>
+      </div>
+      </>)}
+    </div>
+  );
+}
+
+const STATO_CONTATTO: Record<string, [string, string]> = {
+  inviata: ['inviata', 'bg-emerald-50 text-emerald-700'], in_coda: ['in coda', 'bg-blue-50 text-blue-700'],
+  scartato: ['scartato', 'bg-gray-100 text-gray-500'], fallita: ['non partita', 'bg-red-50 text-red-700'],
+};
+
+/** La tab «Giornalisti»: ricerca e invio su Oracle, filtro testate, ogni contatto con il suo stato. */
+function PannelloGiornalisti({ g }: { g: Giornalisti | null }) {
+  const [filtro, setFiltro] = useState<string>('tutti');
+  if (!g) return <div className="bg-white rounded-3xl border border-gray-100 p-4 text-[12px] text-primary/50">Nessuno stato ricevuto: Oracle lo manda ogni 30 minuti.</div>;
+  const eta = g._salvatoIl ? (Date.now() - Date.parse(g._salvatoIl)) / 3600000 : Infinity;
+  const ordina = (o: Record<string, number>) => (Object.entries(o || {}) as Array<[string, number]>).sort((a, b) => b[1] - a[1]);
+  const contatti = (g.contatti || []).filter((c) => filtro === 'tutti' || c.stato === filtro);
+  const Pallino = ({ ok, si, no }: { ok: boolean; si: string; no: string }) => (
+    <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>{ok ? si : no}</span>
+  );
+  const Box = ({ etichetta, valore, sotto }: { etichetta: string; valore: React.ReactNode; sotto?: string }) => (
+    <div className="bg-[#f8f5f0] rounded-2xl p-3">
+      <div className="text-[10px] font-black uppercase tracking-wider text-primary/50">{etichetta}</div>
+      <div className="text-2xl font-black text-primary">{valore}</div>
+      {sotto && <div className="text-[11px] font-bold text-primary/50">{sotto}</div>}
+    </div>
+  );
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-3xl border border-gray-100 p-4">
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <div className="text-[10px] font-black uppercase tracking-wider text-primary/60 flex items-center gap-1"><Newspaper className="w-3 h-3" /> Giornalisti e testate di viaggio</div>
+          <Pallino ok={g.ricerca_attiva} si="ricerca attiva" no="ricerca ferma" />
+          <Pallino ok={g.invio_attivo} si={`invio attivo · max ${g.al_giorno}/giorno`} no="invio fermo" />
+          <span className={`text-[10px] font-bold ${eta > 2 ? 'text-red-600' : 'text-primary/40'}`}>
+            {g._salvatoIl ? `aggiornato ${ora(g._salvatoIl)}` : ''}{eta > 2 ? ' — Oracle non manda lo stato da più di 2 ore' : ''}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <Box etichetta="Trovati" valore={g.trovati} sotto={`+${g.nuovi_24h} nelle ultime 24 ore`} />
+          <Box etichetta="Testate vere" valore={g.ammessi} sotto={`${pct(g.ammessi, g.trovati)} passa il filtro`} />
+          <Box etichetta="Inviate" valore={g.inviate} sotto={g.errori ? `${g.errori} non partite` : 'nessun errore'} />
+          <Box etichetta="In coda" valore={g.da_contattare} sotto={g.al_giorno ? `~${Math.ceil(g.da_contattare / Math.max(1, g.al_giorno))} giorni al ritmo attuale` : undefined} />
+          <Box etichetta="Scartati" valore={Object.values(g.scarti || {}).reduce((s, n) => s + n, 0)} sotto="aziende, enti, non testate" />
+        </div>
+        {g.ricerca_ultima && <div className="text-[10px] text-primary/50 truncate mt-2">ricerca: {g.ricerca_ultima}</div>}
+      </div>
+
+      <div className="grid md:grid-cols-3 gap-4">
+        {([['Trovati per paese', g.per_paese], ['Inviate per lingua', g.per_lingua], ['Perché scartati', g.scarti]] as Array<[string, Record<string, number>]>).map(([titolo, o]) => (
+          <div key={titolo} className="bg-white rounded-3xl border border-gray-100 p-4">
+            <div className="text-[10px] font-black uppercase tracking-wider text-primary/60 mb-2">{titolo}</div>
+            <div className="flex flex-wrap gap-1.5">
+              {ordina(o).map(([k, n]) => <span key={k} className="px-2 py-1 rounded-full bg-[#f8f5f0] text-[11px] font-bold text-primary/80">{k} <b className="text-primary">{n}</b></span>)}
+              {!ordina(o).length && <p className="text-[12px] text-primary/50">—</p>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="bg-white rounded-3xl border border-gray-100 p-4 overflow-x-auto">
+        <div className="flex flex-wrap items-center gap-2 mb-2">
+          <div className="text-[10px] font-black uppercase tracking-wider text-primary/60 mr-2">Contatti (ultimi 80)</div>
+          {['tutti', 'inviata', 'in_coda', 'fallita', 'scartato'].map((k) => (
+            <button key={k} type="button" onClick={() => setFiltro(k)} className={`px-2.5 py-0.5 rounded-full text-[10px] font-black ${filtro === k ? 'bg-primary text-white' : 'bg-[#f8f5f0] text-primary/70'}`}>{k === 'tutti' ? 'tutti' : STATO_CONTATTO[k][0]}</button>
+          ))}
+        </div>
+        <table className="w-full text-[11px]">
+          <thead><tr className="text-left text-primary/50 text-[10px] uppercase"><th className="py-1 pr-3">Stato</th><th className="pr-3">Testata</th><th className="pr-3">Email</th><th className="pr-3">Paese</th><th className="pr-3">Lingua</th><th>Quando / motivo</th></tr></thead>
+          <tbody>
+            {contatti.map((c, i) => {
+              const [et, cls] = STATO_CONTATTO[c.stato] || [c.stato, 'bg-gray-100 text-gray-500'];
+              return (
+                <tr key={i} className="border-t border-gray-100 text-primary/80">
+                  <td className="py-1.5 pr-3"><span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${cls}`}>{et}</span></td>
+                  <td className="pr-3 font-bold">{c.url ? <a href={c.url} target="_blank" rel="noopener noreferrer" className="underline decoration-dotted">{c.nome || c.url}</a> : c.nome}</td>
+                  <td className="pr-3">{c.email}</td><td className="pr-3">{c.paese}</td><td className="pr-3">{c.lingua}</td>
+                  <td className="text-primary/50">{c.quando ? ora(c.quando) : ''}{c.motivo ? ` ${c.motivo}` : ''}</td>
+                </tr>
+              );
+            })}
+            {!contatti.length && <tr><td colSpan={6} className="py-3 text-primary/50">Nessun contatto.</td></tr>}
+          </tbody>
+        </table>
+        <p className="text-[10px] text-primary/40 font-bold mt-2">Solo indirizzi di redazione scritti sul sito della testata, stesso dominio. Un indirizzo riceve una sola email; dopo 3 tentativi falliti si salta. Le risposte arrivano in Posta.</p>
       </div>
     </div>
   );

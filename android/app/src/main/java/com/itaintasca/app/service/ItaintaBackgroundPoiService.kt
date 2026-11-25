@@ -947,7 +947,11 @@ class ItaintaBackgroundPoiService : Service() {
                 // consuma il Day Pass. Si scartano e basta, con log.
                 val simulato = if (Build.VERSION.SDK_INT >= 31) location.isMock
                     else @Suppress("DEPRECATION") location.isFromMockProvider
-                if (simulato) {
+                // (21/11/2026) Unica eccezione: la build di DEBUG con la modalita'
+                // collaudo accesa (Firebase Test Lab, CollaudoSchermoSpentoTest
+                // riproduce la traccia col provider mock). In release il gate
+                // resta com'era: BuildConfig.DEBUG e' false.
+                if (simulato && !(com.itaintasca.app.BuildConfig.DEBUG && RegistroCollaudo.attivo())) {
                     Log.w(TAG, "Fix simulato (mock provider) ignorato")
                     return
                 }
@@ -1680,7 +1684,7 @@ class ItaintaBackgroundPoiService : Service() {
                     // misurare non c'e' (fuori rete, tile assente): vedi
                     // RoadGraph.cheDecide.
                     val distNow = try {
-                        RoadGraph.misura(pred.distanceNowMeters, sorgenteStrada, poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon, isDriving)
+                        RoadGraph.misura(pred.distanceNowMeters, sorgenteStrada, poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon, isDriving, arrivoPoi.toDouble())
                     } catch (e: Exception) { pred.distanceNowMeters }.toFloat()
 
                     // A 30 M DAL PERIMETRO (22/08/2026): la misura che governa
@@ -1699,7 +1703,7 @@ class ItaintaBackgroundPoiService : Service() {
                         val pLon = poi.entranceLon ?: poi.lon
                         Location.distanceBetween(grezza.latitude, grezza.longitude, pLat, pLon, distBuf)
                         val libera = try {
-                            RoadGraph.misura(distBuf[0].toDouble(), sorgenteLibera, pLat, pLon, isDriving)
+                            RoadGraph.misura(distBuf[0].toDouble(), sorgenteLibera, pLat, pLon, isDriving, arrivoPoi.toDouble())
                         } catch (e: Exception) { distBuf[0].toDouble() }.toFloat()
                         if (libera > distArrivo) distArrivo = libera
                     }

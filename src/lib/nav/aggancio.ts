@@ -104,6 +104,28 @@ export class Aggancio {
     return along;
   }
 
+  /**
+   * (21/11/2026, prova con l'app vera a Budapest: nel GIRO le svolte si dicevano a 43–50 m invece che entro 35) Il
+   * punto di una MANOVRA sul tracciato. `primaCorrispondenza` prende il primo segmento entro `maxCross` (30 m): il
+   * segmento che finisce 20 m prima dell'angolo «corrisponde» già (la proiezione cade sul suo capo, a 20 m) e la
+   * manovra risultava fino a 30 m più indietro di dov'è — la frase partiva presto. Qui: dalla prima corrispondenza si
+   * guarda ancora `finestraM` metri avanti e vince il punto PIÙ VICINO. La finestra è corta: su un anello il ripasso
+   * dello stesso punto sta centinaia di metri dopo e resta escluso, come prima.
+   */
+  corrispondenzaManovra(lat: number, lon: number, da: number, maxCross: number, finestraM = 60): number | null {
+    let primo: number | null = null, best = Infinity, along: number | null = null;
+    for (let k = 1; k < this.linea.length; k++) {
+      if (this.cum[k] < da) continue;
+      if (primo != null && this.cum[k - 1] > primo + finestraM) break;
+      const p = this.proietta(k, lat, lon);
+      if (p.dist > maxCross || p.along < da) continue;
+      if (primo == null) primo = p.along;
+      if (p.along > primo + finestraM) continue;
+      if (p.dist < best - 0.01) { best = p.dist; along = p.along; }
+    }
+    return along;
+  }
+
   /** La PRIMA corrispondenza in avanti da `da`, entro `maxCross`, o null. */
   primaCorrispondenza(lat: number, lon: number, da: number, maxCross: number): number | null {
     for (let k = 1; k < this.linea.length; k++) {

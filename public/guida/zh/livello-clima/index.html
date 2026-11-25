@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>📅 气候：最佳旅行时间：地图图层如何运作 | WIP Guide</title>
+<meta name="description" content="WIP 地图的“气候：最佳旅行时间”图层：它绘制什么、从哪个缩放级别开始可见、点击时显示什么、数据来源与局限性。2001-2020 年降雨量和平均气温（NASA POWER）+ AI 分析。">
+<link rel="canonical" href="https://www.wip.guide/guida/zh/livello-clima"><link rel="alternate" hreflang="it" href="https://www.wip.guide/guida/livello-clima"><link rel="alternate" hreflang="en" href="https://www.wip.guide/guida/en/livello-clima"><link rel="alternate" hreflang="fr" href="https://www.wip.guide/guida/fr/livello-clima"><link rel="alternate" hreflang="es" href="https://www.wip.guide/guida/es/livello-clima"><link rel="alternate" hreflang="de" href="https://www.wip.guide/guida/de/livello-clima"><link rel="alternate" hreflang="ru" href="https://www.wip.guide/guida/ru/livello-clima"><link rel="alternate" hreflang="zh-Hans" href="https://www.wip.guide/guida/zh/livello-clima"><link rel="alternate" hreflang="x-default" href="https://www.wip.guide/guida/livello-clima">
+<meta property="og:type" content="website"><meta property="og:title" content="📅 气候：最佳旅行时间：地图图层如何运作"><meta property="og:description" content="WIP 地图的“气候：最佳旅行时间”图层：它绘制什么、从哪个缩放级别开始可见、点击时显示什么、数据来源与局限性。2001-2020 年降雨量和平均气温（NASA POWER）+ AI 分析。"><meta property="og:url" content="https://www.wip.guide/guida/zh/livello-clima"><meta property="og:site_name" content="WIP Guide"><meta property="og:image" content="https://www.wip.guide/scopri/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/icon.png">
+<style>
+:root{--bg:#fff;--fg:#14213d;--mut:#4b5568;--brand:#1e3a8a;--brand2:#2f56c9;--card:#f4f6fb;--line:#d9dfec;--ok:#0f6b3a;--warn:#8a4b00;--warnbg:#fff4e0;--costbg:#e8f0ff;--on:#fff}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0e1424;--fg:#e8ecf7;--mut:#a9b3c9;--brand:#8fb0ff;--brand2:#b5ccff;--card:#172038;--line:#2a3555;--ok:#6fdc9c;--warn:#ffcf8a;--warnbg:#2a2014;--costbg:#16264a;--on:#0e1424}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--brand)}a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--brand2);outline-offset:2px}
+header.top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.bar{max-width:1040px;margin:0 auto;padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.logo{font-weight:800;color:var(--brand);text-decoration:none;font-size:1.15rem}
+nav.menu{display:flex;gap:4px 14px;flex-wrap:wrap;font-size:.92rem}nav.menu a{text-decoration:none;color:var(--fg);padding:6px 2px}nav.menu a:hover{color:var(--brand)}
+.apri{margin-left:auto}
+main{max-width:1040px;margin:0 auto;padding:20px 16px 56px}
+h1{font-size:clamp(1.7rem,4.5vw,2.6rem);line-height:1.15;margin:.2em 0 .4em;color:var(--brand)}
+h2{font-size:1.45rem;margin:2em 0 .5em;line-height:1.25}h3{font-size:1.1rem}
+.lead{font-size:1.2rem;color:var(--mut);max-width:62ch}
+.crumb{font-size:.9rem;color:var(--mut)}.crumb a{color:var(--mut)}
+.btn{display:inline-block;background:var(--brand);color:var(--on);padding:11px 18px;border-radius:10px;text-decoration:none;font-weight:700;margin:4px 6px 4px 0}
+.btn.sec{background:transparent;color:var(--brand);border:2px solid var(--brand)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:22px 0;padding:16px;background:var(--card);border-radius:14px}
+.stat{display:flex;flex-direction:column}.num{font-size:1.9rem;font-weight:800;color:var(--brand);font-variant-numeric:tabular-nums}.et{font-size:.88rem;color:var(--mut)}
+.nota-stat{grid-column:1/-1;font-size:.82rem;color:var(--mut);margin:4px 0 0}
+ol.passi{counter-reset:p;list-style:none;padding:0}ol.passi li{counter-increment:p;position:relative;padding:10px 12px 10px 52px;margin:8px 0;background:var(--card);border-radius:10px}
+ol.passi li::before{content:counter(p);position:absolute;left:12px;top:9px;width:30px;height:30px;border-radius:50%;background:var(--brand);color:var(--on);display:grid;place-items:center;font-weight:800}
+.nota,.costo,.manca{border-radius:10px;padding:12px 14px;margin:14px 0}.nota{background:var(--warnbg);color:var(--warn)}.costo{background:var(--costbg)}
+.manca{border:2px dashed var(--line)}.manca h2{margin-top:0;font-size:1.1rem}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:420px}th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}th{background:var(--card)}
+figure{margin:18px 0}figure img,figure video{max-width:100%;height:auto;border-radius:12px;border:1px solid var(--line)}.esempi{margin:28px 0}.es-griglia{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}.es{border:1px solid var(--linea,#ddd);border-radius:12px;padding:12px;margin:0}.es img{max-height:360px;width:100%;object-fit:contain}.es audio{width:100%;margin-top:8px}.es-nota{font-size:.9em;margin:6px 0 0;opacity:.85}.es-pdf .btn{display:inline-block;margin-bottom:6px}
+figure img{max-height:640px;width:auto;display:block}figcaption{font-size:.85rem;color:var(--mut)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;margin:18px 0}
+.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;text-decoration:none;color:var(--fg)}
+.card:hover{border-color:var(--brand)}.card .em{font-size:1.8rem}.card h3{margin:.3em 0}.card p{margin:.2em 0;color:var(--mut);font-size:.95rem}.card .cn{font-weight:700;color:var(--brand);font-size:.95rem}
+.ricerca{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.ricerca input{flex:1;min-width:220px;padding:12px 14px;border-radius:10px;border:2px solid var(--line);font:inherit;background:var(--bg);color:var(--fg)}
+.ris{list-style:none;padding:0}.ris li{margin:6px 0}.ris a{display:block;padding:10px 12px;background:var(--card);border-radius:10px;text-decoration:none}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:999px;padding:8px 14px;font:inherit;cursor:pointer}.chip:hover{background:var(--brand);color:var(--on)}
+details{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:8px 0}summary{cursor:pointer;font-weight:700}
+.letto{display:flex;align-items:center;gap:8px;margin:28px 0}.progress{font-size:.9rem;color:var(--mut)}
+.fonte{opacity:.8}.agg{font-size:.85rem;color:var(--mut);margin-top:32px}
+footer{border-top:1px solid var(--line);padding:22px 16px;text-align:center;font-size:.9rem;color:var(--mut)}
+.lingue{max-width:1040px;margin:0 auto;padding:0 16px 8px;font-size:.85rem;color:var(--mut)}.lingue a{color:var(--mut)}.lingue strong{color:var(--fg)}footer .lingue{padding-top:10px}
+@media(max-width:600px){body{font-size:16px}nav.menu{display:none}.apri{margin-left:auto}}
+</style>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"WIP","item":"https://www.wip.guide/"},{"@type":"ListItem","position":2,"name":"指南","item":"https://www.wip.guide/guida/zh/"},{"@type":"ListItem","position":3,"name":"地图图层","item":"https://www.wip.guide/guida/zh/livelli-della-mappa"},{"@type":"ListItem","position":4,"name":"气候：最佳旅行时间","item":"https://www.wip.guide/guida/zh/livello-clima"}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"“气候：月度指南”图层有筛选器吗？","acceptedAnswer":{"@type":"Answer","text":"在报告中：年视图或月视图。"}},{"@type":"Question","name":"为什么我看不到它？","acceptedAnswer":{"@type":"Answer","text":"检查你是否已开启图层并且距离足够近：如果出现“放大后请见”，请在相应区域缩放。"}}]}</script>
+</head><body>
+<a href="#main" style="position:absolute;left:-999px" onfocus="this.style.left='8px'">跳到正文</a>
+<header class="top"><div class="bar"><a class="logo" href="/guida/zh/">WIP · 指南</a><nav class="menu" aria-label="指南"><a href="/guida/zh/">指南</a><a href="/guida/zh/categorie">类别</a><a href="/guida/zh/audioguide">语音导览</a><a href="/guida/zh/itinerari">行程</a><a href="/guida/zh/tutorial">教程</a><a href="/guida/zh/domande-frequenti">常见问题</a></nav><a class="btn apri" href="https://wip.guide/">打开 WIP</a></div><nav class="lingue" aria-label="语言"><a lang="it" hreflang="it" href="/guida/livello-clima">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/livello-clima">English</a> · <a lang="fr" hreflang="fr" href="/guida/fr/livello-clima">Français</a> · <a lang="es" hreflang="es" href="/guida/es/livello-clima">Español</a> · <a lang="de" hreflang="de" href="/guida/de/livello-clima">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/livello-clima">Русский</a> · <strong lang="zh">中文</strong></nav></header>
+<main id="main">
+<p class="crumb"><a href="/">WIP</a> › <a href="/guida/zh/">指南</a> › <a href="/guida/zh/livelli-della-mappa">地图图层</a> › 气候：最佳旅行时间</p>
+<h1>📅 气候：最佳旅行时间：地图图层如何运作</h1>
+<p class="lead"><strong>📅 气候：最佳旅行时间</strong>（“当前状况”组）— 2001-2020 年降雨量和平均气温（NASA POWER）+ AI 分析。</p>
+<p class="agg">译自意大利语。截图、视频和示例显示的是意大利语界面。</p>
+<h2>如何开启</h2>
+<ol class="passi"><li>在地图上，点击左下角的<strong>带有图层图标的圆圈</strong>（«地图图层»）。</li><li>查找分组（<strong>«去哪儿»</strong>、<strong>«现状如何»</strong> 或 <strong>«底图»</strong>）并点击图层行：该行会变色并出现一个 ✓（加载时会出现旋转图标）。</li><li>关闭面板：按钮旁会保留<strong>已开启图层的 emoji</strong> 以及一个带有<strong>数字</strong>的小圆点。点击它们即可重新打开。</li><li>若要关闭，请再次点击该行，或者点击 <strong>«全部关闭 (n)»</strong>。</li></ol><h2>在地图上绘制的内容</h2>
+<ul><li>无图钉：左侧有一张<strong>卡片</strong>，显示“📅 最佳旅行时间”、“不宜”、关于当前月份的一句话，如果可用，还显示“本周：比平均值 ±N° · ☔ 预计降雨量 mm”。</li><li><strong>12根条形图</strong>，每月一根：条形越高 = 评分越好（绿色75+、青柠色60+、黄色45+、橙色30+、红色以下）。当前月份有蓝色边框；点击其中一根可查看最低温、最高温、降雨量和评价（极佳、良好、一般、较差）。</li><li>雨水最多、最热和最冷的月份；AI 分析（“✨ ...”）或“🔒 登录以查看此区域的 AI 分析”。</li></ul><h2>从哪个缩放级别开始可见</h2>
+<p>无阈值：使用地图中心（0.5° 网格单元）。</p><h2>点击时显示的内容</h2>
+<ul><li>点击某个月份可查看具体数值；<strong>“📋 完整报告”</strong>会打开气候选项卡，包含年视图和月视图、概览、网络建议、旅行者体验、逐月指南、行前准备、最佳时间、注意事项、统计数据、数据来源、<strong>PDF</strong>、<strong>朗听</strong>功能以及与另一座城市的对比，此外还有适合游泳的月份（水温从 22° 开始）。</li><li>报告生成可能需要长达一分钟的时间（“正在阅读网络和二十年的统计数据...”）：拥有账号的用户生成后，便会对其余所有人开放。</li></ul><h2>数据来源</h2>
+<p>NASA POWER（2001–2020 年平均值）；纯文本分析仅根据表格中的数字生成；报告使用的网络来源标记为“可靠来源”、“博客或网站，未经核实”、“论坛或评论，个人观点”。</p><h2>选项和组合</h2>
+<p><strong>选项：</strong> 在报告中：年视图或月视图。</p>
+<p><strong>与其他图层共存：</strong> 打开“图层”面板时，该卡片会自动收起。相同的数据也会出现在行程中（“通常在 {mese}...”）。</p><section class="manca"><h2>WIP 不做什么（以免产生误解）</h2><ul><li><strong>这是二十年的平均值，全城通用</strong>；它不是天气预报。</li><li>游客无法使用纯文本分析。</li><li>如果 NASA 没有响应：“此点暂无可用统计数据”。</li></ul></section><h2>常见问题</h2><details><summary>“气候：月度指南”图层有筛选器吗？</summary><p>在报告中：年视图或月视图。</p></details><details><summary>为什么我看不到它？</summary><p>检查你是否已开启图层并且距离足够近：如果出现“放大后请见”，请在相应区域缩放。</p></details><h2>继续阅读</h2><div class="grid"><a class="card" href="/guida/zh/livelli-della-mappa"><h3>地图图层</h3><p>WIP 地图的所有 12 个图层：步道、自行车道、美酒与美食、饮水机、保护区与物种、购物、奢华、雪、阳光、气候、海水质量、卫星。…</p></a><a class="card" href="/guida/zh/meteo-neve"><h3>天气与雪况</h3><p>地图上的天气、带“室内”地点的降雨提醒、包含雪道和缆设备的积雪层、紫外线以及逐月气候：WIP 提供什么功能以及数据来源。…</p></a><a class="card" href="/guida/zh/creare-itinerario-tutte-le-modalita"><h3>创建行程</h3><p>WIP 智能行程规划的 10 个入口：与 WIP 对话、最佳出行时间、自动模式、收藏夹、半径、Swip、团队旅行、资料库。各项功能与选项详解。…</p></a></div><div class="letto"><input type="checkbox" id="letto" data-s="livello-clima"><label for="letto">我已读完本指南（仅保存在你的设备上）</label></div><p><a class="btn" href="https://wip.guide/">打开 WIP</a> <a class="btn sec" href="/guida/zh/categorie">全部类别</a></p>
+
+<p class="agg">内容已于 2026 年 11 月 16 日与应用代码核对。如有与您所见不符之处，请写信至 <a href="mailto:support@wip.guide">support@wip.guide</a>.</p>
+</main>
+<footer><a href="/guida/zh/">指南</a> · <a href="/privacy">隐私</a> · <a href="/support">支持</a> · <a href="https://wip.guide/">wip.guide</a><br><nav class="lingue" aria-label="语言"><a lang="it" hreflang="it" href="/guida/livello-clima">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/livello-clima">English</a> · <a lang="fr" hreflang="fr" href="/guida/fr/livello-clima">Français</a> · <a lang="es" hreflang="es" href="/guida/es/livello-clima">Español</a> · <a lang="de" hreflang="de" href="/guida/de/livello-clima">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/livello-clima">Русский</a> · <strong lang="zh">中文</strong></nav></footer>
+<script>(function(){
+function ready(f){document.readyState!='loading'?f():document.addEventListener('DOMContentLoaded',f)}
+ready(function(){
+ var red=matchMedia('(prefers-reduced-motion: reduce)').matches;
+ var els=document.querySelectorAll('.num[data-n]');
+ if('IntersectionObserver' in window&&!red&&els.length){var io=new IntersectionObserver(function(es){es.forEach(function(e){if(!e.isIntersecting)return;io.unobserve(e.target);var el=e.target,n=+el.dataset.n,pre=el.dataset.c||'',t0=null;function st(t){t0=t0||t;var p=Math.min((t-t0)/900,1);el.textContent=pre+Math.round(n*p).toLocaleString('zh-CN');if(p<1)requestAnimationFrame(st)}requestAnimationFrame(st)})},{threshold:.4});els.forEach(function(e){io.observe(e)})}
+ var inp=document.getElementById('q'),out=document.getElementById('ris');
+ if(inp&&out){var idx=null;fetch('/guida/zh/indice.json').then(function(r){return r.json()}).then(function(j){idx=j}).catch(function(){});
+  var norm=function(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\p{L}\p{N} ]+/gu,' ')};
+  var cerca=function(q){q=norm(q).trim();if(!q||!idx){out.innerHTML='';return}var SW='  ';var w=/[\u4e00-\u9fff]/.test(q)?Array.from(q.replace(/\s+/g,'')).reduce(function(a,c,i,s){if(i<s.length-1)a.push(c+s[i+1]);return a},[]):q.split(/\s+/).filter(function(x){return x.length>2&&SW.indexOf(' '+x+' ')<0});
+   var r=idx.map(function(d){var ks=norm(d.k),h=norm(d.t+' '+(d.r||'')+' '+(d.f||'')),s=0;w.forEach(function(x){if(ks.indexOf(x)>-1)s+=5;else if(h.indexOf(x)>-1)s+=1});for(var i=0;i<w.length-1;i++)if(ks.indexOf(w[i]+' '+w[i+1])>-1)s+=8;return {d:d,s:s}}).filter(function(x){return x.s>0}).sort(function(a,b){return b.s-a.s}).slice(0,6);
+   out.innerHTML=r.length?r.map(function(x){return '<li><a href="'+x.d.u+'"><strong>'+x.d.t+'</strong>'+(x.d.r?'<br><span class="et">'+x.d.r+'</span>':'')+'</a></li>'}).join(''):'<li>没有找到相关指南：换个词试试，或浏览类别。</li>'};
+  inp.addEventListener('input',function(){cerca(inp.value)});
+  document.querySelectorAll('[data-q]').forEach(function(b){b.addEventListener('click',function(){inp.value=b.dataset.q;cerca(b.dataset.q);inp.focus()})})}
+ var K='wip-guida-letti';function get(){try{return JSON.parse(localStorage.getItem(K)||'[]')}catch(e){return[]}}function set(a){try{localStorage.setItem(K,JSON.stringify(a))}catch(e){}}
+ var cb=document.getElementById('letto');if(cb){var a=get();cb.checked=a.indexOf(cb.dataset.s)>-1;cb.addEventListener('change',function(){var l=get().filter(function(x){return x!==cb.dataset.s});if(cb.checked)l.push(cb.dataset.s);set(l)})}
+ document.querySelectorAll('[data-lez]').forEach(function(el){var l=get();el.textContent=l.indexOf(el.dataset.lez)>-1?'✓ 已读':''});
+ document.querySelectorAll('[data-perc]').forEach(function(el){var l=get(),s=el.dataset.perc.split(','),n=s.filter(function(x){return l.indexOf(x)>-1}).length;el.textContent='已读 {n}/{t} 课'.replace('{n}',n).replace('{t}',s.length)});
+});})();</script>
+</body></html>

@@ -22,6 +22,11 @@ import GalleryViewToggle, { useGalleryView } from './GalleryViewToggle';
 import { getUserProfile, UserProfile } from '../lib/quotaManager';
 import { getOfflineItinerariesList, getOfflineItinerary } from '../lib/offlineStorage';
 import { Language, getTranslation, LANGUAGES, linguaCorrente } from '../lib/i18n';
+import { apriScheda } from '../lib/apriScheda';
+
+/** Lingue in cui il centro guida web è pubblicato (scripts/guida/build.mjs, soglia 97%). Una lingua si aggiunge
+ *  qui solo dopo che `/guida/<lingua>/` è online. */
+const GUIDA_WEB_LINGUE = ['IT', 'EN', 'FR', 'ES', 'DE', 'RU', 'ZH'];
 import { FAVORITES_EVENT } from '../lib/favorites';
 import { list as listNotifications, markAllRead as markAllNotificationsRead, unreadCount as notificationsUnreadCount, formatRelativeTime, NOTIFICATION_CENTER_EVENT, WipNotification } from '../lib/notificationCenter';
 import { parseImportFile, importPlacesAsFavorites, ImportReport, MAX_IMPORT_ENTRIES } from '../lib/importGoogleMaps';
@@ -2065,7 +2070,27 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
           )}
 
           {activeTab === 'guida' && (
-             <AppGuide language={language} />
+            <div className="space-y-4">
+              {/* La guida essenziale resta com'è; in testa il banner verso il centro guida web, con tutorial, video ed
+                  esempi veri (committente 18/11/2026), nella lingua dell'app se pubblicata (GUIDA_WEB_LINGUE). */}
+              {GUIDA_WEB_LINGUE.includes(String(language).toUpperCase()) && (
+                <button
+                  type="button"
+                  onClick={() => { const l = String(language).toLowerCase(); void apriScheda(`https://www.wip.guide/guida/${l === 'it' ? '' : `${l}/`}`); }}
+                  className="w-full flex items-center gap-4 p-5 rounded-3xl bg-gradient-to-r from-blue-700 to-blue-500 text-white text-left shadow-lg shadow-blue-600/20 active:scale-[0.99] transition-transform"
+                >
+                  <div className="w-11 h-11 shrink-0 rounded-2xl bg-white/15 flex items-center justify-center">
+                    <LifeBuoy className="w-6 h-6" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h4 className="font-black">{getTranslation('pf_guida_web', language)}</h4>
+                    <p className="text-xs font-bold text-white/80">{getTranslation('pf_guida_web_desc', language)}</p>
+                  </div>
+                  <ChevronRight className="w-5 h-5 text-white/80 shrink-0" />
+                </button>
+              )}
+              <AppGuide language={language} />
+            </div>
           )}
 
           {activeTab === 'supporto' && (
@@ -2144,6 +2169,27 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     </div>
                     <ChevronRight className="w-5 h-5 text-gray-300" />
                   </button>
+
+                  {/* Centro guida sul web (16/11/2026): tutorial, video ed esempi veri. La card compare solo nelle
+                      lingue in cui la guida è pubblicata (GUIDA_WEB_LINGUE: build.mjs pubblica una lingua solo se
+                      tradotta ≥ 97%); l'italiano sta in /guida/, le altre in /guida/<lingua>/. apriScheda: scheda
+                      dentro l'app sui nativi (l'audioguida in corso non si ferma). */}
+                  {GUIDA_WEB_LINGUE.includes(String(language).toUpperCase()) && (
+                    <button
+                      type="button"
+                      onClick={() => { const l = String(language).toLowerCase(); void apriScheda(`https://www.wip.guide/guida/${l === 'it' ? '' : `${l}/`}`); }}
+                      className="flex items-center gap-4 p-6 bg-gray-50 rounded-3xl border border-transparent hover:border-blue-200 transition-all group cursor-pointer text-left w-full"
+                    >
+                      <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-gray-400 group-hover:text-blue-600 transition-colors shadow-sm">
+                        <LifeBuoy className="w-6 h-6" />
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="font-black text-gray-900">{getTranslation('pf_guida_web', language)}</h4>
+                        <p className="text-xs font-bold text-gray-500">{getTranslation('pf_guida_web_desc', language)}</p>
+                      </div>
+                      <ChevronRight className="w-5 h-5 text-gray-300" />
+                    </button>
+                  )}
 
                   <div className="p-6 bg-blue-600 rounded-3xl text-white shadow-lg shadow-blue-600/20">
                     <div className="flex items-center gap-3 mb-3">

@@ -193,11 +193,12 @@ export const TRAD_MAPPA: Record<string, Partial<Record<Language, string>>> = {
     IT: 'Non classificata', EN: 'Not classified', FR: 'Non classée',
     ES: 'Sin clasificar', DE: 'Nicht klassifiziert', RU: 'Не классифицировано', ZH: '未分级',
   },
+  // 15/11/2026: diceva «(Open-Meteo)», ma temperatura e onde arrivano da /api/mare/griglia (NASA JPL MUR + NOAA WaveWatch III).
   mp_acqua_onde_ora: {
-    IT: 'Acqua e onde ora (Open-Meteo)', EN: 'Water and waves now (Open-Meteo)',
-    FR: 'Eau et vagues en ce moment (Open-Meteo)', ES: 'Agua y oleaje ahora (Open-Meteo)',
-    DE: 'Wasser und Wellen jetzt (Open-Meteo)', RU: 'Вода и волны сейчас (Open-Meteo)',
-    ZH: '当前水温与海浪（Open-Meteo）',
+    IT: 'Acqua e onde ora (NASA, NOAA)', EN: 'Water and waves now (NASA, NOAA)',
+    FR: 'Eau et vagues en ce moment (NASA, NOAA)', ES: 'Agua y oleaje ahora (NASA, NOAA)',
+    DE: 'Wasser und Wellen jetzt (NASA, NOAA)', RU: 'Вода и волны сейчас (NASA, NOAA)',
+    ZH: '当前水温与海浪（NASA、NOAA）',
   },
   mp_classificazione_eea: {
     IT: 'Classificazione ufficiale UE (EEA) — verifica i divieti temporanei in loco',
@@ -617,19 +618,23 @@ export const TRAD_MAPPA: Record<string, Partial<Record<Language, string>>> = {
     DE: 'Badegewässerqualität', RU: 'Качество воды для купания', ZH: '海水浴场水质',
   },
   // ── Aree protette Natura 2000 (EEA) — 27/08/2026 ──
+  // 15/11/2026: dal 11–16/10 il livello copre anche il resto del mondo (fonti nazionali ufficiali + OpenStreetMap,
+  // mai WDPA): «~27.000 siti UE» e «Natura 2000» nel nome non erano più veri.
   mp_layer_natura2000_nome: {
-    IT: 'Aree protette Natura 2000', EN: 'Natura 2000 protected areas',
-    FR: 'Aires protégées Natura 2000', ES: 'Áreas protegidas Natura 2000',
-    DE: 'Natura-2000-Schutzgebiete', RU: 'Охраняемые территории Natura 2000', ZH: 'Natura 2000 保护区',
+    IT: 'Aree protette', EN: 'Protected areas',
+    FR: 'Aires protégées', ES: 'Áreas protegidas',
+    DE: 'Schutzgebiete', RU: 'Охраняемые территории', ZH: '保护区',
   },
   mp_layer_natura2000_det: {
-    IT: '~27.000 siti UE con confini (Agenzia Europea dell\'Ambiente)',
-    EN: '~27,000 EU sites with boundaries (European Environment Agency)',
-    FR: '~27 000 sites UE avec leurs limites (Agence européenne pour l\'environnement)',
-    ES: '~27.000 sitios de la UE con sus límites (Agencia Europea de Medio Ambiente)',
-    DE: '~27.000 EU-Gebiete mit Grenzen (Europäische Umweltagentur)',
-    RU: '~27 000 участков ЕС с границами (Европейское агентство по окружающей среде)',
-    ZH: '约 27,000 个欧盟保护区及其边界（欧洲环境署）',
+    // 16/11/2026 (committente: «dire anche le specie protette presenti»): il fumetto mostra già le specie avvistate
+    // (GBIF) con il bollino della Lista Rossa IUCN; ora lo dice anche la riga del pannello Livelli.
+    IT: 'Parchi e riserve in tutto il mondo, con confini e specie avvistate (anche quelle a rischio)',
+    EN: 'Parks and reserves worldwide, with boundaries and species sighted (threatened ones too)',
+    FR: 'Parcs et réserves du monde entier, avec leurs limites et les espèces observées (menacées aussi)',
+    ES: 'Parques y reservas de todo el mundo, con sus límites y las especies avistadas (también las amenazadas)',
+    DE: 'Parks und Reservate weltweit, mit Grenzen und beobachteten Arten (auch gefährdete)',
+    RU: 'Парки и заповедники по всему миру: границы и замеченные виды (в том числе редкие)',
+    ZH: '全球公园与保护区，含边界及观测到的物种（包括受威胁物种）',
   },
   // Turismo dello Shopping e Turismo di Lusso (06/09/2026): layer del
   // pannello ⓘ, stesso schema di Vino e Gusto — vedi CategoryChips.tsx.
@@ -686,14 +691,21 @@ export const TRAD_MAPPA: Record<string, Partial<Record<Language, string>>> = {
     RU: 'Источник: Европейское агентство по окружающей среде (CC BY 4.0) — соблюдайте правила территории',
     ZH: '来源：欧洲环境署（CC BY 4.0）——请遵守保护区规定',
   },
+  // 16/11/2026: riga sopra le specie del fumetto delle aree protette — le specie a rischio vengono per prime.
+  mp_specie_a_rischio: {
+    IT: '{n} specie a rischio qui (Lista Rossa IUCN)', EN: '{n} threatened species here (IUCN Red List)',
+    FR: '{n} espèces menacées ici (Liste rouge UICN)', ES: '{n} especies amenazadas aquí (Lista Roja UICN)',
+    DE: '{n} gefährdete Arten hier (Rote Liste IUCN)', RU: 'Видов под угрозой здесь: {n} (Красный список МСОП)',
+    ZH: '此处有 {n} 种受威胁物种（IUCN 红色名录）',
+  },
   mp_natura2000_disclaimer: {
-    IT: 'Confini ufficiali della rete Natura 2000 (EEA). Solo Europa; avvicina la mappa per vederli.',
-    EN: 'Official Natura 2000 network boundaries (EEA). Europe only; zoom in to see them.',
-    FR: 'Limites officielles du réseau Natura 2000 (AEE). Europe uniquement ; zoomez pour les voir.',
-    ES: 'Límites oficiales de la red Natura 2000 (AEMA). Solo Europa; acerca el mapa para verlos.',
-    DE: 'Offizielle Grenzen des Natura-2000-Netzes (EUA). Nur Europa; zum Anzeigen hineinzoomen.',
-    RU: 'Официальные границы сети Natura 2000 (ЕАОС). Только Европа; приблизьте карту.',
-    ZH: 'Natura 2000 网络官方边界（EEA）。仅限欧洲；请放大地图查看。',
+    IT: 'Confini delle aree protette: Natura 2000 (EEA) in Europa, enti nazionali e OpenStreetMap nel resto del mondo. Avvicina la mappa per vederli.',
+    EN: 'Protected area boundaries: Natura 2000 (EEA) in Europe, national agencies and OpenStreetMap elsewhere. Zoom in to see them.',
+    FR: 'Limites des aires protégées : Natura 2000 (AEE) en Europe, organismes nationaux et OpenStreetMap ailleurs. Zoomez pour les voir.',
+    ES: 'Límites de las áreas protegidas: Natura 2000 (AEMA) en Europa, organismos nacionales y OpenStreetMap en el resto del mundo. Acerca el mapa para verlos.',
+    DE: 'Grenzen der Schutzgebiete: Natura 2000 (EUA) in Europa, nationale Behörden und OpenStreetMap im Rest der Welt. Zum Anzeigen hineinzoomen.',
+    RU: 'Границы охраняемых территорий: Natura 2000 (ЕАОС) в Европе, национальные ведомства и OpenStreetMap в остальном мире. Приблизьте карту.',
+    ZH: '保护区边界：欧洲为 Natura 2000（EEA），其他地区为各国官方机构及 OpenStreetMap。请放大地图查看。',
   },
   // ── Scheda POI: denominazioni d'origine e link ai registri esterni — 27/08/2026 ──
   poi_denominazioni_zona: {

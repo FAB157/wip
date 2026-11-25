@@ -61,8 +61,13 @@ export interface SorgenteStrada {
    * d'arrivo è giusto (sull'ingresso) ma la via non ci arriva — il cancello di una villa, il cortile di un palazzo,
    * Buckingham Palace — la somma «strada + tratto fuori rete» non scende mai sotto il raggio e la guida taceva
    * (110 gemme su 202 «mai» in Europa avevano il punto sull'ingresso). `aria` = distanza diretta dal punto.
+   * A PIEDI (committente 21/11/2026, solo dove il sentiero non arriva alla porta): con `raggioArrivoPiedi` restano i
+   * metri di strada fino al punto (`distanzaCheDecide` + `verso`, guardia dei 15 m e «giro largo» compresi); solo se
+   * la via RAGGIUNTA più vicina al punto sta oltre il raggio d'arrivo (cercata fino a 250 m) la guida scatta dove
+   * finisce il sentiero: strada fino lì + 20 m. Vale la minore delle due: dove il sentiero arriva alla porta non cambia
+   * niente. Il punto d'arrivo non si sposta (regola del 12/10). Casi: Certosa di San Martino, Castel Sant'Elmo.
    */
-  decide(lat: number, lon: number, aria: number): number;
+  decide(lat: number, lon: number, aria: number, raggioArrivoPiedi?: number): number;
   /** Solo per i collaudi: via→punto (coda), strada mancante fino a quella via, utente→via. */
   spiega(lat: number, lon: number): { coda: number | null; finoAllaVia: number | null; daUtenteAVia: number };
 }
@@ -70,6 +75,16 @@ export interface SorgenteStrada {
 export const STRADA_CODA_LIBERA_M = 20;
 /** In auto la via che chiude il viaggio si cerca fin qui: con 120 m 39 percorsi su 60, con 250 m 48, stesso anticipo massimo (51 m). */
 export const STRADA_FINE_AUTO_MAX_M = 250;
+/** (21/11/2026, committente: «il risultato non peggiora mai») In AUTO nessun tetto in linea d'aria per la «fine strada»:
+ *  resta la regola del 30/10 (Castel dell'Ovo a 176 m coperto). Limite noto e accettato: la statua di Gellért scatta a
+ *  203 m dalla via sotto la collina. */
+export const FINE_STRADA_ARIA_AUTO_M = Infinity;
+/** (21/11/2026) A piedi la «fine sentiero» vale entro max(raggio d'arrivo + 20, 210 m) in linea d'aria: copre Certosa di
+ *  San Martino (64 m), Castel Sant'Elmo (55), Bellagio Conservatory (158), Pan di Zucchero (201). */
+export const FINE_SENTIERO_ARIA_MIN_M = 210;
+export function ariaMaxFineStrada(raggioArrivoPiedi?: number): number {
+  return raggioArrivoPiedi === undefined ? FINE_STRADA_ARIA_AUTO_M : Math.max(raggioArrivoPiedi + STRADA_CODA_LIBERA_M, FINE_SENTIERO_ARIA_MIN_M);
+}
 export interface GrafoStrade {
   /** Prepara le distanze da una posizione. null se l'utente è fuori rete (o il grafo è vuoto). */
   da(lat: number, lon: number, maxM: number): SorgenteStrada | null;
@@ -280,6 +295,31 @@ export function creaGrafoStrade(polilinee: number[][][]): GrafoStrade {
           if (nd < (dist.get(m) ?? Infinity)) { dist.set(m, nd); coda.metti(nd, m); }
         }
       }
+      /** (21/11/2026) Fra i segmenti entro `maxM` dal punto, il più vicino che la partenza RAGGIUNGE: metri di strada
+       *  fino alla proiezione del punto sul segmento (`best`) e distanza punto–segmento (`d`). Solo per `decide`. */
+      const raggiuntoPiuVicino = (x: number, y: number, maxMetri: number): { best: number; d: number } | null => {
+        const cx = cella(x), cy = cella(y);
+        const r = Math.ceil(maxMetri / CELLA_M);
+        const candidati: Array<{ seg: number; t: number; d: number }> = [];
+        for (let dx = -r; dx <= r; dx++) for (let dy = -r; dy <= r; dy++) {
+          for (const i of griglia.get(`${cx + dx},${cy + dy}`) || []) {
+            if (isola[i]) continue;
+            const p = proietta(segmenti[i], x, y);
+            if (p.d <= maxMetri) candidati.push({ seg: i, t: p.t, d: p.d });
+          }
+        }
+        candidati.sort((a, b) => a.d - b.d);
+        const visti = new Set<number>();
+        for (const c of candidati) {
+          if (visti.has(c.seg)) continue;
+          visti.add(c.seg);
+          let best = Infinity;
+          if (c.seg === partenza.seg) best = partenza.d + Math.abs(c.t - partenza.t) * segmenti[c.seg].len;
+          for (const [n, w] of vicini(c.seg, c.t)) { const d = dist.get(n); if (d !== undefined && d + w < best) best = d + w; }
+          if (Number.isFinite(best)) return { best, d: c.d };
+        }
+        return null;
+      };
       return {
         verso(pLat, pLon) {
           const px = X(pLon), py = Y(pLat);
@@ -307,8 +347,23 @@ export function creaGrafoStrade(polilinee: number[][][]): GrafoStrade {
           for (const [n, w] of vicini(arrivo.seg, arrivo.t)) { const d = dist.get(n); if (d !== undefined && d + w < best) best = d + w; }
           return { coda: Math.round(arrivo.d), finoAllaVia: Number.isFinite(best) ? Math.round(best) : null, daUtenteAVia: Math.round(partenza.d) };
         },
-        decide(pLat, pLon, aria) {
+        decide(pLat, pLon, aria, raggioArrivoPiedi) {
           const px = X(pLon), py = Y(pLat);
+          // A PIEDI (21/11/2026): metri di strada come sempre; «fine sentiero» solo se la via raggiunta più vicina al
+          // punto sta OLTRE il raggio d'arrivo. Il minore dei due: mai più tardi di prima.
+          // (21/11/2026, Budapest: la statua di Gellért scattava a 203 m in linea d'aria dalla via SOTTO la collina) La
+          // «fine strada/sentiero» vale solo se la linea d'aria è entro `ariaMaxFineStrada`: il dislivello non lo
+          // conosciamo, la linea d'aria è il limite.
+          const ariaMax = ariaMaxFineStrada(raggioArrivoPiedi);
+          if (raggioArrivoPiedi !== undefined) {
+            const normale = distanzaCheDecide(aria, this.verso(pLat, pLon));
+            const r = aria <= ariaMax ? raggiuntoPiuVicino(px, py, STRADA_FINE_AUTO_MAX_M) : null;
+            if (r && r.d > raggioArrivoPiedi) {
+              const tot = r.best + STRADA_CODA_LIBERA_M;
+              if (tot <= maxM) return Math.min(normale, tot);
+            }
+            return normale;
+          }
           const arrivo = aggancia(px, py, STRADA_FINE_AUTO_MAX_M);
           if (!arrivo) return aria; // luogo fuori rete: resta la distanza diretta
           let best = Infinity;
@@ -321,9 +376,21 @@ export function creaGrafoStrade(polilinee: number[][][]): GrafoStrade {
           // strada fino a dove finisce, e quel tratto fuori rete conta STRADA_CODA_LIBERA_M: si è arrivati a ~10 m
           // di strada dal punto della rete più vicino al luogo. La linea d'aria qui non entra: da lì al punto
           // possono esserci 80 m di viale privato, ed è la fine della strada che conta.
-          if (arrivo.d > STRADA_CODA_LIBERA_M && Number.isFinite(best)) {
+          if (arrivo.d > STRADA_CODA_LIBERA_M && Number.isFinite(best) && aria <= ariaMax) {
             const tot = best + STRADA_CODA_LIBERA_M;
             if (tot <= maxM) return tot;
+          }
+          // 21/11/2026 (indagine C/D: SFMOMA, Jemaa el-Fna, Bellas Artes di Siviglia, Városliget, Vajdahunyad — in auto
+          // la guida taceva anche a 27 m). La via più vicina al punto può non essere RAGGIUNTA dal grafo (una pedonale,
+          // un pezzo staccato dalla rete per auto): il risultato era Infinity. Decide allora la via raggiunta più vicina
+          // al punto entro STRADA_FINE_AUTO_MAX_M: strada fino lì + la coda (al più STRADA_CODA_LIBERA_M), come sopra.
+          // Stessa correzione in Sorgente.decide (RoadGraph.kt, RoadSnap.swift).
+          if (!Number.isFinite(best) && aria <= ariaMax) {
+            const r = raggiuntoPiuVicino(px, py, STRADA_FINE_AUTO_MAX_M);
+            if (r) {
+              const tot = r.best + Math.min(r.d, STRADA_CODA_LIBERA_M);
+              if (tot <= maxM) return tot;
+            }
           }
           const tot = Number.isFinite(best) ? best + arrivo.d : Infinity;
           return distanzaCheDecide(aria, tot > maxM ? Infinity : tot);

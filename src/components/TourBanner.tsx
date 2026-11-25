@@ -20,7 +20,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Pause, Play, RotateCcw, SkipForward, X, Navigation2, Check, Share2, BookmarkPlus, Flag, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { tourService, type VistaGiro } from '../services/tourService';
 import { Language, getTranslation } from '../lib/i18n';
-import { gestisciErroreGiro } from '../lib/tour/passRichiesto';
+import { gestisciErroreGiro, ePassRichiesto } from '../lib/tour/passRichiesto';
+import { getDayPassState, DAY_PASS_UPDATED_EVENT } from '../services/dayPassService';
 import { locationService } from '../services/locationService';
 import { linkMezzi, trattaLunga } from '../lib/mezziPubblici';
 
@@ -201,6 +202,20 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
   // (22/10/2026, collaudo Milano/Madrid/Vienna) Niente window.confirm: blocca la pagina — e con essa la voce e il
   // GPS del giro — finché qualcuno non risponde, e su iOS a schermo spento non si vede. La conferma sta nel cruscotto:
   // primo tocco sulla X = la domanda nella riga degli avvisi; secondo tocco entro 6 s = chiude.
+  const aspettaPassRef = useRef(false);
+  useEffect(() => {
+    const h = () => {
+      if (!aspettaPassRef.current) return;
+      getDayPassState().then((s) => {
+        if (!s?.active || !aspettaPassRef.current) return;
+        aspettaPassRef.current = false;
+        setAvviso(null);
+        tourService.avvia().catch((e: any) => setAvviso(gestisciErroreGiro(e, language, { toast: false, city: tourService.datiGiro()?.citta })));
+      }).catch(() => {});
+    };
+    window.addEventListener(DAY_PASS_UPDATED_EVENT, h);
+    return () => window.removeEventListener(DAY_PASS_UPDATED_EVENT, h);
+  }, [language]);
   const [chiusuraArmata, setChiusuraArmata] = useState(false);
   const timerChiusura = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (timerChiusura.current) clearTimeout(timerChiusura.current); }, []);
@@ -209,7 +224,8 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
       setChiusuraArmata(true);
       setAvviso(`${t('gr_chiudi_giro_conferma')} ${t('gr_tocca_ancora_per_chiudere')}`);
       if (timerChiusura.current) clearTimeout(timerChiusura.current);
-      timerChiusura.current = setTimeout(() => { setChiusuraArmata(false); setAvviso(null); }, 6000);
+      // (14/11/2026) 6 s erano pochi per leggere la riga e ritoccare: la X resta armata 15 s e si vede (rossa piena).
+      timerChiusura.current = setTimeout(() => { setChiusuraArmata(false); setAvviso(null); }, 15000);
       return;
     }
     if (timerChiusura.current) clearTimeout(timerChiusura.current);
@@ -428,6 +444,9 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
                     // server lo dice, il giro resta «pronto» e si apre la
                     // cassa con «Acquista ora» (gestisciErroreGiro).
                     tourService.avvia().catch((e: any) => {
+                      // (14/11/2026) Se manca il pass si ricorda che l'utente VOLEVA partire: appena il pass è
+                      // attivo il giro parte da solo (effetto più sotto), senza un secondo tocco su «Avvia».
+                      aspettaPassRef.current = ePassRichiesto(e);
                       setAvviso(gestisciErroreGiro(e, language, { toast: false, city: tourService.datiGiro()?.citta }));
                     });
                   }}
@@ -439,9 +458,9 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
                 <button
                   onClick={chiudiGiro}
                   title={t('tour_termina')}
-                  className="w-10 h-10 rounded-full bg-red-50 hover:bg-red-100 flex items-center justify-center transition-colors active:scale-95"
+                  className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors active:scale-95 ${chiusuraArmata ? 'bg-red-600 ring-4 ring-red-200 animate-pulse' : 'bg-red-50 hover:bg-red-100'}`}
                 >
-                  <X className="w-4 h-4 text-red-600" />
+                  <X className={`w-4 h-4 ${chiusuraArmata ? 'text-white' : 'text-red-600'}`} />
                 </button>
               </div>
             ) : (
@@ -488,9 +507,9 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
               <button
                 onClick={chiudiGiro}
                 title={t('tour_termina')}
-                className="w-10 h-10 rounded-full bg-red-50 hover:bg-red-100 flex items-center justify-center transition-colors active:scale-95"
+                className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors active:scale-95 ${chiusuraArmata ? 'bg-red-600 ring-4 ring-red-200 animate-pulse' : 'bg-red-50 hover:bg-red-100'}`}
               >
-                <X className="w-4 h-4 text-red-600" />
+                <X className={`w-4 h-4 ${chiusuraArmata ? 'text-white' : 'text-red-600'}`} />
               </button>
             </div>
             )}

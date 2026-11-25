@@ -49,8 +49,16 @@ import { useRaccontoViaggio } from './RaccontoViaggio';
 import { elencoPdf, eliminaPdf, idPdf, riapriPdf, type PdfVoce, type PdfTipo } from '../lib/pdfArchivio';
 import { saveBlobAsFile, getLocalGuide, saveGuideLocally } from '../services/premiumGuideService';
 import { Capacitor } from '@capacitor/core';
+import { getApiUrl } from '../lib/api';
+import { FlaskConical, ScrollText, BarChart3 } from 'lucide-react';
+import PagellaCollaudo from './admin/PagellaCollaudo';
+import ReportLavori from './admin/ReportLavori';
+import DeployPronto from './admin/DeployPronto';
+import LogNativi from './admin/LogNativi';
+import ReportPartner from './admin/ReportPartner';
+import StatoPortali from './admin/StatoPortali';
 
-export type CartellaDownload = 'itinerari' | 'mappe' | 'audioguide' | 'guide' | 'musei';
+export type CartellaDownload = 'itinerari' | 'mappe' | 'audioguide' | 'guide' | 'musei' | 'test' | 'report';
 
 interface Props {
   language: Language;
@@ -181,6 +189,13 @@ export default function DownloadsScreen({ language, cartellaIniziale, onApriAsco
   // essere salvata nei miei download e archivio e sempre disponibile»):
   // compaiono anche se mai aperte su questo telefono, e riaprirle e' gratis.
   const [museiAccount, setMuseiAccount] = useState<VisitaAcquistata[]>([]);
+  // CARTELLA TEST (18/11/2026, committente: «nell'admin, i miei download, una cartella test con sotto-cartelle —
+  // itinerari, guide, musei — dove salvare gli itinerari test corretti», «il registro dove lo vedo?»). Solo admin.
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [sottoTest, setSottoTest] = useState<'itinerari' | 'guide' | 'musei' | 'registro' | 'pagella' | 'collaudati' | 'deploy' | 'nativi' | 'partner' | 'portali' | null>(null);
+  // Cartella Report (solo admin, 20/11/2026): sottocartella «LAVORI IN BACK», un report al giorno scritto da Oracle.
+  const [sottoReport, setSottoReport] = useState<'lavori' | null>(null);
+  const [registro, setRegistro] = useState<{ regole: any[]; notti: any[]; errore?: string } | null>(null);
   const [bytes, setBytes] = useState(0);
   const [inCorso, setInCorso] = useState<string | null>(null);
   const [vista, setVista] = useState<Vista>(leggiVista);
@@ -197,11 +212,14 @@ export default function DownloadsScreen({ language, cartellaIniziale, onApriAsco
       const { data: sessionData } = await supabase.auth.getSession();
       const uid = sessionData?.session?.user?.id;
       if (!uid) { setItinerariAccount([]); setGuideAccount([]); setMuseiAccount([]); return; }
-      const [ri, rg, rm] = await Promise.all([
-        supabase.from('user_itineraries').select('id, titolo, updated_at').eq('user_id', uid).order('updated_at', { ascending: false }).limit(200),
+      const [ri, rg, rm, rp] = await Promise.all([
+        // `collaudo`: marcatura degli itinerari del collaudo serale (18/11/2026) — vanno nella cartella Test, non qui.
+        supabase.from('user_itineraries').select('id, titolo, updated_at, collaudo:dati_itinerario->collaudo').eq('user_id', uid).order('updated_at', { ascending: false }).limit(300),
         supabase.from('itinerary_guides').select('itinerary_hash, created_at, content_data, media_manifest').eq('user_id', uid).order('created_at', { ascending: false }).limit(200),
         fetchVisiteAcquistate(),
+        supabase.from('user_profiles').select('is_admin').eq('id', uid).maybeSingle(),
       ]);
+      setIsAdmin(rp?.data?.is_admin === true);
       setItinerariAccount(Array.isArray(ri.data) ? ri.data : []);
       setGuideAccount(Array.isArray(rg.data) ? rg.data : []);
       setMuseiAccount(rm);
@@ -238,6 +256,7 @@ export default function DownloadsScreen({ language, cartellaIniziale, onApriAsco
     for (const it of itinerariAccount) {
       const id = String(it.id || '');
       if (!id) continue;
+      if (it.collaudo) continue; // collaudo serale: cartella Test
       if (idOfflinePresenti.has(idOfflineDi(it.titolo, id))) continue;
       perId.set(id, { id, nome: it.titolo || 'Itinerario', data: Date.parse(it.updated_at) || undefined, soloAccount: true });
     }
@@ -268,7 +287,7 @@ export default function DownloadsScreen({ language, cartellaIniziale, onApriAsco
     const locali = records.filter(r => r.tipo === 'guida');
     const hashLocali = new Set(locali.map(r => String(r.meta?.hash || r.id.replace(/^guida:/, ''))));
     const soloAccount = guideAccount
-      .filter(g => g.itinerary_hash && !hashLocali.has(String(g.itinerary_hash)))
+      .filter(g => g.itinerary_hash && !g.content_data?.collaudo && !hashLocali.has(String(g.itinerary_hash)))
       .map(g => ({
         id: `guida:${g.itinerary_hash}`,
         tipo: 'guida' as const,
@@ -308,6 +327,37 @@ export default function DownloadsScreen({ language, cartellaIniziale, onApriAsco
     return ordinaRecord([...locali, ...soloAccount] as unknown as DownloadRecord[]) as Array<DownloadRecord & { soloAccount?: boolean }>;
   }, [records, museiAccount, ordine]);
   const zone = records.filter(r => r.tipo === 'zona');
+  // Cartella Test (solo admin): ciò che il collaudo serale ha generato, controllato e salvato corretto.
+  const testItinerari = useMemo(() => itinerariAccount.filter((it: any) => it.collaudo)
+    .map((it: any) => ({ id: String(it.id), nome: String(it.titolo || 'Itinerario'), data: Date.parse(it.updated_at) || 0, c: it.collaudo }))
+    .sort((a, b) => ordine === 'nome' ? a.nome.localeCompare(b.nome) : b.data - a.data), [itinerariAccount, ordine]);
+  const testGuide = useMemo(() => guideAccount.filter((g: any) => g.content_data?.collaudo)
+    .map((g: any) => ({ hash: String(g.itinerary_hash), nome: String(g.content_data?.guida_titolo || 'Guida d\'autore'), data: Date.parse(g.created_at) || 0, c: g.content_data.collaudo }))
+    .sort((a, b) => b.data - a.data), [guideAccount]);
+  // COLLAUDATI E RIUTILIZZABILI (22/11/2026, committente: «gli itinerari e le guide premium che sono state collaudate con
+  // anche i percorsi WipNav vanno messi in una cartella dentro la tab Test e riutilizzabili»). Stessa soglia della
+  // promozione a base della città (voto ≥ 8, nessun problema grave dell'itinerario), con la sua Guida d'Autore accanto:
+  // si aprono come ogni itinerario dell'archivio (Naviga · WipNav · PDF).
+  const testCollaudati = useMemo(() => testItinerari.filter((it) => {
+    const v = Number(it.c?.voto_generale);
+    const gravi = Array.isArray(it.c?.gravi) ? it.c.gravi.length : Number(it.c?.gravi || 0);
+    return Number.isFinite(v) && v >= 8 && gravi === 0;
+  }).map((it) => ({
+    ...it,
+    guida: testGuide.find((g) => (it.c?.guida?.hash && g.hash === it.c.guida.hash) || g.c?.itinerario_id === it.id) || null,
+  })), [testItinerari, testGuide]);
+  const testMusei = useMemo(() => testItinerari.filter(it => it.c?.museo?.venueKey || it.c?.museo?.venueName)
+    .map(it => ({ ...it.c.museo, data: it.data, citta: it.c.citta })), [testItinerari]);
+  const caricaRegistro = async () => {
+    setRegistro(null);
+    try {
+      const { data: s } = await supabase.auth.getSession();
+      const r = await fetch(getApiUrl('/api/admin/collaudo'), { headers: { Authorization: `Bearer ${s?.session?.access_token || ''}` } });
+      const j = await r.json().catch(() => ({}));
+      // (20/11/2026) Un errore di lettura del server si mostra: prima la cartella restava vuota in silenzio.
+      setRegistro(r.ok ? { regole: j.regole || [], notti: j.notti || [], ...(Array.isArray(j.errori) && j.errori.length ? { errore: j.errori.join(' · ') } : {}) } : { regole: [], notti: [], errore: j.error || `HTTP ${r.status}` });
+    } catch (e: any) { setRegistro({ regole: [], notti: [], errore: e?.message || 'rete' }); }
+  };
   // «Musei» mancava qui (12/09/2026): il pacchetto si registrava già nel
   // registro unico (pacchettoMuseo.ts, tipo='museo') ma questa schermata non
   // lo filtrava né lo mostrava — un museo scaricato risultava invisibile e
@@ -565,10 +615,12 @@ export default function DownloadsScreen({ language, cartellaIniziale, onApriAsco
             { id: 'audioguide', nome: t('dl_audioguide'), icona: <Headphones size={22} />, n: audioguide.length, nPdf: 0 },
             { id: 'guide', nome: t('dl_guide_premium'), icona: <BookOpen size={22} />, n: guide.length, nPdf: pdf.filter(v => v.tipo === 'guida').length },
             { id: 'musei', nome: t('dl_guide_musei'), icona: <Landmark size={22} />, n: musei.length, nPdf: pdf.filter(v => v.tipo === 'museo').length },
+            ...(isAdmin ? [{ id: 'test', nome: 'Test', icona: <FlaskConical size={22} />, n: testItinerari.length + testGuide.length, nPdf: 0 }] : []),
+            ...(isAdmin ? [{ id: 'report', nome: 'Report', icona: <BarChart3 size={22} />, n: 1, nPdf: 0 }] : []),
           ] as Array<{ id: CartellaDownload; nome: string; icona: React.ReactNode; n: number; nPdf: number }>).map(c => (
             <button
               key={c.id}
-              onClick={() => setCartella(c.id)}
+              onClick={() => { setCartella(c.id); setSottoTest(null); setSottoReport(null); }}
               className="relative flex flex-col items-start gap-3 p-4 rounded-[1.5rem] bg-white border border-outline-variant/10 shadow-sm hover:bg-primary/5 active:scale-[0.98] transition-all text-left"
             >
               <div className="flex items-center justify-between w-full">
@@ -590,11 +642,13 @@ export default function DownloadsScreen({ language, cartellaIniziale, onApriAsco
       {cartella !== null && (
         <div className="flex items-center gap-2 px-1">
           <button
-            onClick={() => setCartella(null)}
+            onClick={() => { if (cartella === 'test' && sottoTest) setSottoTest(null); else if (cartella === 'report' && sottoReport) setSottoReport(null); else setCartella(null); }}
             className="inline-flex items-center gap-1 h-9 pl-2 pr-3.5 rounded-full bg-white border border-outline-variant/10 shadow-sm text-primary text-[12px] font-black"
-          ><ChevronLeft size={16} /> {t('dl_titolo')}</button>
+          ><ChevronLeft size={16} /> {cartella === 'test' && sottoTest ? 'Test' : cartella === 'report' && sottoReport ? 'Report' : t('dl_titolo')}</button>
           <h3 className="text-base font-black text-primary truncate">
-            {cartella === 'itinerari' ? t('dl_itinerari') : cartella === 'mappe' ? t('dl_mappe') : cartella === 'audioguide' ? t('dl_audioguide') : cartella === 'guide' ? t('dl_guide_premium') : t('dl_guide_musei')}
+            {cartella === 'report' ? (sottoReport === 'lavori' ? 'Report · LAVORI IN BACK' : 'Report')
+              : cartella === 'test' ? (sottoTest === 'itinerari' ? 'Test · Itinerari' : sottoTest === 'guide' ? 'Test · Guide' : sottoTest === 'musei' ? 'Test · Musei' : sottoTest === 'registro' ? 'Test · Registro regole' : sottoTest === 'pagella' ? 'Test · Pagella' : sottoTest === 'collaudati' ? 'Test · Collaudati' : sottoTest === 'deploy' ? 'Test · Deploy' : sottoTest === 'nativi' ? 'Test · Log nativi' : sottoTest === 'partner' ? 'Test · Partner' : sottoTest === 'portali' ? 'Test · Portali e partner per paese' : 'Test')
+              : cartella === 'itinerari' ? t('dl_itinerari') : cartella === 'mappe' ? t('dl_mappe') : cartella === 'audioguide' ? t('dl_audioguide') : cartella === 'guide' ? t('dl_guide_premium') : t('dl_guide_musei')}
           </h3>
         </div>
       )}
@@ -602,7 +656,7 @@ export default function DownloadsScreen({ language, cartellaIniziale, onApriAsco
       {/* Ordine (data/nome) e vista (lista/griglia): scelta dell'utente,
           persistita. Solo dentro una cartella di voci (le Mappe hanno il
           loro pannello). */}
-      {cartella !== null && cartella !== 'mappe' && (
+      {cartella !== null && cartella !== 'mappe' && cartella !== 'test' && cartella !== 'report' && (
         <div className="flex items-center justify-between gap-2 px-1">
           <div className="inline-flex rounded-full bg-surface-variant/40 p-0.5">
             <button
@@ -629,7 +683,7 @@ export default function DownloadsScreen({ language, cartellaIniziale, onApriAsco
         </div>
       )}
 
-      {cartella !== null && cartella !== 'mappe' && (
+      {cartella !== null && cartella !== 'mappe' && cartella !== 'test' && cartella !== 'report' && (
         (cartella === 'itinerari' ? itinerari.length : cartella === 'audioguide' ? audioguide.length : cartella === 'guide' ? guide.length : musei.length) === 0
       ) && (
         <div className="p-10 border-2 border-dashed border-outline-variant/30 rounded-[2rem] text-center text-on-surface-variant/60">
@@ -788,6 +842,219 @@ export default function DownloadsScreen({ language, cartellaIniziale, onApriAsco
           })}
           </Sezione>
           <SezionePdf tipo="museo" />
+        </section>
+      )}
+
+      {/* TEST (solo admin, 18/11/2026): ciò che il collaudo serale su Oracle genera, controlla, corregge e salva
+          — itinerari, guide d'autore, guide museo controllate — e il registro delle regole con i rapporti notturni. */}
+      {cartella === 'test' && isAdmin && sottoTest === null && (
+        <div className="grid grid-cols-2 gap-3">
+          {([
+            { id: 'itinerari', nome: t('dl_itinerari'), icona: <Route size={22} />, n: testItinerari.length },
+            { id: 'guide', nome: t('dl_guide_premium'), icona: <BookOpen size={22} />, n: testGuide.length },
+            { id: 'musei', nome: t('dl_guide_musei'), icona: <Landmark size={22} />, n: testMusei.length },
+            { id: 'registro', nome: 'Registro regole', icona: <ScrollText size={22} />, n: registro?.regole?.length ?? 0 },
+            { id: 'pagella', nome: 'Pagella e report', icona: <BarChart3 size={22} />, n: registro?.notti?.length ?? 0 },
+            { id: 'collaudati', nome: 'Collaudati, riutilizzabili', icona: <Route size={22} />, n: testCollaudati.length },
+            { id: 'deploy', nome: 'Deploy · report e correzioni', icona: <ScrollText size={22} />, n: 0 },
+            { id: 'nativi', nome: 'Log nativi (Android, iPhone)', icona: <ScrollText size={22} />, n: 0 },
+            { id: 'partner', nome: 'Partner (report e voti)', icona: <BarChart3 size={22} />, n: 0 },
+            { id: 'portali', nome: 'Portali e partner per paese (V / X)', icona: <ScrollText size={22} />, n: 0 },
+          ] as const).map(c => (
+            <button
+              key={c.id}
+              onClick={() => { setSottoTest(c.id); if (c.id === 'registro' || c.id === 'pagella' || c.id === 'deploy' || c.id === 'nativi' || c.id === 'partner' || c.id === 'portali') void caricaRegistro(); }}
+              className="relative flex flex-col items-start gap-3 p-4 rounded-[1.5rem] bg-white border border-outline-variant/10 shadow-sm hover:bg-primary/5 active:scale-[0.98] transition-all text-left"
+            >
+              <div className="flex items-center justify-between w-full">
+                <div className="grid place-items-center w-12 h-12 rounded-2xl bg-amber-100 text-amber-800">{c.icona}</div>
+                <Folder size={16} className="text-on-surface-variant/30" />
+              </div>
+              <p className="text-sm font-black text-on-surface leading-tight">{c.nome}</p>
+              {c.id !== 'registro' && c.id !== 'pagella' && c.id !== 'deploy' && c.id !== 'nativi' && c.id !== 'partner' && c.id !== 'portali' && <p className="text-[11px] font-bold text-on-surface-variant/60">{c.n}</p>}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {cartella === 'test' && sottoTest === 'itinerari' && (
+        <section className="space-y-2.5">
+          {testItinerari.length === 0 && <p className="text-sm font-bold text-on-surface-variant/60 px-1">{t('dl_cartella_vuota')}</p>}
+          {testItinerari.map(it => (
+            <Voce
+              key={it.id}
+              icona={<Route size={20} />}
+              titolo={it.nome}
+              sotto={<>
+                <span>{it.c?.data || (it.data ? new Date(it.data).toLocaleDateString() : '')}</span>
+                <span className={it.c?.esito === 'ok' ? 'text-green-700' : it.c?.esito === 'corretto' ? 'text-amber-700' : 'text-red-700'}>{String(it.c?.esito || '?').toUpperCase()}</span>
+                {Array.isArray(it.c?.problemi) && <span>{it.c.problemi.length} problemi</span>}
+                {Array.isArray(it.c?.correzioni) && it.c.correzioni.length > 0 && <span>{it.c.correzioni.length} correzioni</span>}
+              </>}
+              onApri={() => apri({ tipo: 'itinerario', id: it.id })}
+            />
+          ))}
+        </section>
+      )}
+
+      {cartella === 'test' && sottoTest === 'guide' && (
+        <section className="space-y-2.5">
+          {testGuide.length === 0 && <p className="text-sm font-bold text-on-surface-variant/60 px-1">{t('dl_cartella_vuota')}</p>}
+          {testGuide.map(g => (
+            <Voce
+              key={g.hash}
+              icona={<BookOpen size={20} />}
+              titolo={g.nome}
+              sotto={<>
+                <span>{g.c?.data || ''}</span>
+                <span className={g.c?.esito === 'ok' ? 'text-green-700' : 'text-amber-700'}>{String(g.c?.esito || '?').toUpperCase()}</span>
+                {Array.isArray(g.c?.problemi) && <span>{g.c.problemi.length} problemi</span>}
+              </>}
+              onApri={() => apri({ tipo: 'guida', id: g.hash })}
+            />
+          ))}
+        </section>
+      )}
+
+      {cartella === 'test' && sottoTest === 'musei' && (
+        <section className="space-y-2.5">
+          {testMusei.length === 0 && <p className="text-sm font-bold text-on-surface-variant/60 px-1">{t('dl_cartella_vuota')}</p>}
+          {testMusei.map((m: any, i: number) => (
+            <Voce
+              key={`${m.venueKey || m.venueName}_${i}`}
+              icona={<Landmark size={20} />}
+              titolo={String(m.venueName || m.venueKey)}
+              sotto={<>
+                <span>{m.citta || ''}</span>
+                <span className={m.esito === 'ok' ? 'text-green-700' : 'text-amber-700'}>{String(m.esito || '?').toUpperCase()}</span>
+                {Array.isArray(m.problemi) && <span>{m.problemi.length} problemi</span>}
+              </>}
+              onApri={() => apri({ tipo: 'museo', id: `museo:${m.venueKey}`, venueKey: m.venueKey, poiId: m.poiId || null, nome: m.venueName, language: m.lingua || null })}
+            />
+          ))}
+        </section>
+      )}
+
+      {/* REPORT (solo admin, 20/11/2026): sottocartella «LAVORI IN BACK» con un report al giorno e il tasto Aggiorna. */}
+      {cartella === 'report' && isAdmin && sottoReport === null && (
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            onClick={() => setSottoReport('lavori')}
+            className="relative flex flex-col items-start gap-3 p-4 rounded-[1.5rem] bg-white border border-outline-variant/10 shadow-sm hover:bg-primary/5 active:scale-[0.98] transition-all text-left"
+          >
+            <div className="flex items-center justify-between w-full">
+              <div className="grid place-items-center w-12 h-12 rounded-2xl bg-amber-100 text-amber-800"><BarChart3 size={22} /></div>
+              <Folder size={16} className="text-on-surface-variant/30" />
+            </div>
+            <p className="text-sm font-black text-on-surface leading-tight">LAVORI IN BACK</p>
+          </button>
+        </div>
+      )}
+      {cartella === 'report' && isAdmin && sottoReport === 'lavori' && <ReportLavori />}
+
+      {cartella === 'test' && sottoTest === 'collaudati' && (
+        <section className="space-y-2.5">
+          <p className="text-[11px] font-semibold text-on-surface-variant/70 px-1">Voto ≥ 8 e nessun problema grave dell'itinerario. Si aprono e si navigano come gli altri (WipNav, giro, PDF).</p>
+          {testCollaudati.length === 0 && <p className="text-sm font-bold text-on-surface-variant/60 px-1">{t('dl_cartella_vuota')}</p>}
+          {testCollaudati.map(it => (
+            <Voce
+              key={`col_${it.id}`}
+              icona={<Route size={20} />}
+              titolo={it.nome}
+              sotto={<>
+                <span>{it.c?.data || (it.data ? new Date(it.data).toLocaleDateString() : '')}</span>
+                <span className="text-green-700">voto {Number(it.c?.voto_generale).toFixed(1)}</span>
+                {it.c?.voti?.navigatore != null && <span>WipNav {Number(it.c.voti.navigatore).toFixed(1)}</span>}
+                {it.guida && <span>+ Guida d'Autore</span>}
+              </>}
+              onApri={() => apri({ tipo: 'itinerario', id: it.id })}
+              azioni={it.guida ? (
+                <button onClick={() => apri({ tipo: 'guida', id: it.guida!.hash })} className="px-2.5 py-1 rounded-lg bg-primary/10 text-primary text-[11px] font-black">
+                  <BookOpen size={12} className="inline mr-1" />Guida d'Autore
+                </button>
+              ) : undefined}
+            />
+          ))}
+        </section>
+      )}
+
+      {cartella === 'test' && sottoTest === 'deploy' && (
+        <section className="space-y-3">
+          {registro === null && <p className="text-sm font-bold text-on-surface-variant/60 px-1">…</p>}
+          {registro?.errore && <p className="text-sm font-bold text-red-700 px-1">{registro.errore}</p>}
+          {registro && <DeployPronto notti={registro.notti} />}
+        </section>
+      )}
+
+      {cartella === 'test' && sottoTest === 'nativi' && (
+        <section className="space-y-3">
+          {registro === null && <p className="text-sm font-bold text-on-surface-variant/60 px-1">…</p>}
+          {registro?.errore && <p className="text-sm font-bold text-red-700 px-1">{registro.errore}</p>}
+          {registro && <LogNativi notti={registro.notti} />}
+        </section>
+      )}
+
+      {cartella === 'test' && sottoTest === 'partner' && (
+        <section className="space-y-3">
+          {registro === null && <p className="text-sm font-bold text-on-surface-variant/60 px-1">…</p>}
+          {registro?.errore && <p className="text-sm font-bold text-red-700 px-1">{registro.errore}</p>}
+          {registro && <ReportPartner notti={registro.notti} />}
+        </section>
+      )}
+
+      {cartella === 'test' && sottoTest === 'portali' && (
+        <section className="space-y-3">
+          {registro === null && <p className="text-sm font-bold text-on-surface-variant/60 px-1">…</p>}
+          {registro?.errore && <p className="text-sm font-bold text-red-700 px-1">{registro.errore}</p>}
+          {registro && <StatoPortali notti={registro.notti} />}
+        </section>
+      )}
+
+      {cartella === 'test' && sottoTest === 'pagella' && (
+        <section className="space-y-3">
+          {registro === null && <p className="text-sm font-bold text-on-surface-variant/60 px-1">…</p>}
+          {registro?.errore && <p className="text-sm font-bold text-red-700 px-1">{registro.errore}</p>}
+          {registro && <PagellaCollaudo notti={registro.notti} />}
+        </section>
+      )}
+
+      {cartella === 'test' && sottoTest === 'registro' && (
+        <section className="space-y-3">
+          {registro === null && <p className="text-sm font-bold text-on-surface-variant/60 px-1">…</p>}
+          {registro?.errore && <p className="text-sm font-bold text-red-700 px-1">{registro.errore}</p>}
+          {registro && (
+            <>
+              <h4 className="px-1 text-xs font-black uppercase tracking-widest text-primary">Notti di collaudo</h4>
+              {registro.notti.length === 0 && <p className="text-sm text-on-surface-variant/60 px-1">Ancora nessuna notte registrata.</p>}
+              {registro.notti.map((n: any, i: number) => (
+                <div key={`n${i}`} className="p-3 rounded-2xl bg-white border border-outline-variant/10 text-[12px]">
+                  <p className="font-black text-on-surface">{n.data} · {(n.citta || []).map((c: any) => typeof c === 'string' ? c : c?.citta).filter(Boolean).join(' · ')}</p>
+                  <p className="text-on-surface-variant/80">{n.riassunto || ''}</p>
+                  {Array.isArray(n.regole_proposte) && n.regole_proposte.length > 0 && (
+                    <ul className="mt-1 list-disc pl-4 text-amber-800">{n.regole_proposte.slice(0, 8).map((r: any, j: number) => <li key={j}>{typeof r === 'string' ? r : (r.descrizione || r.proposta || JSON.stringify(r))}{typeof r === 'object' && r?.occorrenze > 1 ? <b> ×{r.occorrenze}</b> : null}</li>)}</ul>
+                  )}
+                </div>
+              ))}
+              <h4 className="px-1 pt-2 text-xs font-black uppercase tracking-widest text-primary">Regole ({registro.regole.length})</h4>
+              {registro.regole.map((r: any, i: number) => (
+                <div key={`r${i}`} className="p-3 rounded-2xl bg-white border border-outline-variant/10 text-[12px]">
+                  <p className="font-black text-on-surface">
+                    <span className="mr-2 px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] uppercase">{r.area}</span>
+                    {r.descrizione}
+                    {/* Proposte raggruppate del collaudo (20/11/2026): quante volte, in quali città, 5 esempi. */}
+                    {r.occorrenze > 0 && <span className="ml-2 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px]">×{r.occorrenze}</span>}
+                  </p>
+                  <p className="mt-1 text-on-surface-variant/70">{r.data}{r.caso ? ` · ${r.caso}` : ''}{r.stato ? ` · ${r.stato}` : ''}</p>
+                  {Array.isArray(r.esempi) && r.esempi.length > 0 && (
+                    <details className="mt-1 text-on-surface-variant/70">
+                      <summary className="cursor-pointer font-bold">Esempi ({r.esempi.length}){r.funzione ? ` · ${r.funzione}` : ''}</summary>
+                      <ul className="mt-1 list-disc pl-4">{r.esempi.map((e: any, j: number) => <li key={j}>{typeof e === 'string' ? e : `${e.data || ''} ${e.citta || ''} — ${e.tappa || ''} ${e.problema || ''}`}</li>)}</ul>
+                    </details>
+                  )}
+                </div>
+              ))}
+            </>
+          )}
         </section>
       )}
 

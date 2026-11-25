@@ -41,6 +41,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         // era attivo, il manager riparte dai prefs.
         BackgroundPoiManager.shared.restartFromPrefsIfActive()
 
+        #if DEBUG
+        // COLLAUDO (22/11/2026, solo build di debug): con l'argomento di avvio -collaudoNav il test di UI
+        // AppCollaudoUITests fa girare il servizio di sfondo e il navigatore VERI con l'app in background.
+        // Senza l'argomento non fa nulla; in Release non esiste.
+        CollaudoNavDriver.shared.avviaSeRichiesto()
+        #endif
+
         // (28/08/2026) Una Live Activity sopravvive alla morte del processo:
         // senza riagganciare quella eventualmente in corso, dopo un riavvio
         // dell'app il cruscotto del giro ne avvierebbe una seconda e la

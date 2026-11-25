@@ -5,6 +5,7 @@
 
 import type { LatLon } from '../lib/geo';
 import { getApiUrl, apiFetch } from '../lib/api';
+import { percorsoCollaudatoPer, type TrattaCollaudata } from '../lib/nav/percorsiCollaudati';
 
 // Base OSRM per il routing PEDONALE, condivisa da TUTTI i consumatori
 // (osrmService, routeEngine, NavigatorEngine, PlanScreen): un'unica costante.
@@ -348,6 +349,26 @@ export function accorpaPassiGrezzi(steps: any[], lang: string): void {
   }
 }
 
+/** Una tratta collaudata → lo stesso WalkingRoute che darebbe la rete. Il testo IT del collaudo si legge com'è per un
+ *  utente italiano; nelle altre lingue le frasi si rifanno dalle manovre grezze (translateManeuver). */
+export function rottaDaTrattaCollaudata(c: TrattaCollaudata, lang: string, poiName?: string): WalkingRoute {
+  const it = String(lang || 'it').slice(0, 2).toLowerCase() === 'it';
+  const steps: RouteStep[] = (c.manovre || []).map((s) => {
+    const type = String(s.t || 'continue');
+    const name = s.n && String(s.n).trim() ? String(s.n).trim() : undefined;
+    return {
+      instruction: it && s.it && type !== 'arrive' ? s.it : translateManeuver(type, s.m, lang, poiName, s.x, name),
+      location: { lat: Number(s.lat), lon: Number(s.lon) },
+      distance: Number(s.d) || 0,
+      maneuverType: type,
+      maneuverModifier: s.m,
+      name,
+    };
+  });
+  accorpaManovreVicine(steps, lang);
+  return { steps, distance: Number(c.metri) || 0, duration: (Number(c.minuti) || 0) * 60, geometry: c.geometria.map(([la, lo]) => [Number(la), Number(lo)] as [number, number]) };
+}
+
 /**
  * Calcola il percorso pedonale da -> a.
  * Ritorna null se OSRM non risponde o non trova rotte.
@@ -358,6 +379,13 @@ export async function fetchWalkingRoute(
   lang: string,
   poiName?: string,
 ): Promise<WalkingRoute | null> {
+  // (20/11/2026) PERCORSO COLLAUDATO: se la tratta è stata camminata dal collaudo notturno (itinerario verificato) e
+  // si parte dal suo inizio verso il suo arrivo, si usa quella — anche offline. Uscendo dal percorso si ricalcola da un
+  // punto lontano dall'inizio, e lì la tratta non vale più: rotta normale.
+  try {
+    const c = percorsoCollaudatoPer(from, to);
+    if (c) return rottaDaTrattaCollaudata(c, lang, poiName);
+  } catch { /* si calcola come sempre */ }
   try {
     const coords = `${from.lon},${from.lat};${to.lon},${to.lat}`;
     // `language`: il server la passa a Valhalla/ORS/Geoapify per le istruzioni

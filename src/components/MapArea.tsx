@@ -11,6 +11,8 @@ import {
   memo,
 } from "react";
 import { createPortal } from "react-dom";
+import { Capacitor } from "@capacitor/core";
+import { apriScheda } from "../lib/apriScheda";
 import { getApiUrl, apiFetch } from "../lib/api";
 import { tracciaEvento } from "../lib/pageviewTracker";
 import {
@@ -38,7 +40,7 @@ import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 
 import { setCachedPoiDetails, getCachedPoiDetails, getCachedCityName } from "../lib/poiCache";
 import { fetchCityNameQueued } from "../lib/nominatimQueue";
-import { gygSearchUrl, viatorSearchUrl, tiqetsHomeUrl, trackAffiliateClick } from "../lib/affiliates";
+import { gygSearchUrl, viatorSearchUrl, tiqetsHomeUrl, trackAffiliateClick, viatorDestinazioneDaProdotto, ensureViatorAffiliateUrl } from "../lib/affiliates";
 import { supabase } from "../lib/supabase";
 import { Language, getTranslation } from "../lib/i18n";
 import { puntoArrivo } from "../lib/puntoArrivo";
@@ -1011,10 +1013,17 @@ function specieNelFumettoArea(strato: L.Layer, language: string) {
     const disegna = (specie: any[]) => {
       if (!box.isConnected || !specie.length) return;
       // Tutte le specie in una fila che scorre col dito (committente 11/10/2026: «su 12 se ne vedono 4»).
-      const prime = specie;
+      // (16/11/2026, committente: «anche le specie protette») Le specie a rischio della Lista Rossa IUCN vengono
+      // PRIMA, dalla più minacciata, e una riga dice quante sono: prima erano mescolate alle altre col solo bollino.
+      const GRAVITA: Record<string, number> = { CR: 0, EN: 1, VU: 2, NT: 3 };
+      const peso = (s: any) => { const lr = listaRossa(s.lista_rossa, language); return lr ? (GRAVITA[lr.sigla] ?? 4) : 5; };
+      const prime = specie.map((s, i) => ({ s, i })).sort((a, b) => peso(a.s) - peso(b.s) || a.i - b.i).map((x) => x.s);
+      specie = prime;
+      const aRischio = prime.filter((s) => peso(s) < 4).length;
       const autori = [...new Set(prime.map((s) => String(s.foto_autore || '').trim()).filter(Boolean))];
       const firma = autori.slice(0, 4).join(', ') + (autori.length > 4 ? '…' : '');
       box.innerHTML = `<div style="font-size:10px;font-weight:700;color:#065f46;margin-top:6px;">🐾 ${escapeHtml(getTranslation('sk_biodiversita_fonte', language as any))}${specie.length > 4 ? ` · ${specie.length} ›` : ''}</div>
+        ${aRischio ? `<div style="font-size:10px;font-weight:800;color:#b91c1c;margin-top:2px;">🛡️ ${escapeHtml(getTranslation('mp_specie_a_rischio', language as any).replace('{n}', String(aRischio)))}</div>` : ''}
         <div class="no-scrollbar" style="display:flex;gap:5px;margin-top:4px;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;touch-action:pan-x;">${prime.map((s, n) => `<div data-wip-specie-n="${n}" style="width:50px;flex:none;cursor:pointer;">
           <img src="${escapeHtml(miniatura(fotoSicura(String(s.foto_url || '')) || ''))}" alt="" referrerpolicy="no-referrer" style="display:block;width:50px;height:50px;object-fit:cover;border-radius:6px;background:#dcfce7;" onerror="this.onerror=null;var p=this.parentElement;if(p)p.remove()">
           <div style="font-size:9px;font-style:italic;color:#374151;line-height:1.15;margin-top:2px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">${escapeHtml(String(s.specie || ''))}</div>
@@ -1100,7 +1109,11 @@ function MapArea({
       const c = map ? map.getCenter() : { lat: center[0], lng: center[1] };
       // La finestra va aperta SUBITO, in modo sincrono dentro il gesto utente:
       // dopo l'await il popup blocker del browser la bloccherebbe in silenzio.
-      const win = window.open('about:blank', '_blank');
+      // (25/11/2026, committente: «da app Apple no») sull'app nativa niente finestra vuota: WKWebView non apre
+      // `about:blank` e il window.open dopo l'await non ha più il gesto dell'utente → il tasto non faceva nulla. Sul
+      // nativo la pagina del partner si apre nella scheda interna (apriScheda: SFSafariViewController / Custom Tab).
+      const nativo = Capacitor.isNativePlatform();
+      const win = nativo ? null : window.open('about:blank', '_blank');
       let city = '';
       try {
         city = await fetchCityNameQueued(c.lat, c.lng);
@@ -1127,12 +1140,34 @@ function MapArea({
             if (first?.url) url = first.url;
           }
         } catch { /* fallback alla home Tiqets già impostato in url */ }
+      } else if (partner === 'viator') {
+        // (25/11/2026) come Tiqets: si passa dall'API (/api/viator, prodotti della zona già col nostro pid) e si apre la
+        // pagina della DESTINAZIONE del primo prodotto — tutte le esperienze della zona. La ricerca testuale per città
+        // piccole (Carrara) non trovava nulla. Ripiego: la ricerca testuale come prima.
+        url = viatorSearchUrl(city);
+        try {
+          const lang = (language || 'IT').toLowerCase();
+          const res = await fetch(getApiUrl('/api/viator'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lat: c.lat, lon: c.lng, radius: 50, cityName: city, lang, language: lang })
+          });
+          if (res.ok) {
+            const products = await res.json();
+            const first = Array.isArray(products) ? products.find((p: any) => p?.url) : null;
+            const dest = first?.url ? viatorDestinazioneDaProdotto(first.url) : null;
+            if (dest) url = dest;
+            else if (first?.url) url = ensureViatorAffiliateUrl(first.url);
+          }
+        } catch { /* ripiego: ricerca testuale già impostata */ }
       } else {
-        url = partner === 'viator' ? viatorSearchUrl(city) : gygSearchUrl(city);
+        url = gygSearchUrl(city);
       }
 
       trackAffiliateClick(url, `Ricerca esperienze ${city || 'zona corrente'}`, city, 'home_chip');
-      if (win) {
+      if (nativo) {
+        await apriScheda(url);
+      } else if (win) {
         win.location.href = url;
       } else {
         window.open(url, '_blank', 'noopener,noreferrer');
@@ -5622,17 +5657,11 @@ function MapArea({
             }
 
             if (!success || !res) {
-              // Tutti e 4 i mirror hanno fallito (rete, timeout o errore HTTP):
-              // il ramo UI del banner "overpass" esiste già (righe più sotto),
-              // solo mai alimentato finora. Guardia sul fetchSeq: se nel
-              // frattempo è già partito un fetch più recente, non sovrascrivere
-              // il suo stato con un errore ormai superato.
-              if (fetchSeq === fetchSeqRef.current) {
-                setFetchErrors((prev) => ({
-                  ...prev,
-                  overpass: getTranslation('mp_overpass_errore', language),
-                }));
-              }
+              // Tutti e 4 i mirror hanno fallito (rete, timeout o errore HTTP).
+              // (23/11/2026, committente: «togli l'avviso errore ma rimane l'interrogazione dei parchi gioco»)
+              // Niente più banner «OpenStreetMap non raggiungibile»: OpenStreetMap qui è solo la riserva per i
+              // luoghi di quartiere (parchi giochi, utilità) quando il database ne ha meno di 15 in vista, e i
+              // luoghi del database sono già sulla mappa. L'interrogazione resta, il fallimento va solo nel log.
               throw new Error("Overpass API error on all mirrors: " + (lastError?.message || ""));
             }
             const data = await res.json();

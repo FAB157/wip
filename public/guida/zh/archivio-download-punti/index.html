@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>档案、我的下载、积分、任务与问答 | WIP Guide</title>
+<meta name="description" content="了解 WIP 中的档案（收听记录）、我的下载（5个文件夹）、XP 积分、等级、任务、加载问答、护照和雨天保障是如何运作的。">
+<link rel="canonical" href="https://www.wip.guide/guida/zh/archivio-download-punti"><link rel="alternate" hreflang="it" href="https://www.wip.guide/guida/archivio-download-punti"><link rel="alternate" hreflang="en" href="https://www.wip.guide/guida/en/archivio-download-punti"><link rel="alternate" hreflang="fr" href="https://www.wip.guide/guida/fr/archivio-download-punti"><link rel="alternate" hreflang="es" href="https://www.wip.guide/guida/es/archivio-download-punti"><link rel="alternate" hreflang="de" href="https://www.wip.guide/guida/de/archivio-download-punti"><link rel="alternate" hreflang="ru" href="https://www.wip.guide/guida/ru/archivio-download-punti"><link rel="alternate" hreflang="zh-Hans" href="https://www.wip.guide/guida/zh/archivio-download-punti"><link rel="alternate" hreflang="x-default" href="https://www.wip.guide/guida/archivio-download-punti">
+<meta property="og:type" content="website"><meta property="og:title" content="档案、我的下载、积分、任务与问答"><meta property="og:description" content="了解 WIP 中的档案（收听记录）、我的下载（5个文件夹）、XP 积分、等级、任务、加载问答、护照和雨天保障是如何运作的。"><meta property="og:url" content="https://www.wip.guide/guida/zh/archivio-download-punti"><meta property="og:site_name" content="WIP Guide"><meta property="og:image" content="https://www.wip.guide/scopri/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/icon.png">
+<style>
+:root{--bg:#fff;--fg:#14213d;--mut:#4b5568;--brand:#1e3a8a;--brand2:#2f56c9;--card:#f4f6fb;--line:#d9dfec;--ok:#0f6b3a;--warn:#8a4b00;--warnbg:#fff4e0;--costbg:#e8f0ff;--on:#fff}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0e1424;--fg:#e8ecf7;--mut:#a9b3c9;--brand:#8fb0ff;--brand2:#b5ccff;--card:#172038;--line:#2a3555;--ok:#6fdc9c;--warn:#ffcf8a;--warnbg:#2a2014;--costbg:#16264a;--on:#0e1424}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--brand)}a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--brand2);outline-offset:2px}
+header.top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.bar{max-width:1040px;margin:0 auto;padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.logo{font-weight:800;color:var(--brand);text-decoration:none;font-size:1.15rem}
+nav.menu{display:flex;gap:4px 14px;flex-wrap:wrap;font-size:.92rem}nav.menu a{text-decoration:none;color:var(--fg);padding:6px 2px}nav.menu a:hover{color:var(--brand)}
+.apri{margin-left:auto}
+main{max-width:1040px;margin:0 auto;padding:20px 16px 56px}
+h1{font-size:clamp(1.7rem,4.5vw,2.6rem);line-height:1.15;margin:.2em 0 .4em;color:var(--brand)}
+h2{font-size:1.45rem;margin:2em 0 .5em;line-height:1.25}h3{font-size:1.1rem}
+.lead{font-size:1.2rem;color:var(--mut);max-width:62ch}
+.crumb{font-size:.9rem;color:var(--mut)}.crumb a{color:var(--mut)}
+.btn{display:inline-block;background:var(--brand);color:var(--on);padding:11px 18px;border-radius:10px;text-decoration:none;font-weight:700;margin:4px 6px 4px 0}
+.btn.sec{background:transparent;color:var(--brand);border:2px solid var(--brand)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:22px 0;padding:16px;background:var(--card);border-radius:14px}
+.stat{display:flex;flex-direction:column}.num{font-size:1.9rem;font-weight:800;color:var(--brand);font-variant-numeric:tabular-nums}.et{font-size:.88rem;color:var(--mut)}
+.nota-stat{grid-column:1/-1;font-size:.82rem;color:var(--mut);margin:4px 0 0}
+ol.passi{counter-reset:p;list-style:none;padding:0}ol.passi li{counter-increment:p;position:relative;padding:10px 12px 10px 52px;margin:8px 0;background:var(--card);border-radius:10px}
+ol.passi li::before{content:counter(p);position:absolute;left:12px;top:9px;width:30px;height:30px;border-radius:50%;background:var(--brand);color:var(--on);display:grid;place-items:center;font-weight:800}
+.nota,.costo,.manca{border-radius:10px;padding:12px 14px;margin:14px 0}.nota{background:var(--warnbg);color:var(--warn)}.costo{background:var(--costbg)}
+.manca{border:2px dashed var(--line)}.manca h2{margin-top:0;font-size:1.1rem}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:420px}th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}th{background:var(--card)}
+figure{margin:18px 0}figure img,figure video{max-width:100%;height:auto;border-radius:12px;border:1px solid var(--line)}.esempi{margin:28px 0}.es-griglia{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}.es{border:1px solid var(--linea,#ddd);border-radius:12px;padding:12px;margin:0}.es img{max-height:360px;width:100%;object-fit:contain}.es audio{width:100%;margin-top:8px}.es-nota{font-size:.9em;margin:6px 0 0;opacity:.85}.es-pdf .btn{display:inline-block;margin-bottom:6px}
+figure img{max-height:640px;width:auto;display:block}figcaption{font-size:.85rem;color:var(--mut)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;margin:18px 0}
+.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;text-decoration:none;color:var(--fg)}
+.card:hover{border-color:var(--brand)}.card .em{font-size:1.8rem}.card h3{margin:.3em 0}.card p{margin:.2em 0;color:var(--mut);font-size:.95rem}.card .cn{font-weight:700;color:var(--brand);font-size:.95rem}
+.ricerca{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.ricerca input{flex:1;min-width:220px;padding:12px 14px;border-radius:10px;border:2px solid var(--line);font:inherit;background:var(--bg);color:var(--fg)}
+.ris{list-style:none;padding:0}.ris li{margin:6px 0}.ris a{display:block;padding:10px 12px;background:var(--card);border-radius:10px;text-decoration:none}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:999px;padding:8px 14px;font:inherit;cursor:pointer}.chip:hover{background:var(--brand);color:var(--on)}
+details{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:8px 0}summary{cursor:pointer;font-weight:700}
+.letto{display:flex;align-items:center;gap:8px;margin:28px 0}.progress{font-size:.9rem;color:var(--mut)}
+.fonte{opacity:.8}.agg{font-size:.85rem;color:var(--mut);margin-top:32px}
+footer{border-top:1px solid var(--line);padding:22px 16px;text-align:center;font-size:.9rem;color:var(--mut)}
+.lingue{max-width:1040px;margin:0 auto;padding:0 16px 8px;font-size:.85rem;color:var(--mut)}.lingue a{color:var(--mut)}.lingue strong{color:var(--fg)}footer .lingue{padding-top:10px}
+@media(max-width:600px){body{font-size:16px}nav.menu{display:none}.apri{margin-left:auto}}
+</style>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"WIP","item":"https://www.wip.guide/"},{"@type":"ListItem","position":2,"name":"指南","item":"https://www.wip.guide/guida/zh/"},{"@type":"ListItem","position":3,"name":"档案、下载与积分","item":"https://www.wip.guide/guida/zh/archivio-download-punti"}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"如何赚取积分？","acceptedAnswer":{"@type":"Answer","text":"通过问答（答对一题 1 积分）、任务、等级奖励，以及在 WIP Community 中通过审核的照片。"}},{"@type":"Question","name":"在哪里可以找到我已经听过的导游解说？","acceptedAnswer":{"@type":"Answer","text":"在“个人资料” › “存档”：“重新收听（已购买）”。"}},{"@type":"Question","name":"如果我不领取奖励会怎么样？","acceptedAnswer":{"@type":"Answer","text":"它会一直处于等待状态，直到你点击“领取奖励”。"}}]}</script>
+</head><body>
+<a href="#main" style="position:absolute;left:-999px" onfocus="this.style.left='8px'">跳到正文</a>
+<header class="top"><div class="bar"><a class="logo" href="/guida/zh/">WIP · 指南</a><nav class="menu" aria-label="指南"><a href="/guida/zh/">指南</a><a href="/guida/zh/categorie">类别</a><a href="/guida/zh/audioguide">语音导览</a><a href="/guida/zh/itinerari">行程</a><a href="/guida/zh/tutorial">教程</a><a href="/guida/zh/domande-frequenti">常见问题</a></nav><a class="btn apri" href="https://wip.guide/">打开 WIP</a></div><nav class="lingue" aria-label="语言"><a lang="it" hreflang="it" href="/guida/archivio-download-punti">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/archivio-download-punti">English</a> · <a lang="fr" hreflang="fr" href="/guida/fr/archivio-download-punti">Français</a> · <a lang="es" hreflang="es" href="/guida/es/archivio-download-punti">Español</a> · <a lang="de" hreflang="de" href="/guida/de/archivio-download-punti">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/archivio-download-punti">Русский</a> · <strong lang="zh">中文</strong></nav></header>
+<main id="main">
+<p class="crumb"><a href="/">WIP</a> › <a href="/guida/zh/">指南</a> › 档案、下载与积分</p>
+<h1>档案、我的下载、积分、任务与问答</h1>
+<p class="lead">在这里你可以找到所有你做过的事情（档案和下载），以及如何赚取积分和信用点（XP、任务、问答）。</p>
+<p class="agg">译自意大利语。截图、视频和示例显示的是意大利语界面。</p>
+<div class="galleria"><figure><img src="/guida/img/archivio-download-punti-1.jpg" alt="我的下载包含五个文件夹： itineraries、地图、语音导览、高级导览、博物馆导览" loading="lazy" decoding="async"><figcaption>“我的下载”：五个始终可见的文件夹，带有项目数量。 <span class="fonte">wip.guide 的真实截图 (15/11/2026)。</span></figcaption></figure></div><h2>档案：你的收听记录</h2>
+<p>个人资料的 <strong>档案</strong> 选项卡是语音导览的<strong>收听历史记录</strong>，按日期分组。它不包含下载内容。</p>
+<ul><li>每个选项卡显示照片、分类、名称和时间。</li><li><strong>重新收听（已购买）</strong>：免费重新收听你已经买过的导览。</li><li><strong>垃圾桶</strong>图标可从历史记录中移除该收听记录（会要求确认）。</li><li>如果该地点已不存在，则显示 “不可用”。</li></ul><h2>我的下载：五个文件夹</h2>
+<p>可通过 <strong>个人资料 › 我的下载</strong>、<strong>行程 › 我的行程</strong> 以及行程 › 离线打开：它始终是同一个档案库。顶部可以看到 “已用空间”。在每个文件夹中，你可以按<strong>日期</strong>或<strong>名称</strong>排序，并选择<strong>列表</strong>或<strong>网格</strong>视图。</p>
+<div class="tw"><table><thead><tr><th>文件夹</th><th>包含内容</th><th>每行上的按钮</th></tr></thead><tbody><tr><td>行程</td><td>已下载或在你账户上的行程。标记：地图 ✓/✗、导航 ✓/✗、已完成/总语音导览数、大小、PDF。</td><td>导航 · 故事 · PDF · 删除；“下载”（如果在账户上）；“完成 download”（如果未完成）</td></tr><tr><td>地图</td><td>为离线下载的区域：选择城市和半径（最远 100 公里）。</td><td>在地图上打开 · 更新（仅修改） · 从设备中删除</td></tr><tr><td>语音导览</td><td>«已听过的语音导览»（通往归档）和已下载的导览。</td><td>点击打开</td></tr><tr><td>高级导览</td><td>名家导览。</td><td>PDF · 下载</td></tr><tr><td>博物馆导览</td><td>已付费的博物馆参观。</td><td>PDF · 下载 · 删除</td></tr></tbody></table></div>
+<ul><li><strong>徽章</strong>：«可离线»（绿色）、«不完整»（琥珀色）、«在你的账户中»（蓝色）。</li><li><strong>打印的 PDF</strong> 显示在文件夹底部。</li><li>重新打开下载<strong>不扣除额度或通票</strong>。</li><li>离线地图是免费的：只需为收听语音导览付费。</li></ul>
+<aside class="nota"><strong>须知。</strong> 播客和有声书没有文件夹。</aside><h2>XP 点数、等级和任务</h2>
+<div class="tw"><table><thead><tr><th>操作</th><th>点数</th></tr></thead><tbody><tr><td>打开从未探索过的地方的详情页</td><td>+5 XP（«已探索地点！»）</td></tr><tr><td>收听语音导览</td><td>+10 XP</td></tr><tr><td>使用 Vision 扫描地点</td><td>+10 XP</td></tr><tr><td>正确回答测验</td><td>+20 XP 和 +1 额度</td></tr></tbody></table></div>
+<p><strong>任务</strong>选项卡显示<strong>等级</strong>环（当前和缺少的 XP、«等级奖励：+n 额度»）、<strong>«等级奖励»</strong>轮播图以及<strong>«探索成就»</strong>（例如某个类别的“访问 n 个地点”，带有进度条和奖励额度）。等级奖励<strong>不会自动发放</strong>：点击<strong>«领取奖励»</strong>。赚取的额度不会过期，并且会优先消耗。等级门槛可在应用中查看。</p><h2>测验</h2>
+<p>在等待生成（行程或名家导览）时，会出现一个<strong>测验</strong>：关于旅行和地点的 4 选项题目，每道题回答后有 4 秒钟的解析。结束时：«测验完成！…… 赢得：额度与 XP»。<strong>«跳过»</strong>可将其关闭，已获得的积分仍会发放。这些题目与你的目的地无关。</p><h2>日记与护照</h2>
+<ul><li><strong>日记</strong>（个人资料）：听过的地点、护照上的城市、Vision 照片、过去 6 个月的收听记录。</li><li><strong>旅行健康</strong>（仅限应用）：步数、公里数和楼层数，最近 7 天。</li><li><strong>你的旅行年</strong>：访问过的城市和«心仪地点»；«分享»会生成一张图片。</li><li><strong>WIP 护照</strong>：每个目的地一个盖章，带有首次访问的日期；«分享护照»。</li></ul><h2>雨天保障</h2>
+<ol class="passi"><li>打开 个人资料 › 行程 › AI：在<strong>过去 7 天</strong>创建的行程上会出现<strong>«🌧 下雨了吗？雨天保障»</strong>。</li><li>选择日期（«哪一天下雨了？»）。</li><li>点击<strong>«验证并申请退款»</strong>。</li></ol>
+<p>如果那天降雨<strong>至少 6 小时或 20 毫米</strong>（来自 Open-Meteo 的数据），我们会退还你当天的额度。行程中的每一天<strong>仅限一次</strong>，无需小票。如果天气数据尚未稳定，请过两天再试。</p><section class="manca"><h2>WIP 不做什么（以免产生误解）</h2><ul><li>不存在排行榜。</li><li>徽章目录无法查看。</li><li>测验仅在加载时出现，探索地图时不会出现。</li></ul></section><h2>常见问题</h2><details><summary>如何赚取积分？</summary><p>通过问答（答对一题 1 积分）、任务、等级奖励，以及在 WIP Community 中通过审核的照片。</p></details><details><summary>在哪里可以找到我已经听过的导游解说？</summary><p>在“个人资料” › “存档”：“重新收听（已购买）”。</p></details><details><summary>如果我不领取奖励会怎么样？</summary><p>它会一直处于等待状态，直到你点击“领取奖励”。</p></details><h2>继续阅读</h2><div class="grid"><a class="card" href="/guida/zh/profilo-e-setup"><h3>个人资料与设置</h3><p>WIP 的所有“个人资料”选项卡以及所有“系统与个性化设置”选项：初始地图、通知、权限、流量消耗、安全、语言、优惠券、GeoControl 和语音导览类别。…</p></a><a class="card" href="/guida/zh/come-si-compra"><h3>如何购买</h3><p>如何在 WIP 中通过网页、iPhone 和 Android 购买积分、套餐、余额、通行证（Day Pass、Pass Museo、Visita Museo）以及积分价格表。…</p></a><a class="card" href="/guida/zh/vision-riconoscimento"><h3>Vision</h3><p>如何使用 WIP 的 Vision：AI 扫描（地点、艺术品、自然）、AR 雷达、费用、从相册选择照片、候选项目、My Vision 以及 WIP Community。为你解释所有选项。…</p></a></div><div class="letto"><input type="checkbox" id="letto" data-s="archivio-download-punti"><label for="letto">我已读完本指南（仅保存在你的设备上）</label></div><p><a class="btn" href="https://wip.guide/">打开 WIP</a> <a class="btn sec" href="/guida/zh/categorie">全部类别</a></p>
+
+<p class="agg">内容已于 2026 年 11 月 16 日与应用代码核对。如有与您所见不符之处，请写信至 <a href="mailto:support@wip.guide">support@wip.guide</a>.</p>
+</main>
+<footer><a href="/guida/zh/">指南</a> · <a href="/privacy">隐私</a> · <a href="/support">支持</a> · <a href="https://wip.guide/">wip.guide</a><br><nav class="lingue" aria-label="语言"><a lang="it" hreflang="it" href="/guida/archivio-download-punti">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/archivio-download-punti">English</a> · <a lang="fr" hreflang="fr" href="/guida/fr/archivio-download-punti">Français</a> · <a lang="es" hreflang="es" href="/guida/es/archivio-download-punti">Español</a> · <a lang="de" hreflang="de" href="/guida/de/archivio-download-punti">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/archivio-download-punti">Русский</a> · <strong lang="zh">中文</strong></nav></footer>
+<script>(function(){
+function ready(f){document.readyState!='loading'?f():document.addEventListener('DOMContentLoaded',f)}
+ready(function(){
+ var red=matchMedia('(prefers-reduced-motion: reduce)').matches;
+ var els=document.querySelectorAll('.num[data-n]');
+ if('IntersectionObserver' in window&&!red&&els.length){var io=new IntersectionObserver(function(es){es.forEach(function(e){if(!e.isIntersecting)return;io.unobserve(e.target);var el=e.target,n=+el.dataset.n,pre=el.dataset.c||'',t0=null;function st(t){t0=t0||t;var p=Math.min((t-t0)/900,1);el.textContent=pre+Math.round(n*p).toLocaleString('zh-CN');if(p<1)requestAnimationFrame(st)}requestAnimationFrame(st)})},{threshold:.4});els.forEach(function(e){io.observe(e)})}
+ var inp=document.getElementById('q'),out=document.getElementById('ris');
+ if(inp&&out){var idx=null;fetch('/guida/zh/indice.json').then(function(r){return r.json()}).then(function(j){idx=j}).catch(function(){});
+  var norm=function(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\p{L}\p{N} ]+/gu,' ')};
+  var cerca=function(q){q=norm(q).trim();if(!q||!idx){out.innerHTML='';return}var SW='  ';var w=/[\u4e00-\u9fff]/.test(q)?Array.from(q.replace(/\s+/g,'')).reduce(function(a,c,i,s){if(i<s.length-1)a.push(c+s[i+1]);return a},[]):q.split(/\s+/).filter(function(x){return x.length>2&&SW.indexOf(' '+x+' ')<0});
+   var r=idx.map(function(d){var ks=norm(d.k),h=norm(d.t+' '+(d.r||'')+' '+(d.f||'')),s=0;w.forEach(function(x){if(ks.indexOf(x)>-1)s+=5;else if(h.indexOf(x)>-1)s+=1});for(var i=0;i<w.length-1;i++)if(ks.indexOf(w[i]+' '+w[i+1])>-1)s+=8;return {d:d,s:s}}).filter(function(x){return x.s>0}).sort(function(a,b){return b.s-a.s}).slice(0,6);
+   out.innerHTML=r.length?r.map(function(x){return '<li><a href="'+x.d.u+'"><strong>'+x.d.t+'</strong>'+(x.d.r?'<br><span class="et">'+x.d.r+'</span>':'')+'</a></li>'}).join(''):'<li>没有找到相关指南：换个词试试，或浏览类别。</li>'};
+  inp.addEventListener('input',function(){cerca(inp.value)});
+  document.querySelectorAll('[data-q]').forEach(function(b){b.addEventListener('click',function(){inp.value=b.dataset.q;cerca(b.dataset.q);inp.focus()})})}
+ var K='wip-guida-letti';function get(){try{return JSON.parse(localStorage.getItem(K)||'[]')}catch(e){return[]}}function set(a){try{localStorage.setItem(K,JSON.stringify(a))}catch(e){}}
+ var cb=document.getElementById('letto');if(cb){var a=get();cb.checked=a.indexOf(cb.dataset.s)>-1;cb.addEventListener('change',function(){var l=get().filter(function(x){return x!==cb.dataset.s});if(cb.checked)l.push(cb.dataset.s);set(l)})}
+ document.querySelectorAll('[data-lez]').forEach(function(el){var l=get();el.textContent=l.indexOf(el.dataset.lez)>-1?'✓ 已读':''});
+ document.querySelectorAll('[data-perc]').forEach(function(el){var l=get(),s=el.dataset.perc.split(','),n=s.filter(function(x){return l.indexOf(x)>-1}).length;el.textContent='已读 {n}/{t} 课'.replace('{n}',n).replace('{t}',s.length)});
+});})();</script>
+</body></html>

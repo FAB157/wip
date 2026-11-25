@@ -7,7 +7,7 @@ import { getApiUrl } from '../../lib/api';
  * ENTI, PRO LOCO E HOTEL — la scrivania delle richieste (11/10/2026, committente: «tab admin per gestione del
  * tutto»). Le richieste arrivano dalle pagine /comuni e /hotel (tabella `richieste_enti`); qui si leggono, si
  * cambia lo stato, si risponde per email, si scrive una nota interna e, per gli hotel, si approva il coupon di
- * prova (50 utilizzi × 500 crediti, 90 giorni) che il server crea e manda da solo. Ogni email e ogni nota
+ * prova (50 utilizzi × 500 crediti, giorni chiesti all'approvazione, 90 proposti) che il server crea e manda da solo. Ogni email e ogni nota
  * restano nel diario (`corrispondenza`) della richiesta: la storia di un ente si legge in un posto solo.
  */
 
@@ -50,6 +50,7 @@ export default function AdminEnti({ onMessage }: Props) {
   const [risposta, setRisposta] = useState<{ oggetto: string; testo: string }>({ oggetto: '', testo: '' });
   const [nota, setNota] = useState('');
   const [occupata, setOccupata] = useState<string | null>(null);
+  const [giorniCoupon, setGiorniCoupon] = useState('90');
 
   const carica = useCallback(async () => {
     setCaricamento(true);
@@ -94,8 +95,12 @@ export default function AdminEnti({ onMessage }: Props) {
     if (j) onMessage({ type: 'success', text: `${r.ente}: ${nuovo.replace('_', ' ')}` });
   };
   const approvaCoupon = async (r: Richiesta, ancora = false) => {
-    if (!ancora && !window.confirm(`Creo il coupon di prova per «${r.ente}» (50 utilizzi × 500 crediti, 90 giorni) e mando il codice a ${r.email}?`)) return;
-    const j = await chiama(r.id, 'POST', '/approva-coupon', { usi: 50, crediti: 500, giorni: 90, ancora });
+    // (13/11/2026, committente: Avicena Hotel Boutique chiedeva più tempo, «va bene anche 360 giorni») La durata si
+    // scrive nel campo accanto al tasto (90 proposti, il server accetta da 7 a 730). Un campo nella scheda, non un
+    // window.prompt: i riquadri del browser bloccano la pagina e l'automazione (stessa regola del Day Pass, 23/10).
+    const giorni = Math.round(Number(String(giorniCoupon).replace(',', '.')));
+    if (!Number.isFinite(giorni) || giorni < 7 || giorni > 730) { onMessage({ type: 'error', text: 'Giorni non validi: da 7 a 730.' }); return; }
+    const j = await chiama(r.id, 'POST', '/approva-coupon', { usi: 50, crediti: 500, giorni, ancora });
     if (j) onMessage({ type: j.email_inviata ? 'success' : 'error', text: j.email_inviata ? `Coupon ${j.codice} creato e inviato a ${r.email}` : `Coupon ${j.codice} creato, ma l'email NON è partita (${j.email_errore}): mandalo a mano` });
   };
   const rispondi = async (r: Richiesta) => {
@@ -178,10 +183,15 @@ export default function AdminEnti({ onMessage }: Props) {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  {/* Coupon anche ai comuni (committente 11/10): stesso taglio, 50 × 500 (erano 30 fino al 12/10: una famiglia ne consuma 4), 90 giorni. */}
+                  {/* Coupon anche ai comuni (committente 11/10): stesso taglio, 50 × 500 (erano 30 fino al 12/10: una famiglia ne consuma 4); giorni dal campo (13/11). */}
+                  <label className="px-2 py-1 rounded-xl bg-amber-50 text-amber-900 text-[11px] font-black flex items-center gap-1">
+                    Giorni
+                    <input type="number" min={7} max={730} value={giorniCoupon} onChange={(e) => setGiorniCoupon(e.target.value)}
+                      aria-label="Giorni di validità del coupon" className="w-16 bg-white rounded-lg px-1 py-1 text-[11px] border border-amber-200" />
+                  </label>
                   <button type="button" disabled={occupata === r.id} onClick={() => void approvaCoupon(r, !!coupon)}
                     className="px-3 py-2 rounded-xl bg-amber-600 text-white text-[11px] font-black flex items-center gap-1">
-                    <Ticket className="w-3.5 h-3.5" /> {coupon ? 'Nuovo coupon (50 × 500)' : `Approva: coupon 50 × 500 crediti${eHotel ? '' : ' per i visitatori'}`}
+                    <Ticket className="w-3.5 h-3.5" /> {coupon ? `Nuovo coupon (50 × 500, ${giorniCoupon} giorni)` : `Approva: coupon 50 × 500 crediti, ${giorniCoupon} giorni${eHotel ? '' : ' per i visitatori'}`}
                   </button>
                   {r.stato !== 'in_lavorazione' && <button type="button" disabled={occupata === r.id} onClick={() => void cambiaStato(r, 'in_lavorazione')} className="px-3 py-2 rounded-xl bg-sky-100 text-sky-800 text-[11px] font-black">In lavorazione</button>}
                   {r.stato !== 'fatta' && <button type="button" disabled={occupata === r.id} onClick={() => void cambiaStato(r, 'fatta')} className="px-3 py-2 rounded-xl bg-emerald-100 text-emerald-800 text-[11px] font-black flex items-center gap-1"><Check className="w-3.5 h-3.5" /> Fatta</button>}

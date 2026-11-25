@@ -592,30 +592,35 @@ export default function PoiAudioPlayer({
           </button>
         </div>
 
-        <div className="flex items-center justify-center gap-6 mb-8">
-          <button onClick={() => locationService.restart()} className="text-primary hover:text-secondary flex flex-col items-center gap-1">
+        {/* 18/11/2026 (iPhone): con gap-6 e play da 80 px i cinque comandi superavano la larghezza della scheda —
+            «Ricomincia» e «Sleep» tagliati ai bordi, il play schiacciato a ovale. Sul telefono ogni tasto laterale
+            prende una colonna uguale (flex-1, min-w-0) e il play resta tondo (shrink-0). */}
+        <div className="flex items-start justify-between sm:justify-center gap-1 sm:gap-6 mb-8">
+          {/* (18/11/2026, committente) Sul telefono solo i simboli: le scritte restano da tablet in su (sm:block) e
+              per i lettori di schermo (aria-label). */}
+          <button onClick={() => locationService.restart()} aria-label={getTranslation("restart_btn", language)} className="flex-1 sm:flex-none min-w-0 text-primary hover:text-secondary flex flex-col items-center gap-1">
             <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center">
               <RotateCcw className="w-6 h-6" />
             </div>
-            <span className="text-[11px] font-bold uppercase">{getTranslation("restart_btn", language)}</span>
+            <span className="hidden sm:block text-[11px] leading-tight text-center font-bold uppercase">{getTranslation("restart_btn", language)}</span>
           </button>
 
           <button
             onClick={onToggleSpeech}
             disabled={(!wikiData?.extract && !generatedText) || isLoading || isRegenerating}
             aria-label={(audioState.isPlaying && isCurrentPoi) ? getTranslation('a11y_pausa', language) : getTranslation('a11y_riproduci', language)}
-            className={`w-20 h-20 rounded-full flex items-center justify-center transition-all shadow-xl active:scale-90 ${
+            className={`w-16 h-16 sm:w-20 sm:h-20 shrink-0 rounded-full flex items-center justify-center transition-all shadow-xl active:scale-90 ${
               (audioState.isPlaying && isCurrentPoi) ? "bg-red-500 shadow-red-200" : "bg-secondary shadow-secondary/30"
             }`}
           >
             {(audioState.isPlaying && isCurrentPoi) ? <Pause className="w-10 h-10 text-white fill-current" /> : <Play className="w-10 h-10 text-white fill-current translate-x-1" />}
           </button>
 
-          <button onClick={() => locationService.seek(10)} className="text-primary hover:text-secondary flex flex-col items-center gap-1">
+          <button onClick={() => locationService.seek(10)} aria-label={getTranslation("forward_10s", language)} className="flex-1 sm:flex-none min-w-0 text-primary hover:text-secondary flex flex-col items-center gap-1">
             <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center">
               <RotateCw className="w-6 h-6" />
             </div>
-            <span className="text-[11px] font-bold uppercase">{getTranslation("forward_10s", language)}</span>
+            <span className="hidden sm:block text-[11px] leading-tight text-center font-bold uppercase">{getTranslation("forward_10s", language)}</span>
           </button>
 
           {/* Velocità tra i controlli principali: il vecchio "1x" in alto a
@@ -623,14 +628,14 @@ export default function PoiAudioPlayer({
           <button
             onClick={handleSpeedToggle}
             aria-label={getTranslation('sk_velocita_aria', language).replace('{n}', String(audioState.playbackSpeed))}
-            className="text-primary hover:text-secondary flex flex-col items-center gap-1"
+            className="flex-1 sm:flex-none min-w-0 text-primary hover:text-secondary flex flex-col items-center gap-1"
           >
             <div className={`w-12 h-12 rounded-full flex items-center justify-center text-sm font-black transition-all active:scale-95 ${
               audioState.playbackSpeed !== 1 ? "bg-secondary text-white shadow-md" : "bg-blue-50"
             }`}>
               {audioState.playbackSpeed}x
             </div>
-            <span className="text-[11px] font-bold uppercase">{getTranslation('sk_velocita', language)}</span>
+            <span className="hidden sm:block text-[11px] leading-tight text-center font-bold uppercase">{getTranslation('sk_velocita', language)}</span>
           </button>
 
           {/* Sleep timer: off → 10' → 20' → 30' → off. Allo scadere l'audio
@@ -638,14 +643,14 @@ export default function PoiAudioPlayer({
           <button
             onClick={cycleSleep}
             aria-label={sleepMin ? getTranslation('sk_sleep_attivo', language).replace('{n}', String(sleepMin)) : getTranslation('sk_sleep_spento', language)}
-            className="text-primary hover:text-secondary flex flex-col items-center gap-1"
+            className="flex-1 sm:flex-none min-w-0 text-primary hover:text-secondary flex flex-col items-center gap-1"
           >
             <div className={`w-12 h-12 rounded-full flex items-center justify-center transition-all active:scale-95 ${
               sleepMin ? "bg-primary text-white shadow-md" : "bg-blue-50"
             }`}>
               {sleepMin ? <span className="text-xs font-black">{sleepMin}'</span> : <Moon className="w-6 h-6" />}
             </div>
-            <span className="text-[11px] font-bold uppercase">{getTranslation('sk_sleep', language)}</span>
+            <span className="hidden sm:block text-[11px] leading-tight text-center font-bold uppercase">{getTranslation('sk_sleep', language)}</span>
           </button>
         </div>
 

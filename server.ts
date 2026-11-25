@@ -25,7 +25,7 @@ import { Mp3Encoder } from "@breezystack/lamejs";
 import * as agentTools from "./agentTools.js";
 // Opere di un museo/chiesa opera per opera (12/09/2026): funzione pura,
 // nessuna dipendenza da server.ts — vedi la sua intestazione per il perché.
-import { opereDelMuseo, type OperaDelMuseo, type OpereDelMuseoRisultato } from "./opereMuseo.js";
+import { opereDelMuseo, CLASSI_NON_OPERA, classeNonOpera, type OperaDelMuseo, type OpereDelMuseoRisultato } from "./opereMuseo.js";
 // Feed eventi/mostre/stagionali aggiunti il 07/09/2026 (Klook, Trip.com,
 // festival Wikidata, stagioni, JSON-LD dei musei, città in tre nomi).
 import * as eventiFeed from "./eventiFeed.js";
@@ -474,6 +474,78 @@ const SCRIPT_INATTESO_RE = /[Ѐ-ӿ一-鿿가-힣]/;
 // Rotazione delle chiavi Agnes AI (load balancing come nello script di
 // enrichment massivo). Si resetta a ogni cold start serverless: va bene.
 let agnesKeyCounter = 0;
+// (23/11/2026) Tutte le chiavi Agnes in un punto solo: i due nomi storici più AGNES_API_KEY_3 … _12 (gli account nuovi
+// del committente si aggiungono solo come variabili, senza toccare il codice). Doppioni tolti.
+function chiaviAgnes(): string[] {
+  const nomi = ['AGNES_API_KEY', 'AGNES_AI_API_KEY', 'AGNES_AI_API_KEY2'];
+  for (let i = 2; i <= 12; i++) nomi.push(`AGNES_API_KEY_${i}`);
+  return [...new Set(nomi.map((n) => String(process.env[n] || '').trim()).filter(Boolean))];
+}
+// PAGINA DI SPAM / DOMINIO SCADUTO (23/11/2026, «Rocky Mountain Park» di Denver): il sito dichiarato del luogo
+// (mountainparkshistory.org) è scaduto e ricomprato, oggi «Choosing the Best Online Casino Australia», ma nomina ancora il
+// parco: passava da «sito ufficiale» e Agnes ci ha scritto la scheda del Rocky Mountain NATIONAL Park. Una pagina con tre o
+// più termini diversi di gioco d'azzardo, scommesse, prestiti o farmaci non è mai materiale. Un luogo che È un casinò
+// (nel nome) non si controlla per le parole del gioco.
+const TERMINI_SPAM = [
+  'online casino', 'casino online', 'casinò online', 'casino en ligne', 'casino en línea', 'best casino', 'casino bonus', 'casino sites',
+  'free spins', 'no deposit', 'deposit bonus', 'welcome bonus', 'bonus code', 'pokies', 'slot machine', 'online slots', 'slot online',
+  'jackpot', 'roulette', 'blackjack', 'bookmaker', 'sportsbook', 'sports betting', 'betting sites', 'scommesse online', 'gambling',
+  'payday loan', 'viagra', 'cialis', 'crypto casino', 'real money',
+];
+function paginaSpam(testo: string, nomeLuogo = ''): boolean {
+  const t = String(testo || '').toLowerCase();
+  if (!t) return false;
+  const nome = String(nomeLuogo || '').toLowerCase();
+  const termini = /casin[oò]|kasino|kazino|казино/.test(nome) ? TERMINI_SPAM.filter((x) => !/casin|roulette|blackjack|jackpot|slot|gambling/.test(x)) : TERMINI_SPAM;
+  const trovati = termini.filter((x) => t.includes(x));
+  // Almeno DUE devono essere termini da sito di spam, non da guida turistica: la voce Wikipedia della Las Vegas Strip
+  // dice «roulette», «jackpot», «sportsbook», «sports betting» e resta buona (misurato).
+  const daSpam = trovati.filter((x) => /online|en ligne|en línea|best casino|casino sites|bonus|spins|deposit|pokies|betting sites|payday|viagra|cialis|real money/.test(x));
+  return trovati.length >= 3 && daSpam.length >= 2;
+}
+// Z.AI GRATUITO, RISERVA DEI CONTROLLI (23/11/2026, committente: chiave Z.ai + «4 account diversi»). Misurato con la prima
+// chiave: gratis solo i modelli «flash» vecchi — glm-4.5-flash risponde in ~4 s e regge ~4 chiamate insieme per account
+// (oltre: 429), glm-4.7-flash una sola; GLM-5.x a pagamento (1113 «Insufficient balance»). Senza materiale inventa
+// (Duomo di Carrara «barocco»): MAI per scrivere schede o guide, solo per i controlli brevi (scheda sul luogo, revisore
+// di frasi) quando i motori soliti sono pieni. Chiavi: ZAI_API_KEY, ZAI_API_KEY_2 … _6 (un account per chiave: il limite
+// è per account). ZAI_PARALLELE_PER_CHIAVE = chiamate insieme per chiave (4). Senza chiavi non fa niente.
+const zaiInVolo = new Map<string, number>();
+const zaiFermaFino = new Map<string, number>();
+function chiaviZai(): string[] {
+  const nomi = ['ZAI_API_KEY']; for (let i = 2; i <= 6; i++) nomi.push(`ZAI_API_KEY_${i}`);
+  return [...new Set(nomi.map((n) => String(process.env[n] || '').trim()).filter(Boolean))];
+}
+async function chiamaZaiGratis(messages: any[], o: { json?: boolean; maxTokens?: number; timeoutMs?: number } = {}): Promise<{ data: string; model: string }> {
+  const chiavi = chiaviZai();
+  if (!chiavi.length) throw new Error('zai: nessuna chiave');
+  // Misurato 23/11 su 5 account: 4 insieme per account → 15 su 20 ok (uno per account in 429); 3 è il passo sicuro.
+  const perChiave = Math.max(1, Number(process.env.ZAI_PARALLELE_PER_CHIAVE) || 3);
+  const modello = String(process.env.ZAI_MODELLO || 'glm-4.5-flash');
+  const libere = chiavi.filter((k) => (zaiInVolo.get(k) || 0) < perChiave && (zaiFermaFino.get(k) || 0) < Date.now())
+    .sort((a, b) => (zaiInVolo.get(a) || 0) - (zaiInVolo.get(b) || 0));
+  if (!libere.length) throw new Error('zai: tutte le chiavi piene');
+  let ultimo = '';
+  for (const k of libere.slice(0, 2)) {
+    zaiInVolo.set(k, (zaiInVolo.get(k) || 0) + 1);
+    try {
+      const r = await axios.post('https://api.z.ai/api/paas/v4/chat/completions', {
+        model: modello, messages, temperature: 0.1, max_tokens: o.maxTokens || 1500, thinking: { type: 'disabled' },
+        ...(o.json ? { response_format: { type: 'json_object' } } : {}),
+      }, { headers: { Authorization: `Bearer ${k}`, 'Content-Type': 'application/json' }, timeout: o.timeoutMs || 30000 });
+      const testo = String(r.data?.choices?.[0]?.message?.content || '').trim();
+      if (!testo) { ultimo = 'risposta vuota'; continue; }
+      return { data: testo, model: `${modello} (Z.ai)` };
+    } catch (e: any) {
+      const st = e?.response?.status;
+      ultimo = `${st || ''} ${String(e?.response?.data?.error?.message || e?.message || e).slice(0, 120)}`;
+      // 429 = account pieno (o credito, codice 1113): quella chiave riposa 30 s, si prova un altro account.
+      if (st === 429 || st === 401 || st === 403) zaiFermaFino.set(k, Date.now() + (st === 429 ? 30_000 : 10 * 60_000));
+    } finally {
+      zaiInVolo.set(k, Math.max(0, (zaiInVolo.get(k) || 1) - 1));
+    }
+  }
+  throw new Error(`zai: ${ultimo}`);
+}
 // Stessa rotazione per le 4 chiavi Cerebras (25/08/2026: trovate configurate
 // in .env ma mai collegate a callUniversalAi).
 let cerebrasKeyCounter = 0;
@@ -552,7 +624,7 @@ async function callUniversalAi(
       // Tollera anche la variante AGNES_AI_API_KEY: su Vercel la chiave può
       // essere stata configurata con quel nome e senza questa riga Agnes
       // veniva saltato in silenzio.
-      const agnesKeys = [process.env.AGNES_API_KEY, process.env.AGNES_API_KEY_2, process.env.AGNES_AI_API_KEY, process.env.AGNES_AI_API_KEY2].filter(Boolean);
+      const agnesKeys = chiaviAgnes();
       // (22/10/2026) Un motore saltato in silenzio non si vede nei log: lo si dice.
       if (agnesKeys.length === 0) { console.warn('[Universal AI] agnes saltato: nessuna chiave AGNES_* con un valore'); return false; }
       const agnesKey = agnesKeys[agnesKeyCounter++ % agnesKeys.length];
@@ -569,7 +641,10 @@ async function callUniversalAi(
         model: finalModel,
         messages,
         response_format: options.response_format,
-        temperature: options.temperature || 0.7
+        temperature: options.temperature || 0.7,
+        // (14/11/2026) Senza tetto esplicito Agnes si ferma a 4.096 token, ragionamento compreso: 807 itinerari della
+        // semina scartati «troncato» in 16 ore. Con max_tokens chiude (misurato: 11.668 token, finish «stop»).
+        ...(options.max_tokens ? { max_tokens: options.max_tokens } : {})
       }, { headers: { "Authorization": `Bearer ${agnesKey}` }, timeout: agnesTimeoutMs });
       textContent = res.data.choices?.[0]?.message?.content || "";
       responseData = res.data;
@@ -622,11 +697,19 @@ async function callUniversalAi(
       const gonkaTimeout = Number(options.gonkaTimeoutMs) || (userId === 'background-script' ? (Number(process.env.GONKA_TIMEOUT_SFONDO_MS) || 90000) : 180000);
       const tentativiGonka = options.gonkaRiprova ? 2 : 1;
       let res: any;
+      let troncamentiGonka = 0;
+      // La riga in coda all'ultimo messaggio che rende NUOVA la richiesta per la cache del fornitore (vedi sotto).
+      const messaggiSenzaCache = (n: number) => {
+        const copia = messages.map((m: any) => ({ ...m }));
+        const ultimo = copia[copia.length - 1];
+        if (ultimo && typeof ultimo.content === 'string') ultimo.content = `${ultimo.content}\n\n(Riferimento interno della richiesta: ${Date.now().toString(36)}-${n}. Non citarlo e non tenerne conto.)`;
+        return copia;
+      };
       for (let tentativo = 1; ; tentativo++) {
         try {
           res = await axios.post(`${gonkaBase}/chat/completions`, {
             model: gonkaModel,
-            messages,
+            messages: troncamentiGonka ? messaggiSenzaCache(troncamentiGonka) : messages,
             response_format: options.response_format,
             temperature: options.temperature || 0.7,
             // `gonkaMaxTokens` (25/09/2026): DeepSeek via Gonka scrive il ragionamento PRIMA del JSON, quindi un
@@ -649,6 +732,23 @@ async function callUniversalAi(
           // controllo del «leak» le scartava tutte (il secondo gruppo de/ru/zh falliva sempre su Gonka e ricadeva
           // sui motori senza credito: 402). Le rotte di traduzione lo escludono solo se tra le lingue c'è ru o zh.
           if (!options.scrittureLibere && SCRIPT_INATTESO_RE.test(contenuto)) throw Object.assign(new Error('gonka: output con script inatteso (probabile leak multilingue) — scartato'), { passeggero: true });
+          // GONKA SI FERMA A 128 TOKEN, E LO RICORDA (13/11/2026, Cuernavaca; misurato su 14 account). Circa una risposta
+          // su due esce con finish_reason=length dopo 128 token esatti, qualunque `max_tokens` si chieda (dipende dal
+          // nodo che risponde); e la STESSA richiesta ripetuta torna dalla cache del fornitore in 0,2 s, mozza uguale —
+          // quindi il «retry con max_tokens raddoppiato» dei chiamanti non poteva riuscire. Il pezzo di testo veniva
+          // preso per buono e scartato più avanti («narrazione troncata», «uscita in ES»): 6 audioguide su 33 perse, e
+          // lo stesso su ogni lavoro di sfondo. Ora: fino a due nuove richieste con una riga in coda che cambia il testo
+          // (così la cache non risponde); se resta mozza a quel modo, il motore ha fallito e si passa al successivo.
+          // Un troncamento VERO (uscita lunga arrivata al tetto) resta com'era: lo vede il chiamante (`truncated`).
+          if (res.data.choices?.[0]?.finish_reason === 'length' && !options.accettaTroncato && (Number(res.data.usage?.completion_tokens) || 0) <= 160) {
+            if (troncamentiGonka < 2) {
+              troncamentiGonka++;
+              console.warn(`[Universal AI] gonka (${pool}): uscita ferma a ${res.data.usage?.completion_tokens ?? '?'} token, nuova richiesta ${troncamentiGonka}/2`);
+              tentativo--;
+              continue;
+            }
+            throw Object.assign(new Error(`gonka: uscita ferma a ${res.data.usage?.completion_tokens ?? '?'} token anche dopo due nuove richieste — si passa al motore successivo`), { passeggero: false });
+          }
           textContent = contenuto;
           break;
         } catch (e: any) {
@@ -690,7 +790,7 @@ async function callUniversalAi(
       // di musei e itinerari, era rimasto fuori e Groq rispondeva 400
       // «property 'gonkaPool' is unsupported» a OGNI chiamata della semina —
       // il motore più veloce tagliato fuori da un campo in più per due giorni.
-      const { strictEngine: _se, excludeEngines: _ee, ultimaSpiaggiaPagante: _up, groqOnTheFly: _otf, gonkaPool: _gp, gonkaUltimo: _gu, gonkaPrimo: _gpr, gonkaModel: _gm, gonkaTimeoutMs: _gt, gonkaRiprova: _gr, gonkaAncheInDiretta: _gad, gonkaPrimoInDiretta: _gpd, gonkaMaxTokens: _gmt, gonkaSforzo: _gsf, scrittureLibere: _sl, revisore: _rv, ...groqOptions } = options as any;
+      const { strictEngine: _se, excludeEngines: _ee, ultimaSpiaggiaPagante: _up, groqOnTheFly: _otf, gonkaPool: _gp, gonkaUltimo: _gu, gonkaPrimo: _gpr, gonkaModel: _gm, gonkaTimeoutMs: _gt, gonkaRiprova: _gr, gonkaAncheInDiretta: _gad, gonkaPrimoInDiretta: _gpd, gonkaMaxTokens: _gmt, gonkaSforzo: _gsf, scrittureLibere: _sl, revisore: _rv, accettaTroncato: _at, ...groqOptions } = options as any;
       const chiediGroq = (groqInstance: any) => groqInstance.chat.completions.create({
         messages,
         model: finalModel,
@@ -728,7 +828,16 @@ async function callUniversalAi(
         // passa al motore dopo senza «pause» (vedi groqInFila).
         const inFila = String(process.env.GROQ_IN_FILA || '').trim() === '1' && userId === 'background-script';
         const stima = Math.ceil(messages.reduce((n: number, m: any) => n + String(m?.content || '').length, 0) / 3.2) + Math.min(Number(groqOptions?.max_tokens) || 1500, 3000);
-        r = inFila ? await groqInFila(groqClients, chiediGroq, stima) : await tentaConRotazione(groqClients, chiediGroq);
+        // GROQ A PAGAMENTO, ULTIMO RIPIEGO (15/11/2026, committente: «come ultimo fallback, sia per on the fly che
+        // revisore»): solo con un utente in attesa (`groqOnTheFly`), solo dopo che dedicate e pool hanno fallito.
+        const pagante = options.groqOnTheFly && userId !== 'background-script' ? groqPagamentoClient : null;
+        try {
+          r = inFila ? await groqInFila(groqClients, chiediGroq, stima) : await tentaConRotazione(groqClients, chiediGroq);
+        } catch (ePool: any) {
+          if (!pagante || !valeLaPenaAltraChiave(ePool)) throw ePool;
+          console.warn(`[Groq a pagamento] gratuite esaurite (${ePool?.status || ePool?.message}), uso la chiave a pagamento — ${featureContext}`);
+          r = await chiediGroq(pagante);
+        }
       }
       textContent = r.choices?.[0]?.message?.content || "";
       responseData = r;
@@ -1032,7 +1141,9 @@ async function callUniversalAi(
   // gonka che funziona»). L'account «musei» risponde 402 (credito finito) e le traduzioni delle guide restavano
   // ai soli gratuiti. In sfondo, quando «musei» ha detto 402 (ricordato 6 ore), non ha chiave o è in pausa, si
   // prende un account del giro dei luoghi (poi…, gate…) libero e sotto il suo tetto, partendo da uno a caso.
-  if (userId === 'background-script' && gonkaPoolRichiesto === 'musei' && ((gonkaSenzaCreditoFino['musei'] || 0) > Date.now() || !gonkaKeys['musei'] || engineInPausa('gonka:musei'))) {
+  // (17/11/2026) Lo stesso per gli ITINERARI della semina: misurato su Oracle, l'account «itinerari» andava in pausa per
+  // quota 244 volte in 17 h e il secondo giro dopo un troncamento ricadeva sui gratuiti saturi (308 scarti su 436).
+  if (userId === 'background-script' && (gonkaPoolRichiesto === 'musei' || gonkaPoolRichiesto === 'itinerari') && ((gonkaSenzaCreditoFino[gonkaPoolRichiesto] || 0) > Date.now() || !gonkaKeys[gonkaPoolRichiesto] || engineInPausa(`gonka:${gonkaPoolRichiesto}`))) {
     const altriMusei = Object.keys(gonkaKeys).filter((p) => /^(poi\d*|gate\d+)$/.test(p) && gonkaKeys[p] && !((gonkaSenzaCreditoFino[p] || 0) > Date.now()) && !engineInPausa(`gonka:${p}`));
     const viaM = Math.floor(Math.random() * Math.max(1, altriMusei.length));
     for (let i = 0; i < altriMusei.length; i++) {
@@ -1086,7 +1197,7 @@ async function callUniversalAi(
   // Oracle) metteva «groq» in pausa 10 minuti per TUTTI nella stessa istanza: l'utente in diretta perdeva le due
   // chiavi on-the-fly (quota propria, misurata piena) senza che nessuno le provasse, e cadeva su Gemini/Agnes/402.
   // Con chiavi dedicate (on the fly, revisore) groq resta in coda: tryEngine prova prima quelle, poi il pool.
-  const groqDedicato = (!!options.groqOnTheFly && groqOnTheFlyClients.length > 0) || (!!options.revisore && groqRevisoreClients.length > 0);
+  const groqDedicato = (!!options.groqOnTheFly && (groqOnTheFlyClients.length > 0 || !!groqPagamentoClient)) || (!!options.revisore && groqRevisoreClients.length > 0);
   const disponibili = consentiti.filter((e) => (e === 'groq' && groqDedicato) || !engineInPausa(chiavePausa(e)));
   const engineQueue = disponibili.length ? disponibili : consentiti;
   // (22/10/2026) I motori in pausa erano saltati senza traccia: quando i gratuiti finivano la quota, nei log mancava
@@ -1113,13 +1224,13 @@ async function callUniversalAi(
       // Gonka scadeva e il lavoro ricadeva su Agnes o restava senza testo — 27 audioguide non scritte su 64
       // luoghi). Solo in sfondo e solo nel giro dei luoghi: fallito un account (scadenza, 429, 5xx) si prova
       // UNA volta un altro account libero dello stesso giro.
-      if (eng === 'gonka' && userId === 'background-script' && (/^(poi\d*|gate\d+)$/.test(String(gonkaPoolEffettivo || '')) || options.gonkaPool === 'musei')) {
+      if (eng === 'gonka' && userId === 'background-script' && (/^(poi\d*|gate\d+)$/.test(String(gonkaPoolEffettivo || '')) || options.gonkaPool === 'musei' || options.gonkaPool === 'itinerari')) {
         // (04/10/2026 sera) GONKA_ALTRI_ACCOUNT = quanti altri account provare (1 se non c'è); GONKA_PAUSA_GUASTO_MS =
         // respiro prima di riprovare dopo un 5xx o una scadenza. Servono al server LOCALE dell'arricchimento
         // fuori linea, che non ha il limite dei 300 s di Vercel: lì la rete Gonka ha momenti di 502 a raffica, e
         // aspettare qualche secondo e riprovare vale più che ricadere su un motore senza quota («guasto»).
         const provati = new Set<string>([String(gonkaPoolEffettivo)]);
-        const quanti = Math.max(options.gonkaPool === 'musei' ? 3 : 1, Math.min(6, Number(process.env.GONKA_ALTRI_ACCOUNT) || 1));
+        const quanti = Math.max(options.gonkaPool === 'musei' || options.gonkaPool === 'itinerari' ? 3 : 1, Math.min(6, Number(process.env.GONKA_ALTRI_ACCOUNT) || 1));
         const respiro = Math.max(0, Number(process.env.GONKA_PAUSA_GUASTO_MS) || 0);
         let ultimoErr: any = e;
         for (let giroAltri = 0; giroAltri < quanti && !success; giroAltri++) {
@@ -1320,7 +1431,10 @@ async function callUniversalAi(
     });
   } catch (e: any) {}
 
-  return { ...responseData, data: textContent, truncated: wasTruncated };
+  // `motore` (13/11/2026): `model` è il nome dato dal FORNITORE — per Gonka «deepseek-ai/DeepSeek-V4-Flash-0731», senza
+  // il prefisso «gonka:». La semina della libreria lo leggeva per sapere chi aveva troncato, scambiava Gonka per DeepSeek
+  // diretto e non ritentava mai: 255 scarti «troncato» su 257 in due ore e mezza. `motore` è il nome interno, col prefisso.
+  return { ...responseData, data: textContent, truncated: wasTruncated, motore: finalModel };
 }
 
 // ── SPESA DEEPSEEK CANALE DIRETTO (13/09/2026, ridefinito 16/09) ──────
@@ -1484,8 +1598,15 @@ function extractItineraryStops(obj: any): any[] {
 // Usato per agganciare una tappa scritta dall'AI («Castello di Uzzano») alla
 // riga vera del database («Castello di Uzzano - Azienda Agricola»).
 const PAROLE_VUOTE_NOMI = new Set(['del', 'della', 'delle', 'dei', 'degli', 'di', 'da', 'the', 'and', 'con', 'per', 'san', 'santa', 'chiesa', 'castello', 'villa', 'museo', 'ristorante', 'pizzeria', 'trattoria', 'osteria', 'piazza', 'via', 'secondo', 'giro', 'pranzo', 'cena', 'colazione', 'aperitivo', 'visita', 'tour']);
+// LETTERE CHE NFD NON SCOMPONE (18/11/2026, collaudo Malta: \u00abG\u0127ar Dalam\u00bb diventava \u00abg ar dalam\u00bb, \u00abIl-\u0120onna ta' Sant'
+// Anton\u00bb perdeva le parole): \u0127, \u0142, \u00f8, \u0111, \u00df, \u00e6, \u0153\u2026 si riducono alla lettera base PRIMA di togliere gli accenti. Usata da
+// paroleNome, tipiLuogo, tokensNomeLuogo, normTesto e dall'aggancio.
+const LETTERE_PIANE: Record<string, string> = { '\u0127': 'h', '\u0126': 'h', '\u0142': 'l', '\u0141': 'l', '\u00f8': 'o', '\u00d8': 'o', '\u0111': 'd', '\u0110': 'd', '\u00f0': 'd', '\u00d0': 'd', '\u00fe': 'th', '\u00de': 'th', '\u00df': 'ss', '\u00e6': 'ae', '\u00c6': 'ae', '\u0153': 'oe', '\u0152': 'oe', '\u0131': 'i', '\u0140': 'l', '\u0167': 't', '\u0192': 'f' };
+function pianaLettere(s: any): string {
+  return String(s || '').replace(/[\u0127\u0126\u0142\u0141\u00f8\u00d8\u0111\u0110\u00f0\u00d0\u00fe\u00de\u00df\u00e6\u00c6\u0153\u0152\u0131\u0140\u0167\u0192]/g, (c) => LETTERE_PIANE[c] || c).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
 function paroleNome(s: any): string[] {
-  return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  return pianaLettere(s)
     // (18/10/2026, Vienna) I NUMERI contano anche corti: «Belvedere 21» (un altro museo, 700 m più in là) diventava
     // «belvedere» e combaciava al 100% con «Belvedere Superiore» — la tappa finiva sull'edificio sbagliato.
     .replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(w => (w.length > 2 || /^\d+$/.test(w)) && !PAROLE_VUOTE_NOMI.has(w));
@@ -1513,6 +1634,14 @@ function chiaveNomeTappa(s: any): string {
   return `nome:${intero}`;
 }
 
+/** Chiave «doppioni mai» per i blocchi e i giorni rifatti (18/11/2026): un PASTO si confronta solo con i pasti — «Pranzo
+ *  a Spinola Bay» non è un doppione di «Spinola Bay». '' = nessuna chiave. */
+function chiaveDoppioneTappa(t: any): string {
+  const k = chiaveNomeTappa(t?.titolo_tappa || t?.titolo);
+  if (!k) return '';
+  const pasto = /^(pranzo|cena|colazione|aperitivo|merenda|brunch|lunch|dinner|breakfast|ristorante)$/i.test(String(t?.tipo || '').trim()) || /^(pranzo|cena|colazione|aperitivo|merenda|brunch|lunch|dinner|breakfast)\b/i.test(String(t?.titolo_tappa || t?.titolo || '').trim());
+  return `${pasto ? 'p' : 'n'}:${k}`;
+}
 const TIPO_ALLOGGIO_RIENTRO = /hotel|alloggio|albergo|rientro|check/i;
 
 // ── UN PRODOTTO NON È UNA TAPPA (22/10/2026, collaudo Milano/Madrid/Vienna; committente «correggi tutto») ──
@@ -1520,9 +1649,23 @@ const TIPO_ALLOGGIO_RIENTRO = /hotel|alloggio|albergo|rientro|check/i;
 // tour in bici…», «Tour privato…», «Biglietto salta-coda…») e così lo «Shopping nel centro storico», che non è un
 // luogo: niente da vedere, niente punto d'arrivo, niente audioguida. La stessa espressione che tiene i prodotti fuori
 // da shared_pois (/api/poi/from-itinerary) qui li toglie dal giorno. Pasti, alloggi e rientri non si toccano.
-const NOME_PRODOTTO_NON_TAPPA = /^(tour|visita guidata|escursione|gita|crociera|bigliett[oi]|ticket|noleggio|degustazione|lezione|corso|workshop|laboratorio|esperienz[ae]|experiences?|day trip|walking tour|food tour|bike tour|private tour)\b|\btour (privato|guidato|in autobus|in bici|a piedi|gastronomico|panoramico|hop-on)\b|\bhop-on hop-off\b|^(giro|gita|uscita|tour) in (barca|battello|gondola|bici|bicicletta|bus|autobus|kayak)\b|^(da|from|desde|depuis|ab) [A-ZÀ-Ý][^:]{1,30}:|\blike a local\b|^[^:]{2,30}:\s*(bigliett[oi]|ticket|tour|visita guidata|ingresso|pass|escursione)\b|\b(degustazion[ei]|wine tasting|tasting|cooking class|lezione di cucina|boutique wine)\b/i;
+const NOME_PRODOTTO_NON_TAPPA = /^(diving|immersion[ei]|snorkel(ing)?|kayak|parasailing|jet ?ski|quad|segway)\b|^(tour|visita guidata|escursione|gita|crociera|bigliett[oi]|ticket|noleggio|degustazione|lezione|corso|workshop|laboratorio|esperienz[ae]|experiences?|day trip|walking tour|food tour|bike tour|private tour)\b|\btour (privato|guidato|in autobus|in bici|a piedi|gastronomico|panoramico|hop-on)\b|\bhop-on hop-off\b|^(giro|gita|uscita|tour) in (barca|battello|gondola|bici|bicicletta|bus|autobus|kayak)\b|^(da|from|desde|depuis|ab) [A-ZÀ-Ý][^:]{1,30}:|\blike a local\b|^[^:]{2,30}:\s*(bigliett[oi]|ticket|tour|visita guidata|ingresso|pass|escursione)\b|\b(degustazion[ei]|wine tasting|tasting|cooking class|lezione di cucina|boutique wine)\b/i;
 const SHOPPING_GENERICO = /^(shopping|acquisti|compras|souvenirs?|einkaufs?bummel|lèche-vitrines?|passeggiata (per lo|di) shopping|tempo libero per (lo )?shopping)\b/i;
+/** (18/11/2026, collaudo Malta 94f5e937) «Ritorno a St. Julian's e relax in hotel», «Ritorno a St. Julian's» (tipo
+ *  relax/trasferimento) non sono luoghi: restavano «poco noti», senza POI, e contavano nelle verifiche. Una tappa il cui
+ *  TITOLO dice rientro/ritorno/relax in hotel prende tipo «rientro» (il tipo del modello resta in `tipo_originale`), così
+ *  ogni controllo che salta alloggi e rientri (TIPO_ALLOGGIO_RIENTRO) la salta. */
+const TITOLO_RIENTRO = /^(ritorno|rientro|rientrare|relax in hotel|riposo in hotel|check[- ]?in|check[- ]?out|return to|back to|retour|regreso|r[uü]ckkehr)\b/i;
+function segnaRientri(parsed: any): number {
+  let n = 0;
+  for (const g of (Array.isArray(parsed?.giorni) ? parsed.giorni : [])) for (const t of (Array.isArray(g?.tappe) ? g.tappe : [])) {
+    if (!t || t.poi_id || TIPO_ALLOGGIO_RIENTRO.test(String(t.tipo || ''))) continue;
+    if (TITOLO_RIENTRO.test(String(t.titolo_tappa || t.titolo || '').trim())) { t.tipo_originale = t.tipo; t.tipo = 'rientro'; delete t.verifica; delete t.nota_verifica; delete t.verifica_rimandata; n++; }
+  }
+  return n;
+}
 function togliTappeProdotto(parsed: any, soloGiorni?: Set<number>): number {
+  segnaRientri(parsed);
   let tolti = 0;
   const giorni: any[] = Array.isArray(parsed?.giorni) ? parsed.giorni : [];
   giorni.forEach((g, i) => {
@@ -1558,13 +1701,15 @@ function scalaImporto(campo: any, togli: number): any {
   const nuovo = s.replace(/(\d+(?:[.,]\d{1,2})?)/, (x) => { fatto = true; const v = Math.max(0, Number(x.replace(',', '.')) - togli); return String(Math.round(v)); });
   return fatto ? nuovo : campo;
 }
-function togliDalBudget(g: any, nomiTolti: string[]): number {
+function togliDalBudget(g: any, nomiTolti: string[], unoPerNome = false): number {
   const tb = g?.tabella_budget;
   if (!tb || typeof tb !== 'object') return 0;
   let tolto = 0;
   for (const nome of nomiTolti) {
     const parole = tokensNomeLuogo(nomeLuogoDaTappa(nome)).filter((w) => !PAROLE_TIPO_LOCALE.has(w));
     if (!parole.length) continue;
+    // (18/11/2026) Per un DOPPIONE si toglie una sola voce: il luogo che resta, se è nello stesso giorno, ha la sua.
+    let fatto = false;
     for (const voce of Object.keys(tb)) {
       const v = tb[voce];
       if (!v || typeof v !== 'object' || typeof v.dettaglio !== 'string') continue;
@@ -1573,7 +1718,7 @@ function togliDalBudget(g: any, nomiTolti: string[]): number {
       for (const p of pezzi) {
         const n = normTesto(p);
         const importo = importoEuro(p);
-        if (importo != null && parole.some((w) => n.includes(w))) { tolto += importo; v.stima_pp = scalaImporto(v.stima_pp, importo); continue; }
+        if (!(unoPerNome && fatto) && importo != null && parole.some((w) => n.includes(w))) { tolto += importo; v.stima_pp = scalaImporto(v.stima_pp, importo); fatto = true; continue; }
         resto.push(p);
       }
       v.dettaglio = resto.filter(Boolean).join('; ');
@@ -1581,6 +1726,51 @@ function togliDalBudget(g: any, nomiTolti: string[]): number {
   }
   if (tolto > 0 && tb.totale_giorno != null) tb.totale_giorno = scalaImporto(tb.totale_giorno, tolto);
   return tolto;
+}
+// TOTALE DEL VIAGGIO = SOMMA DEI GIORNI (18/11/2026, ordine del committente «correggi il totale»). Il modello scrive
+// `totale_viaggio` nel PRIMO blocco, quando esistono solo i giorni 1–2 (Malta: «144 € … per i primi 2 giorni; il totale
+// dei 4 giorni sarà aggiornato» — e nessuno lo aggiornava). Si ricalcola dai `totale_giorno` a valle di blocchi, doppioni,
+// sostituzioni dei pasti. Se un giorno non ha una cifra in euro leggibile il testo del modello resta (mai un totale
+// parziale spacciato per intero). Stessa regola nell'app: src/lib/totaleViaggio.ts.
+const A_PERSONA_TOTALE: Record<string, string> = { it: 'a persona', en: 'per person', fr: 'par personne', es: 'por persona', de: 'pro Person', ru: 'на человека', zh: '每人' };
+function ricalcolaTotaleViaggio(parsed: any, lingua: string): boolean {
+  const giorni: any[] = Array.isArray(parsed?.giorni) ? parsed.giorni : [];
+  if (!giorni.length) return false;
+  // (18/11/2026, New York) Anche dollari, sterline, franchi: tutti i giorni nella STESSA valuta, altrimenti resta il testo.
+  let somma = 0;
+  let valuta: string | null = null;
+  for (const g of giorni) {
+    const s = String(g?.tabella_budget?.totale_giorno ?? '');
+    const v = valutaDelTesto(s);
+    if (!v || (valuta && v !== valuta)) return false;
+    valuta = v;
+    const m = s.replace(/\s+/g, ' ').match(/(\d[\d.,]*)\s*(?:[-–]\s*(\d[\d.,]*))?/);
+    if (!m) return false;
+    const a = numeroDelTesto(m[1]);
+    const b = m[2] ? numeroDelTesto(m[2]) : a;
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+    somma += (a + b) / 2;
+  }
+  if (somma <= 0 || !valuta) return false;
+  const n = Math.round(somma);
+  const importo = valuta === '$' || valuta === '£' ? `${valuta}${n}` : `${n} ${valuta}`;
+  parsed.totale_viaggio = `${importo} ${A_PERSONA_TOTALE[String(lingua || 'it').toLowerCase().slice(0, 2)] || A_PERSONA_TOTALE.en}`;
+  return true;
+}
+/** La valuta di un importo scritto dal modello: '€', '$', '£', 'CHF'; null se nessuna o più d'una. */
+function valutaDelTesto(s: string): string | null {
+  const trovate = new Set<string>();
+  if (/€|\beur\b|euro/i.test(s)) trovate.add('€');
+  if (/\$|\busd\b|dollar/i.test(s)) trovate.add('$');
+  if (/£|\bgbp\b|sterlin/i.test(s)) trovate.add('£');
+  if (/\bchf\b|franch/i.test(s)) trovate.add('CHF');
+  return trovate.size === 1 ? [...trovate][0] : null;
+}
+/** «1.200» / «1,200» (migliaia) → 1200; «12,5» → 12.5. */
+function numeroDelTesto(s: string): number {
+  const t = String(s || '').replace(/[.,]$/, '');
+  if (/^\d{1,3}([.,]\d{3})+$/.test(t)) return parseFloat(t.replace(/[.,]/g, ''));
+  return parseFloat(t.replace(',', '.'));
 }
 
 // ── ORARI IN SEQUENZA (23/10/2026, collaudo 7 città) ─────────────────────────────────────────────────
@@ -1637,13 +1827,20 @@ function ricalcolaOrariGiorni(parsed: any, soloGiorni?: Set<number>): number {
 // altrimenti il nome (chiaveNomeTappa). Hotel e rientri esclusi. Con
 // `soloGiorni` (indici) si tolgono tappe SOLO da quei giorni: gli altri valgono
 // come gia' visti e restano intatti (serve ad «Aggiungi giorno»).
-function togliDoppioniItinerario(parsed: any, soloGiorni?: Set<number>): number {
+function togliDoppioniItinerario(parsed: any, soloGiorni?: Set<number>, conBudget = false): number {
   const visti = new Set<string>();
   let tolti = 0;
+  // (18/11/2026, committente: «doppioni mai» ma un PASTO non è mai doppione di un LUOGO) La chiave del nome toglie
+  // «pranzo/cena»: «Pranzo a Spinola Bay» diventava «spinola bay» come la baia e spariva. I pasti si confrontano solo
+  // con i pasti (chiave `p:`), i luoghi con i luoghi (`n:`); lo stesso poi_id resta un doppione per tutti.
+  const ePastoT = (t: any) => TIPI_PASTO.test(String(t?.tipo || '').trim()) || /^(pranzo|cena|colazione|aperitivo|merenda|brunch|lunch|dinner|breakfast)\b/i.test(String(t?.titolo_tappa || t?.titolo || '').trim());
   const chiaviDi = (t: any): string[] => {
     const n = chiaveNomeTappa(t?.titolo_tappa || t?.titolo);
-    return [String(t?.poi_id || '') && `id:${t.poi_id}`, n && `n:${n}`].filter(Boolean) as string[];
+    return [String(t?.poi_id || '') && `id:${t.poi_id}`, n && `${ePastoT(t) ? 'p' : 'n'}:${n}`].filter(Boolean) as string[];
   };
+  // (18/11/2026) Le tappe tolte per giorno, per togliere la loro voce dal budget del giorno (conBudget).
+  const toltePerGiorno = new Map<any, string[]>();
+  const segnaTolta = (g: any, t: any) => { const a = toltePerGiorno.get(g) || []; a.push(String(t?.titolo_tappa || t?.titolo || '')); toltePerGiorno.set(g, a); };
   const giorni: any[] = Array.isArray(parsed?.giorni) ? parsed.giorni : [];
   if (soloGiorni) {
     giorni.forEach((g, i) => {
@@ -1663,20 +1860,66 @@ function togliDoppioniItinerario(parsed: any, soloGiorni?: Set<number>): number 
     return Number.isFinite(a) && Number.isFinite(b) && (a !== 0 || b !== 0) ? { lat: a, lon: b } : null;
   };
   if (soloGiorni) giorni.forEach((g, i) => { if (!soloGiorni.has(i) && Array.isArray(g?.tappe)) for (const t of g.tappe) { const p = puntoAgganciato(t); if (p) culturaliTenute.push(p); } });
+  // NOME CONTENUTO = STESSO LUOGO (18/11/2026, Malta: «Spinola Bay» il giorno 1 e «Passeggiata fotografica a Spinola Bay
+  // (punto panoramico)» il giorno 4, entrambe non agganciate, 740 m fra i due punti del modello). Due tappe NON
+  // agganciate e non pasti, dove le parole proprie dell'una stanno tutte nell'altra, l'altra aggiunge solo parole che
+  // descrivono il modo della visita (passeggiata, fotografica, punto panoramico…), almeno una parola propria è lunga
+  // ≥ 5 lettere, i tipi non si contraddicono e i punti stanno entro 800 m: è lo stesso luogo, resta la prima.
+  const DESCRITTIVE = new Set(['fotografica', 'fotografico', 'foto', 'photo', 'photographic', 'punto', 'point', 'panoramico', 'panoramica', 'panoramic', 'vista', 'view', 'viewpoint', 'romantica', 'romantico', 'lungo', 'sul', 'sulla', 'along', 'giro', 'serale', 'notturna', 'notturno']);
+  const SOGLIA_NOME_CONTENUTO_M = 800;
+  const nonAgganciateTenute: Array<{ proprie: string[]; tipi: Set<string>; lat: number; lon: number }> = [];
+  const descriviNonAgganciata = (t: any) => {
+    if (t?.poi_id || TIPO_PASTO_FERMO.test(String(t?.tipo || ''))) return null;
+    const a = Number(t?.coordinate?.lat), b = Number(t?.coordinate?.lng ?? t?.coordinate?.lon);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || (a === 0 && b === 0)) return null;
+    const nome = String(t?.titolo_tappa || t?.titolo || '').replace(/\(([^()]*)\)/g, ' $1 ');
+    const proprie = paroleNome(nome).filter((w) => !TIPI_LUOGO[w] && !PAROLE_NON_PROPRIE.has(w));
+    return proprie.length ? { proprie, tipi: tipiLuogo(nome), lat: a, lon: b } : null;
+  };
+  const stessoLuogoPerNome = (x: any, y: any) => {
+    const [corto, lungo] = x.proprie.length <= y.proprie.length ? [x, y] : [y, x];
+    if (!corto.proprie.some((w: string) => w.length >= 5)) return false;
+    if (!corto.proprie.every((w: string) => lungo.proprie.includes(w))) return false;
+    if (!lungo.proprie.filter((w: string) => !corto.proprie.includes(w)).every((w: string) => DESCRITTIVE.has(w))) return false;
+    if (x.tipi.size && y.tipi.size && ![...x.tipi].some((g: string) => y.tipi.has(g))) return false;
+    return getHaversineDistance(x.lat, x.lon, y.lat, y.lon) <= SOGLIA_NOME_CONTENUTO_M;
+  };
+  const nomiTenute: Array<{ nome: string; lat: number; lon: number }> = [];
+  const descriviPerNome = (t: any) => {
+    if (TIPO_PASTO_FERMO.test(String(t?.tipo || ''))) return null;
+    const a = Number(t?.coordinate?.lat), b = Number(t?.coordinate?.lng ?? t?.coordinate?.lon);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || (a === 0 && b === 0)) return null;
+    const nome = String(t?.titolo_tappa || t?.titolo || '').replace(/\s*\([^()]*\)\s*$/, '').replace(/\s+[-–—]\s+.*$/, '').trim();
+    return nome ? { nome, lat: a, lon: b } : null;
+  };
+  if (soloGiorni) giorni.forEach((g, i) => { if (!soloGiorni.has(i) && Array.isArray(g?.tappe)) for (const t of g.tappe) { const d = descriviNonAgganciata(t); if (d) nonAgganciateTenute.push(d); const n = descriviPerNome(t); if (n) nomiTenute.push(n); } });
   giorni.forEach((g, i) => {
     if (!Array.isArray(g?.tappe) || (soloGiorni && !soloGiorni.has(i))) return;
     g.tappe = g.tappe.filter((t: any) => {
       if (TIPO_ALLOGGIO_RIENTRO.test(String(t?.tipo || ''))) return true;
       const chiavi = chiaviDi(t);
-      const p = puntoAgganciato(t);
-      if (p && culturaliTenute.some((q) => getHaversineDistance(p.lat, p.lon, q.lat, q.lon) <= SOGLIA_STESSO_EDIFICIO_M)) { tolti++; return false; }
+      const pastoQui = ePastoT(t);
+      const togli = () => { tolti++; segnaTolta(g, t); return false; };
+      const p = pastoQui ? null : puntoAgganciato(t);
+      if (p && culturaliTenute.some((q) => getHaversineDistance(p.lat, p.lon, q.lat, q.lon) <= SOGLIA_STESSO_EDIFICIO_M)) return togli();
+      const dNA = pastoQui ? null : descriviNonAgganciata(t);
+      if (dNA && nonAgganciateTenute.some((q) => stessoLuogoPerNome(dNA, q))) return togli();
+      if (dNA) nonAgganciateTenute.push(dNA);
+      // STESSO LUOGO DETTO IN DUE LINGUE (18/11/2026, collaudo New York: «St. Patrick's Cathedral» agganciata il giorno
+      // 1 e «Cattedrale di St. Patrick (facciata e interno)» il giorno 5; «Cattedrale di San Giovanni il Divino» e
+      // «Cattedrale di St. John the Divine»). Non pasti, entro 300 m, stesse parole proprie (anche tradotte).
+      const dN = pastoQui ? null : descriviPerNome(t);
+      if (dN && nomiTenute.some((q) => dN.lat != null && q.lat != null && getHaversineDistance(dN.lat, dN.lon, q.lat, q.lon) <= 300
+        && (nomiStessoLuogo(dN.nome, q.nome) || nomiStessoLuogoTradotti(dN.nome, q.nome)))) return togli();
+      if (dN) nomiTenute.push(dN);
       if (!chiavi.length) { if (p) culturaliTenute.push(p); return true; }
-      if (chiavi.some((c) => visti.has(c))) { tolti++; return false; }
+      if (chiavi.some((c) => visti.has(c))) return togli();
       chiavi.forEach((c) => visti.add(c));
       if (p) culturaliTenute.push(p);
       return true;
     });
   });
+  if (conBudget) for (const [g, nomi] of toltePerGiorno) { try { togliDalBudget(g, nomi, true); } catch { /* resta com'è */ } }
   return tolti;
 }
 
@@ -1739,7 +1982,9 @@ function fraseMezzi(lingua: string, legs: Array<{ modo: string; linea: string; d
   };
   const t = T[L] || T.en;
   const pezzi = legs.map(l => {
-    const modo = (nomiModo[l.modo] || nomiModo.BUS)[L] || (nomiModo[l.modo] || nomiModo.BUS).en;
+    // (14/11/2026, Zurigo) Transitous dà le S-Bahn come METRO: «metro S24» non esiste, è un treno suburbano.
+    const chiaveModo = /^(METRO|SUBWAY)$/.test(l.modo) && /^S\s?\d+$/i.test(String(l.linea || '')) ? 'SUBURBAN' : l.modo;
+    const modo = (nomiModo[chiaveModo] || nomiModo.BUS)[L] || (nomiModo[chiaveModo] || nomiModo.BUS).en;
     // Un codice interno del gestore («0083_RV») non è il nome di una linea: non si scrive.
     const linea = l.linea && !/_/.test(l.linea) && l.linea.length <= 8 ? ` ${l.linea}` : '';
     return `${modo}${linea} ${t.da} ${l.da}, ${t.fermate(l.fermate)}, ${t.scendi} ${l.a}`;
@@ -1779,9 +2024,19 @@ async function viaggioTransitous(da: { lat: number; lon: number }, a: { lat: num
   out.minCorsa = legs.reduce((s: number, l: any) => s + l.min, 0);
   return out;
 }
-async function mezziPerTratteLunghe(parsed: any, opts: { lingua?: string; soloGiorni?: Set<number>; tettoMs?: number } = {}): Promise<{ tratte: number; scritte: number }> {
+async function mezziPerTratteLunghe(parsed: any, opts: { lingua?: string; soloGiorni?: Set<number>; tettoMs?: number; rifai?: boolean } = {}): Promise<{ tratte: number; scritte: number }> {
   const esito = { tratte: 0, scritte: 0 };
   const giorni: any[] = Array.isArray(parsed?.giorni) ? parsed.giorni : [];
+  // (14/11/2026, Zurigo) `rifai`: le righe si riscrivono da capo. La verifica, che viene DOPO, sposta le tappe
+  // (pasto sostituito, locale agganciato all'archivio, posizione corretta dal geocoder): la riga scritta prima
+  // portava ancora alla posizione vecchia — «scendi a Hardbrücke» per una cena finita in Aargauerstrasse, 2 km più
+  // in là. Le tratte non cambiate tornano dalla cache; quelle cambiate si richiedono.
+  if (opts.rifai) {
+    giorni.forEach((g, gi) => {
+      if (!Array.isArray(g?.tappe) || (opts.soloGiorni && !opts.soloGiorni.has(gi))) return;
+      for (const t of g.tappe) { if (t) { delete t.mezzi_precedente; delete t.mezzi_tratta; } }
+    });
+  }
   const xy = (t: any) => { const lat = Number(t?.coordinate?.lat), lon = Number(t?.coordinate?.lng ?? t?.coordinate?.lon); return Number.isFinite(lat) && Number.isFinite(lon) && (lat !== 0 || lon !== 0) ? { lat, lon } : null; };
   const lavori: Array<() => Promise<void>> = [];
   giorni.forEach((g, gi) => {
@@ -1957,6 +2212,15 @@ function togliFrasiSegnalate(testo: string, segnalate: string[]): { testo: strin
   });
   return { testo: tenute.join(' ').trim(), tolte };
 }
+/** La domanda del REVISORE DEI FATTI (25/09/2026), in una funzione sola (18/11/2026): la usa revisoreFattiItinerario
+ *  e il banco di prova (scratch/banco-prova-itinerari.mjs --motori) per misurare trovati / mancati / falsi allarmi sul
+ *  motore vero. `elenco` = «1. Titolo\ntesto» separati da una riga vuota. */
+function domandaRevisoreFatti(destination: any, elenco: string): any[] {
+  return [
+    { role: 'system', content: 'Sei un verificatore di fatti per guide di viaggio. Rispondi solo con JSON.' },
+    { role: 'user', content: `Città: ${destination || '?'}.\nPer ogni tappa qui sotto leggi il testo e segnala le FRASI che contengono un fatto specifico che sai essere FALSO, oppure che è rischioso e che non puoi confermare: attribuzione di un'opera a un artista, nascita/morte/residenza di una persona in quel luogo, date e secoli, record e primati, eventi storici, leggende presentate come fatti. NON segnalare descrizioni, consigli pratici, sensazioni, orari, né fatti veri e noti (esempio: l'Arca di San Domenico a Bologna ha davvero statuette giovanili di Michelangelo: NON va segnalata). Copia ogni frase segnalata ESATTAMENTE com'è nel testo.\n\n${elenco}\n\nJSON: {"tappe":[{"n":1,"frasi":["frase esatta"],"motivo":"breve"}]} — "frasi" vuoto se il testo è a posto.` },
+  ];
+}
 const FRASE_DIPENDENTE = /^(?:altre|altri|altra|altro|anche|inoltre|essa|esso|egli|ella|lui|lei|tale|tali|lì|là|qui accanto|accanto|nella stessa|nello stesso|della stessa|dello stesso|la stessa|lo stesso|other|others|another|also|it|he|she|they|there|moreover|furthermore|besides|nearby|aussi|d'autres|autres|también|otras|otros|además|auch|weitere|außerdem|dort)\b/i;
 // NOMI DI PERSONA NON SOSTENUTI (25/09/2026, scheda opera: il «Compianto sul Cristo morto» di
 // Santo Stefano a Bologna usciva «di Ambrogio o Angiolo di Bondone» — Giotto col nome di battesimo,
@@ -1988,7 +2252,7 @@ function togliFrasiConNomiIgnoti(testo: string, ammesso: string): { testo: strin
   const r = togliFrasiSegnalate(testo, segnalate);
   return { testo: r.testo, tolte: r.tolte, nomi: [...new Set(nomi)] };
 }
-async function revisoreFattiItinerario(parsed: any, opz: { destination?: string; language?: string; userId?: any; soloGiorni?: Set<number>; tettoMs?: number }): Promise<{ esito: string; controllate: number; frasi_tolte: number; motore?: string }> {
+async function revisoreFattiItinerario(parsed: any, opz: { destination?: string; language?: string; userId?: any; soloGiorni?: Set<number>; tettoMs?: number; soloNonLette?: boolean }): Promise<{ esito: string; controllate: number; frasi_tolte: number; motore?: string }> {
   const out: { esito: string; controllate: number; frasi_tolte: number; motore?: string } = { esito: 'non_eseguito', controllate: 0, frasi_tolte: 0 };
   const lingua = String(opz.language || 'it').toLowerCase().slice(0, 2);
   const tappe: any[] = [];
@@ -1996,13 +2260,15 @@ async function revisoreFattiItinerario(parsed: any, opz: { destination?: string;
     if (opz.soloGiorni && !opz.soloGiorni.has(i)) return;
     for (const t of (Array.isArray(g?.tappe) ? g.tappe : [])) {
       if (TIPO_ALLOGGIO_RIENTRO.test(String(t?.tipo || ''))) continue;
+      // (18/11/2026) La cron di completamento rilegge solo le tappe che nessun revisore ha ancora letto.
+      if (opz.soloNonLette && t?.fatti_controllati) continue;
       if (CAMPI_TESTO_TAPPA.some((c) => String(t?.[c] || '').trim().length > 40)) tappe.push(t);
     }
   });
   // (23/10/2026) Anche le «info_viaggio» (precauzioni, suggerimenti…) sono testo del modello con fatti: si leggono
   // come pseudo-tappe e una voce segnalata si toglie dall'elenco.
   const info = parsed?.info_viaggio;
-  if (!opz.soloGiorni && info && typeof info === 'object') {
+  if (!opz.soloGiorni && !(opz.soloNonLette && parsed?.qualita?.revisore_fatti?.esito === 'ok') && info && typeof info === 'object') {
     for (const sez of Object.keys(info)) {
       const voci = Array.isArray(info[sez]) ? info[sez].filter((x: any) => typeof x === 'string' && x.trim()) : [];
       if (voci.length) tappe.push({ __info: sez, titolo_tappa: `Informazioni di viaggio: ${sez}`, attivita: voci.map((x: string) => /[.!?…]$/.test(x.trim()) ? x.trim() : `${x.trim()}.`).join(' ') });
@@ -2020,13 +2286,12 @@ async function revisoreFattiItinerario(parsed: any, opz: { destination?: string;
     const resta = scadenza - Date.now();
     if (resta < 5000) return;
     const elenco = lotto.map((t, k) => `${k + 1}. ${String(t.titolo_tappa || t.titolo || '').slice(0, 120)}\n${CAMPI_TESTO_TAPPA.map((c) => String(t?.[c] || '').trim()).filter(Boolean).join('\n').slice(0, 1500)}`).join('\n\n');
-    const messaggi = [
-      { role: 'system', content: 'Sei un verificatore di fatti per guide di viaggio. Rispondi solo con JSON.' },
-      { role: 'user', content: `Città: ${opz.destination || '?'}.\nPer ogni tappa qui sotto leggi il testo e segnala le FRASI che contengono un fatto specifico che sai essere FALSO, oppure che è rischioso e che non puoi confermare: attribuzione di un'opera a un artista, nascita/morte/residenza di una persona in quel luogo, date e secoli, record e primati, eventi storici, leggende presentate come fatti. NON segnalare descrizioni, consigli pratici, sensazioni, orari, né fatti veri e noti (esempio: l'Arca di San Domenico a Bologna ha davvero statuette giovanili di Michelangelo: NON va segnalata). Copia ogni frase segnalata ESATTAMENTE com'è nel testo.\n\n${elenco}\n\nJSON: {"tappe":[{"n":1,"frasi":["frase esatta"],"motivo":"breve"}]} — "frasi" vuoto se il testo è a posto.` },
-    ];
+    const messaggi = domandaRevisoreFatti(opz.destination, elenco);
     try {
       const r: any = await Promise.race([
-        chiamaRevisore(messaggi, { temperature: 0, max_tokens: 2500, response_format: { type: 'json_object' } }, 'itinerario_revisore_fatti', sbUrl, sbKey, getGroqClient(), opz.userId),
+        // (15/11/2026, committente: «revisore / 2 on the fly / pool») Con un utente in attesa, finita la chiave dei
+        // revisori si provano le due on the fly prima del pool comune, che di notte è consumato dai lavori di sfondo.
+        chiamaRevisore(messaggi, { temperature: 0, max_tokens: 2500, response_format: { type: 'json_object' }, groqOnTheFly: !!opz.userId && opz.userId !== 'background-script' }, 'itinerario_revisore_fatti', sbUrl, sbKey, getGroqClient(), opz.userId),
         new Promise((_, rej) => setTimeout(() => rej(new Error('tetto')), resta)),
       ]);
       const raw = String(r?.data || '');
@@ -2065,6 +2330,8 @@ async function revisoreFattiItinerario(parsed: any, opz: { destination?: string;
       }
       riusciti++;
       out.controllate += lotto.length;
+      // Segno per tappa (18/11/2026): letta da un revisore — la cron di completamento rilegge solo le altre.
+      for (const t of lotto) if (t && !t.__info) t.fatti_controllati = true;
       return true;
     } catch (e: any) {
       // Il motivo resta scritto (25/09/2026: su «Aggiungi giorno» usciva «non_eseguito» senza traccia).
@@ -2129,8 +2396,19 @@ for (const [gruppi, parole] of [
   [['cimitero'], 'cimitero cemetery cimetiere cementerio friedhof'],
   [['biblioteca'], 'biblioteca library bibliotheque bibliothek'],
   [['locale'], 'ristorante restaurant trattoria osteria pizzeria taverna bistrot bistro cafe caffe bar enoteca birreria pub gelateria pasticceria'],
+  // (18/11/2026, Malta) Parole di tipo che mancavano: «Baia di Balluta» / «Balluta Bay», «Knisja tal-Karmnu» (maltese),
+  // «Ġnien» (giardino), «Torri», i centri commerciali («The Point Shopping Mall» / «The Point»).
+  [['baia'], 'baia bay baie bahia bucht cala cove insenatura'],
+  [['chiesa'], 'knisja santwarju bazilika katidral kappella'],
+  [['parco'], 'gnien gonna'],
+  // (18/11/2026, collaudo Malta) «Grotte di Ghar Dalam» cercava *grotte* e non trovava «Għar Dalam» (wd-Q742598).
+  [['grotta'], 'grotta grotte grotto grottoes cave caves caverna caverne cueva cuevas hohle ghar'],
+  [['torre'], 'torri towers tour'],
+  [['centro_commerciale'], 'mall'],
 ] as [string[], string][]) for (const p of parole.split(' ')) TIPI_LUOGO[p] = gruppi;
-const PAROLE_NON_PROPRIE = new Set(['alla', 'alle', 'allo', 'agli', 'nella', 'nelle', 'nello', 'negli', 'sulla', 'sulle', 'sul', 'sui', 'dal', 'dalla', 'dalle', 'dagli', 'verso', 'tra', 'fra', 'dell', 'nell', 'all', 'sull', 'dall', 'une', 'des', 'les', 'los', 'las', 'der', 'die', 'das', 'und', 'von', 'from', 'with', 'into', 'passeggiata', 'passeggiate', 'sosta', 'partenza', 'arrivo', 'rientro', 'ritorno', 'salita', 'discesa', 'escursione', 'pausa', 'esplorazione', 'scoperta', 'tramonto', 'alba', 'mattina', 'mattinata', 'pomeriggio', 'sera', 'serata', 'degustazione', 'shopping', 'ultimo', 'ultima', 'primo', 'prima', 'breve', 'libero', 'tempo', 'relax', 'walk', 'visit', 'stroll', 'lunch', 'dinner', 'breakfast', 'sunset', 'morning', 'afternoon', 'evening', 'free', 'time', 'excursion', 'hike', 'trekking', 'centro', 'storico', 'storica', 'grande', 'grand', 'great']);
+const PAROLE_NON_PROPRIE = new Set(['alla', 'alle', 'allo', 'agli', 'nella', 'nelle', 'nello', 'negli', 'sulla', 'sulle', 'sul', 'sui', 'dal', 'dalla', 'dalle', 'dagli', 'verso', 'tra', 'fra', 'dell', 'nell', 'all', 'sull', 'dall', 'une', 'des', 'les', 'los', 'las', 'der', 'die', 'das', 'und', 'von', 'from', 'with', 'into', 'passeggiata', 'passeggiate', 'sosta', 'partenza', 'arrivo', 'rientro', 'ritorno', 'salita', 'discesa', 'escursione', 'pausa', 'esplorazione', 'scoperta', 'tramonto', 'alba', 'mattina', 'mattinata', 'pomeriggio', 'sera', 'serata', 'degustazione', 'shopping', 'ultimo', 'ultima', 'primo', 'prima', 'breve', 'libero', 'tempo', 'relax', 'walk', 'visit', 'stroll', 'lunch', 'dinner', 'breakfast', 'sunset', 'morning', 'afternoon', 'evening', 'free', 'time', 'excursion', 'hike', 'trekking', 'centro', 'storico', 'storica', 'grande', 'grand', 'great', 'parrocchiale', 'parish', 'parroquia', 'paroisse', 'pfarrkirche', 'parrocca', 'tal', 'tad', 'tas', 'tat', 'taz',
+  // (18/11/2026, collaudo Malta) «Palazzo Falson Historic House Museum» = «Palazzo Falson»: etichette da depliant.
+  'historic', 'historical', 'house', 'heritage', 'storica', 'dimora']);
 /** Le parole della citta', con i suoi altri nomi (CITTA_SINONIMI: «Lisbona» vale anche «Lisboa» e «Lisbon»): la
  *  citta' nel nome di un luogo non prova niente («Sé de Lisboa» finiva su un locale «Lisboa Tu e Eu»). */
 function paroleCitta(citta: any): Set<string> {
@@ -2144,7 +2422,7 @@ function paroleCitta(citta: any): Set<string> {
 }
 function tipiLuogo(s: any): Set<string> {
   const out = new Set<string>();
-  for (const w of String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/)) for (const g of (TIPI_LUOGO[w] || [])) out.add(g);
+  for (const w of pianaLettere(s).replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/)) for (const g of (TIPI_LUOGO[w] || [])) out.add(g);
   return out;
 }
 function paroleProprie(s: any, citta: Set<string>): string[] {
@@ -2174,6 +2452,170 @@ function nomiStessoLuogo(nomeTappa: any, nomeDb: any, citta?: any): boolean {
   // cappella), «TRICKD Surfers Paradise» / il centro commerciale, «Creole Kitchen» / «Toula's Creole Kitchen».
   // Si perde qualche aggancio giusto («Dubai Gold Souk» / «Deira Gold Souk»): la tappa diventa un pin nuovo, come prima.
   return S.size === L.size;
+}
+
+// ── NOMI DELLO STESSO LUOGO IN DUE LINGUE (18/11/2026, Malta) ───────────────
+// «Chiesa Parrocchiale di Nostra Signora del Monte Carmelo» è in archivio come «Our Lady of Mount Carmel» (560 m più in
+// là): nessuna parola in comune, l'aggancio non la trovava e nasceva un gemello `iti-` senza testo né foto. Qui le
+// parole proprie più comuni nei nomi di luogo (dediche, titoli, santi) si riducono a una forma sola, poi si confrontano
+// come in nomiStessoLuogo: STESSE parole proprie, tipi non in contraddizione. Elenco corto e prudente: una parola che
+// non è qui resta com'è, e allora deve essere identica.
+const TRADUZIONI_NOMI: string[][] = [
+  ['nostra', 'our', 'notre', 'nuestra', 'nossa', 'unsere', 'unserer', 'unserer', 'madonna', 'sidtna'],
+  ['signora', 'lady', 'dame', 'senora', 'senhora', 'frau'],
+  ['monte', 'mount', 'mont', 'mons'],
+  ['carmelo', 'carmel', 'carmen', 'karmnu', 'carmo', 'karmel'],
+  ['santo', 'san', 'santa', 'saint', 'sainte', 'sankt', 'sao', 'santi', 'santissimo', 'santissima', 'sant', 'st', 'ste', 'sto'],
+  // (18/11/2026 sera, collaudo Malta: «Torre di San Giorgio (Torri ta' San Ġorġ)» / «St George's Tower» wd-Q20051371)
+  ['giuliano', 'julian', 'julien', 'juliano', 'giljan', 'julianus'],
+  ['giovanni', 'john', 'jean', 'juan', 'johannes', 'joao', 'gwann'],
+  ['pietro', 'peter', 'pierre', 'pedro', 'petrus', 'pietru'],
+  ['paolo', 'paul', 'pablo', 'paulo', 'pawl'],
+  ['giorgio', 'george', 'georges', 'jorge', 'georg', 'gorg', 'giorgos', 'georgios', 'jordi'],
+  ['maria', 'mary', 'marie', 'marija'],
+  ['francesco', 'francis', 'francois', 'francisco', 'franziskus', 'frangisk'],
+  ['lorenzo', 'lawrence', 'laurent', 'lorenz', 'lawrenz'],
+  ['nicola', 'nicholas', 'nicolas', 'nikolaus', 'nikola'],
+  ['caterina', 'catherine', 'catalina', 'katharina', 'katerina'],
+  ['andrea', 'andrew', 'andre', 'andres', 'andreas'],
+  ['michele', 'michael', 'michel', 'miguel', 'mikiel'],
+  ['antonio', 'anthony', 'antoine', 'anton', 'antnin'],
+  ['agostino', 'augustine', 'augustin', 'agustin', 'wistin'],
+  ['domenico', 'dominic', 'dominique', 'domingo', 'duminku'],
+  ['stefano', 'stephen', 'etienne', 'esteban', 'stephan'],
+  ['giuseppe', 'joseph', 'jose', 'guzeppi'],
+  ['assunzione', 'assumption', 'asuncion', 'assomption'],
+  ['annunziata', 'annunciation', 'annonciation', 'anunciacion'],
+  ['immacolata', 'immaculate', 'inmaculada'],
+  ['vittoria', 'victory', 'victoire', 'victoria', 'vitorja'],
+  ['grazie', 'graces', 'gracia', 'grazzja'],
+  ['cuore', 'heart', 'coeur', 'corazon', 'qalb'],
+  ['vecchio', 'old', 'vieux', 'viejo'],
+  ['nuovo', 'new', 'neuf', 'nuevo'],
+  // (23/11/2026, collaudo notturno: «Museo della Seconda Guerra Mondiale» = «National World War II Museum» /
+  // «Museo Nacional de la Segunda Guerra Mundial», New Orleans; «Giardini Botanici dell'UBC» = «UBC Botanical Garden»)
+  ['seconda', 'second', 'segunda', 'seconde', 'zweite', 'zweiten', 'ii'],
+  ['guerra', 'war', 'guerre', 'krieg'],
+  ['mondiale', 'world', 'mundial', 'mondial', 'welt'],
+  ['botanico', 'botanici', 'botanica', 'botaniche', 'botanical', 'botanic', 'botanique', 'botanischer', 'botanicos'],
+  ['illusioni', 'illusione', 'illusion', 'illusions', 'ilusion', 'ilusiones'],
+];
+const CANONE_NOME: Record<string, string> = {};
+for (const g of TRADUZIONI_NOMI) for (const w of g) CANONE_NOME[w] = g[0];
+// «St. Julians» (genitivo senza apostrofo) = «julian»: una «s» finale non cambia il santo.
+const canoneParola = (w: string) => CANONE_NOME[w] || (w.length > 4 && w.endsWith('s') ? CANONE_NOME[w.slice(0, -1)] : '') || w;
+function nomiStessoLuogoTradotti(nomeTappa: any, nomeDb: any, citta?: any): boolean {
+  // (18/11/2026, collaudo Malta) «Parish Church of Our Lady of Pompei, Marsaxlokk»: la località dopo l'ultima virgola
+  // (o fra parentesi) non è una parola del nome — si prova il nome intero e quello senza.
+  const varianti = (s: any) => {
+    const n = String(s || '').trim();
+    const senza = n.replace(/\s*\([^()]*\)\s*$/, '').replace(/,\s*[^,]{2,40}$/, '').trim();
+    return senza && senza !== n && paroleNome(senza).length ? [n, senza] : [n];
+  };
+  for (const a of varianti(nomeTappa)) for (const b of varianti(nomeDb)) if (nomiTradottiUno(a, b, citta)) return true;
+  return false;
+}
+function nomiTradottiUno(nomeTappa: any, nomeDb: any, citta?: any): boolean {
+  const C = paroleCitta(citta);
+  const Tt = tipiLuogo(nomeTappa), Td = tipiLuogo(nomeDb);
+  if (Tt.size && Td.size && ![...Tt].some((g) => Td.has(g))) return false;
+  for (const g of Td) if (g !== 'locale' && !Tt.has(g)) return false;
+  // Qui «san/santa/sant» contano (in paroleNome sono parole vuote): «San Giorgio» e «St George» devono combaciare
+  // per intero, non solo su «giorgio».
+  // Le parole della città si confrontano anche TRADOTTE (St. Julian's = San Giljan = San Giuliano).
+  const Ccanone = new Set([...C].map(canoneParola));
+  const proprie = (s: any, togliCitta = true) => {
+    const P = new Set(pianaLettere(s).replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/)
+      // «St» (2 lettere) conta: è «San/Saint» — «St George's Tower» = «Torre di San Giorgio».
+      .filter((w) => w && (w.length > 2 || /^\d+$/.test(w) || w === 'st') && !TIPI_LUOGO[w] && !PAROLE_NON_PROPRIE.has(w)
+        && !/^(del|della|delle|dei|degli|di|da|the|and|con|per|des|les|los|las|del|der|die|das)$/.test(w))
+      .map(canoneParola)
+      .filter((w) => !togliCitta || !Ccanone.has(w)));
+    // «Nostra Signora» = «Our Lady» = «Madonna» = «Notre-Dame»: una dedica sola, non due parole.
+    if (P.has('nostra')) P.delete('signora');
+    return P;
+  };
+  const soloTitoli = (P: Set<string>) => ![...P].some((w) => !['nostra', 'signora', 'santo', 'vecchio', 'nuovo'].includes(w));
+  let A = proprie(nomeTappa), B = proprie(nomeDb);
+  // (18/11/2026, collaudo Malta: «St. Julian's Parish Church» / «Parrocca San Giljan» a St. Julian's) Se tolta la città
+  // restano solo titoli, il santo della città È il nome: si confronta senza toglierla.
+  if (soloTitoli(A) || soloTitoli(B)) { A = proprie(nomeTappa, false); B = proprie(nomeDb, false); }
+  if (!A.size || !B.size || A.size !== B.size) return false;
+  for (const w of A) if (!B.has(w)) return false;
+  // Almeno una parola che non sia solo un titolo («nostra signora» da sola non basta a dire QUALE).
+  return [...A].some((w) => !['nostra', 'signora', 'santo', 'vecchio', 'nuovo'].includes(w));
+}
+/** Le forme da cercare con `ilike` per una parola che ha traduzioni (tutte, ≥ 4 lettere). */
+function formeTradotteParola(w: string): string[] {
+  const c = CANONE_NOME[w];
+  if (!c) return [];
+  const g = TRADUZIONI_NOMI.find((x) => x[0] === c) || [];
+  return [...new Set(g.filter((x) => x.length >= 4))];
+}
+// ── TAPPA CULTURALE CONFERMATA SEMPRE AGGANCIATA (23/11/2026, collaudo notturno 22→23/11: «non_agganciata», 38 casi
+// gravi in 17 città) ── Tappe «verificate» ma senza poi_id: «Museo delle Illusioni Montréal» (in archivio «Museum of
+// Illusions Montréal» / «Musée de l'Illusion Montréal»: la ricerca *illusioni* non trova «Illusion»), «Giardini Botanici
+// dell'UBC» («UBC Botanical Garden»), «Museo della Seconda Guerra Mondiale» (New Orleans: riga con QID Q1477833 ma id
+// non `wd-`, e nessuna etichetta italiana su Wikidata), «Rue Saint-Jean» (riga `via-` di categoria shopping, scartata
+// perché la tappa non era «shopping»), «Mercato di San Pedro» (riga a 140 m: aggancio «dubbio», il giudice ha detto no).
+// Le regole qui sotto: nome con le stesse RADICI (prime 5 lettere) delle parole proprie; etichette Wikidata vicine in più
+// lingue con le parole tradotte; una via si aggancia alla riga della via; un luogo esteso non è dubbio entro 300 m.
+/** Stesso luogo per RADICE: tipi non in contraddizione (come nomiStessoLuogo), stesse parole proprie una a una, uguali
+ *  o tradotte (canoneParola) o con le stesse prime 5 lettere («illusioni»/«illusions», «botanici»/«botanical»); almeno una
+ *  parola di 5 lettere o più. Serve quando la ricerca per nome non trova nulla. Pura: la prova il banco. */
+function nomiStessoLuogoRadice(nomeTappa: any, nomeDb: any, citta?: any): boolean {
+  const C = paroleCitta(citta);
+  const Tt = tipiLuogo(nomeTappa), Td = tipiLuogo(nomeDb);
+  if (Tt.size && Td.size && ![...Tt].some((g) => Td.has(g))) return false;
+  for (const g of Td) if (g !== 'locale' && !Tt.has(g)) return false;
+  const proprie = (s: any) => [...new Set(paroleProprie(s, C).map(canoneParola))];
+  const A = proprie(nomeTappa), B = proprie(nomeDb);
+  if (!A.length || A.length !== B.length || !A.some((w) => w.length >= 5)) return false;
+  const rad = (w: string) => w.slice(0, 5);
+  const prese = new Set<number>();
+  for (const w of A) {
+    const k = B.findIndex((x, j) => !prese.has(j) && (x === w || (w.length >= 5 && x.length >= 5 && rad(x) === rad(w))));
+    if (k < 0) return false;
+    prese.add(k);
+  }
+  return true;
+}
+/** La radice da cercare con `ilike` quando la parola intera non trova nulla: le prime 6 lettere di una parola di 7 o più
+ *  («illusioni» → «illusi», «botanici» → «botani»). '' se la parola è corta. Pura. */
+function radiceRicerca(w: any): string {
+  const s = pianaLettere(w).replace(/[^a-z0-9]/g, '');
+  return s.length >= 7 ? s.slice(0, 6) : '';
+}
+// Parole che dicono l'ISTITUZIONE, non il luogo: «National World War II Museum» = «Museo della Seconda Guerra Mondiale».
+const PAROLE_ISTITUZIONE = new Set(['nazionale', 'nazionali', 'national', 'nacional', 'nationale', 'nationaal', 'narodowe', 'nazional']);
+/** Un'etichetta Wikidata di una riga VICINA (entro 500 m) è lo stesso luogo della tappa? Parole proprie tradotte
+ *  (canoneParola, anche «II» = «seconda»), senza città, tipi e parole d'istituzione («nazionale/national»): stesse parole,
+ *  una a una, anche per radice. Pura. */
+function etichettaVicinaStessoLuogo(nome: any, etichetta: any, citta?: any): boolean {
+  const C = new Set([...paroleCitta(citta)].map(canoneParola));
+  const Tt = tipiLuogo(nome), Te = tipiLuogo(etichetta);
+  if (Tt.size && Te.size && ![...Tt].some((g) => Te.has(g))) return false;
+  const parole = (s: any) => [...new Set(pianaLettere(s).replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/)
+    .filter((w) => w && (w.length > 2 || w === 'ii') && !TIPI_LUOGO[w] && !PAROLE_NON_PROPRIE.has(w) && !PAROLE_VUOTE_NOMI.has(w)
+      && !/^(del|della|delle|dei|degli|di|da|the|and|con|per|des|les|los|las|der|die|das|dell|nel|nella)$/.test(w))
+    .map(canoneParola).filter((w) => !C.has(w) && !PAROLE_ISTITUZIONE.has(w)))];
+  const A = parole(nome), B = parole(etichetta);
+  if (!A.length || A.length !== B.length || !A.some((w) => w.length >= 5)) return false;
+  const prese = new Set<number>();
+  for (const w of A) {
+    const k = B.findIndex((x, j) => !prese.has(j) && (x === w || (w.length >= 5 && x.length >= 5 && x.slice(0, 5) === w.slice(0, 5))));
+    if (k < 0) return false;
+    prese.add(k);
+  }
+  return true;
+}
+/** Una tappa che È una via o una strada (tipo o nome): si aggancia alla riga della via anche se l'archivio la tiene fra
+ *  lo shopping (`via-…`, categoria shopping: «Rue Saint-Jean» a Québec). Pura. */
+function tappaEVia(tipo: any, nome: any): boolean {
+  return /^(strada|via|viale|corso|street|rue|calle|avenue|boulevard|passeggiata|promenade|lungomare)\b/i.test(String(tipo || '').trim()) || tipiLuogo(nome).has('via');
+}
+function rigaViaPerTappaVia(tipo: any, nome: any, riga: any): boolean {
+  return tappaEVia(tipo, nome) && tipiLuogo(riga?.name).has('via') && /^(shopping|street|via|road|pedestrian|strada)$/i.test(String(riga?.category || ''));
 }
 // ── fine NOMI DELLO STESSO LUOGO ────────────────────────────────────────────
 
@@ -2269,7 +2711,248 @@ function orariCopronoPasto(orariOsm: string, tipo: string): boolean | null {
 // `opzioni.rigoroso` (21/09/2026) = libreria: il candidato deve passare anche nomiStessoLuogo (col nome della citta'
 // in `opzioni.citta`) e la ricerca parte dalla parola PROPRIA piu' lunga, non dalla prima («Passeggiata sul Ponte
 // Vecchio» cercava «passeggiata»). Senza opzioni il comportamento e' quello di sempre (generazione al momento).
-async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number; lon: number } | null, destination?: string, cancelToken?: { cancelled: boolean }, opzioni?: { rigoroso?: boolean; citta?: string }): Promise<{ agganciate: number; pasti_fuori_orario: number }> {
+// ── Regole dell'aggancio estratte per il collaudo offline (18/11/2026, collaudo Malta) ──────────────────────────
+// Parole che non distinguono un luogo nella ricerca per nome: vanno in coda, dopo le parole proprie e prima delle
+// parole di tipo. «The Point Shopping Mall» cercava *shopping*, «Palazzo Falson Historic House Museum» *historic*,
+// «Chiesa di Nostra Signora di Pompei» *signora*.
+const GENERICA_RICERCA = /^(shopping|complex|complesso|centre|center|centro|commerciale|plaza|outlet|area|zona|historic|historical|house|heritage|dimora|storica|nostra|signora|madonna|notre|nuestra|lady|saint|sant|santissima|santissimo|parish|parrocchiale|parrocca|vecchia|vecchio|citta|borgo|old|town|city|ville|ciudad|stadt)$/;
+function ordinaParoleRicerca(distintiveTutte: string[]): string[] {
+  return distintiveTutte.filter((w) => !TIPI_LUOGO[w] && !GENERICA_RICERCA.test(w))
+    .concat(distintiveTutte.filter((w) => !TIPI_LUOGO[w] && GENERICA_RICERCA.test(w)), distintiveTutte.filter((w) => !!TIPI_LUOGO[w]));
+}
+/** Una riga che È una città o una località non è mai la tappa, a meno che la tappa sia proprio quel luogo (stesso
+ *  nome). «Craft Village Malta (Ta' Qali)» finiva su `loc-Q1042361` «Ta' Qali» (localita). Vale anche per i borghi gemma. */
+function rigaCittaPerTappa(riga: any, nomeTappa: any, tipoTappa: any = ''): boolean {
+  const nr = normTesto(riga?.name);
+  // «X (Paese)» (wiki-365554 «San Giuliano (Malta)», csv/monumenti) è la voce enciclopedica di una CITTÀ: lo stesso nome
+  // non basta a farne la tappa, a meno che la tappa sia una città o un borgo (debug dal vivo Malta, 18/11/2026).
+  const conPaese = PAESI_NOMI.has(normTesto(String(riga?.name || '').match(/\(([^()]{3,40})\)\s*$/)?.[1] || ''));
+  const tappaCitta = /borgo|citt|villag|paese|localit|town|city|village|quartier|district/i.test(String(tipoTappa || ''));
+  if (conPaese && !tappaCitta) return true;
+  // Stesso nome della tappa (anche solo la parte prima di « - », «Mdina - Città Vecchia»), o la tappa È una città o un
+  // borgo con quel nome: la riga va bene.
+  const nt = String(nomeLuogoDaTappa(nomeTappa) || '');
+  // La parte prima di « - » conta solo se la tappa È una città o un borgo: «Mdina - Porta di Mdina» è la porta.
+  const forme = [nt, tappaCitta ? nt.replace(/\s+[-–—]\s+.*$/, '') : '', nt.replace(/\s*\([^()]*\)\s*$/, '')].map((x) => normTesto(x)).filter(Boolean);
+  if (nr && forme.includes(nr)) return false;
+  return /^loc-/i.test(String(riga?.id || '')) || /^localit[aà]$/i.test(String(riga?.category || '')) || eEntitaAmministrativa({ ...riga, is_gem: false });
+}
+// Nomi dei paesi del mondo (it, en, fr, es, de, mt e lingua locale) per riconoscere «X (Paese)» (18/11/2026).
+const PAESI_NOMI: Set<string> = (() => {
+  const out = new Set<string>();
+  try {
+    const lingue = ['it', 'en', 'fr', 'es', 'de', 'mt', 'pt', 'nl'];
+    const dn = lingue.map((l) => { try { return new (Intl as any).DisplayNames([l], { type: 'region' }); } catch { return null; } }).filter(Boolean);
+    const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    for (const a of A) for (const b of A) {
+      const cod = a + b;
+      for (const d of dn) { try { const n = d.of(cod); if (n && n !== cod) out.add(String(n).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '')); } catch { /* codice inesistente */ } }
+    }
+  } catch { /* Intl senza DisplayNames: insieme vuoto, la regola non scatta */ }
+  return out;
+})();
+/** Una riga fatta di UN solo nome proprio senza tipo («Mdina»), contenuto in una tappa che ha altre parole proprie
+ *  («Mura di Mdina e belvedere»), è il nome del posto, non la tappa. Con la tappa che non ha altro («Palazzo Falson
+ *  Historic House Museum» / «Palazzo Falson», «The Point Shopping Mall» / «The Point») resta agganciabile. */
+/** (18/11/2026, collaudo New York) Righe che non sono MAI il luogo da visitare: le righe cinema «Qui hanno girato»
+ *  (`cine-…`, `cinema-…`, categoria cinema: il Met finiva su `cine-Q160236`, 42 caratteri; «Magnolia Bakery (Upper
+ *  West Side)» sul quartiere) e le estensioni di vincolo NRHP («Grand Central Terminal (Boundary Increase: Park Avenue
+ *  Viaduct)»), a meno che la tappa lo dica. Se c'è solo la riga cinema, niente aggancio: il POI vero lo trova o crea la cron. */
+function rigaNonLuogoDaVisitare(riga: any, nomeTappa: any): boolean {
+  if (/^(cine-|cinema-)/i.test(String(riga?.id || '')) || /^(cinema|film|film_location|location_film)$/i.test(String(riga?.category || ''))) return true;
+  if (/boundary (increase|decrease)|\(boundary\b/i.test(String(riga?.name || '')) && !/boundary/i.test(String(nomeTappa || ''))) return true;
+  return false;
+}
+/** (18/11/2026, collaudo New York) «Statua della Libertà e Ellis Island»: un nome «A e B» si prova anche sulle parti,
+ *  quando ognuna ha almeno due parole (così «Santi Giovanni e Paolo» o «Pane e Vino» non si spezzano). */
+/** (18/11/2026, collaudo New York: «MoMA Design Store» agganciato alla riga del museo) Una tappa NEGOZIO o di shopping
+ *  non si aggancia mai a una riga che non è un negozio, un mercato o un centro commerciale: il tipo si contraddice
+ *  (museo ↔ negozio). Resta senza aggancio, o va sul negozio se c'è. */
+function negozioSuRigaNonNegozio(tipoTappa: any, nomeTappa: any, riga: any): boolean {
+  const NEGOZIO = /shopping|\bshop\b|store|negozi|bookshop|gift|boutique|outlet|\bmall\b|centro commerciale|mercat|market|bazaar|souk|emporio|libreria/i;
+  if (!NEGOZIO.test(`${tipoTappa || ''} ${nomeTappa || ''}`)) return false;
+  // Stesso nome = stesso luogo anche se è un monumento: «Galleria Vittorio Emanuele II» (tipo shopping) è la Galleria.
+  if (normTesto(riga?.name) === normTesto(nomeLuogoDaTappa(nomeTappa)) || nomiStessoLuogo(nomeTappa, riga?.name)) return false;
+  return !NEGOZIO.test(`${riga?.category || ''} ${riga?.name || ''}`) && !/^(marketplace|commercial|retail|department_store|supermarket)$/i.test(String(riga?.category || ''));
+}
+function partiNomeComposto(nome: any): string[] {
+  const n = String(nome || '').replace(/\s*\([^()]*\)\s*$/, '').trim();
+  const pezzi = n.split(/\s+(?:e|ed|and|&|y|et|und)\s+/i).map((x) => x.trim()).filter(Boolean);
+  if (pezzi.length !== 2) return [];
+  if (!pezzi.every((p) => p.split(/\s+/).length >= 2 && paroleProprie(p, new Set()).length >= 1)) return [];
+  return pezzi;
+}
+/** (18/11/2026, debug dal vivo Malta) Una riga Overture vale come aggancio solo per un luogo NON commerciale (spiaggia,
+ *  baia, parco, porto, chiesa…) con lo stesso nome della tappa: stesse parole proprie, anche tradotte. «Silema Bay &
+ *  Spinola Bay» non è «Spinola Bay» (una parola propria in più). */
+const CATEGORIE_OVERTURE_LUOGO = /^(beach|bay|park|garden|gardens|marina|harbor|harbour|port|viewpoint|square|plaza|nature_reserve|natural|cave|island|cliff|peak|mountain|lake|river|waterfall|monument|memorial|church|cathedral|chapel|basilica|temple|castle|fort|fortress|tower|museum|archaeological_site|ruins|historic|historic_site|landmark|attraction|bridge|lighthouse|palace|gate|city_wall|promenade|botanical_garden)$/i;
+function overtureLuogoStessoNome(riga: any, nomeTappa: any, destination: any): boolean {
+  if (!CATEGORIE_OVERTURE_LUOGO.test(String(riga?.category || ''))) return false;
+  return normTesto(riga?.name) === normTesto(nomeLuogoDaTappa(nomeTappa)) || nomiStessoLuogo(nomeTappa, riga?.name, destination) || nomiStessoLuogoTradotti(nomeTappa, riga?.name, destination)
+    // (23/11/2026) anche per radice: «Giardini Botanici dell'UBC» / «UBC Botanical Garden» (botanical_garden)
+    || nomiStessoLuogoRadice(nomeTappa, riga?.name, destination);
+}
+/** QID candidati per il nome di una tappa, LINGUA-INDIPENDENTE (18/11/2026, committente: «si può ricercare anche nella
+ *  lingua originale?»): etichette e alias Wikidata in italiano, inglese e nella lingua dell'utente (`wbsearchentities`,
+ *  5 per lingua), più la ricerca a testo pieno di Wikidata (`list=search`, che legge etichette e alias in tutte le lingue:
+ *  «Chiesa del Salvatore sul Sangue Versato» → Q215208 «Храм Спаса на Крови»). Al massimo 12 QID, tre chiamate in
+ *  parallelo da 6 s, cache 30 giorni in api_cache (`wdnome_<md5>`). `fonte`: 'etichetta' o 'testo'. */
+async function qidsPerNomeTappa(nome: string, lingua = 'it'): Promise<Array<{ qid: string; fonte: string }>> {
+  const n = String(nome || '').replace(/\s*\(.*?\)\s*$/, '').trim();
+  if (n.length < 3) return [];
+  const chiave = `wdnome_${crypto.createHash('md5').update(`${normTesto(n)}|${lingua}`).digest('hex')}`;
+  try { const c = await leggiCacheFresca(chiave, 30 * 24 * 3600 * 1000); if (c) { const v = JSON.parse(c); if (Array.isArray(v?.qids)) return v.qids; } } catch { /* si ricalcola */ }
+  const UA = { 'User-Agent': 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)' };
+  const lingue = [...new Set(['it', 'en', String(lingua || 'it').toLowerCase().slice(0, 2)])];
+  const out: Array<{ qid: string; fonte: string }> = [];
+  const aggiungi = (q: any, fonte: string) => { if (/^Q\d+$/.test(String(q || '')) && !out.some((x) => x.qid === q) && out.length < 12) out.push({ qid: String(q), fonte }); };
+  let fallite = 0;
+  const [etichette, testo] = await Promise.all([
+    Promise.all(lingue.map((lg) => axios.get(`https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(n)}&language=${lg}&uselang=${lg}&type=item&limit=5&format=json`, { headers: UA, timeout: 6000 }).catch(() => { fallite++; return null; }))),
+    axios.get(`https://www.wikidata.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(n)}&srlimit=5&srnamespace=0&format=json`, { headers: UA, timeout: 6000 }).catch(() => { fallite++; return null; }),
+  ]);
+  for (const w of etichette) for (const x of (w?.data?.search || [])) aggiungi(x?.id, 'etichetta');
+  for (const x of (testo?.data?.query?.search || [])) aggiungi(x?.title, 'testo');
+  // Si ricorda solo una risposta completa (una chiamata caduta non diventa «nessun QID» per 30 giorni).
+  if (!fallite) { try { await salvaCacheDatata(chiave, 'wikidata_nome', { qids: out }); } catch { /* cache non scritta */ } }
+  return out;
+}
+function rigaSoloNomeDelPosto(nomeRiga: any, nomeTappa: any, destination: any): boolean {
+  const C0 = paroleCitta(destination);
+  const pr = paroleProprie(nomeRiga, C0), pt = paroleProprie(nomeLuogoDaTappa(nomeTappa), C0);
+  return pr.length === 1 && !tipiLuogo(nomeRiga).size && pt.includes(pr[0]) && pt.some((w) => w !== pr[0]);
+}
+// ── TIPO DELLA TAPPA E DELLA RIGA (18/11/2026: estratte dall'aggancio, le usa anche il controllo qualità) ─────────
+/** Il `tipo` dichiarato dal modello dice un luogo CULTURALE (museo, chiesa, monumento, piazza, parco…). */
+const RE_TIPO_CULTURALE = /muse|galler|chies|basilic|cattedral|duomo|santuar|abbazi|monaster|convent|cappell|tempi|moschea|sinagog|monument|castell|fort|rocca|palazz|torr|teatr|archeolog|rovin|storic|piazz|ponte|villa|parco|giardin|panoram|belvedere|church|museum|cathedral|castle|palace/i;
+function eTipoCulturale(tipo: any): boolean { return RE_TIPO_CULTURALE.test(String(tipo || '')); }
+/** Una riga di gusto, enogastronomia o locali (Malta: «La Crema Balluta», tipo chiesa, su `osm-eno-node-…`, una gelateria). */
+function eRigaDiGusto(riga: any): boolean {
+  return /^(osm-eno-|gusto-|eno-|loc-eno)/i.test(String(riga?.id || ''))
+    || /enogastronom|gusto|^locali$|ristor|restaurant|^bar$|^cafe|^caf[eé]$|food|cantin|winery|bottega|bakery|forno|pasticc|gelat|^shop$|^negozi/i.test(String(riga?.category || ''));
+}
+const RE_TAPPA_SHOPPING = /shopping|mall|centro commerciale|negoz|boutique|outlet|acquist|mercat|market/i;
+/** Parole in comune / parole in tutto (paroleNome), la misura con cui l'aggancio decide se riscrivere il titolo. */
+function jaccardNomi(a: any, b: any): number {
+  const A = new Set(paroleNome(a)), B = new Set(paroleNome(b));
+  let comuni = 0; for (const x of A) if (B.has(x)) comuni++;
+  return comuni / Math.max(1, new Set([...A, ...B]).size);
+}
+
+// ══ GIUDICE DELL'AGGANCIO NEI CASI DUBBI (18/11/2026, ordine del committente: «questi errori non devono mai più
+// succedere per nessun itinerario e/o guida») ═══════════════════════════════════════════════════════════════════════
+// Le regole deterministiche dell'aggancio prendono i casi noti; restano quelli in cui i nomi sono diversi (un'altra
+// lingua, un nome lungo contro uno corto) o la riga è lontana dal punto del modello. Lì UNA domanda sì/no a un motore
+// che non scrive (chiamaRevisore: Groq gpt-oss-120b → GLM via Gonka, mai DeepSeek), fino a 15 coppie per chiamata, con
+// un tetto di tempo. Senza risposta resta l'aggancio deterministico e l'esito dice `non_eseguito`: mai in silenzio.
+/** Un aggancio è DUBBIO quando i nomi non coincidono (jaccard < 0,7, non lo stesso nome né lo stesso nome tradotto)
+ *  oppure quando, con nomi diversi nella forma, la riga sta a 100 m o più dal punto del modello. Nome identico = mai dubbio. */
+// (23/11/2026, collaudo Cusco: «Mercato di San Pedro» / «Mercado de San Pedro» a 140 m, giudicato «dubbio» e
+// rifiutato) Un luogo ESTESO (mercato, parco, giardino, piazza, via, spiaggia, lago, porto…) con lo stesso nome (anche
+// tradotto) non è dubbio fino a 300 m: il suo punto e quello del modello cadono spesso in due angoli diversi.
+const RE_LUOGO_ESTESO = /mercat|market|mercado|march[eé]|parc|park|giardin|garden|jard[ií]n|piazz|plaza|square|platz|\bvia\b|strada|street|\brue\b|calle|spiagg|beach|playa|lago|lake|porto|harbou?r|marina|lungomare|promenade|quartiere|campus/i;
+const DUBBIO_ESTESO_M = 300;
+function aggancioDubbio(nomeTappa: any, nomeRiga: any, distM: number, destination?: any, tipo?: any): boolean {
+  const a = String(nomeTappa || '').replace(/\s*\([^()]*\)\s*$/, '').trim(), b = String(nomeRiga || '').replace(/\s*\([^()]*\)\s*$/, '').trim();
+  if (!a || !b || normTesto(a) === normTesto(b)) return false;
+  const stessoNome = nomiStessoLuogo(a, b, destination) || nomiStessoLuogoTradotti(a, b, destination);
+  if (jaccardNomi(a, b) < 0.7 && !stessoNome) return true;
+  const soglia = stessoNome && RE_LUOGO_ESTESO.test(`${tipo || ''} ${a}`) ? DUBBIO_ESTESO_M : 100;
+  return Number.isFinite(distM) && distM >= soglia;
+}
+/** La domanda al giudice: una riga per coppia, risposta solo JSON. */
+function domandaGiudice(coppie: Array<{ tappa: string; tipo?: string; citta?: string; riga: string; categoria?: string; dist?: number; qid?: string }>): any[] {
+  const righe = coppie.map((c, i) => `${i + 1}. La tappa "${String(c.tappa).slice(0, 120)}" (${c.tipo || 'luogo'}, ${c.citta || '?'}) e la riga "${String(c.riga).slice(0, 120)}" (${c.categoria || '?'}, a ${Math.round(Number(c.dist) || 0)} m${c.qid ? `, QID ${c.qid}` : ''}) sono lo STESSO luogo?`).join('\n');
+  return [
+    { role: 'system', content: 'Sei un controllore di luoghi per guide di viaggio. Rispondi solo con JSON.' },
+    { role: 'user', content: `Per ogni coppia dimmi se la tappa di un itinerario e la riga del database sono lo STESSO luogo fisico (stesso edificio, monumento, sito, parco o locale). NON sono lo stesso luogo: una parte o un luogo accanto, un omonimo, la città, il quartiere o la località che lo contiene, un negozio, un bar o una colonnina dentro o vicino al luogo, un film o un fatto avvenuto lì, un ponte o una piazza che porta il nome del museo. Se la tappa è un negozio, un bookshop, un design store, un caffè o un ristorante e la riga è un museo, un monumento o una piazza (o il contrario), la risposta è false anche se il nome è quasi uguale: conta il TIPO tra parentesi. Nomi in lingue diverse POSSONO essere lo stesso luogo. Se non lo sai, rispondi null.\n\n${righe}\n\nRispondi solo JSON: {"risposte":[{"n":1,"stesso":true}]} con "stesso" true, false o null.` },
+  ];
+}
+/** Legge la risposta del giudice: un verdetto per coppia (true / false / null = non risposto). */
+function leggiRispostaGiudice(raw: any, n: number): Array<boolean | null> {
+  const out: Array<boolean | null> = Array.from({ length: n }, () => null);
+  const s = String(raw || '');
+  let lette = false;
+  try {
+    const j = JSON.parse(s.slice(s.indexOf('{'), s.lastIndexOf('}') + 1));
+    const elenco = Array.isArray(j?.risposte) ? j.risposte : Array.isArray(j) ? j : [];
+    for (const v of elenco) { const k = Number(v?.n) - 1; if (k >= 0 && k < n && typeof v?.stesso === 'boolean') { out[k] = v.stesso; lette = true; } }
+    if (!lette && n === 1 && typeof j?.stesso === 'boolean') out[0] = j.stesso;
+  } catch {
+    for (const m of s.matchAll(/"n"\s*:\s*(\d+)[^{}]*?"stesso"\s*:\s*(true|false)/g)) { const k = Number(m[1]) - 1; if (k >= 0 && k < n) out[k] = m[2] === 'true'; }
+  }
+  return out;
+}
+/** Chiede al giudice un elenco di coppie (lotti da 15, in parallelo, tetto di tempo). */
+async function giudicaCoppieAggancio(coppie: any[], opz: { userId?: any; tettoMs?: number } = {}): Promise<{ verdetti: Array<boolean | null>; esito: string; motore?: string; chiamate: number; ms: number }> {
+  const t0 = Date.now();
+  const verdetti: Array<boolean | null> = coppie.map(() => null);
+  if (!coppie.length) return { verdetti, esito: 'nessun_dubbio', chiamate: 0, ms: 0 };
+  const scadenza = t0 + Math.max(3000, Number(opz.tettoMs) || 20000);
+  const sbUrl = process.env.VITE_SUPABASE_URL || '', sbKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  const LOTTO = 15;
+  const lotti: any[][] = [];
+  for (let i = 0; i < coppie.length; i += LOTTO) lotti.push(coppie.slice(i, i + LOTTO));
+  let riusciti = 0, chiamate = 0;
+  let motore: string | undefined;
+  await Promise.all(lotti.slice(0, 4).map(async (lotto, li) => {
+    const resta = scadenza - Date.now();
+    if (resta < 2500) return;
+    chiamate++;
+    let timer: any;
+    try {
+      const r: any = await Promise.race([
+        chiamaRevisore(domandaGiudice(lotto), { temperature: 0, max_tokens: 1500, response_format: { type: 'json_object' }, groqOnTheFly: !!opz.userId && opz.userId !== 'background-script' }, 'giudice_aggancio', sbUrl, sbKey, getGroqClient(), opz.userId || 'background-script'),
+        new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('tetto')), resta); }),
+      ]);
+      const v = leggiRispostaGiudice(r?.data, lotto.length);
+      v.forEach((x, k) => { verdetti[li * LOTTO + k] = x; });
+      if (v.some((x) => x !== null)) riusciti++;
+      if (r?.motoreRevisore) motore = r.motoreRevisore;
+    } catch (e: any) { console.warn('[giudice aggancio] nessuna risposta:', String(e?.message || e).slice(0, 120)); }
+    finally { clearTimeout(timer); }
+  }));
+  const esito = riusciti === 0 ? 'non_eseguito' : riusciti < lotti.length || verdetti.some((x) => x === null) ? 'parziale' : 'ok';
+  return { verdetti, esito, motore, chiamate, ms: Date.now() - t0 };
+}
+/** Somma due esiti del giudice nell'itinerario (chiamato più volte: aggancio, verifica, controllo qualità). */
+function sommaEsitoGiudice(prima: any, ora: any): any {
+  if (!prima || prima.esito === 'nessun_dubbio') return ora;
+  if (!ora || ora.esito === 'nessun_dubbio') return prima;
+  const esito = prima.esito === 'ok' && ora.esito === 'ok' ? 'ok' : prima.esito === 'non_eseguito' && ora.esito === 'non_eseguito' ? 'non_eseguito' : 'parziale';
+  return { esito, coppie: (prima.coppie || 0) + (ora.coppie || 0), si: (prima.si || 0) + (ora.si || 0), no: (prima.no || 0) + (ora.no || 0), chiamate: (prima.chiamate || 0) + (ora.chiamate || 0), ms: (prima.ms || 0) + (ora.ms || 0), motore: ora.motore || prima.motore, ts: Date.now() };
+}
+/** Applica il verdetto «no» del giudice: la tappa torna com'era prima dell'aggancio e la riga non torna più. */
+function disfaAggancio(t: any, prima: any, idRiga: string): void {
+  for (const k of Object.keys(t)) delete t[k];
+  Object.assign(t, JSON.parse(JSON.stringify(prima || {})));
+  if (idRiga) t.agganci_rifiutati = [...new Set([...(Array.isArray(t.agganci_rifiutati) ? t.agganci_rifiutati : []), idRiga])].slice(-10);
+  t.aggancio_giudice = 'no';
+}
+/** Giudica gli agganci segnati DUBBI da agganciaTappeAlDatabase (`__giudizio` sulla tappa) e toglie sempre il segno.
+ *  Il verdetto va sulla tappa (`aggancio_giudice: 'si'|'no'`) e il conto in `itin.qualita.giudice`. */
+async function giudicaAgganciDubbi(itin: any, opz: { destination?: any; userId?: any; tettoMs?: number; nonChiedere?: boolean } = {}): Promise<any> {
+  const conDubbio = extractItineraryStops(itin).map((s) => s.ref).filter((t: any) => t && t.__giudizio);
+  if (!conDubbio.length) return { esito: 'nessun_dubbio', coppie: 0, si: 0, no: 0 };
+  const coppie = conDubbio.map((t: any) => ({
+    tappa: String(t.__giudizio.prima?.titolo_tappa || t.__giudizio.prima?.titolo || t.titolo_tappa || ''), tipo: String(t.tipo || ''), citta: String(opz.destination || ''),
+    riga: String(t.__giudizio.riga?.name || ''), categoria: String(t.__giudizio.riga?.category || ''), dist: Number(t.__giudizio.dist) || 0, qid: String(t.__giudizio.riga?.wikidata || ''),
+  }));
+  const g = opz.nonChiedere ? { verdetti: coppie.map(() => null), esito: 'non_eseguito', chiamate: 0, ms: 0 } as any : await giudicaCoppieAggancio(coppie, { userId: opz.userId, tettoMs: opz.tettoMs });
+  let si = 0, no = 0;
+  conDubbio.forEach((t: any, k: number) => {
+    const gz = t.__giudizio; delete t.__giudizio;
+    const v = g.verdetti[k];
+    if (v === false) { disfaAggancio(t, gz.prima, String(gz.riga?.id || '')); no++; }
+    else if (v === true) { t.aggancio_giudice = 'si'; si++; }
+  });
+  const out = { esito: g.esito, coppie: coppie.length, si, no, chiamate: g.chiamate, ms: g.ms, motore: g.motore, ts: Date.now() };
+  if (itin && typeof itin === 'object') itin.qualita = { ...(itin.qualita || {}), giudice: sommaEsitoGiudice(itin.qualita?.giudice, out) };
+  if (coppie.length) console.log(`[giudice aggancio] ${coppie.length} coppie dubbie: ${si} sì, ${no} no, esito ${g.esito} (${g.ms} ms)`);
+  return out;
+}
+
+async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number; lon: number } | null, destination?: string, cancelToken?: { cancelled: boolean }, opzioni?: { rigoroso?: boolean; citta?: string; giudice?: boolean }): Promise<{ agganciate: number; pasti_fuori_orario: number }> {
   const esito = { agganciate: 0, pasti_fuori_orario: 0 };
   if (!supabaseUrl || !supabaseServiceKey) return esito;
   const stops = extractItineraryStops(itineraryObj).slice(0, 80);
@@ -2288,6 +2971,12 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
         await unaTappa(s.ref, v);
         if (s.ref?.poi_id || cancelToken?.cancelled) break;
       }
+      // (18/11/2026, collaudo New York) «Statua della Libertà e Ellis Island»: si prova la PRIMA parte. Il titolo del
+      // modello resta (segno __perQid: niente rinomina col nome della sola parte).
+      if (!s.ref?.poi_id && !cancelToken?.cancelled && !TIPI_PASTO.test(String(s.ref?.tipo || ''))) {
+        const parti = partiNomeComposto(s.ref?.titolo_tappa || s.ref?.titolo);
+        if (parti.length) { s.ref.__perQid = true; await unaTappa(s.ref, parti[0]); if (s.ref) delete s.ref.__perQid; }
+      }
     }
   };
   async function unaTappa(t: any, nomeForzato?: string) {
@@ -2298,7 +2987,7 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
       // (20/10/2026, Torino) «Piazza Castello» è fatto SOLO di parole vuote («piazza», «castello»): paroleNome dava
       // [] e la tappa non veniva nemmeno cercata — restava «poco nota» con la gemma wd-Q3902175 a 30 m. Quando il
       // nome non ha parole proprie si usano tutte le sue parole, anche per la somiglianza.
-      const paroleTutte = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter((w) => w.length > 2);
+      const paroleTutte = (s: any) => pianaLettere(s).replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter((w) => w.length > 2);
       const soloVuote = paroleNome(nome).length === 0;
       if (soloVuote && paroleTutte(nome).length === 0) return;
       const somiglianza = (a: any, b: any): number => {
@@ -2338,24 +3027,66 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
       // (20/10/2026, Carrara) Anche per i PASTI si cerca la parola propria: «Pranzo a La Bottega del Lardo» chiedeva
       // la prima parola («pranzo»/«bottega») e non trovava mai il locale in locali_pois. Il pasto e il tipo cadono.
       const distintiveTutte = tokensNomeLuogo(pasto ? nomeLuogoDaTappa(nome) : nome).filter((w) => !paroleDellaCitta.has(w) && !(pasto && PAROLE_TIPO_LOCALE.has(w))).sort((a, b) => b.length - a.length);
-      const distintive = distintiveTutte.filter((w) => !TIPI_LUOGO[w]).concat(distintiveTutte.filter((w) => !!TIPI_LUOGO[w]));
+      // (18/11/2026, Malta) Anche «shopping», «complex», «centre» non distinguono: «The Point Shopping Mall» cercava
+      // *shopping* e trovava il Bay Street Shopping Complex. Vanno in coda come le parole di tipo.
+      // (18/11/2026, collaudo Malta) E le parole da depliant o da dedica: «Palazzo Falson Historic House Museum»
+      // cercava *historic*, «Chiesa di Nostra Signora di Pompei» cercava *signora* — la parola che trova è «Falson»,
+      // «Pompei».
+      const distintive = ordinaParoleRicerca(distintiveTutte);
       const parolaNuda = proprie[0] || distintive[0] || paroleNome(nome)[0] || paroleTutte(nome).sort((a, b) => b.length - a.length)[0];
       // (18/10/2026, collaudo Madrid) Le parole cercate sono SENZA accenti («alcala»), il database li ha («Puerta de
       // Alcalá», wd-Q1140634, gemma): `ilike` non li confonde, la ricerca tornava vuota e la tappa diventava un
       // doppione `iti-…` senza ingresso. Si cerca la parola com'è scritta nel nome della tappa; se il nome non la
       // contiene così (la parola viene da un'altra forma), ogni lettera accentabile diventa `_` (un carattere qualsiasi).
-      const senzaAccenti = (w: string) => w.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      const senzaAccenti = (w: string) => pianaLettere(w);
       const parolaScritta = String(nome).split(/[^\p{L}\p{N}]+/u).find((w) => w && senzaAccenti(w) === parolaNuda);
       const parola = parolaScritta && parolaScritta !== parolaNuda ? parolaScritta.toLowerCase() : String(parolaNuda || '').replace(/[aeiouncyz]/g, '_');
       const url = pasto
         ? `${supabaseUrl}/rest/v1/locali_pois?select=id,name,lat,lon,address,city,phone,website,osm_opening_hours,operating_status,sub_category&name=ilike.*${encodeURIComponent(parola)}*${bbox}&limit=40`
-        : `${supabaseUrl}/rest/v1/shared_pois?select=id,name,lat,lon,address,city,contact_phone,contact_website,entrance_lat,entrance_lon,arrival_lat,arrival_lon,is_gem,category,wikidata,status&name=ilike.*${encodeURIComponent(parola)}*&is_hidden=not.is.true${bbox}&limit=40`;
-      const r = await axios.get(url, { headers: intestazioni, timeout: 10000 }).catch((e: any) => { console.warn('[Itinerario] query aggancio fallita per', nome, e?.response?.status || e?.message); return null; });
-      const righe: any[] = Array.isArray(r?.data) ? r.data : [];
+        : `${supabaseUrl}/rest/v1/shared_pois?select=id,name,lat,lon,address,city,contact_phone,contact_website,entrance_lat,entrance_lon,arrival_lat,arrival_lon,is_gem,category,wikidata,status,image_url,description_short&name=ilike.*${encodeURIComponent(parola)}*&is_hidden=not.is.true${bbox}&limit=40`;
+      // (18/11/2026, collaudo Malta) Una parola corta e comune («point») riempie le 40 righe con altro («Cash point»,
+      // «Tigne Point Beach»…) e la riga vera con QID («The Point», wd-shop-Q18225087) restava fuori. Per i luoghi si
+      // chiedono IN PIÙ le sole righe con QID che portano la parola: sono le prove migliori, e sono poche.
+      const [r, rQid] = await Promise.all([
+        axios.get(url, { headers: intestazioni, timeout: 10000 }).catch((e: any) => { console.warn('[Itinerario] query aggancio fallita per', nome, e?.response?.status || e?.message); return null; }),
+        pasto ? Promise.resolve(null) : axios.get(`${url.replace(/&limit=40$/, '')}&wikidata=not.is.null&limit=40`, { headers: intestazioni, timeout: 10000 }).catch(() => null),
+      ]);
+      const righe: any[] = Array.isArray(r?.data) ? [...r.data] : [];
+      for (const x of (Array.isArray(rQid?.data) ? rQid.data : [])) if (!righe.some((y) => y.id === x.id)) righe.push(x);
+      // Tutte le righe lette per questa tappa (ricerca per nome, QID, tradotta): servono a scegliere, alla fine, la riga
+      // PIÙ RICCA dello stesso luogo (18/11/2026).
+      const poolRighe: any[] = [...righe];
       let migliore: any = null, punteggio = 0, migliorQualita = -1, migliorFonte = -1, distMigliore = Infinity;
       const qidDaProdotti = new Set<string>();
       const tipiTappa: Set<string> = pasto ? new Set<string>() : tipiLuogo(nome);
+      // (18/11/2026, Malta: «La Crema Balluta», tipo chiesa, agganciata a `osm-eno-node-…` «La Crema Balluta», una
+      // gelateria della gastronomia) Il TIPO della tappa (campo `tipo`) conta quanto il nome: una tappa CULTURALE non
+      // si aggancia mai a una riga di gusto, enogastronomia o locali; una tappa di shopping può agganciarsi a un centro
+      // commerciale (categoria `shopping`, con QID), che le altre tappe non prendono mai.
+      const tipoDichiarato = String(t?.tipo || '');
+      const tappaCulturale = !pasto && eTipoCulturale(tipoDichiarato);
+      const tappaShopping = !pasto && /shopping|mall|centro commerciale|negoz|boutique|outlet|acquist|mercat|market/i.test(`${tipoDichiarato} ${nome}`);
+      // Il tipo dichiarato NON si somma ai tipi del nome: «Colosseo» (tipo monumento) contro «Anfiteatro Flavio» (teatro)
+      // diventerebbe una contraddizione. Basta l'esclusione delle righe di gusto qui sotto.
+      // (18/11/2026, collaudo Malta) Una riga che È una città o una località non è mai la tappa, a meno che la tappa
+      // non sia proprio quel luogo (stesso nome): «Craft Village Malta (Ta' Qali)» finiva su `loc-Q1042361` «Ta' Qali»
+      // (localita), «Mdina - Porta di Mdina» su `osm_15801416` «Mdina» (42 caratteri, il nome della città). Regola
+      // comune «città mai» (eEntitaAmministrativa), qui anche per i borghi gemma e per le righe `loc-`.
+      const rigaCittaNonTappa = (riga: any) => rigaCittaPerTappa(riga, nome, t?.tipo);
+      const rigaDiGusto = eRigaDiGusto;
       for (const riga of righe) {
+        // (18/11/2026, controllo qualità) Una riga che il giudice o il controllo hanno già scartato per QUESTA tappa
+        // non torna: altrimenti la verifica (che rifà l'aggancio sulle non agganciate) la ricollegherebbe.
+        if (Array.isArray(t?.agganci_rifiutati) && t.agganci_rifiutati.includes(String(riga?.id || ''))) continue;
+        if (tappaCulturale && rigaDiGusto(riga)) continue;
+        if (!pasto && rigaCittaNonTappa(riga)) continue;
+        if (!pasto && rigaNonLuogoDaVisitare(riga, nome)) continue;
+        if (!pasto && negozioSuRigaNonNegozio(tipoDichiarato, nome, riga)) continue;
+        // (18/11/2026, collaudo Malta) Una riga che è SOLO un nome proprio («Mdina», senza tipo) contenuto in una tappa
+        // che ne ha altri («Mura di Mdina e belvedere») è il nome del posto, non la tappa. Resta ammessa quando la tappa
+        // non ha altre parole proprie («Palazzo Falson Historic House Museum» / «Palazzo Falson», «The Point Shopping
+        // Mall» / «The Point»).
+        if (!pasto && rigaSoloNomeDelPosto(riga.name, nome, destination)) continue;
         if (pasto && riga.operating_status && riga.operating_status !== 'open') continue;
         // (21/10/2026, Carrara) «Cena da Tognozzi» si è agganciata alla «Cremeria Toscana Tognozzi 1947»: una
         // gelateria/caffè/pasticceria non è un pranzo o una cena, a meno che il nome della tappa non lo dica.
@@ -2372,7 +3103,8 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
         // della prosa AI con indirizzi spesso inventati: non sono una PROVA che
         // il luogo esista. «Piazza Matteotti a Panzano» (che non esiste) si
         // agganciava alla sua stessa copia di un giro precedente.
-        if (/^(iti-|ai_|t\d+_\d+$)/.test(String(riga.id || ''))) continue;
+        // (18/11/2026) Anche `tappa_…`/`tappa-…`: gemelli scritti da vecchi client a partire da una tappa, non una fonte.
+        if (/^(iti-|ai_|t\d+_\d+$|tappa_|tappa-)/.test(String(riga.id || ''))) continue;
         // Prodotti e locali non sono luoghi (Lisbona, 06/09): «Alfama» si
         // agganciava a un tour Viator, la Cattedrale a un biglietto Tiqets,
         // il Castello di São Jorge a un ristorante Overture omonimo.
@@ -2383,7 +3115,10 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
           if (riga.wikidata && /^Q\d+$/.test(String(riga.wikidata)) && somiglianzaNomi(nome, riga.name) >= 0.8) qidDaProdotti.add(String(riga.wikidata));
           continue;
         }
-        if (!pasto && /^ov-/.test(String(riga.id || ''))) continue;
+        // (18/11/2026, debug dal vivo Malta) Overture non è escluso per principio: «Balluta Bay», «St. George's Bay»,
+        // «Buskett Gardens» esistevano SOLO come righe ov- (spiaggia, parco) e la tappa diventava un gemello `iti-` vuoto.
+        // Una riga ov- di un luogo NON commerciale vale se il nome è lo stesso (stesse parole proprie, anche tradotte).
+        if (!pasto && /^ov-/.test(String(riga.id || '')) && !overtureLuogoStessoNome(riga, nome, destination)) continue;
         // REGOLA DEL DATO DICHIARATO, NON MESSO DA UN UTENTE (10/09/2026): una
         // riga inserita dalla community o da Vision non è una fonte, è
         // un'opinione di un utente come un altro — la panca scultorea
@@ -2402,7 +3137,12 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
         // Le righe del livello «lusso» sono negozi e hotel con un nome di luogo nell'indirizzo (Venezia 08/10/2026:
         // «Palazzo Ducale» agganciato a `lusso-osm-…` «vicino a Molo di Palazzo Ducale» — tappa senza foto né testo,
         // e la Guida Premium ha descritto il molo invece del palazzo).
-        if (!pasto && (/^lusso-/i.test(String(riga.id || '')) || /^(lusso|luxury|shopping)$/i.test(String(riga.category || '')))) continue;
+        // (18/11/2026, Malta) Eccezione: una tappa di SHOPPING si aggancia al centro commerciale con fonte (`osm-shop-…`,
+        // `wd-shop-Q…`, categoria shopping): «Bay Street Shopping Complex» e «The Point» esistevano con QID e la tappa
+        // diventava un gemello `iti-` vuoto. Il livello lusso (`lusso-…`) resta escluso sempre.
+        // (23/11/2026, Québec) Eccezione: una tappa che È una via si aggancia alla riga della via («Rue Saint-Jean», `via-…`,
+        // categoria shopping) — rigaViaPerTappaVia.
+        if (!pasto && (/^lusso-/i.test(String(riga.id || '')) || /^(lusso|luxury)$/i.test(String(riga.category || '')) || (/^shopping$/i.test(String(riga.category || '')) && !tappaShopping && !rigaViaPerTappaVia(tipoDichiarato, nome, riga)))) continue;
         if (opzioni?.rigoroso && (/^(loc-|test)/i.test(String(riga.id || '')) || /^(citta|localita|city|town|village|hamlet|settlement|comune|frazione|quartiere|neighbourhood|suburb|transit|fermata)$/i.test(String(riga.category || '').normalize('NFD').replace(/[̀-ͯ]/g, '')))) continue;
         if (opzioni?.rigoroso && !nomiStessoLuogo(nome, riga.name, opzioni.citta)) continue;
         // Rigoroso: entro 3 km dal punto della tappa, 1,5 km per i pasti. Le catene («In-N-Out», «Al Fanar», «Le
@@ -2427,12 +3167,37 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
         // al GRATTACIELO omonimo (wd-Q1812350, 72 piani) come tappa «parco». Una riga di tipo edificio residenziale /
         // uffici / hotel non è un luogo da visitare se il nome della tappa non dice che è una torre o un palazzo.
         if (!pasto && /^(skyscraper|apartments|residential|office|hotel|condominium|building)$/i.test(String(riga.category || '')) && !/torre|tower|grattacielo|skyscraper|building|palazzo|hotel|edificio/i.test(nome)) continue;
-        const s = somiglianza(nome, riga.name);
+        // (14/11/2026, Zurigo) UNA SOLA PAROLA IN COMUNE NON È LO STESSO LUOGO. «Museo FIFA» (parola propria: «fifa») si
+        // è agganciato a «2015 FIFA corruption case» — uno scandalo giudiziario — e «(promenade)» alla fontana
+        // «Fountain School House Hohe Promenade»: somiglianza 1 perché si divide per il nome più corto. Quando la
+        // tappa ha UNA parola propria e la riga ne porta almeno due in più, è un altro soggetto; resta ammessa se è
+        // una gemma (nomi ufficiali lunghi) o se il suo nome dice lo stesso tipo di luogo della tappa.
+        if (!pasto && !riga.is_gem && !soloVuote) {
+          const A1 = paroleNome(nome), B1 = paroleNome(riga.name);
+          if (A1.length === 1 && B1.includes(A1[0]) && B1.filter((w) => w !== A1[0] && !TIPI_LUOGO[w]).length >= 2) {
+            const Td1 = tipiLuogo(riga.name);
+            if (!(tipiTappa.size && [...tipiTappa].some((g) => Td1.has(g)))) continue;
+          }
+        }
+        let s = somiglianza(nome, riga.name);
+        // (18/11/2026, debug dal vivo Malta: «Torri di Wignacourt» / «Wignacourt Tower» = 0,5) Quando i due nomi dicono lo
+        // STESSO tipo di luogo in due lingue, il tipo non conta come parola: si confrontano le sole parole proprie.
+        if (s < 0.6 && tipiTappa.size) {
+          const Td2 = tipiLuogo(riga.name);
+          if ([...tipiTappa].some((g) => Td2.has(g))) {
+            const C2 = paroleCitta(destination);
+            const A3 = new Set(paroleProprie(nome, C2)), B3 = new Set(paroleProprie(riga.name, C2));
+            if (A3.size && B3.size && A3.size === B3.size && [...A3].every((w) => B3.has(w))) s = 1;
+          }
+        }
         const d = getHaversineDistance(la, lo, Number(riga.lat), Number(riga.lon));
         // A parita' di nome vince la riga con piu' dati (indirizzo, gemma,
         // punto d'arrivo), poi quella con una FONTE (Wikidata, UNESCO), poi la piu' vicina. La fonte viene DOPO
         // i dati e non sommata a loro: sommata (+2, 08/10) faceva vincere il ponte sul museo.
-        const qualita = (riga.address ? 1 : 0) + (riga.is_gem ? 1 : 0) + ((riga.arrival_lat || riga.entrance_lat) ? 1 : 0);
+        // (18/11/2026, collaudo New York: Guggenheim su una riga da 29 caratteri, MoMA su una da 42 con wd-Q188740 da 761
+        // vicino) Contano anche la foto, la scheda e il QID: a parità di nome vince la riga più completa.
+        const qualita = (riga.address ? 1 : 0) + (riga.is_gem ? 1 : 0) + ((riga.arrival_lat || riga.entrance_lat) ? 1 : 0)
+          + (riga.image_url ? 1 : 0) + (String(riga.description_short || '').length >= 60 ? 1 : 0) + ((riga.wikidata || /^wd-/i.test(String(riga.id || ''))) ? 1 : 0);
         const conFonte = /^(wd-|unesco-)/i.test(String(riga.id || '')) ? 1 : 0;
         const meglio = s > punteggio
           || (s === punteggio && qualita > migliorQualita)
@@ -2450,32 +3215,56 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
       // esattamente il nome della tappa, è quella — prima la ricerca per QID poteva preferire un'entità omonima.
       const nomeNorm = normTesto(nome);
       const esatta = righe.filter((riga: any) => normTesto(riga.name) === nomeNorm && nomeNorm.length >= 5
-        && !/^(iti-|ai_|t\d+_\d+$|viator-|tq-|gyg-|tm-|tiqets-|vision-|lusso-|gtfs-|ocm-)/i.test(String(riga.id || ''))
+        && !/^(iti-|ai_|t\d+_\d+$|tappa_|tappa-|viator-|tq-|gyg-|tm-|tiqets-|vision-|lusso-|gtfs-|ocm-)/i.test(String(riga.id || ''))
+        && !(tappaCulturale && rigaDiGusto(riga))
+        && !(!pasto && rigaNonLuogoDaVisitare(riga, nome))
+        && !(!pasto && negozioSuRigaNonNegozio(tipoDichiarato, nome, riga))
+        && !(!pasto && /^shopping$/i.test(String(riga.category || '')) && !tappaShopping && !rigaViaPerTappaVia(tipoDichiarato, nome, riga))
         && riga.category !== 'community' && !/^(draft|hidden|needs_revision)$/i.test(String(riga.status || ''))
         && !(pasto && tipoEPastoPrincipale(t?.tipo) && nonAdattoAPastoPrincipale(riga.name, riga.sub_category))
         && !(pasto && !localeStessoNome(nome, riga.name, destination))
-        && getHaversineDistance(la, lo, Number(riga.lat), Number(riga.lon)) <= 300)
+        // (18/11/2026, collaudo Malta: «Palazzo Falson» a 200 m dal punto del modello) Una riga con QID e lo stesso
+        // nome vale fino a 600 m: il punto del modello è spesso spostato, il QID no.
+        && !(!pasto && /^ov-/.test(String(riga.id || '')) && !overtureLuogoStessoNome(riga, nome, destination))
+        // (18/11/2026, debug dal vivo Malta: le baie a 450–760 m dal punto del modello) Per un LUOGO con lo stesso nome
+        // esatto si arriva a 800 m; i pasti restano a 300 m (le catene hanno lo stesso nome in ogni quartiere).
+        && getHaversineDistance(la, lo, Number(riga.lat), Number(riga.lon)) <= (pasto ? 300 : 800))
         .sort((a: any, b: any) => getHaversineDistance(la, lo, Number(a.lat), Number(a.lon)) - getHaversineDistance(la, lo, Number(b.lat), Number(b.lon)))[0];
       if (esatta) { migliore = esatta; punteggio = 1; }
-      if ((!migliore || punteggio < 0.6) && !pasto) {
+      // (18/11/2026) Anche con una scelta già fatta ma SENZA QID si chiede a Wikidata: la riga col QID entra nel confronto
+      // «riga più ricca» (non sostituisce da sola una scelta buona).
+      const sceltaSenzaQidW = !!migliore && punteggio >= 0.6 && !(migliore.wikidata || /^wd-/i.test(String(migliore.id || '')));
+      if ((!migliore || punteggio < 0.6 || sceltaSenzaQidW) && !pasto) {
         try {
-          const qids: string[] = [...qidDaProdotti];
-          for (const lg of qids.length ? [] : ['it', 'en']) {
-            const w = await axios.get(`https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(nome)}&language=${lg}&uselang=${lg}&type=item&limit=5&format=json`, { headers: { 'User-Agent': 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)' }, timeout: 6000 }).catch(() => null);
-            for (const x of (w?.data?.search || [])) if (/^Q\d+$/.test(String(x?.id || '')) && !qids.includes(x.id)) qids.push(x.id);
-            if (qids.length) break;
-          }
+          // (18/11/2026, committente: «per i problemi dei nomi si può ricercare anche nella lingua originale?») Ricerca
+          // LINGUA-INDIPENDENTE: etichette Wikidata in italiano, inglese e nella lingua dell'utente, più la ricerca a testo
+          // pieno di Wikidata, che legge le etichette e gli alias in TUTTE le lingue («Chiesa del Salvatore sul Sangue
+          // Versato» → Q215208 «Храм Спаса на Крови»). Cache 30 giorni (qidsPerNomeTappa). Un QID trovato solo dal testo
+          // pieno vale se la riga del DB ha un nome compatibile (sotto).
+          const trovati = qidDaProdotti.size ? [...qidDaProdotti].map((q) => ({ qid: q, fonte: 'prodotto' })) : await qidsPerNomeTappa(nome, String(opzioni?.lingua || 'it'));
+          const qids: string[] = trovati.map((x) => x.qid);
+          const soloTesto = new Set(trovati.filter((x) => x.fonte === 'testo').map((x) => x.qid));
           if (qids.length && !cancelToken?.cancelled) {
             // (23/10/2026, Ottawa: «Galleria Nazionale del Canada») Molte righe wd- hanno la colonna wikidata vuota ma il
-            // QID nell'id: si cercano tutte e due le forme.
+            // QID nell'id: si cercano tutte e due le forme. (18/11/2026) Il QID è una prova forte: si cerca fino a 10 km
+            // dal punto del modello (spesso spostato), non 3.
             const idWd = qids.map((q) => `wd-${q}`).join(',');
-            const rq = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=id,name,lat,lon,address,city,contact_phone,contact_website,entrance_lat,entrance_lon,arrival_lat,arrival_lon,is_gem,category,wikidata,status&or=(wikidata.in.(${qids.join(',')}),id.in.(${idWd}))&is_hidden=not.is.true${bbox}&limit=20`, { headers: intestazioni, timeout: 10000 }).catch(() => null);
+            const dLatQ = Math.max(raggioKm, 10) / 111, dLonQ = Math.max(raggioKm, 10) / (111 * Math.max(0.15, Math.cos(la * Math.PI / 180)));
+            const bboxQid = `&lat=gte.${la - dLatQ}&lat=lte.${la + dLatQ}&lon=gte.${lo - dLonQ}&lon=lte.${lo + dLonQ}`;
+            const rq = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=id,name,lat,lon,address,city,contact_phone,contact_website,entrance_lat,entrance_lon,arrival_lat,arrival_lon,is_gem,category,wikidata,status,image_url,description_short&or=(wikidata.in.(${qids.join(',')}),id.in.(${idWd}))&is_hidden=not.is.true${bboxQid}&limit=20`, { headers: intestazioni, timeout: 10000 }).catch(() => null);
             let qMig: any = null, qQual = -1, qDist = Infinity, qOrd = Infinity;
             for (const riga of (Array.isArray(rq?.data) ? rq.data : [])) {
+              if (!poolRighe.some((y) => y.id === riga.id)) poolRighe.push(riga);
               const id = String(riga.id || '');
-              if (/^(iti-|ai_|t\d+_\d+$|viator-|tq-|gyg-|tm-|tiqets-|ov-|vision-|lusso-|gtfs-|ocm-)/i.test(id) || riga.category === 'community') continue;
+              if (/^(iti-|ai_|t\d+_\d+$|tappa_|tappa-|viator-|tq-|gyg-|tm-|tiqets-|ov-|vision-|lusso-|gtfs-|ocm-)/i.test(id) || riga.category === 'community') continue;
+              if (tappaCulturale && rigaDiGusto(riga)) continue;
+              if (rigaCittaNonTappa(riga)) continue;
+              if (rigaNonLuogoDaVisitare(riga, nome)) continue;
+              if (negozioSuRigaNonNegozio(tipoDichiarato, nome, riga)) continue;
               if (/^(draft|hidden|needs_revision)$/i.test(String(riga.status || ''))) continue;
               const qRiga = String(riga.wikidata || (id.match(/^wd-(Q\d+)/) || [])[1] || '');
+              // QID trovato solo dalla ricerca a testo pieno (che legge anche le descrizioni): serve un nome compatibile.
+              if (soloTesto.has(qRiga) && !(nomiStessoLuogo(nome, riga.name, destination) || nomiStessoLuogoTradotti(nome, riga.name, destination) || somiglianzaNomi(nome, riga.name) >= 0.6)) continue;
               const ord = qids.indexOf(qRiga); // il primo QID della ricerca è il più probabile
               const qual = (riga.address ? 1 : 0) + (riga.is_gem ? 1 : 0) + ((riga.arrival_lat || riga.entrance_lat) ? 1 : 0);
               const d = getHaversineDistance(la, lo, Number(riga.lat), Number(riga.lon));
@@ -2483,11 +3272,152 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
             }
             // Il nome della riga NON sostituisce quello dell'AI: è in un'altra lingua (lo stesso luogo, detto nella
             // lingua dell'utente). punteggio = 1 basta a non far scattare la rinomina più sotto (jaccard < 0.7).
-            if (qMig) { migliore = qMig; punteggio = 1; t.__perQid = true; }
+            if (qMig && (!migliore || punteggio < 0.6)) { migliore = qMig; punteggio = 1; t.__perQid = true; }
           }
         } catch { /* Wikidata giù: la tappa resta com'era */ }
       }
+      // NOME TRADOTTO → ETICHETTE WIKIDATA DELLE RIGHE VICINE (14/11/2026, Zurigo; idea annotata a San Pietroburgo il
+      // 09/10). «Chiesa di San Pietro» è in archivio come «St. Peter» (wd-Q690687): la ricerca per nome non la trova e
+      // la ricerca Wikidata per nome dà altre chiese di San Pietro. Quando il modello ha dato un punto, si leggono le
+      // righe con QID entro 500 m e si confronta il nome della tappa con le loro etichette (it, en, lingua della
+      // tappa): l'etichetta è la prova, il tipo non deve contraddirsi.
+      if ((!migliore || punteggio < 0.6) && !pasto && !daCentro && !nomeForzato && !cancelToken?.cancelled) {
+        try {
+          const dLa = 0.5 / 111, dLo = 0.5 / (111 * Math.max(0.15, Math.cos(la * Math.PI / 180)));
+          // (23/11/2026, New Orleans: «The National World War II Museum» ha il QID nella colonna wikidata e un id
+          // `29_9424_-90_0706`) Anche le righe con la colonna wikidata piena, non solo gli id `wd-`.
+          const rv = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=id,name,lat,lon,address,city,contact_phone,contact_website,entrance_lat,entrance_lon,arrival_lat,arrival_lon,is_gem,category,wikidata,status&or=(id.like.wd-Q*,wikidata.not.is.null)&is_hidden=not.is.true&lat=gte.${la - dLa}&lat=lte.${la + dLa}&lon=gte.${lo - dLo}&lon=lte.${lo + dLo}&limit=50`, { headers: intestazioni, timeout: 8000 }).catch(() => null);
+          const vicine: any[] = (Array.isArray(rv?.data) ? rv.data : []).filter((riga: any) => riga.category !== 'community' && !/^(draft|hidden|needs_revision)$/i.test(String(riga.status || '')) && !/^(fountain|plaque|information)$/i.test(String(riga.category || '')));
+          const qidDi = (riga: any) => String(riga.wikidata || (String(riga.id || '').match(/^wd-(Q\d+)/) || [])[1] || '');
+          const qv = [...new Set(vicine.map(qidDi).filter((q) => /^Q\d+$/.test(q)))].slice(0, 50);
+          if (qv.length) {
+            const w = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${qv.join('|')}&props=labels|aliases&languages=it|en|es|fr|de|pt&format=json`, { headers: { 'User-Agent': 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)' }, timeout: 6000 }).catch(() => null);
+            const ent = w?.data?.entities || {};
+            let eMig: any = null, eS = 0, eD = Infinity;
+            for (const riga of vicine) {
+              const e = ent[qidDi(riga)]; if (!e) continue;
+              const nomi: string[] = [...Object.values(e.labels || {}).map((x: any) => x?.value), ...Object.values(e.aliases || {}).flatMap((a: any) => (Array.isArray(a) ? a : []).map((x: any) => x?.value))].filter(Boolean);
+              let sMax = 0;
+              for (const n of nomi) {
+                // Etichetta intera = nome intero (a parte la città): stesse parole in tutti e due i versi.
+                // (18/11/2026) Senza le parole di tipo quando entrambi ne hanno una: «Hagar Qim Temple» / «Ħaġar Qim».
+                const A2 = new Set(paroleTutte(nome).filter((x) => !paroleDellaCitta.has(x) && !TIPI_LUOGO[x])), B2 = new Set(paroleTutte(n).filter((x) => !paroleDellaCitta.has(x) && !TIPI_LUOGO[x]));
+                if (!A2.size || !B2.size) continue;
+                { const Ta = tipiLuogo(nome), Tb = tipiLuogo(n); if (Ta.size && Tb.size && ![...Ta].some((g) => Tb.has(g))) continue; }
+                let c2 = 0; for (const x of A2) if (B2.has(x)) c2++;
+                sMax = Math.max(sMax, c2 / Math.max(A2.size, B2.size));
+                // (23/11/2026) Le stesse parole TRADOTTE o con la stessa radice, senza «nazionale/national»:
+                // «Museo della Seconda Guerra Mondiale» = «Museo Nacional de la Segunda Guerra Mundial».
+                if (etichettaVicinaStessoLuogo(nome, n, destination)) sMax = Math.max(sMax, 0.85);
+              }
+              if (sMax < 0.8) continue;
+              const d = getHaversineDistance(la, lo, Number(riga.lat), Number(riga.lon));
+              if (sMax > eS || (sMax === eS && d < eD)) { eMig = riga; eS = sMax; eD = d; }
+            }
+            if (eMig) { migliore = eMig; punteggio = 1; t.__perQid = true; }
+          }
+        } catch { /* Wikidata giù: la tappa resta com'era */ }
+      }
+      // NOME IN UN'ALTRA LINGUA SENZA QID (18/11/2026, Malta): «Chiesa Parrocchiale di Nostra Signora del Monte Carmelo»
+      // contro «Our Lady of Mount Carmel» (riga OSM senza QID, 560 m). Si cercano le forme TRADOTTE delle parole proprie
+      // (TRADUZIONI_NOMI) nel raggio della tappa e si tiene la riga più vicina con le STESSE parole proprie tradotte e un
+      // tipo che non contraddice (nomiStessoLuogoTradotti). Stesse esclusioni della ricerca per nome.
+      // (18/11/2026, collaudo Malta 1ef00dbf) Gira anche quando la riga scelta non ha un QID: le righe tradotte entrano
+      // nel confronto «riga più ricca» qui sotto (San Giuseppe di Msida su una riga `bc-` di 24 caratteri), senza
+      // togliere una scelta buona.
+      const sceltaSenzaQid = !!migliore && !(migliore.wikidata || /^wd-/i.test(String(migliore.id || '')));
+      if ((!migliore || punteggio < 0.6 || sceltaSenzaQid) && !pasto && !nomeForzato && !cancelToken?.cancelled) {
+        try {
+          let proprieT = paroleNome(nome).filter((w) => !TIPI_LUOGO[w] && !PAROLE_NON_PROPRIE.has(w) && !paroleDellaCitta.has(w));
+          // «St. Julian's Parish Church» a St. Julian's: l'unica parola propria è il santo della città — si cerca quella.
+          if (!proprieT.length) proprieT = paroleNome(nome).filter((w) => !TIPI_LUOGO[w] && !PAROLE_NON_PROPRIE.has(w));
+          const forme = [...new Set(proprieT.flatMap(formeTradotteParola))].filter((f) => !/^(santo|saint|sainte|sankt|santa|santi|santissimo|santissima|nostra|notre|nuestra|nossa|unsere|unserer|madonna|sidtna|lady|dame|senora|senhora|frau|signora|vecchio|nuovo|neuf|nuevo|viejo|vieux|monte|mount|mont|mons)$/.test(f)).slice(0, 10);
+          // (18/11/2026, collaudo Malta) Si confrontano anche le righe già lette dalla ricerca per nome: «Chiesa di Nostra
+          // Signora di Pompei» trova «Parish Church of Our Lady of Pompei, Marsaxlokk» con *pompei*, ma la somiglianza
+          // semplice (1 parola su 3) la scartava.
+          let candidatiT: any[] = [...righe];
+          if (forme.length) {
+            const orNomi = forme.map((f) => `name.ilike.*${f}*`).join(',');
+            const rt = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=id,name,lat,lon,address,city,contact_phone,contact_website,entrance_lat,entrance_lon,arrival_lat,arrival_lon,is_gem,category,wikidata,status,image_url,description_short&or=(${encodeURIComponent(orNomi)})&is_hidden=not.is.true${bbox}&limit=60`, { headers: intestazioni, timeout: 10000 }).catch(() => null);
+            for (const x of (Array.isArray(rt?.data) ? rt.data : [])) if (!candidatiT.some((y) => y.id === x.id)) candidatiT.push(x);
+          }
+          for (const x of candidatiT) if (!poolRighe.some((y) => y.id === x.id)) poolRighe.push(x);
+          {
+            let tMig: any = null, tD = Infinity;
+            for (const riga of candidatiT) {
+              const id = String(riga.id || '');
+              if (/^(iti-|ai_|t\d+_\d+$|tappa_|tappa-|viator-|tq-|gyg-|tm-|tiqets-|vision-|lusso-|gtfs-|ocm-)/i.test(id) || riga.category === 'community') continue;
+              // (18/11/2026) Overture vale per un luogo non commerciale con lo stesso nome («Parrocca San Giljan»).
+              if (/^ov-/i.test(id) && !overtureLuogoStessoNome(riga, nome, destination)) continue;
+              if (/^(draft|hidden|needs_revision)$/i.test(String(riga.status || ''))) continue;
+              if (tappaCulturale && rigaDiGusto(riga)) continue;
+              if (rigaCittaNonTappa(riga)) continue;
+              if (rigaNonLuogoDaVisitare(riga, nome)) continue;
+              if (negozioSuRigaNonNegozio(tipoDichiarato, nome, riga)) continue;
+              if (/^shopping$/i.test(String(riga.category || '')) && !tappaShopping && !rigaViaPerTappaVia(tipoDichiarato, nome, riga)) continue;
+              if (!nomiStessoLuogoTradotti(nome, riga.name, destination)) continue;
+              const d = getHaversineDistance(la, lo, Number(riga.lat), Number(riga.lon));
+              if (d < tD) { tMig = riga; tD = d; }
+            }
+            if (tMig && (!migliore || punteggio < 0.6)) { migliore = tMig; punteggio = 1; t.__perQid = true; }
+          }
+        } catch { /* ricerca tradotta fallita: la tappa resta com'era */ }
+      }
+      // RADICE (23/11/2026, collaudo notturno: «Museo delle Illusioni Montréal» cercava *illusioni*, l'archivio ha «Museum
+      // of Illusions Montréal» e «Musée de l'Illusion Montréal»; «Giardini Botanici dell'UBC» / «UBC Botanical Garden»).
+      // Quando nient'altro ha trovato la tappa si cerca la RADICE delle parole distintive (prime 6 lettere, radiceRicerca)
+      // e vale una riga con le stesse parole proprie una a una, anche per radice (nomiStessoLuogoRadice). Stesse esclusioni
+      // di sopra; Overture solo per un luogo non commerciale (CATEGORIE_OVERTURE_LUOGO). Vince la riga non Overture, poi
+      // quella con QID, poi la più vicina. Il titolo del modello resta (lingua dell'utente); il giudice vede i casi dubbi.
+      if ((!migliore || punteggio < 0.6) && !pasto && !nomeForzato && !cancelToken?.cancelled) {
+        try {
+          const radici = [...new Set(distintive.map(radiceRicerca).filter(Boolean))].slice(0, 2);
+          const candidatiR: any[] = [...poolRighe];
+          if (radici.length) {
+            const orR = radici.map((x) => `name.ilike.*${x}*`).join(',');
+            const rr = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=id,name,lat,lon,address,city,contact_phone,contact_website,entrance_lat,entrance_lon,arrival_lat,arrival_lon,is_gem,category,wikidata,status,image_url,description_short&or=(${encodeURIComponent(orR)})&is_hidden=not.is.true${bbox}&limit=60`, { headers: intestazioni, timeout: 10000 }).catch(() => null);
+            for (const x of (Array.isArray(rr?.data) ? rr.data : [])) if (!candidatiR.some((y) => y.id === x.id)) candidatiR.push(x);
+          }
+          for (const x of candidatiR) if (!poolRighe.some((y) => y.id === x.id)) poolRighe.push(x);
+          let rMig: any = null, rPunti = -Infinity;
+          for (const riga of candidatiR) {
+            const id = String(riga.id || '');
+            if (/^(iti-|ai_|t\d+_\d+$|tappa_|tappa-|viator-|tq-|gyg-|tm-|tiqets-|vision-|lusso-|gtfs-|ocm-)/i.test(id) || riga.category === 'community') continue;
+            if (/^ov-/i.test(id) && !CATEGORIE_OVERTURE_LUOGO.test(String(riga.category || ''))) continue;
+            if (riga.is_hidden === true || /^(draft|hidden|needs_revision)$/i.test(String(riga.status || ''))) continue;
+            if (Array.isArray(t?.agganci_rifiutati) && t.agganci_rifiutati.includes(id)) continue;
+            if (tappaCulturale && rigaDiGusto(riga)) continue;
+            if (rigaCittaNonTappa(riga) || rigaNonLuogoDaVisitare(riga, nome) || negozioSuRigaNonNegozio(tipoDichiarato, nome, riga)) continue;
+            if (/^shopping$/i.test(String(riga.category || '')) && !tappaShopping && !rigaViaPerTappaVia(tipoDichiarato, nome, riga)) continue;
+            if (!nomiStessoLuogoRadice(nome, riga.name, destination)) continue;
+            const d = getHaversineDistance(la, lo, Number(riga.lat), Number(riga.lon));
+            if (!(d <= raggioKm * 1000)) continue;
+            const punti = (/^ov-/i.test(id) ? 0 : 2) + ((riga.wikidata || /^wd-/i.test(id)) ? 1 : 0) - d / 3000;
+            if (punti > rPunti) { rMig = riga; rPunti = punti; }
+          }
+          if (rMig) { migliore = rMig; punteggio = 1; t.__perQid = true; }
+        } catch { /* ricerca per radice fallita: la tappa resta com'era */ }
+      }
+      // LA RIGA PIÙ RICCA DELLO STESSO LUOGO (18/11/2026, collaudo Malta 1ef00dbf: «Chiesa di Nostra Signora di Pompei»
+      // agganciata a `w129290479` «Madonna ta' Pompei», 69 caratteri, con `wd-Q19272928` «Parish Church of Our Lady of
+      // Pompei, Marsaxlokk», 1.862 caratteri e foto, a 0 m). Scelta la riga, se fra quelle lette ce n'è una dello stesso
+      // luogo (stesso nome, anche tradotto) entro 150 m con più QID, foto o testo, vince quella.
+      if (migliore && punteggio >= 0.6 && !pasto) {
+        const ricchezza = (x: any) => ((x?.wikidata || /^wd-/i.test(String(x?.id || ''))) ? 2 : 0) + (x?.image_url ? 1 : 0) + (String(x?.description_short || '').length >= 60 ? 1 : 0) + (x?.is_gem ? 1 : 0);
+        const nomeOk = (x: any) => normTesto(x.name) === normTesto(migliore.name) || nomiStessoLuogo(migliore.name, x.name, destination)
+          || nomiStessoLuogoTradotti(migliore.name, x.name, destination) || nomiStessoLuogoTradotti(nome, x.name, destination);
+        const valida = (x: any) => !/^(iti-|ai_|t\d+_\d+$|tappa_|tappa-|viator-|tq-|gyg-|tm-|tiqets-|vision-|lusso-|gtfs-|ocm-)/i.test(String(x.id || ''))
+          && x.category !== 'community' && !/^(draft|hidden|needs_revision)$/i.test(String(x.status || '')) && x.is_hidden !== true
+          && !(tappaCulturale && rigaDiGusto(x)) && !rigaCittaNonTappa(x) && !rigaNonLuogoDaVisitare(x, nome) && !negozioSuRigaNonNegozio(tipoDichiarato, nome, x)
+          && !(/^ov-/.test(String(x.id || '')) && !overtureLuogoStessoNome(x, nome, destination));
+        const dM = (x: any) => getHaversineDistance(Number(migliore.lat), Number(migliore.lon), Number(x.lat), Number(x.lon));
+        const base = ricchezza(migliore);
+        const piuRicca = poolRighe.filter((x) => x.id !== migliore.id && valida(x) && dM(x) <= 150 && ricchezza(x) > base && nomeOk(x))
+          .sort((a, b) => ricchezza(b) - ricchezza(a) || dM(a) - dM(b))[0];
+        if (piuRicca) { console.log(`[Itinerario] «${nome}»: ${migliore.id} → ${piuRicca.id} (riga più ricca dello stesso luogo)`); migliore = piuRicca; t.__perQid = true; }
+      }
       if (!migliore || punteggio < 0.6) return;
+      if (Array.isArray(t?.agganci_rifiutati) && t.agganci_rifiutati.includes(String(migliore.id || ''))) return;
       if (cancelToken?.cancelled) return; // il timeout a monte e' gia' scattato: non mutare piu' "parsed"
       // (07/10/2026, Los Angeles) «Hollywood Walk of Fame» agganciato alla riga del cinema «Hollywood» (cine-Q34006,
       // il QUARTIERE): nome accorciato E coordinate spostate al centro del quartiere, 1 km dalla Walk of Fame. Una
@@ -2500,6 +3430,24 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
         dbContenuto = B0.size > 0 && [...B0].every((x) => A0.has(x)) && B0.size < A0.size;
       }
       if (rigaCinema && dbContenuto) return;
+      // (14/11/2026, Zurigo) «Caffè Sprüngli al Paradeplatz» (pasticceria) si è agganciato alla PIAZZA Paradeplatz e
+      // la Guida d'Autore ha descritto la piazza. Un locale o un negozio «al/in <luogo>» non è quel luogo.
+      if (!pasto && dbContenuto && /pasticc|caff|caf[eé]|\bbar\b|gelat|negozi|shop|boutique|ristor|aperitiv|colazion|merenda|snack|cioccolat|locale|enotec|birreri/i.test(`${t?.tipo || ''} ${nome}`) && !/pasticc|caff|caf[eé]|\bbar\b|gelat|negozi|shop|boutique|ristor|cioccolat|enotec|birreri/i.test(String(migliore.name || ''))
+        // (18/11/2026, debug dal vivo Malta: «The Point Shopping Mall» → «The Point», categoria shopping, scartato qui
+        // perché il NOME della riga non dice «shop») La categoria della riga conta quanto il nome.
+        && !/shopping|shop|negozi|mall|market|mercat|boutique|commercial|retail|ristor|restaurant|cafe|bar|pasticc|gelat/i.test(String(migliore.category || ''))) return;
+      // GIUDICE NEI CASI DUBBI (18/11/2026, committente: «questi errori non devono mai più succedere»). Un aggancio con
+      // nomi diversi (jaccard < 0,7 e non lo stesso nome tradotto) o a 100–500 m dal punto del modello è DUBBIO: la tappa
+      // si salva com'era prima di scriverlo, e giudicaAgganciDubbi (dopo l'aggancio di tutte le tappe, UNA chiamata per
+      // ~15 coppie) lo disfa se il revisore dice «non è lo stesso luogo». Solo luoghi: i pasti hanno già la regola del nome.
+      if (opzioni?.giudice && !pasto && !t.__giudizio) {
+        const dAgg = daCentro ? 0 : getHaversineDistance(la, lo, Number(migliore.lat), Number(migliore.lon));
+        if (aggancioDubbio(String(t?.titolo_tappa || t?.titolo || nome), String(migliore.name || ''), dAgg, destination, t?.tipo)) {
+          const { __perQid: _q, ...prima } = t;
+          t.__giudizio = { prima: JSON.parse(JSON.stringify(prima)), riga: { id: String(migliore.id || ''), name: String(migliore.name || ''), category: String(migliore.category || ''), wikidata: String(migliore.wikidata || (String(migliore.id || '').match(/^wd-(Q\d+)/) || [])[1] || ''), city: String(migliore.city || '') }, dist: Math.round(dAgg) };
+        }
+      }
+      if (!t.coordinate_ai && !daCentro && Number.isFinite(la) && Number.isFinite(lo)) t.coordinate_ai = { lat: la, lng: lo };
       esito.agganciate++;
       // Città del candidato vs destinazione dichiarata (10/09/2026): il nome
       // può combaciare ma essere l'omonimo di un'altra città. In quel caso
@@ -2556,9 +3504,11 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
       if (pasto) {
         const copre = orariCopronoPasto(migliore.osm_opening_hours, String(t.tipo));
         if (copre === false) {
+          // (20/11/2026, collaudi notturni: Botín a Madrid e Osteria del Treno a Milano bocciati «da verificare» per gli
+          // orari OSM) Orari che non sembrano coprire il pasto NON sono un motivo per bocciare un ristorante che esiste:
+          // gli orari d'archivio sono spesso vecchi o scritti male. Resta solo una nota informativa; il verdetto non cambia.
           esito.pasti_fuori_orario++;
-          t.verifica = 'da_verificare';
-          t.nota_verifica = [t.nota_verifica, `⚠ Orari del locale (${migliore.osm_opening_hours}) non coprono la fascia di ${String(t.tipo).toLowerCase()}: verifica o scegli un altro locale.`].filter(Boolean).join(' ');
+          t.nota_orari = `ℹ Orari d'archivio del locale: ${migliore.osm_opening_hours}. Controllali prima di andare.`;
         }
       }
     } catch (e: any) { console.warn('[Itinerario] aggancio fallito per', t?.titolo_tappa, e?.message); }
@@ -2580,6 +3530,11 @@ const NOME_AMMINISTRATIVO = /^(area metropolitana|citt[àa] metropolitana|metrop
 function eEntitaAmministrativa(r: any): boolean {
   if (!r) return false;
   const cat = String(r.category || '').trim(), tipo = String(r.poi_type || '').trim();
+  // (15/11/2026, committente: «i borghi devono avere audioguida ed essere gemme») Un BORGO GEMMA (category
+  // 'localita', is_gem — Riomaggiore, Volterra, Colonnata: la gemma la decide assegna-gemme-v2, ≥ 1.500 visite/mese,
+  // UNESCO o Borghi più belli) è una meta da raccontare, non una città-contenitore. Le località NON gemme (Avenza,
+  // Marina di Carrara) restano mute come il 23/10. Chi chiama questa funzione deve leggere anche `is_gem`.
+  if (r.is_gem === true && /^localit[aà]$/i.test(cat)) return false;
   if (CATEGORIE_AMMINISTRATIVE.test(cat) || CATEGORIE_AMMINISTRATIVE.test(tipo)) return true;
   const nome = String(r.name || '').trim();
   if (NOME_AMMINISTRATIVO.test(nome)) return true;
@@ -2640,6 +3595,8 @@ function eNonLoSo(t: any): boolean {
   if (/NON[_\s-]*LO[_\s-]*SO/.test(s)) return true; // maiuscolo: il segnale, ovunque nella risposta
   return /^\W*non\s+lo\s+so\W*$/i.test(s); // minuscolo: solo se è TUTTA la risposta
 }
+/** Tetto di token di Chiedi: ragionamento di gpt-oss + risposta (vedi rispondiDomandaVisitatore, 21/11/2026). */
+const CHIEDI_MAX_TOKENS = 1500;
 async function rispondiDomandaVisitatore(o: { domanda: string; poiName: string; lang: string; materiale: string; guida: string; utenteInAttesa: boolean }): Promise<string> {
   const lingua = String(o.lang || 'it').toLowerCase();
   const nonSo = (RISPOSTA_NON_SO[lingua] || RISPOSTA_NON_SO.en).replace('{nome}', o.poiName || '—');
@@ -2660,17 +3617,27 @@ DOMANDA: ${o.domanda}`;
   let timer: any;
   try {
     const r: any = await Promise.race([
-      callUniversalAi('groq', [{ role: 'user', content: prompt }], { temperature: 0.3, max_tokens: 400, groqOnTheFly: o.utenteInAttesa, ultimaSpiaggiaPagante: o.utenteInAttesa },
+      // REGOLA 21/11/2026 (collaudo notturno, Lisbona: Estufa Fria «nel 1933» e Miradouro de Santa Catarina «nel 1559»
+      // con la risposta nel materiale → frase «non so»; prima Uffizi/1747). gpt-oss-120b spende i token nel RAGIONAMENTO:
+      // con max_tokens 400 e ~2.800 caratteri di materiale il contenuto tornava VUOTO (HTTP 200) e il vuoto diventava
+      // «non so». Il tetto copre ragionamento + risposta; la lunghezza della risposta la fissa il prompt (1-4 frasi).
+      callUniversalAi('groq', [{ role: 'user', content: prompt }], { temperature: 0.3, max_tokens: CHIEDI_MAX_TOKENS, groqOnTheFly: o.utenteInAttesa, ultimaSpiaggiaPagante: o.utenteInAttesa },
         'chiedi_domanda', sUrl, sKey, typeof getGroqClient === 'function' ? getGroqClient() : null, o.utenteInAttesa ? undefined : 'background-script'),
       new Promise((res) => { timer = setTimeout(() => res(null), 18000); }),
     ]);
     clearTimeout(timer);
     const uscita = narrazioneSenzaPensiero(String(r?.data || r?.text || '')).replace(/[#*_~`]/g, '').trim();
+    // REGOLA 21/11/2026 (collaudo notturno, Lisbona 03:51: Groq in pausa, Agnes/Mistral/Gemini 429, Together 402 —
+    // l'eccezione diventava «Su questo non ho informazioni verificate…» per Estufa Fria «nel 1933», che il materiale
+    // dice). Un GUASTO (nessun motore, tetto dei 18 s, contenuto vuoto) non è «non lo so»: è una risposta che non c'è.
+    // Si torna vuoto e la rotta lo dichiara; l'app mostra il suo messaggio d'errore (sk_risposta_errore), mai una
+    // frase che dice che il luogo non ha informazioni.
+    if (!r || !uscita) return '';
     // REGOLA (23/10/2026, collaudo 7 città: Chiedi lesse «NONLOSO»): il segnale «non so» del modello arriva in
     // ogni grafia (NON_LO_SO, NONLOSO, NON LO SO, «non lo so.»): in qualunque forma → la frase onesta fissa.
-    if (!uscita || eNonLoSo(uscita) || ragionamentoDelModello(uscita) || rifiutoDelModello(uscita) || GERGO_DEL_PROMPT.test(uscita)) return nonSo;
+    if (eNonLoSo(uscita) || ragionamentoDelModello(uscita) || rifiutoDelModello(uscita) || GERGO_DEL_PROMPT.test(uscita)) return nonSo;
     return uscita;
-  } catch { clearTimeout(timer); return nonSo; }
+  } catch { clearTimeout(timer); return ''; }
 }
 
 // ── FATTI SUPERATI, SEGNAPOSTI, AGGREGATORI (23/10/2026, collaudo 7 città: Guida d'Autore) ─────────────
@@ -2772,9 +3739,9 @@ function isPublicHttpUrl(raw: any): boolean {
 //      fissa del repo dopo La Spezia e le 210 foto sbagliate.
 const tokensNomeLuogo = (s: string): string[] => {
   const stop = new Set(['di','del','della','dei','delle','degli','the','of','la','le','il','lo','san','santa','santo','chiesa','church','museo','museum','musee','museu','palazzo','villa','via','piazza','torre','castello','castle','cattedrale','cathedral','basilica','teatro','theatre','theater','parco','park','monte','lago','lake','de','du','des','el','los','las','and','e','y','et','und','der','die','das','von','national','nazionale','civico','galleria','gallery','fondazione','foundation','centro','center','centre','casa','house']);
-  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((t) => t.length >= 4 && !stop.has(t));
+  return pianaLettere(s).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((t) => t.length >= 4 && !stop.has(t));
 };
-const normTesto = (s: string) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+const normTesto = (s: string) => pianaLettere(s).replace(/[^a-z0-9]/g, '');
 
 /** VISITA DELLE PAGINE TROVATE (19/09/2026, committente: «con SearXNG andare a
  *  visitare quando cerca qualcosa»). Uno snippet di due righe non dice se la
@@ -2818,19 +3785,29 @@ function chiaveNomeLocale(nomePulito: string): string {
 }
 // (23/10/2026) Si firmano TUTTE le forme del nome (variantiNomeTappa): «Kafana Question Mark (Znak Pitanja)» è
 // citata dalle pagine serbe come «Znak Pitanja». Vince la prima forma citata insieme alla città.
-async function firmaWebLuogo(nome: string, citta: string, lang: string, eLocale = false): Promise<{ hit: boolean; conCitta: boolean; cercato?: string } | null> {
+// (14/11/2026, Zurigo) LA CITTÀ IN TUTTE LE SUE FORME. Le pagine del posto scrivono «Zürich» o «Zurich», l'utente
+// «Zurigo»: la prova «nome + città» falliva su luoghi veri (Hiltl, St. Peter, Lindt). Dal punto si leggono il nome
+// locale, quello inglese e quello nella lingua dell'utente (un reverse Nominatim, in cache 30 giorni).
+async function formeCittaDaPunto(lat: any, lon: any, lang: string): Promise<string[]> {
+  const la = Number(lat), lo = Number(lon);
+  if (!Number.isFinite(la) || !Number.isFinite(lo) || (la === 0 && lo === 0)) return [];
+  const n = await eventiFeed.cittaInTreNomi(la, lo, lang).catch(() => null);
+  if (!n) return [];
+  return [...new Set([n.locale, n.en, n.utente].map((x) => String(x || '').trim()).filter((x) => x.length >= 3))];
+}
+async function firmaWebLuogo(nome: string, citta: string, lang: string, eLocale = false, altreCitta: string[] = []): Promise<{ hit: boolean; conCitta: boolean; cercato?: string } | null> {
   if (!process.env.SEARXNG_URL) return null;
   const forme = variantiNomeTappa(nome, citta);
-  if (forme.length <= 1) return firmaWebLuogoUno(nome, citta, lang, eLocale);
+  if (forme.length <= 1) return firmaWebLuogoUno(nome, citta, lang, eLocale, altreCitta);
   let migliore: { hit: boolean; conCitta: boolean; cercato?: string } | null = null;
   for (const f of forme.slice(0, 3)) {
-    const r = await firmaWebLuogoUno(f, citta, lang, eLocale);
+    const r = await firmaWebLuogoUno(f, citta, lang, eLocale, altreCitta);
     if (r?.conCitta) return r;
     if (r && (!migliore || (r.hit && !migliore.hit))) migliore = r;
   }
   return migliore;
 }
-async function firmaWebLuogoUno(nome: string, citta: string, lang: string, eLocale = false): Promise<{ hit: boolean; conCitta: boolean; cercato?: string } | null> {
+async function firmaWebLuogoUno(nome: string, citta: string, lang: string, eLocale = false, altreCitta: string[] = []): Promise<{ hit: boolean; conCitta: boolean; cercato?: string } | null> {
   if (!process.env.SEARXNG_URL) return null;
   const nomePulito = nomeLuogoDaTappa(nome).replace(/\s*\(.*?\)\s*$/, '').replace(/\s+/g, ' ').trim();
   const tok = tokensNomeLuogo(nomePulito);
@@ -2865,7 +3842,7 @@ async function firmaWebLuogoUno(nome: string, citta: string, lang: string, eLoca
   try {
     const ris = await eventiFeed.ricercaWeb(`"${nomePulito}" ${String(citta || '').trim()}`, { lang, count: 8, provider: 'searxng' });
     if (!ris.length) return { hit: false, conCitta: false, cercato: nomePulito };
-    const cittaTok = tokensNomeLuogo(citta);
+    const cittaTok = [...new Set([citta, ...altreCitta].flatMap((c) => tokensNomeLuogo(c)))];
     let hit = false, conCitta = false;
     for (const r of ris) {
       const testo = normTesto(`${r.title} ${r.snippet}`);
@@ -2947,6 +3924,12 @@ function variantiNomeTappa(nome: any, citta: any = ''): string[] {
   const out: string[] = [];
   const senza = base.replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
   if (senza) out.push(senza);
+  // REGOLA 21/11/2026 (collaudo notturno: «Cena da Hofbräuhaus» → «Da Hofbräuhaus», «Cena da Chez Vincent» → «Da Chez
+  // Vincent», rimasti «da verificare» perché gli archivi cercavano il «Da»). «Da Gino» è un nome, «da Hofbräuhaus» no:
+  // non si sa quale, quindi si cerca ANCHE senza il «Da» davanti (il titolo della tappa non cambia) — solo quando il
+  // resto porta lettere che l'italiano non ha (ä, ö, ß, ñ, ç…): «Da Gino» resta cercato solo come «Da Gino».
+  const senzaDa = senza.replace(/^(?:da|dal|dalla|dai)\s+(?=\S{2,})/i, '').trim();
+  if (senzaDa && senzaDa !== senza && senzaDa.length >= 3 && /[äöüßñçøåæœłšžčřđőű]/i.test(senzaDa)) out.push(senzaDa);
   const cittaTok = new Set(paroleNome(citta));
   for (const m of base.matchAll(/\(([^)]+)\)/g)) {
     const d = m[1].replace(/\s+/g, ' ').trim();
@@ -3020,6 +4003,42 @@ const NOTE_PASTO: Record<string, { sostituito: string; nonTrovato: string; consi
   ES: { sostituito: '🔁 Local sustituido: «{nome}» no parece existir en {citta}. Este está en nuestro archivo: comprueba horarios y reserva.', nonTrovato: '⚠ Local no encontrado: «{nome}» no parece existir en {citta} y el archivo no tiene nada cerca. Elige dónde comer en la zona.', consiglio: 'Local del archivo WIP: reserva y comprueba los horarios.', nessunaPagina: '⚠ Ninguna página web cita este nombre en {citta}: puede no existir o llamarse de otra forma. Compruébalo antes de ir.', posizione: '📍 Posición no confirmada: el geocodificador no encontró este lugar. Comprueba la dirección antes de ir.' },
   DE: { sostituito: '🔁 Lokal ersetzt: „{nome}“ wurde in {citta} nicht gefunden. Dieses steht in unserem Archiv: Öffnungszeiten prüfen und reservieren.', nonTrovato: '⚠ Lokal nicht gefunden: „{nome}“ scheint es in {citta} nicht zu geben, und im Archiv ist nichts in der Nähe. Wähle selbst ein Lokal in der Gegend.', consiglio: 'Lokal aus dem WIP-Archiv: reservieren und Öffnungszeiten prüfen.', nessunaPagina: '⚠ Keine Webseite nennt diesen Namen in {citta}: vielleicht existiert er nicht oder heißt anders. Vor dem Besuch prüfen.', posizione: '📍 Position nicht bestätigt: der Geocoder hat diesen Ort nicht gefunden. Adresse vor dem Besuch prüfen.' },
 };
+// (14/11/2026, Zurigo: «Hiltl» sostituito) Locale che gli archivi non hanno ma che le pagine web citano col nome
+// intero insieme alla città: NON si sostituisce (potrebbe essere vero), resta col suo nome e l'avviso.
+const NOTE_SOLO_WEB: Record<string, string> = {
+  IT: '⚠ «{nome}» è citato sul web a {citta} ma non è nei nostri archivi di locali: controlla indirizzo e orari prima di andarci.',
+  EN: '⚠ “{nome}” is mentioned on the web in {citta} but is not in our venue archives: check the address and opening hours before going.',
+  FR: '⚠ « {nome} » est cité sur le web à {citta} mais n’est pas dans nos archives : vérifiez l’adresse et les horaires avant d’y aller.',
+  ES: '⚠ «{nome}» aparece en la web en {citta} pero no está en nuestros archivos de locales: comprueba dirección y horarios antes de ir.',
+  DE: '⚠ „{nome}“ wird im Web in {citta} genannt, steht aber nicht in unseren Lokal-Archiven: Adresse und Öffnungszeiten vor dem Besuch prüfen.',
+};
+// ── TAPPA «DA VERIFICARE» MAI CONSEGNATA COSÌ (23/11/2026, collaudo notturno 22→23/11: 22 casi gravi in 15 città —
+// «Astrid y Gastón» a Lima, «Parrilla La Dorita» a Buenos Aires, «Olive et Gourmando» a Montréal, «Mitsitam Native Foods
+// Café» a Washington lasciati con «⚠ … è citato sul web ma non è nei nostri archivi», «The Rusty Spoon» a Orlando con
+// «📍 Posizione non confermata»). REGOLA: un pasto che il web cita col NOME INTERO nella città (firma forte) si conferma se
+// il geocoder («nome, città»: Wikidata, Wikipedia, Nominatim) lo trova entro 1,5 km dal punto del modello o nella città
+// del viaggio → «verificata» con quelle coordinate (`coordinate_fonte`). Se il geocoder non lo trova, si SOSTITUISCE con
+// un locale vero vicino (sostituisciPastoInventato → cercaLocaleVero), come i pasti inventati. Solo senza nessun
+// sostituto resta con l'avviso. Vale anche per il pasto che arriva al geocoder senza posizione confermata.
+const PASTO_GEOCODER_MODELLO_M = 1500;
+const PASTO_GEOCODER_CITTA_KM = 25;
+/** Il punto del geocoder conferma il pasto? Entro 1,5 km dal punto del modello, o entro 25 km da un centro del viaggio
+ *  (area metropolitana, come l'aggancio). Pura: la prova il banco. */
+function pastoConfermatoDalGeocoder(g: any, punto: any, centri: Array<{ lat: number; lon: number }> = []): boolean {
+  const la = Number(g?.lat), lo = Number(g?.lon);
+  if (!Number.isFinite(la) || !Number.isFinite(lo) || (la === 0 && lo === 0)) return false;
+  const pLa = Number(punto?.lat), pLo = Number(punto?.lon ?? punto?.lng);
+  if (Number.isFinite(pLa) && Number.isFinite(pLo) && (pLa !== 0 || pLo !== 0) && getHaversineDistance(pLa, pLo, la, lo) <= PASTO_GEOCODER_MODELLO_M) return true;
+  return (centri || []).some((c) => Number.isFinite(Number(c?.lat)) && Number.isFinite(Number(c?.lon)) && getHaversineDistance(Number(c.lat), Number(c.lon), la, lo) <= PASTO_GEOCODER_CITTA_KM * 1000);
+}
+const NOTE_PASTO_SENZA_INDIRIZZO: Record<string, string> = {
+  IT: '🔁 Locale sostituito: «{nome}» è citato sul web a {citta}, ma né gli archivi di locali né il geocoder ne confermano l’indirizzo. Questo è nel nostro archivio, vicino alle altre tappe: controlla gli orari e prenota.',
+  EN: '🔁 Venue replaced: “{nome}” is mentioned on the web in {citta}, but neither our venue archives nor the geocoder confirm its address. This one is in our archive, near the other stops: check opening hours and book.',
+  FR: '🔁 Adresse remplacée : « {nome} » est cité sur le web à {citta}, mais ni nos archives ni le géocodeur n’en confirment l’adresse. Celle-ci est dans notre archive, près des autres étapes : vérifiez les horaires et réservez.',
+  ES: '🔁 Local sustituido: «{nome}» aparece en la web en {citta}, pero ni nuestros archivos ni el geocodificador confirman su dirección. Este está en nuestro archivo, cerca de las otras paradas: comprueba horarios y reserva.',
+  DE: '🔁 Lokal ersetzt: „{nome}“ wird im Web in {citta} genannt, aber weder unsere Archive noch der Geocoder bestätigen die Adresse. Dieses steht in unserem Archiv, nahe den anderen Stationen: Öffnungszeiten prüfen und reservieren.',
+};
+const notaPastoSenzaIndirizzo = (language: any) => NOTE_PASTO_SENZA_INDIRIZZO[String(language || 'IT').toUpperCase().slice(0, 2)] || NOTE_PASTO_SENZA_INDIRIZZO.EN;
 // (23/10/2026) Tappa che la verifica NON ha fatto in tempo a controllare: mai «verificata» per silenzio.
 const NOTE_NON_VERIFICATO: Record<string, string> = {
   IT: '⚠ Non è stato possibile verificare questa tappa in tempo: controlla nome, indirizzo e orari prima di andarci.',
@@ -3198,18 +4217,20 @@ async function cercaLocaleVero(ancora: { lat: number; lon: number }, tipo: strin
 // (23/10/2026) Tutte le forme del nome (variantiNomeTappa: senza parentesi, poi l'originale fra parentesi) e mai un
 // mercato/pasticceria/bar/caffè per un pranzo o una cena (nonAdattoAPastoPrincipale). null solo se TUTTE le forme sono
 // state cercate e nessuna c'è; undefined = archivi non interrogabili o esistenza confermata solo dal web.
-async function localeEsistePerNome(nome: string, ancora: { lat: number; lon: number } | null, lang: string, tipo = ''): Promise<{ id: string; name: string; lat: number; lon: number; address: string; phone: string; website: string; fonte: string } | null | undefined> {
+async function localeEsistePerNome(nome: string, ancora: { lat: number; lon: number } | null, lang: string, tipo = '', citta = '', punto: { lat: number; lon: number } | null = null): Promise<{ id: string; name: string; lat: number; lon: number; address: string; phone: string; website: string; fonte: string } | null | undefined> {
   const varianti = variantiNomeTappa(nome);
   const forme = varianti.length ? varianti : [nome];
   let nulli = 0;
+  // Il nome della città come lo scrivono le pagine del posto («Zürich», non «Zurigo»).
+  const cittaLocale = ancora ? (await formeCittaDaPunto(ancora.lat, ancora.lon, lang).catch(() => [] as string[])).find((c) => normTesto(c) !== normTesto(citta)) || '' : '';
   for (const v of forme) {
-    const r = await localeEsistePerNomeUno(v, ancora, lang, tipo);
+    const r = await localeEsistePerNomeUno(v, ancora, lang, tipo, citta, cittaLocale, punto);
     if (r) return r;
     if (r === null) nulli++;
   }
   return nulli === forme.length ? null : undefined;
 }
-async function localeEsistePerNomeUno(nome: string, ancora: { lat: number; lon: number } | null, lang: string, tipo = ''): Promise<{ id: string; name: string; lat: number; lon: number; address: string; phone: string; website: string; fonte: string } | null | undefined> {
+async function localeEsistePerNomeUno(nome: string, ancora: { lat: number; lon: number } | null, lang: string, tipo = '', citta = '', cittaLocale = '', punto: { lat: number; lon: number } | null = null): Promise<{ id: string; name: string; lat: number; lon: number; address: string; phone: string; website: string; fonte: string } | null | undefined> {
   const principale = tipoEPastoPrincipale(tipo);
   const nomePulito = nomeLuogoDaTappa(nome).replace(/\s*\(.*?\)\s*$/, '').trim();
   if (!nomePulito || !ancora) return undefined;
@@ -3243,9 +4264,19 @@ async function localeEsistePerNomeUno(nome: string, ancora: { lat: number; lon: 
         interrogato = true;
         const dLat = 8 / 111, dLon = dLat / Math.max(0.15, Math.cos(ancora.lat * Math.PI / 180));
         const r = await axios.get(`${supabaseUrl}/rest/v1/locali_pois?select=id,name,lat,lon,address,city,phone,website,sub_category,operating_status&name=ilike.*${encodeURIComponent(proprie[0])}*&lat=gte.${ancora.lat - dLat}&lat=lte.${ancora.lat + dLat}&lon=gte.${ancora.lon - dLon}&lon=lte.${ancora.lon + dLon}&limit=30`, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 8000 });
-        const righe: any[] = (Array.isArray(r.data) ? r.data : []).filter((p: any) => p?.name && p.operating_status !== 'closed' && !/^(iti-|ai_)/.test(String(p.id || '')) && somiglianzaNomi(nomePulito, p.name) >= 0.6 && localeStessoNome(nomePulito, p.name) && !(principale && nonAdattoAPastoPrincipale(p.name, p.sub_category)));
-        righe.sort((a, b) => getHaversineDistance(ancora.lat, ancora.lon, Number(a.lat), Number(a.lon)) - getHaversineDistance(ancora.lat, ancora.lon, Number(b.lat), Number(b.lon)));
-        const p = righe[0];
+        // (14/11/2026, Zurigo) «Restaurant Hiltl» non trovava «Haus Hiltl»: la somiglianza a parole era 0,5 e il locale,
+        // vero e famoso, è stato sostituito. Quando TUTTE le parole proprie della tappa stanno nella riga
+        // (localeStessoNome) e la più lunga ha almeno 5 lettere, una sola parola in più nella riga non cambia locale.
+        const proprieTappa = paroleProprieLocale(nomePulito);
+        const stessoMarchio = (nomeRiga: any) => proprieTappa.some((w) => w.length >= 5) && paroleProprieLocale(nomeRiga).length <= proprieTappa.length + 1;
+        const righe: any[] = (Array.isArray(r.data) ? r.data : []).filter((p: any) => p?.name && p.operating_status !== 'closed' && !/^(iti-|ai_)/.test(String(p.id || '')) && localeStessoNome(nomePulito, p.name) && (somiglianzaNomi(nomePulito, p.name) >= 0.6 || stessoMarchio(p.name)) && !(principale && nonAdattoAPastoPrincipale(p.name, p.sub_category)));
+        // (14/11/2026, Zurigo) «Restaurant Markthalle» (il modello intendeva la Markthalle im Viadukt) si è agganciato
+        // all'omonimo di Aargauerstrasse, 2 km più a ovest: l'ancora è la tappa PRIMA, non il punto del pasto. Quando
+        // il modello ha dato un punto suo, vale la regola dell'aggancio: entro LOCALE_AGGANCIO_MAX_M da quel punto.
+        const rif = punto && Number.isFinite(punto.lat) && Number.isFinite(punto.lon) && (punto.lat !== 0 || punto.lon !== 0) ? punto : ancora;
+        const vicine = punto && rif === punto ? righe.filter((x) => getHaversineDistance(rif.lat, rif.lon, Number(x.lat), Number(x.lon)) <= LOCALE_AGGANCIO_MAX_M) : righe;
+        vicine.sort((a, b) => getHaversineDistance(rif.lat, rif.lon, Number(a.lat), Number(a.lon)) - getHaversineDistance(rif.lat, rif.lon, Number(b.lat), Number(b.lon)));
+        const p = vicine[0];
         if (p) return { id: String(p.id), name: String(p.name), lat: Number(p.lat), lon: Number(p.lon), address: String(p.address || p.city || ''), phone: String(p.phone || ''), website: String(p.website || ''), fonte: 'Archivio WIP (locali)' };
       }
     } catch (e: any) { console.warn('[Itinerario] archivio locali per nome fallito:', e?.message); }
@@ -3256,10 +4287,18 @@ async function localeEsistePerNomeUno(nome: string, ancora: { lat: number; lon: 
   if (process.env.SEARXNG_URL) {
     try {
       const chiave = chiaveNomeLocale(nomePulito);
-      const ris = await eventiFeed.ricercaWeb(`"${nomePulito}" ristorante`, { lang, count: 8, provider: 'searxng' });
+      // (14/11/2026) La ricerca porta la CITTÀ e la parola del posto: «"Hiltl" ristorante» non trovava le pagine di
+      // Zurigo, che dicono «restaurant». Prima la forma nella lingua dell'utente, poi quella internazionale.
+      const parolaLocale = lang === 'it' ? 'ristorante' : lang === 'es' ? 'restaurante' : 'restaurant';
+      let ris = await eventiFeed.ricercaWeb(`"${nomePulito}" ${String(citta || '').trim()} ${parolaLocale}`.replace(/\s+/g, ' '), { lang, count: 8, provider: 'searxng' });
+      const SITI_RECENSIONI = /tripadvisor\.|thefork\.|lafourchette|restaurantguru|guide\.michelin|yelp\.|gamberorosso|2spaghi|paginegialle|opentable\.|quandoo\.|happycow\.|falstaff\.|gaultmillau/i;
+      const confermaIn = (lista: any[]) => lista.find((x: any) => SITI_RECENSIONI.test(x.url) && normTesto(`${x.title}`).includes(chiave));
+      if (chiave.length >= 5 && !confermaIn(ris) && parolaLocale !== 'restaurant') {
+        ris = await eventiFeed.ricercaWeb(`"${nomePulito}" ${String(cittaLocale || citta || '').trim()} restaurant`.replace(/\s+/g, ' '), { lang: 'en', count: 8, provider: 'searxng' }).catch(() => ris);
+      }
       if (chiave.length >= 5) {
         interrogato = true;
-        const conferma = ris.find((x: any) => /tripadvisor\.|thefork\.|lafourchette|restaurantguru|guide\.michelin|yelp\.|gamberorosso|2spaghi|paginegialle/i.test(x.url) && normTesto(`${x.title}`).includes(chiave));
+        const conferma = confermaIn(ris);
         if (conferma && !(principale && nonAdattoAPastoPrincipale(nomePulito))) return undefined;
       }
     } catch { /* ricerca giù: si prova Foursquare */ }
@@ -3267,8 +4306,8 @@ async function localeEsistePerNomeUno(nome: string, ancora: { lat: number; lon: 
   const fsqKey = process.env.FOURSQUARE_API_KEY || process.env.VITE_FOURSQUARE_API_KEY;
   if (fsqKey && await foursquareBudgetOk()) {
     try {
-      interrogato = true;
       const r = await axios.get(`https://places-api.foursquare.com/places/search?query=${encodeURIComponent(nomePulito)}&ll=${ancora.lat},${ancora.lon}&radius=8000&limit=10&fields=fsq_place_id,name,location,latitude,longitude,website,tel,categories`, { timeout: 6000, headers: { Authorization: `Bearer ${fsqKey}`, 'X-Places-Api-Version': '2025-06-17', Accept: 'application/json' } });
+      interrogato = true; // (14/11/2026) solo se Foursquare ha risposto: un 401 non è «cercato e non c'è»
       for (const p of (r.data?.results || [])) {
         if (somiglianzaNomi(nomePulito, p?.name) < 0.6) continue;
         if (!localeStessoNome(nomePulito, p?.name)) continue; // REGOLA 23/10/2026: stesse parole proprie
@@ -3323,7 +4362,159 @@ async function sostituisciPastoInventato(t: any, ancora: { lat: number; lon: num
 // («Forte di Santa Ana» → «Santa Ana»); ognuno passa da Wikidata (etichetta), Wikipedia e Nominatim. Solo se nessuna
 // forma dà un punto la tappa resta «da verificare». Per un pranzo/cena il risultato non può essere un mercato, una
 // pasticceria, un bar (nonAdattoAPastoPrincipale).
-async function posizioneDaGeocoder(nome: string, destination: string, lang: string, tipo = ''): Promise<{ lat: number; lon: number; nome: string } | null> {
+async function posizioneDaGeocoder(nome: string, destination: string, lang: string, tipo = '', dove: { localita?: string; riquadro?: { lat: number; lon: number; km: number } | null } = {}): Promise<{ lat: number; lon: number; nome: string } | null> {
+  // (18/11/2026, Malta) La località della tappa, quando c'è, viene PRIMA della città dell'itinerario: «Porta di Mdina,
+  // St. Julian's» non esiste per nessun geocoder. Poi la città dell'itinerario come sempre, poi il riquadro del
+  // viaggio senza città (Nominatim `viewbox` + `bounded`).
+  // (18/11/2026, collaudo Malta 1ef00dbf) Cache per processo (lo stesso nome torna fra stream, cron e guida) e niente
+  // attese fisse: il turno di Nominatim lo dà attendiTurnoNominatim, il resto (Wikidata, Wikipedia) va in parallelo.
+  const chiave = `${normTesto(nome)}|${normTesto(destination)}|${normTesto(dove.localita || '')}|${dove.riquadro ? `${dove.riquadro.lat.toFixed(2)},${dove.riquadro.lon.toFixed(2)}` : ''}`;
+  if (GEOCODER_TAPPE_CACHE.has(chiave)) return GEOCODER_TAPPE_CACHE.get(chiave) || null;
+  let g: any = null;
+  if (dove.localita) g = await posizioneDaGeocoderUno(nomeLuogoDaTappa(nome).replace(/\s*\(.*?\)\s*$/, '').trim() || nome, dove.localita, lang, tipo);
+  if (!g) g = await posizioneDaGeocoderTutteLeForme(nome, destination, lang, tipo);
+  if (!g && dove.riquadro) g = await posizioneNelRiquadro(nome, lang, tipo, dove.riquadro);
+  // (20/11/2026, collaudi notturni: «M+ Museum», «Hamburger Bahnhof – Museo per l'Arte Contemporanea», «Torre della
+  // Televisione di Žižkov», «Mercato notturno di Temple Street» «non trovati dal geocoder») Prima di dire «non trovato»:
+  // i QID del nome in TUTTE le lingue (qidsPerNomeTappa) con coordinate nel riquadro del viaggio, poi Nominatim con il
+  // nome INGLESE e nella LINGUA LOCALE delle etichette Wikidata.
+  if (!g) {
+    const centro = dove.riquadro || null;
+    const w = centro ? await confermaDaWikidata(nome, lang, centro, centro.km).catch(() => undefined) : undefined;
+    if (w) g = { lat: w.lat, lon: w.lon, nome: w.etichetta, fonte: 'wikidata' };
+    else if (w === null && centro) {
+      // QID senza coordinate nel riquadro: le etichette servono comunque a Nominatim
+      for (const et of (confermaDaWikidata.ultimeEtichette.get(normTesto(nome)) || []).slice(0, 3)) {
+        const g2: any = await posizioneDaGeocoderTutteLeForme(et, destination, lang, tipo).catch(() => null);
+        if (g2 && getHaversineDistance(centro.lat, centro.lon, g2.lat, g2.lon) <= centro.km * 1000) { g = g2; break; }
+      }
+    }
+  }
+  if (GEOCODER_TAPPE_CACHE.size > 2000) GEOCODER_TAPPE_CACHE.clear();
+  GEOCODER_TAPPE_CACHE.set(chiave, g);
+  return g;
+}
+/** (20/11/2026) CONFERMA FORTE da Wikidata: fra i QID del nome (qidsPerNomeTappa, etichette e alias in tutte le lingue)
+ *  quello con coordinate (P625) entro `km` dal centro del viaggio E con un'etichetta (it/en/lingua locale) che è lo stesso
+ *  luogo del nome (nomiStessoLuogo / tradotti, o la parola più distintiva). undefined = Wikidata non ha risposto (nessuna
+ *  prova contraria); null = cercato, niente nel raggio. Le etichette en/locali trovate restano per Nominatim. */
+async function confermaDaWikidata(nome: string, lang: string, centro: { lat: number; lon: number }, km: number): Promise<{ qid: string; lat: number; lon: number; etichetta: string; etichette: string[] } | null | undefined> {
+  const n = nomeLuogoDaTappa(String(nome || '')).trim();
+  if (!n || !centro || !Number.isFinite(Number(centro.lat))) return null;
+  const qids = await qidsPerNomeTappa(n, String(lang || 'it').toLowerCase().slice(0, 2)).catch(() => null);
+  if (qids === null) return undefined;
+  if (!qids.length) return null;
+  const UA = { 'User-Agent': 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)' };
+  const r = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${qids.slice(0, 12).map((x) => x.qid).join('|')}&props=claims|labels|aliases&format=json`, { headers: UA, timeout: 7000 }).catch(() => null);
+  if (!r?.data?.entities) return undefined;
+  const distintive = tokensNomeLuogo(n.replace(/\s*\(.*?\)\s*/g, ' ')).filter((t) => !PAROLE_TIPO_LOCALE.has(t)).sort((a, b) => b.length - a.length);
+  const traParentesi = (n.match(/\(([^()]{3,80})\)/) || [])[1] || '';
+  const etichetteViste: string[] = [];
+  let migliore: any = null;
+  for (const { qid } of qids) {
+    const e = r.data.entities[qid];
+    if (!e) continue;
+    const etichette = [...new Set([...Object.values(e.labels || {}).map((l: any) => String(l?.value || '')), ...Object.values(e.aliases || {}).flat().map((a: any) => String(a?.value || ''))].filter(Boolean))];
+    const stesso = etichette.some((et) => etichettaStessoLuogo(n, et) || (traParentesi && etichettaStessoLuogo(traParentesi, et))
+      || (distintive[0] && distintive[0].length >= 4 && normTesto(et).includes(distintive[0]) && (distintive.length < 2 || normTesto(et).includes(distintive[1]))));
+    if (!stesso) continue;
+    const en = String(e.labels?.en?.value || ''), loc = Object.entries(e.labels || {}).filter(([k]) => !['it', 'en'].includes(k)).map(([, v]: any) => String(v?.value || ''));
+    for (const et of [en, ...loc.slice(0, 2)]) if (et && normTesto(et) !== normTesto(n) && !etichetteViste.includes(et)) etichetteViste.push(et);
+    const c = e.claims?.P625?.[0]?.mainsnak?.datavalue?.value;
+    const la = Number(c?.latitude), lo = Number(c?.longitude);
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) continue;
+    const d = getHaversineDistance(Number(centro.lat), Number(centro.lon), la, lo);
+    if (d > km * 1000) continue;
+    if (!migliore || d < migliore.__d) migliore = { qid, lat: la, lon: lo, etichetta: String(e.labels?.[String(lang || 'it').toLowerCase()]?.value || en || etichette[0] || n), etichette: [], __d: d };
+  }
+  confermaDaWikidata.ultimeEtichette.set(normTesto(nome), etichetteViste);
+  if (confermaDaWikidata.ultimeEtichette.size > 2000) confermaDaWikidata.ultimeEtichette.clear();
+  if (!migliore) return null;
+  delete migliore.__d; migliore.etichette = etichetteViste;
+  return migliore;
+}
+confermaDaWikidata.ultimeEtichette = new Map<string, string[]>();
+/** Un'etichetta Wikidata (in qualunque lingua) è lo stesso luogo del nome scritto dal modello? Uguale, stesso luogo
+ *  (anche tradotto), oppure: almeno due parole dell'etichetta ritrovate nel nome (confronto sulle prime 5 lettere, così
+ *  «Television» = «Televisione»), almeno metà delle sue parole, e fra le ritrovate una delle sue parole più lunghe
+ *  («San Pietro in Vincoli» NON è «Chiesa di San Pietro»: «vincoli» manca). Pura: la prova il banco. */
+function etichettaStessoLuogo(nome: any, etichetta: any): boolean {
+  const a = String(nome || '').trim(), b = String(etichetta || '').trim();
+  if (!a || !b) return false;
+  if (normTesto(a) === normTesto(b) || nomiStessoLuogo(a, b, '') || nomiStessoLuogoTradotti(a, b, '')) return true;
+  const parole = (s: string) => pianaLettere(s).split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !/^(del|della|dei|delle|degli|the|and|von|der|die|das|des|les|los|las|per|sul|sulla|lungo|di)$/.test(w));
+  const pa = parole(a), pb = [...new Set(parole(b))];
+  if (pb.length < 2 || !pa.length) return false;
+  const pref = (w: string) => w.slice(0, 5);
+  const inA = new Set(pa.map(pref));
+  const trovate = pb.filter((w) => inA.has(pref(w)));
+  const max = Math.max(...pb.map((w) => w.length));
+  return trovate.length >= 2 && trovate.length * 2 >= pb.length && trovate.some((w) => w.length === max);
+}
+const GEOCODER_TAPPE_CACHE = new Map<string, any>();
+/** (18/11/2026, collaudo Malta 94f5e937) Esiste una LOCALITÀ (città, paese, frazione, quartiere, isola) con questo nome
+ *  entro `km` dal centro del viaggio? Nominatim nel riquadro (`viewbox` + `bounded`), solo risultati di tipo abitato, e
+ *  distanza misurata. Cache in memoria per processo; una richiesta al secondo come vuole Nominatim. */
+const LOCALITA_RAGGIO_CACHE = new Map<string, boolean>();
+// (18/11/2026, collaudo Malta 1ef00dbf: verifica 195 s, scaduta) UN SOLO turno per Nominatim in tutto il processo
+// (una richiesta al secondo, come vuole il servizio): così il geocoder delle tappe può lavorare IN PARALLELO su Wikidata
+// e Wikipedia, e solo le chiamate a Nominatim si mettono in fila.
+let prossimoTurnoNominatim = 0;
+async function attendiTurnoNominatim(): Promise<void> {
+  const ora = Date.now();
+  const mio = Math.max(ora, prossimoTurnoNominatim);
+  prossimoTurnoNominatim = mio + 1100;
+  if (mio > ora) await new Promise((r) => setTimeout(r, mio - ora));
+}
+async function localitaNelRaggio(nome: string, lat: number, lon: number, km: number): Promise<boolean> {
+  // «Victoria o Qormi», «Mdina / Rabat»: basta che UNA delle località proposte stia nel raggio.
+  const parti = String(nome || '').replace(/\s*\(.*?\)\s*/g, ' ').split(/\s+o\s+|\s+or\s+|\/|,/i).map((x) => x.trim()).filter(Boolean);
+  if (parti.length > 1) { for (const p of parti.slice(0, 3)) if (await localitaNelRaggio(p, lat, lon, km)) return true; return false; }
+  const n = parti[0] || '';
+  if (!n || !Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+  const chiave = `${normTesto(n)}|${lat.toFixed(2)}|${lon.toFixed(2)}|${Math.round(km)}`;
+  if (LOCALITA_RAGGIO_CACHE.has(chiave)) return LOCALITA_RAGGIO_CACHE.get(chiave) as boolean;
+  await attendiTurnoNominatim();
+  const dLa = km / 111, dLo = km / (111 * Math.max(0.15, Math.cos(lat * Math.PI / 180)));
+  let esito = false;
+  try {
+    const r = await axios.get('https://nominatim.openstreetmap.org/search', {
+      params: { q: n, format: 'jsonv2', limit: 5, viewbox: `${lon - dLo},${lat + dLa},${lon + dLo},${lat - dLa}`, bounded: 1 },
+      headers: { 'User-Agent': 'WorldInPocket/1.0 (audioguida geolocalizzata; support@wip.guide)', Accept: 'application/json' }, timeout: 6000,
+    });
+    esito = (Array.isArray(r.data) ? r.data : []).some((x: any) =>
+      /^(city|town|village|hamlet|suburb|quarter|neighbourhood|locality|municipality|administrative|island|islet|borough|city_district|isolated_dwelling)$/i.test(String(x.addresstype || x.type || ''))
+      && getHaversineDistance(lat, lon, Number(x.lat), Number(x.lon)) <= km * 1000);
+  } catch { return false; } // geocoder giù: nel dubbio la segnalazione resta (e non si ricorda)
+  LOCALITA_RAGGIO_CACHE.set(chiave, esito);
+  return esito;
+}
+/** Nominatim nel riquadro del viaggio, senza nome di città (18/11/2026). Stesse esclusioni di posizioneDaGeocoderUno. */
+async function posizioneNelRiquadro(nome: string, lang: string, tipo: string, rq: { lat: number; lon: number; km: number }): Promise<{ lat: number; lon: number; nome: string } | null> {
+  const principale = tipoEPastoPrincipale(tipo);
+  const nomePulito = nomeLuogoDaTappa(nome).replace(/\s*\(.*?\)\s*$/, '').trim();
+  const distintive = tokensNomeLuogo(nomePulito).filter((t) => !PAROLE_TIPO_LOCALE.has(t));
+  if (!nomePulito || !distintive.length || !Number.isFinite(rq?.lat) || !Number.isFinite(rq?.lon)) return null;
+  const piuLunga = [...distintive].sort((a, b) => b.length - a.length)[0];
+  const dLa = rq.km / 111, dLo = rq.km / (111 * Math.max(0.15, Math.cos(rq.lat * Math.PI / 180)));
+  try {
+    await attendiTurnoNominatim();
+    const r = await axios.get('https://nominatim.openstreetmap.org/search', {
+      params: { q: nomePulito, format: 'jsonv2', limit: 5, 'accept-language': lang || 'it', viewbox: `${rq.lon - dLo},${rq.lat + dLa},${rq.lon + dLo},${rq.lat - dLa}`, bounded: 1 },
+      headers: { 'User-Agent': 'WorldInPocket/1.0 (audioguida geolocalizzata; support@wip.guide)', Accept: 'application/json' }, timeout: 6000,
+    });
+    for (const x of (Array.isArray(r.data) ? r.data : [])) {
+      if (/^(city|town|village|municipality|administrative|county|state|country|suburb|hamlet|neighbourhood|quarter)$/i.test(String(x.type || x.addresstype || ''))) continue;
+      if (principale && (nonAdattoAPastoPrincipale(x.name, `${x.type || ''} ${x.category || ''}`) || /^(marketplace|bakery|pastry|confectionery|ice_cream|cafe|bar|pub)$/i.test(String(x.type || '')))) continue;
+      const testo = normTesto(`${x.name || ''} ${x.display_name || ''}`);
+      if (!testo.includes(piuLunga) || distintive.filter((t) => testo.includes(t)).length < Math.min(distintive.length, 2)) continue;
+      const la = Number(x.lat), lo = Number(x.lon);
+      if (Number.isFinite(la) && Number.isFinite(lo)) return { lat: la, lon: lo, nome: String(x.name || ''), fonte: 'nominatim' } as any;
+    }
+  } catch { /* geocoder giù: nessun risultato, non una prova contraria */ }
+  return null;
+}
+async function posizioneDaGeocoderTutteLeForme(nome: string, destination: string, lang: string, tipo = ''): Promise<{ lat: number; lon: number; nome: string } | null> {
   const forme = variantiNomeTappa(nome, destination);
   const senzaGeneriche = (f: string) => {
     const tutte = f.split(/\s+/);
@@ -3333,7 +4524,7 @@ async function posizioneDaGeocoder(nome: string, destination: string, lang: stri
   for (const f of [...forme]) { const g = senzaGeneriche(f); if (g && tokensNomeLuogo(g).length) forme.push(g); }
   const elenco = [...new Set(forme.length ? forme : [nome])].slice(0, 4);
   for (let k = 0; k < elenco.length; k++) {
-    if (k > 0) await new Promise((r) => setTimeout(r, 1100)); // Nominatim: una richiesta al secondo
+    // Nominatim: una richiesta al secondo — il turno lo dà attendiTurnoNominatim dentro la chiamata (18/11/2026).
     const g = await posizioneDaGeocoderUno(elenco[k], destination, lang, tipo);
     if (g) return g;
   }
@@ -3342,7 +4533,9 @@ async function posizioneDaGeocoder(nome: string, destination: string, lang: stri
 async function posizioneDaGeocoderUno(nome: string, destination: string, lang: string, tipo = ''): Promise<{ lat: number; lon: number; nome: string } | null> {
   const principale = tipoEPastoPrincipale(tipo);
   const nomePulito = nomeLuogoDaTappa(nome).replace(/\s*\(.*?\)\s*$/, '').trim();
-  const distintive = tokensNomeLuogo(nomePulito).filter((t) => !PAROLE_TIPO_LOCALE.has(t));
+  // (18/11/2026, collaudo Malta) Le parole della CITTÀ non confermano il nome: «Mercato di St. Julian's» trovava la città.
+  const paroleDest = paroleCitta(destination);
+  const distintive = tokensNomeLuogo(nomePulito).filter((t) => !PAROLE_TIPO_LOCALE.has(t) && !paroleDest.has(t));
   if (!nomePulito || !distintive.length) return null;
   const piuLunga = [...distintive].sort((a, b) => b.length - a.length)[0];
   // (21/10/2026, Carrara) PRIMA Wikidata: «Palazzo Cybo-Malaspina» ha la sua voce con le coordinate (P625) ma per
@@ -3382,6 +4575,7 @@ async function posizioneDaGeocoderUno(nome: string, destination: string, lang: s
     }
   } catch { /* Wikipedia giù: si prova il geocoder */ }
   try {
+    await attendiTurnoNominatim();
     const r = await axios.get('https://nominatim.openstreetmap.org/search', {
       params: { q: `${nomePulito}, ${destination}`, format: 'jsonv2', limit: 5, 'accept-language': lang || 'it' },
       headers: { 'User-Agent': 'WorldInPocket/1.0 (audioguida geolocalizzata; support@wip.guide)', Accept: 'application/json' }, timeout: 6000,
@@ -3594,16 +4788,30 @@ async function verifyItineraryAntiHallucination(itineraryObj: any, opts: any) {
   const { destination, radiusKm, specialRequests, interests, language, inDiretta } = opts || {};
   // lat/lon riassegnabili: la rete di sicurezza del controllo geografico può sostituire un riferimento omonimo.
   let lat: any = opts?.lat, lon: any = opts?.lon;
-  const stops = extractItineraryStops(itineraryObj).slice(0, 60);
+  // (18/11/2026, committente: «tutti i giorni, anche se fossero 7, devono essere verificati tappa per tappa») 7 giorni
+  // × 9 tappe passano le 60: il tetto è 80, come l'aggancio.
+  const stops = extractItineraryStops(itineraryObj).slice(0, 80);
   if (stops.length === 0) return { checked: 0, flagged: 0 };
+  // Una tappa che entra qui viene verificata ADESSO: il segno «rimandata per tempo» di una passata precedente cade, e
+  // torna solo se anche questa passata finisce il tempo prima di arrivarci.
+  for (const s of stops) if (s?.ref?.verifica_rimandata) delete s.ref.verifica_rimandata;
+  let rimandate = 0;
+  const rimanda = (t: any) => { if (t && !t.verifica_rimandata) { t.verifica_rimandata = true; rimandate++; } };
   // REGOLA (23/10/2026, Belgrado: il chiamante tagliava a 20 s mentre la sola firma web dei pasti ne usava 45 —
   // nessuna tappa ha ricevuto `verifica`, sono passati un ristorante inesistente e una cena a 775 m). La verifica ha
   // UNA scadenza (`opts.tettoMs`) e ogni fase si misura su quella: la firma web lascia il tempo ai pasti e al geocoder,
   // e ciò che non si fa in tempo esce «da_verificare» con la nota, mai «verificata» per silenzio (chiusura in fondo).
   const scadenza = Number(opts?.tettoMs) > 0 ? Date.now() + Number(opts.tettoMs) : Infinity;
   const restaMs = () => scadenza - Date.now();
-  const riserva = Number.isFinite(scadenza) ? Math.min(30000, Number(opts.tettoMs) * 0.4) : 0;
+  // La riserva è il tempo tenuto per pasti e geocoder dopo la firma web. Con un tetto lungo (18/11/2026: la verifica
+  // in diretta ora ha tutto il tempo che resta dei 300 s) cresce con le tappe da controllare: Nominatim va in fila
+  // (~1,1 s l'una, fino a 4 forme del nome) e ogni pasto passa da TripAdvisor/Foursquare. Ricalcolata dopo l'aggancio.
+  let riserva = Number.isFinite(scadenza) ? Math.min(30000, Number(opts.tettoMs) * 0.4) : 0;
   let tempoScaduto = false;
+  // (18/11/2026, collaudo Malta 1ef00dbf) Tempi per fase, scritti in qualita.verifica.fasi_ms: si vede dove va il tempo.
+  const fasi: Record<string, number> = {};
+  let tFase = Date.now();
+  const segnaFase = (nome: string) => { const ora = Date.now(); fasi[nome] = (fasi[nome] || 0) + (ora - tFase); tFase = ora; };
 
   // 0) Prima di tutto: coordinate, indirizzi e contatti dal NOSTRO database,
   //    non dall'AI (vedi agganciaTappeAlDatabase). Va fatto prima del
@@ -3613,12 +4821,20 @@ async function verifyItineraryAntiHallucination(itineraryObj: any, opts: any) {
     const agCancel = { cancelled: false };
     let agTimer: any;
     const ag: any = await Promise.race([
-      agganciaTappeAlDatabase(itineraryObj, centro, destination, agCancel),
+      agganciaTappeAlDatabase(itineraryObj, centro, destination, agCancel, opts?.giudice ? { giudice: true } : undefined),
       new Promise((r) => { agTimer = setTimeout(() => { agCancel.cancelled = true; r({ agganciate: 0, pasti_fuori_orario: 0, scaduto: true }); }, Number.isFinite(scadenza) ? Math.max(3000, Math.min(15000, restaMs() - riserva - 5000)) : 2 ** 30); }),
     ]).finally(() => clearTimeout(agTimer));
+    // (18/11/2026) Giudice nei casi dubbi anche qui (cron di completamento, «Aggiungi giorno»): le tappe agganciate ora.
+    if (opts?.giudice) await giudicaAgganciDubbi(itineraryObj, { destination, userId: opts.userIdGiudice, tettoMs: Number.isFinite(scadenza) ? Math.max(3000, Math.min(15000, restaMs() - riserva - 5000)) : 15000 }).catch(() => null);
     console.log(`[Itinerario] tappe agganciate al DB: ${ag.agganciate}/${stops.length}, pasti fuori orario: ${ag.pasti_fuori_orario}`);
   } catch (e: any) {
     console.warn('[Itinerario] aggancio al DB fallito:', e?.message);
+  }
+  segnaFase('aggancio');
+  if (Number.isFinite(scadenza)) {
+    const nonAgganciate = stops.filter((s) => !s?.ref?.poi_id && !TIPO_ALLOGGIO_RIENTRO.test(String(s?.ref?.tipo || ''))).length;
+    const pasti = stops.filter((s) => !s?.ref?.poi_id && TIPI_PASTO.test(String(s?.ref?.tipo || ''))).length;
+    riserva = Math.max(riserva, Math.min(restaMs() * 0.55, 8000 + nonAgganciate * 2500 + pasti * 4000));
   }
 
   // Nota "chicca" nella lingua dell'utente: tono da consiglio, NON da allarme.
@@ -3747,6 +4963,7 @@ async function verifyItineraryAntiHallucination(itineraryObj: any, opts: any) {
   // definizione), al massimo 12 per non pesare sul tetto dei 20 s in diretta,
   // due alla volta per rispettare il limite dell'istanza SearXNG.
   const firmeWeb = new Map<number, { hit: boolean; conCitta: boolean; cercato?: string }>();
+  const nonFirmatePerTempo = new Set<number>(); // tappe che la firma web non ha cercato perché il tempo è finito
   const firmeWebPromise = (async () => {
     if (!process.env.SEARXNG_URL) return;
     // REGOLA FISSA (20/10/2026, Carrara: tre pasti inventati in tre generazioni, tutti «verificati»): si cercano
@@ -3756,13 +4973,20 @@ async function verifyItineraryAntiHallucination(itineraryObj: any, opts: any) {
     const daFirmare = stops.map((s, i) => ({ s, i }))
       .filter(({ s }) => !s.ref.poi_id && (s.ref.titolo_tappa || s.ref.titolo) && !TIPO_ALLOGGIO_RIENTRO.test(String(s.ref.tipo || '')))
       .sort((a, b) => Number(ePasto(b.s)) - Number(ePasto(a.s)))
-      .slice(0, 30);
+      .slice(0, 80);
     // (23/10/2026) Il tetto della firma web rispetta la scadenza della verifica: dopo vengono i pasti e il geocoder.
-    const tetto = Math.min(Date.now() + (inDiretta ? 45000 : 150000), scadenza - riserva);
+    // (18/11/2026) Con una scadenza data dal chiamante vale solo quella (meno la riserva): il vecchio tetto fisso di
+    // 45 s in diretta lasciava senza firma le tappe degli ultimi giorni di un viaggio lungo.
+    const tetto = Number.isFinite(scadenza) ? scadenza - riserva : Date.now() + (inDiretta ? 45000 : 150000);
+    const altreCitta = daFirmare.length ? await formeCittaDaPunto(lat, lon, String(language || 'it').toLowerCase()).catch(() => [] as string[]) : [];
     for (let k = 0; k < daFirmare.length; k += 2) {
-      if (Date.now() > tetto) { console.warn(`[Itinerario] "${destination}": firma web fermata al tetto di tempo, ${daFirmare.length - k} tappe non cercate`); break; }
+      if (Date.now() > tetto) {
+        console.warn(`[Itinerario] "${destination}": firma web fermata al tetto di tempo, ${daFirmare.length - k} tappe non cercate`);
+        for (const { i } of daFirmare.slice(k)) nonFirmatePerTempo.add(i);
+        break;
+      }
       await Promise.all(daFirmare.slice(k, k + 2).map(async ({ s, i }) => {
-        const f = await firmaWebLuogo(s.ref.titolo_tappa || s.ref.titolo, destination, String(language || 'it').toLowerCase(), ePasto(s));
+        const f = await firmaWebLuogo(s.ref.titolo_tappa || s.ref.titolo, destination, String(language || 'it').toLowerCase(), ePasto(s), altreCitta);
         if (f) firmeWeb.set(i, f);
       }));
     }
@@ -3825,6 +5049,9 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
     temperature: 0.1,
     response_format: { type: 'json_object' as const },
     ultimaSpiaggiaPagante: inDiretta === true,
+    // (15/11/2026, committente: «revisore / 2 on the fly / pool») In diretta Groq prova le due chiavi on the fly
+    // prima del pool comune; nei lavori di sfondo mai.
+    groqOnTheFly: inDiretta === true,
     // In diretta Agnes (60 s di timeout, 2-4 min reali) non entra in coda:
     // brucerebbe da solo il tetto di 20 s e DeepSeek non verrebbe mai
     // raggiunto. Nella libreria di sfondo resta.
@@ -3894,6 +5121,7 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
     } catch { /* atlante illeggibile: vale l'altro */ }
   }
 
+  segnaFase('revisori_ai');
   let verdicts: any[] = [];
   let primaDomandaPersa = false;
   try {
@@ -3907,9 +5135,36 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
     primaDomandaPersa = true;
   }
 
+  // ── «ALTRA CITTÀ» DENTRO IL RAGGIO DEL VIAGGIO NON È UN'ALTRA CITTÀ (18/11/2026, collaudo Malta 94f5e937) ──────────
+  // Malta da St. Julian's con raggio 15 km: sette tappe vere bocciate «Si trova a Mdina, non a St. Julian's», «Si trova
+  // a Marsaxlokk», «ad Attard», «a Valletta» — tutte località entro il raggio del viaggio: sono gite, non omonimi. Le
+  // città che i revisori nominano si cercano nel RIQUADRO del viaggio (Nominatim, `viewbox` + `bounded`): se una località
+  // con quel nome c'è dentro il raggio, la tappa non è «in un'altra città». Mosca per un viaggio a San Pietroburgo,
+  // Gozo (30 km) per uno a St. Julian's con 15 km restano fuori, e la segnalazione resta.
+  const raggioViaggioKm = Math.min(80, Math.max(Number(radiusKm) || 30, 5));
+  const cittaVicine = new Set<string>();
+  if (typeof lat === 'number' && typeof lon === 'number') {
+    const daProvare = [...new Set([
+      ...verdicts.filter((v: any) => v?.esiste === 'no').map((v: any) => String(v?.citta || '').trim()),
+      ...[...atlanti.values()].flat().map((r) => r.citta),
+    ].filter((c) => c && c !== '?' && cittaDiscordante(c, destination)))].slice(0, 8);
+    // In parallelo (il turno di Nominatim li mette in fila da sé, ~1 s l'uno, e la cache li rende gratuiti la seconda
+    // volta); tetto complessivo 12 s.
+    let tLoc: any;
+    await Promise.race([
+      Promise.all(daProvare.map(async (c) => { if (await localitaNelRaggio(c, lat, lon, raggioViaggioKm).catch(() => false)) cittaVicine.add(normTesto(c)); })),
+      new Promise((r) => { tLoc = setTimeout(r, Math.max(2000, Math.min(12000, restaMs() - 15000))); }),
+    ]).finally(() => clearTimeout(tLoc));
+    if (cittaVicine.size) console.log(`[Itinerario] "${destination}": località nel raggio di ${raggioViaggioKm} km, non «altre città»: ${[...cittaVicine].join(', ')}`);
+  }
+  const nelRaggio = (c: any) => !!c && cittaVicine.has(normTesto(String(c)));
+  segnaFase('localita_nel_raggio');
+
   verdicts.forEach((v: any) => {
     const s = stops[Number(v.n)];
     if (!s) return;
+    // Bocciata solo perché «sta in un'altra città» che invece è dentro il raggio del viaggio: vale come «esiste».
+    if (v.esiste === 'no' && nelRaggio(v.citta)) v.esiste = 'si';
     // IL DATABASE VINCE SUL REVISORE (05/09/2026): una tappa agganciata a una
     // riga nostra (stesso nome, entro pochi km) esiste per definizione. Il
     // revisore AI bocciava luoghi veri con motivazioni inventate («Uzzano e'
@@ -3934,7 +5189,11 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
       s.ref.verifica = 'da_verificare';
       s.ref.nota_verifica = `⚠ Tappa non confermata${v.motivo ? `: ${v.motivo}` : ''}${v.alternativa ? `. Alternativa sicura: ${v.alternativa}` : ''}`;
       flagged++;
-    } else if (v.conforme === 'no') {
+    } else if (v.conforme === 'no' && detectDietConstraints(constraints).length > 0 && TIPI_PASTO.test(String(s.ref.tipo || '').trim())) {
+      // (20/11/2026, collaudi notturni 19–20/11: «Pranzo a The Red Lion — pranzo non è storia o museo», «Osteria
+      // Bancogiro — tipo non richiesto», «Passeggiata a Trastevere — non è ambiente naturale») Gli INTERESSI scelti non
+      // fanno di un luogo vero una tappa «non conforme»: vale solo un vincolo di cucina/dieta, e solo per un pasto —
+      // come per le tappe agganciate. Gli altri giudizi del revisore sull'esistenza restano.
       s.ref.verifica = 'non_conforme';
       s.ref.nota_verifica = `⚠ Potrebbe non rispettare le tue richieste${v.motivo ? `: ${v.motivo}` : ''}`;
       flagged++;
@@ -3959,6 +5218,7 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
   //  - «verificata» senza coordinate in zona e ZERO pagine che citano il
   //    nome → «poco noto» (consiglio di controllare, non allarme).
   await firmeWebPromise;
+  segnaFase('firma_web_attesa');
   let firmeUsate = 0;
   firmeWeb.forEach((f, i) => {
     const s = stops[i];
@@ -3981,6 +5241,9 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
     if (!s || s.ref.poi_id || firmeWeb.has(i) || s.ref.verifica !== 'verificata') return;
     if (TIPO_ALLOGGIO_RIENTRO.test(String(s.ref.tipo || ''))) return;
     s.ref.verifica = 'poco_noto'; s.ref.nota_verifica = hiddenGemNote; flagged++; senzaSegnale++;
+    // (18/11/2026) Senza segnale perché la firma web non ha fatto in tempo a cercarla: non è un giudizio, è un
+    // controllo rimandato — la cron /api/cron/completa-verifiche lo rifà.
+    if (nonFirmatePerTempo.has(i)) rimanda(s.ref);
   });
   if (senzaSegnale) console.log(`[Itinerario] "${destination}": ${senzaSegnale} tappe non agganciate e senza firma della rete → poco noto`);
 
@@ -3991,24 +5254,74 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
   const note = notePasto(language);
   const lingua = String(language || 'it').toLowerCase();
   const usati = new Set<string>(stops.map((s) => String(s?.ref?.poi_id || '')).filter(Boolean));
-  let pastiSostituiti = 0, pastiNonTrovati = 0, senzaPagine = 0;
+  let pastiSostituiti = 0, pastiNonTrovati = 0, senzaPagine = 0, pastiConfermatiGeocoder = 0;
   for (let i = 0; i < stops.length; i++) {
     const s = stops[i]; const f = firmeWeb.get(i);
     if (!s || s.ref.poi_id) continue;
     if (TIPI_PASTO.test(String(s.ref.tipo || ''))) {
       if (TIPO_ALLOGGIO_RIENTRO.test(String(s.ref.tipo || ''))) continue;
       const nomeVecchio = String(s.ref.titolo_tappa || s.ref.titolo || '');
+      // (15/11/2026, Zurigo) «Ritorno in centro e aperitivo» non nomina nessun locale: è un momento della giornata,
+      // non un posto inventato. Diventava una pizzeria alle 20:50, un'ora prima della cena. Solo per aperitivo,
+      // merenda, colazione: pranzo e cena devono sempre essere un locale vero.
+      if (!tipoEPastoPrincipale(s.ref.tipo)) {
+        const proprie = tokensNomeLuogo(nomeLuogoDaTappa(nomeVecchio)).filter((w) => !PAROLE_TIPO_LOCALE.has(w)
+          && !/^(ritorno|rientro|centro|aperitivo|aperitif|apero|merenda|colazione|pausa|sosta|tempo|libero|libera|serata|sera|passeggiata|hotel|albergo|return|back|centre|center|break|drink|drinks|snack|breakfast|evening|retour|pause|regreso|vuelta|ruckkehr|zentrum|citta|city|ville|ciudad|stadt)$/.test(w));
+        if (!proprie.length) continue;
+      }
       // (23/10/2026) Tempo finito: il pasto non controllato NON esce verificato.
       if (restaMs() < 12000) {
         tempoScaduto = true;
         s.ref.verifica = 'da_verificare'; s.ref.nota_verifica = notaNonVerificato(language); flagged++;
+        rimanda(s.ref);
         continue;
       }
       const ancora = ancoraPerPasto(stops, i, lat, lon);
       // (23/10/2026) Un mercato, una pasticceria, una gelateria, un bar non sono un pranzo o una cena: si sostituisce.
       const eNonPasto = tipoEPastoPrincipale(s.ref.tipo) && nonAdattoAPastoPrincipale(nomeVecchio);
       // Un locale deve ESISTERE in un archivio di locali (TripAdvisor, Foursquare), non solo in una pagina web.
-      const trovato = eNonPasto ? null : await localeEsistePerNome(nomeVecchio, ancora, lingua, String(s.ref.tipo || '')).catch(() => undefined);
+      const puntoModello = { lat: Number(s.ref?.coordinate?.lat), lon: Number(s.ref?.coordinate?.lng ?? s.ref?.coordinate?.lon) };
+      const trovato = eNonPasto ? null : await localeEsistePerNome(nomeVecchio, ancora, lingua, String(s.ref.tipo || ''), String(destination || ''), puntoModello).catch(() => undefined);
+      // (14/11/2026) Gli archivi non lo hanno, ma il web lo cita col nome intero insieme alla città: non si
+      // sostituisce un locale che forse è vero. Resta col suo nome, «da verificare», con l'avviso.
+      if (trovato === null && !eNonPasto && f?.conCitta) {
+        // REGOLA 23/11/2026 (sopra NOTE_PASTO_SENZA_INDIRIZZO): prima il geocoder, poi la sostituzione, solo alla fine l'avviso.
+        if (restaMs() > 15000) {
+          const rifGeo = [...(typeof lat === 'number' && typeof lon === 'number' ? [{ lat, lon }] : []), ...(Array.isArray(opts?.centri) ? opts.centri : []).map((c: any) => ({ lat: Number(c?.lat), lon: Number(c?.lon ?? c?.lng) }))].filter((c) => Number.isFinite(c.lat) && Number.isFinite(c.lon) && (c.lat !== 0 || c.lon !== 0));
+          // «Pranzo da Olive et Gourmando» → «Da Olive et Gourmando»: il «Da» è del pasto, non del nome; si prova anche senza.
+          const nomeSenzaDa = nomeLuogoDaTappa(nomeVecchio).replace(/^(?:da|dal|dalla|dai|chez)\s+(?=\S{3,})/i, '').trim();
+          const forme = [...new Set([nomeVecchio, nomeSenzaDa].filter(Boolean))];
+          let tGeo: any;
+          const g: any = await Promise.race([
+            (async () => {
+              for (const f of forme) {
+                const x = await posizioneDaGeocoder(f, String(destination || ''), lingua, String(s.ref.tipo || ''), { localita: localitaDellaTappa(s.ref, destination), riquadro: rifGeo[0] ? { ...rifGeo[0], km: PASTO_GEOCODER_CITTA_KM } : null }).catch(() => null);
+                if (x && pastoConfermatoDalGeocoder(x, puntoModello, rifGeo)) return x;
+              }
+              return null;
+            })(),
+            new Promise((r) => { tGeo = setTimeout(() => r(null), Math.max(3000, Math.min(15000, restaMs() - 10000))); }),
+          ]).finally(() => clearTimeout(tGeo));
+          if (g && pastoConfermatoDalGeocoder(g, puntoModello, rifGeo)) {
+            s.ref.coordinate = { lat: g.lat, lng: g.lon };
+            s.ref.coordinate_fonte = String(g.fonte || 'nominatim');
+            s.ref.verifica = 'verificata'; s.ref.nota_verifica = '';
+            s.ref.pasto_confermato_geocoder = true;
+            pastiConfermatiGeocoder++;
+            continue;
+          }
+          const ok = await sostituisciPastoInventato(s.ref, ancora, String(destination || ''), language, usati, String(specialRequests || '')).catch(() => false);
+          if (ok) {
+            s.ref.nota_verifica = notaPastoSenzaIndirizzo(language).replace('{nome}', nomeLuogoDaTappa(nomeVecchio)).replace('{citta}', String(destination || ''));
+            usati.add(String(s.ref.poi_id)); pastiSostituiti++;
+            continue;
+          }
+        }
+        s.ref.verifica = 'da_verificare';
+        s.ref.nota_verifica = (NOTE_SOLO_WEB[String(language || 'IT').toUpperCase()] || NOTE_SOLO_WEB.EN).replace('{nome}', nomeLuogoDaTappa(nomeVecchio)).replace('{citta}', String(destination || ''));
+        flagged++;
+        continue;
+      }
       if (trovato) {
         s.ref.poi_id = trovato.id; s.ref.coordinate = { lat: trovato.lat, lng: trovato.lon }; s.ref.coordinate_fonte = trovato.fonte;
         if (trovato.address) s.ref.indirizzo = trovato.address;
@@ -4031,13 +5344,17 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
       senzaPagine++; flagged++;
     }
   }
-  if (pastiSostituiti || pastiNonTrovati || senzaPagine) console.log(`[Itinerario] "${destination}": pasti sostituiti ${pastiSostituiti}, pasti non trovati ${pastiNonTrovati}, luoghi senza pagine ${senzaPagine}`);
+  if (pastiSostituiti || pastiNonTrovati || senzaPagine || pastiConfermatiGeocoder) console.log(`[Itinerario] "${destination}": pasti sostituiti ${pastiSostituiti}, pasti non trovati ${pastiNonTrovati}, confermati dal geocoder ${pastiConfermatiGeocoder}, luoghi senza pagine ${senzaPagine}`);
 
+  segnaFase('pasti');
   // ── POSIZIONE CERTA (20/10/2026): le coordinate del modello non bastano ────
   // Ogni tappa non agganciata ancora «verificata» passa dal geocoder: posizione dal geocoder (se diversa di più di
   // 300 m da quella del modello, si corregge); senza risultato → «da verificare», perché la posizione non lo è.
   // Nominatim vuole una richiesta al secondo: in fila, al massimo 10 tappe.
-  const daGeocodificare = stops.map((s, i) => ({ s, i })).filter(({ s }) => s && !s.ref.poi_id && (s.ref.verifica === 'verificata' || !s.ref.verifica) && !TIPO_ALLOGGIO_RIENTRO.test(String(s.ref.tipo || ''))).slice(0, 10);
+  // (18/11/2026) Niente più tetto di 10 tappe: in un viaggio di 7 giorni le tappe dall'11ª in poi non passavano MAI dal
+  // geocoder. Il limite è il tempo (sotto), e chi resta fuori è «rimandata», non confermata.
+  const daGeocodificare = stops.map((s, i) => ({ s, i })).filter(({ s }) => s && !s.ref.poi_id && (s.ref.verifica === 'verificata' || s.ref.verifica === 'poco_noto' || !s.ref.verifica) && !TIPO_ALLOGGIO_RIENTRO.test(String(s.ref.tipo || '')));
+  const spostatePerAggancio: any[] = [];
   let posizioniCorrette = 0, posizioniIncerte = 0;
   const kmDa = (aLat: number, aLon: number, bLat: number, bLon: number) => Math.sqrt(Math.pow((aLat - bLat) * 111, 2) + Math.pow((aLon - bLon) * 111 * Math.cos(aLat * Math.PI / 180), 2));
   // (21/10/2026, Sarzana rigenerata) «Piazza Matteotti» ha preso le coordinate di quella di NAPOLI: nella
@@ -4052,15 +5369,42 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
     if (Number.isFinite(a) && Number.isFinite(b) && (a !== 0 || b !== 0)) riferimenti.push({ lat: a, lon: b });
   }
   const raggioZona = Math.min(80, Math.max(Number(radiusKm) || 100, 30));
-  for (let k = 0; k < daGeocodificare.length; k++) {
-    const { s } = daGeocodificare[k];
-    // (23/10/2026) Tempo finito: le posizioni non controllate restano «da verificare», mai confermate per silenzio.
-    if (restaMs() < 4000) {
-      tempoScaduto = true;
-      for (const { s: r } of daGeocodificare.slice(k)) { r.ref.verifica = 'da_verificare'; r.ref.nota_verifica = [r.ref.nota_verifica, notaNonVerificato(language)].filter(Boolean).join(' '); flagged++; }
-      break;
+  // (18/11/2026, collaudo Malta 1ef00dbf: verifica 195 s e scaduta) Tre tappe alla volta: Wikidata e Wikipedia in
+  // parallelo, Nominatim in fila sul turno unico (attendiTurnoNominatim). Prima le «verificate», poi le «poco note».
+  // Ogni tappa ha un tetto di 15 s; chi non arriva in tempo è «rimandata» alla cron, mai confermata per silenzio.
+  daGeocodificare.sort((a, b) => Number(a.s.ref.verifica === 'poco_noto') - Number(b.s.ref.verifica === 'poco_noto'));
+  const t0Geo = Date.now();
+  const codaGeo = [...daGeocodificare];
+  const lavoraGeo = async () => {
+    while (codaGeo.length) {
+      const { s, i } = codaGeo.shift() as any;
+      await geocodificaUna(s, i);
     }
-    const g = await posizioneDaGeocoder(s.ref.titolo_tappa || s.ref.titolo, String(destination || ''), lingua, String(s.ref.tipo || ''));
+  };
+  const geocodificaUna = async (s: any, iStop: number) => {
+    // (23/10/2026) Tempo finito: le posizioni non controllate restano «da verificare», mai confermate per silenzio.
+    if (restaMs() < 10000) {
+      tempoScaduto = true;
+      if (s.ref.verifica !== 'poco_noto') { s.ref.verifica = 'da_verificare'; s.ref.nota_verifica = [s.ref.nota_verifica, notaNonVerificato(language)].filter(Boolean).join(' '); flagged++; }
+      rimanda(s.ref);
+      return;
+    }
+    // (18/11/2026, Malta: Mdina e Sliema cercate come «…, St. Julian's» → «Posizione non confermata») La località
+    // della TAPPA (dal suo indirizzo o dalla parentesi del nome) prima della città dell'itinerario; senza risultato,
+    // Nominatim nel riquadro del viaggio (centro della destinazione, raggio della zona) senza nome di città.
+    const riquadro = riferimenti.length ? { lat: riferimenti[0].lat, lon: riferimenti[0].lon, km: raggioZona } : null;
+    let tG: any;
+    const SCADUTO = Symbol('scaduto');
+    const g: any = await Promise.race([
+      posizioneDaGeocoder(s.ref.titolo_tappa || s.ref.titolo, String(destination || ''), lingua, String(s.ref.tipo || ''), { localita: localitaDellaTappa(s.ref, destination), riquadro }).catch(() => null),
+      new Promise((r) => { tG = setTimeout(() => r(SCADUTO), Math.max(3000, Math.min(15000, restaMs() - 8000))); }),
+    ]).finally(() => clearTimeout(tG));
+    if (g === SCADUTO) {
+      tempoScaduto = true;
+      if (s.ref.verifica !== 'poco_noto') { s.ref.verifica = 'da_verificare'; s.ref.nota_verifica = [s.ref.nota_verifica, notaNonVerificato(language)].filter(Boolean).join(' '); flagged++; }
+      rimanda(s.ref);
+      return;
+    }
     const cM = s.ref.coordinate; const mLat = Number(cM?.lat), mLon = Number(cM?.lng ?? cM?.lon);
     const inZona = !g || (riferimenti.length
       ? riferimenti.some((p) => kmDa(g.lat, g.lon, p.lat, p.lon) <= raggioZona)
@@ -4069,17 +5413,55 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
     if (g && inZona) {
       const c = s.ref.coordinate; const slat = Number(c?.lat), slng = Number(c?.lng ?? c?.lon);
       const spostamento = Number.isFinite(slat) && Number.isFinite(slng) && (slat !== 0 || slng !== 0) ? getHaversineDistance(slat, slng, g.lat, g.lon) : Infinity;
-      if (spostamento > 300) { s.ref.coordinate = { lat: g.lat, lng: g.lon }; posizioniCorrette++; }
-      s.ref.coordinate_fonte = String((g as any).fonte || 'nominatim');
+      // (15/11/2026, Zurigo) Un luogo ESTESO (lago, fiume, lungolago, quartiere, costa…) ha per coordinata il suo
+      // centro: «Lago di Zurigo (lungolago)» finiva a Männedorf, 15 km dal lungolago, con traghetto e treno per
+      // arrivarci. Il nome è confermato, ma oltre 1,5 km resta il punto del modello: è lì che si va.
+      const esteso = Number.isFinite(spostamento) && spostamento > 1500
+        && /\b(lago|lake|lac|see|lungolago|lungomare|lungofiume|fiume|river|fleuve|rio|fluss|quartiere|quartier|district|barrio|viertel|costa|coast|baia|bay|golfo|valle|valley|passeggiata|promenade|paseo|riviera|canale|canal)\b/i
+          .test(`${s.ref.tipo || ''} ${s.ref.titolo_tappa || s.ref.titolo || ''}`);
+      if (spostamento > 300 && !esteso) { s.ref.coordinate = { lat: g.lat, lng: g.lon }; posizioniCorrette++; spostatePerAggancio.push(s.ref); }
+      s.ref.coordinate_fonte = esteso ? 'modello' : String((g as any).fonte || 'nominatim');
+    } else if (s.ref.verifica === 'poco_noto' && nonFirmatePerTempo.has(iStop)) {
+      rimanda(s.ref); // la firma web non l'ha cercata per tempo: la decide la cron
+    } else if (s.ref.verifica === 'poco_noto' && firmeWeb.get(iStop)?.conCitta) {
+      // (18/11/2026) Una tappa «poco nota» che il web cita col nome E la città resta «poco nota» anche se il geocoder
+      // non la trova: esiste, ma la cron non ne farà un POI (serve una posizione confermata).
     } else {
+      // (18/11/2026, collaudo Malta: «Mercato di St. Julian's» rigenerato ancora «poco noto») Nessuna fonte di posizione
+      // per NOME e nessuna pagina col nome e la città: la tappa non è confermata → «da verificare».
+      const eraPocoNoto = s.ref.verifica === 'poco_noto';
+      // REGOLA 23/11/2026 (Orlando, «The Rusty Spoon»): un PASTO senza posizione confermata non resta «da verificare»
+      // se c'è un locale vero vicino: si sostituisce (stessa via dei pasti inventati). Senza sostituto resta l'avviso.
+      if (ePastoTappa(s.ref) && restaMs() > 12000) {
+        const nomeVecchio = String(s.ref.titolo_tappa || s.ref.titolo || '');
+        const ok = await sostituisciPastoInventato(s.ref, ancoraPerPasto(stops, iStop, lat, lon), String(destination || ''), language, usati, String(specialRequests || '')).catch(() => false);
+        if (ok) {
+          s.ref.nota_verifica = notaPastoSenzaIndirizzo(language).replace('{nome}', nomeLuogoDaTappa(nomeVecchio)).replace('{citta}', String(destination || ''));
+          usati.add(String(s.ref.poi_id));
+          return;
+        }
+      }
       s.ref.verifica = 'da_verificare';
-      s.ref.nota_verifica = [s.ref.nota_verifica, note.posizione].filter(Boolean).join(' ');
+      s.ref.nota_verifica = [eraPocoNoto ? '' : s.ref.nota_verifica, note.posizione].filter(Boolean).join(' ');
       s.ref.posizione_incerta = true;
       posizioniIncerte++; flagged++;
     }
-    if (k < daGeocodificare.length - 1) await new Promise((r) => setTimeout(r, 1100));
+  };
+  await Promise.all([lavoraGeo(), lavoraGeo(), lavoraGeo()]);
+  segnaFase('geocoder');
+  if (daGeocodificare.length) console.log(`[Itinerario] "${destination}": geocoder su ${daGeocodificare.length} tappe non agganciate in ${Math.round(fasi.geocoder / 1000)} s — posizioni corrette ${posizioniCorrette}, non confermate ${posizioniIncerte}`);
+  // (18/11/2026, debug dal vivo Malta: «Torri di Wignacourt» messa dal modello a St. Julian's, 8 km dalla torre vera) Una
+  // tappa SPOSTATA dal geocoder si riprova ad agganciare nel punto vero: lì c'è la riga con fonte.
+  if (spostatePerAggancio.length && restaMs() > 8000) {
+    const agC = { cancelled: false }; let agT: any;
+    await Promise.race([
+      agganciaTappeAlDatabase({ giorni: [{ tappe: spostatePerAggancio }] }, (typeof lat === 'number' && typeof lon === 'number') ? { lat, lon } : null, destination, agC),
+      new Promise((r) => { agT = setTimeout(() => { agC.cancelled = true; r(null); }, Math.max(3000, Math.min(20000, restaMs() - 5000))); }),
+    ]).catch(() => {}).finally(() => clearTimeout(agT));
+    const ri = spostatePerAggancio.filter((t: any) => t.poi_id).length;
+    if (ri) { console.log(`[Itinerario] "${destination}": ${ri} tappe agganciate dopo la correzione della posizione`); for (const t of spostatePerAggancio) if (t.poi_id && t.verifica !== 'verificata' && t.verifica !== 'non_conforme') { t.verifica = 'verificata'; t.nota_verifica = ''; } }
   }
-  if (daGeocodificare.length) console.log(`[Itinerario] "${destination}": geocoder su ${daGeocodificare.length} tappe non agganciate — posizioni corrette ${posizioniCorrette}, non confermate ${posizioniIncerte}`);
+  segnaFase('riaggancio');
 
   // ── SECONDA DOMANDA: «E DOVE?» — passaggio a sé, su TUTTE le tappe ───────
   //
@@ -4101,7 +5483,7 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
     // dubbio non si allarma.
     const risposte = atlanti.get(i) || [];
     const qualcunoLoMetteQui = risposte.some((r) =>
-      !cittaDiscordante(r.citta, destination) || r.compatibili.some((c) => !cittaDiscordante(c, destination)));
+      !cittaDiscordante(r.citta, destination) || r.compatibili.some((c) => !cittaDiscordante(c, destination)) || nelRaggio(r.citta));
     if (qualcunoLoMetteQui) return;
     const fuori = [...new Set(risposte.map((r) => r.citta))];
     if (!fuori.length) return;
@@ -4135,15 +5517,17 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
     }
   }
 
-  chiudiVerificaNonFinita(itineraryObj, language);
-  if (tempoScaduto) console.warn(`[Itinerario] "${destination}": verifica arrivata alla scadenza — le tappe non controllate restano «da verificare»`);
-  return { checked: stops.length, flagged, discordanti, soloSecondaDomanda: primaDomandaPersa || undefined, tempoScaduto: tempoScaduto || undefined };
+  chiudiVerificaNonFinita(itineraryObj, language, false, tempoScaduto);
+  rimandate = extractItineraryStops(itineraryObj).filter((s) => s?.ref?.verifica_rimandata).length;
+  if (tempoScaduto) console.warn(`[Itinerario] "${destination}": verifica arrivata alla scadenza — ${rimandate} tappe non controllate restano «da verificare» e passano alla cron di completamento`);
+  segnaFase('chiusura');
+  return { checked: stops.length, flagged, discordanti, soloSecondaDomanda: primaDomandaPersa || undefined, tempoScaduto: tempoScaduto || undefined, rimandate, fasi_ms: fasi };
 }
 
 /** REGOLA (23/10/2026): nessuna tappa esce dalla verifica senza un verdetto. Agganciata al database = esiste
  *  («verificata» se nessuno ha detto altro); non agganciata e senza verdetto, o «verificata» sulla sola parola del
  *  modello quando la verifica non è finita → «da_verificare» con la nota. Hotel e rientri esclusi. */
-function chiudiVerificaNonFinita(itin: any, language: any, nonFinita = false): number {
+function chiudiVerificaNonFinita(itin: any, language: any, nonFinita = false, perTempo = nonFinita): number {
   let chiuse = 0;
   for (const s of extractItineraryStops(itin)) {
     const t = s?.ref;
@@ -4152,10 +5536,128 @@ function chiudiVerificaNonFinita(itin: any, language: any, nonFinita = false): n
     if (!t.verifica || (nonFinita && t.verifica === 'verificata')) {
       t.verifica = 'da_verificare';
       t.nota_verifica = [t.nota_verifica, notaNonVerificato(language)].filter(Boolean).join(' ');
+      // (18/11/2026) Chiusa perché il tempo è finito, non perché qualcosa l'abbia smentita: segno macchina distinto da
+      // un «non trovato» vero, che la cron /api/cron/completa-verifiche usa per riprenderla.
+      if (perTempo) t.verifica_rimandata = true;
       chiuse++;
     }
   }
   return chiuse;
+}
+
+/** Il testo di «non verificata in tempo» in una delle 7 lingue (per riconoscere le tappe chiuse per tempo da
+ *  itinerari salvati prima del segno `verifica_rimandata`). */
+function eNotaNonVerificato(nota: any): boolean {
+  const n = String(nota || '');
+  return !!n && Object.values(NOTE_NON_VERIFICATO).some((x) => n.includes(x));
+}
+
+/** Località della TAPPA per il geocoder (18/11/2026, Malta): dall'indirizzo («Triq Villegaignon, Mdina» → «Mdina»,
+ *  ultimo pezzo con lettere che non è un CAP né la sola destinazione) o dalla parentesi finale del nome
+ *  («Bastioni (Mdina)»). '' se non c'è nulla di diverso dalla destinazione. */
+function localitaDellaTappa(t: any, destination: any): string {
+  const dest = normTesto(String(destination || ''));
+  const pezzi = String(t?.indirizzo || '').split(',').map((x) => x.replace(/\b[A-Z]{0,3}\s?\d{3,6}\b/g, '').trim()).filter((x) => /\p{L}{3,}/u.test(x) && !/\d/.test(x));
+  const tra = String(t?.titolo_tappa || t?.titolo || '').match(/\(([^()]{3,40})\)\s*$/)?.[1]?.trim() || '';
+  // Dall'indirizzo: gli ultimi due pezzi (località, paese) se non sono la destinazione stessa.
+  const daIndirizzo = pezzi.slice(-2).filter((x) => normTesto(x) !== dest).join(', ');
+  if (daIndirizzo && !dest.includes(normTesto(daIndirizzo))) return daIndirizzo;
+  if (tra && normTesto(tra) !== dest && tokensNomeLuogo(tra).length && !TIPI_LUOGO[normTesto(tra)]) return tra;
+  return '';
+}
+
+// ══ COMPLETAMENTO DELLA VERIFICA (18/11/2026, ordine del committente) ══════════════════════════════════════════════
+// «Aumenta il tempo per la revisione e creazione dell'itinerario e della guida premium; tutti i giorni, anche se
+// fossero 7, devono essere verificati tappa per tappa — DeepSeek come attore e Groq come revisore — devono prendersi
+// il tempo necessario per finalizzare.» Su Vercel un'invocazione muore a 300 s: lo stream verifica quanto può nel
+// tempo che resta e segna `verifica_rimandata` su ciò che non ha fatto in tempo; QUESTA funzione riprende SOLO quelle
+// tappe (stesse funzioni: aggancio, firma web su SearXNG, archivi dei locali, sostituzione dei pasti, geocoder), poi il
+// revisore dei fatti (Groq, chiamaRevisore) sulle tappe non ancora lette. La chiama la cron /api/cron/completa-verifiche
+// e la Guida d'Autore prima di lasciare fuori le tappe «da verificare».
+/** Tappe da riprendere: segnate «rimandata», o chiuse con la nota «non verificata in tempo» (itinerari salvati prima
+ *  del segno), o — con `forza` — ogni tappa non agganciata ancora «da verificare» / senza verdetto, e le tappe
+ *  culturali agganciate a una riga che non è una prova (gemelli `iti-`/`tappa_`, gastronomia: la regola
+ *  dell'aggancio è cambiata il 18/11). */
+function tappeDaRiverificare(itin: any, forza = false): any[] {
+  return extractItineraryStops(itin).map((s) => s.ref).filter((t: any) => {
+    if (!t || TIPO_ALLOGGIO_RIENTRO.test(String(t.tipo || ''))) return false;
+    if (t.verifica_rimandata || (!t.poi_id && eNotaNonVerificato(t.nota_verifica))) return true;
+    if (!forza) return false;
+    if (!t.poi_id) return !t.verifica || t.verifica === 'da_verificare' || t.posizione_incerta === true;
+    return !TIPI_PASTO.test(String(t.tipo || '')) && /^(iti-|tappa_|tappa-|osm-eno-)/i.test(String(t.poi_id));
+  });
+}
+function statoVerifica(itin: any, extra: any = {}): any {
+  const rimaste = extractItineraryStops(itin).filter((s) => s?.ref?.verifica_rimandata).length;
+  return { ...(itin?.qualita?.verifica || {}), ...extra, completa: rimaste === 0, non_verificate_per_tempo: rimaste, ts: Date.now() };
+}
+async function completaVerificaItinerario(itin: any, opts: { destination: string; lat?: number; lon?: number; language?: string; centri?: any[]; radiusKm?: number; specialRequests?: string; tettoMs: number; forza?: boolean; userId?: any; revisore?: boolean }): Promise<{ riprese: number; rimaste: number; cambiate: number; revisore?: any }> {
+  // Rientri e relax in hotel scritti come tappe nei piani salvati: non sono luoghi da verificare (18/11/2026).
+  segnaRientri(itin);
+  const da = tappeDaRiverificare(itin, !!opts.forza);
+  if (!da.length) return { riprese: 0, rimaste: 0, cambiate: 0 };
+  const t0 = Date.now();
+  // Le tappe si verificano dentro un itinerario-copia fatto SOLO di loro (ognuna nel suo giorno, per l'àncora dei
+  // pasti): le altre restano intatte. Si azzera il verdetto vecchio; se era un aggancio non valido si toglie anche il
+  // collegamento (solo con `forza`, solo luoghi non pasto).
+  const firma = (t: any) => JSON.stringify([t.titolo_tappa, t.poi_id, t.verifica, t.coordinate]);
+  const prima = new Map<any, string>(da.map((t: any) => [t, firma(t)]));
+  const mini: any = { giorni: [] };
+  const origine: any[] = [];
+  (itin.giorni || []).forEach((g: any, gi: number) => {
+    const tappe = (Array.isArray(g?.tappe) ? g.tappe : (Array.isArray(g?.pois) ? g.pois : [])).filter((t: any) => da.includes(t));
+    if (!tappe.length) return;
+    // Il contesto del giorno serve all'àncora dei pasti: le tappe agganciate dello stesso giorno entrano come copie
+    // in sola lettura (hanno poi_id: la verifica le salta), e non si riportano indietro.
+    const mg = mini.giorni.length;
+    let ti = 0;
+    const copie = (Array.isArray(g?.tappe) ? g.tappe : g.pois || []).map((t: any) => {
+      const c = JSON.parse(JSON.stringify(t));
+      if (da.includes(t)) {
+        // La POSIZIONE nella copia, non il riferimento: verificaItinerarioConTetto sostituisce il contenuto di `mini` con
+        // la sua copia verificata (18/11/2026, collaudo Malta 1ef00dbf: col riferimento si riportava indietro la tappa
+        // NON verificata, senza `verifica` — «St. Peter's Pool» e «Torre di San Lucano» uscivano senza verdetto).
+        origine.push({ orig: t, mg, ti: -1, c });
+        delete c.verifica; delete c.nota_verifica; delete c.posizione_incerta; delete c.verifica_rimandata;
+        if (c.poi_id && opts.forza && /^(iti-|tappa_|tappa-|osm-eno-)/i.test(String(c.poi_id)) && !TIPI_PASTO.test(String(c.tipo || ''))) delete c.poi_id;
+      } else if (!c.poi_id) return null; // le altre non agganciate non si toccano e non servono come àncora
+      return c;
+    }).filter(Boolean);
+    copie.forEach((c: any) => { const o = origine.find((x) => x.c === c); if (o) o.ti = ti; ti++; });
+    mini.giorni.push({ giorno: g?.giorno ?? gi + 1, tappe: copie });
+  });
+  const lat = Number(opts.lat), lon = Number(opts.lon);
+  const report: any = await verificaItinerarioConTetto(mini, {
+    destination: opts.destination, lat: Number.isFinite(lat) ? lat : undefined, lon: Number.isFinite(lon) ? lon : undefined,
+    radiusKm: opts.radiusKm, specialRequests: opts.specialRequests, language: opts.language, inDiretta: false, centri: opts.centri,
+    giudice: true, userIdGiudice: opts.userId || 'background-script',
+  }, Math.max(20000, opts.tettoMs - 12000));
+  // Si riportano indietro SOLO le tappe riprese (la copia è stata verificata; se la verifica è caduta per intero,
+  // verificaItinerarioConTetto le ha chiuse «da_verificare» + rimandate e così restano).
+  for (const { orig, mg, ti } of origine) {
+    const verificata = mini?.giorni?.[mg]?.tappe?.[ti];
+    if (!verificata || typeof verificata !== 'object') continue;
+    for (const k of Object.keys(orig)) delete orig[k];
+    Object.assign(orig, verificata);
+    // Una tappa esce SEMPRE con un verdetto: se manca (verifica caduta a metà), «da verificare» e rimandata alla cron.
+    if (!orig.verifica && !TIPO_ALLOGGIO_RIENTRO.test(String(orig.tipo || ''))) {
+      if (orig.poi_id) orig.verifica = 'verificata';
+      else { orig.verifica = 'da_verificare'; orig.nota_verifica = notaNonVerificato(opts.language); orig.verifica_rimandata = true; }
+    }
+  }
+  const cambiate = da.filter((t: any) => prima.get(t) !== firma(t));
+  // Regola fissa «doppioni mai» anche dopo il completamento: una tappa ripresa può finire sullo stesso luogo di un'altra.
+  try { if (cambiate.length && togliDoppioniItinerario(itin, undefined, true)) ricalcolaTotaleViaggio(itin, String(opts.language || 'it')); } catch { /* fail-open */ }
+  // Il revisore dei fatti legge le tappe non ancora lette (Groq prima, via chiamaRevisore). Le tappe sostituite hanno
+  // il testo della fonte, non del modello: non serve, ma non fa danni — si leggono solo quelle senza il segno.
+  let revisore: any;
+  const restaRev = opts.tettoMs - (Date.now() - t0);
+  if (restaRev > 15000 && opts.revisore !== false) {
+    try { revisore = await revisoreFattiItinerario(itin, { destination: opts.destination, language: opts.language, userId: 'background-script', tettoMs: Math.min(60000, restaRev - 5000), soloNonLette: true }); } catch { /* resta com'è */ }
+  }
+  const rimaste = extractItineraryStops(itin).filter((s) => s?.ref?.verifica_rimandata).length;
+  console.log(`[completa-verifica] «${opts.destination}»: ${da.length} tappe riprese, ${cambiate.length} cambiate, ${rimaste} ancora rimandate (${Math.round((Date.now() - t0) / 1000)} s)${report?.timedOut ? ' — tetto' : ''}`);
+  return { riprese: da.length, rimaste, cambiate: cambiate.length, revisore };
 }
 
 /** La verifica con un TETTO, per chi ha un utente in attesa (23/10/2026). Lavora su una COPIA: se finisce, la copia
@@ -4179,6 +5681,842 @@ async function verificaItinerarioConTetto(itin: any, opts: any, tettoMs: number)
     console.warn(`[Itinerario] "${opts?.destination}": verifica non finita (${esito.r?.timedOut ? 'tetto' : esito.r?.error}) — ${chiuse} tappe lasciate «da verificare»`);
   }
   return esito.r;
+}
+
+// ══ CONTROLLO QUALITÀ AUTOMATICO (18/11/2026, ordine del committente: «questi errori non devono mai più succedere per
+// nessun itinerario e/o guida») ═════════════════════════════════════════════════════════════════════════════════════
+// Deterministico, senza AI (il giudice dell'aggancio solo per i casi dubbi della regola «e»). Gira su ogni itinerario
+// dopo verifica e doppioni, prima dell'evento `verified` e del salvataggio; in «Aggiungi giorno»; nella cron di
+// completamento; nella Guida d'Autore prima del materiale. Regole che devono dare ZERO:
+//   a) lo stesso poi_id due volte (non pasti)                     → doppione tolto («doppioni mai», col budget)
+//   b) tappa agganciata a cinema / quartiere / località / città / riga nascosta o non luogo → sganciata e riagganciata
+//   c) tipo contraddetto (culturale ↔ gusto/locali/shopping, negozio ↔ museo, tipi del nome) → sganciata e riagganciata
+//   d) tratta assurda nel giorno (salto > 5 km andata e ritorno, o una tappa lontana da tutte) → posizione dalla riga o
+//      dal geocoder; se il geocoder conferma il punto la tappa è vera e lontana
+//   e) luogo non agganciato con una riga CON FONTE (QID / Wikipedia / testo ≥ 200) e lo stesso nome entro 500 m → agganciato
+//   f) pasto (pranzo/cena) agganciato a ciò che non è un ristorante → sostituito con un locale vero (o «da verificare»)
+// Quello che resta → `restano`, e ogni tappa coinvolta esce «da_verificare» con la nota: mai passato in silenzio.
+const NOTE_CONTROLLO: Record<string, string> = {
+  IT: '⚠ Il controllo automatico ha trovato un dubbio su questa tappa: verifica nome e posizione prima di andarci.',
+  EN: '⚠ Our automatic check found a doubt about this stop: check its name and location before going.',
+  FR: '⚠ Le contrôle automatique a relevé un doute sur cette étape : vérifiez le nom et l’emplacement avant d’y aller.',
+  ES: '⚠ El control automático encontró una duda sobre esta parada: comprueba nombre y ubicación antes de ir.',
+  DE: '⚠ Die automatische Prüfung hat bei diesem Halt einen Zweifel gefunden: Name und Lage vorher prüfen.',
+  RU: '⚠ Автоматическая проверка нашла сомнение по этой остановке: уточните название и местоположение перед посещением.',
+  ZH: '⚠ 自动检查对此站点存疑：出发前请确认名称和位置。',
+};
+const notaControllo = (language: any) => NOTE_CONTROLLO[String(language || 'IT').toUpperCase()] || NOTE_CONTROLLO.EN;
+const ID_NON_PROVA = /^(iti-|ai_|t\d+_\d+$|tappa_|tappa-|viator-|tq-|gyg-|tm-|tiqets-|vision-|lusso-|gtfs-|ocm-|ov-)/i;
+/** b) La riga agganciata non è MAI il luogo da visitare: cinema «Qui hanno girato», estensioni di vincolo, città,
+ *  località, quartieri, righe nascoste, fermate, colonnine, parcheggi. '' = va bene. Senza la riga (database giù) si
+ *  giudica solo dal prefisso dell'id. I pasti hanno la regola «f». */
+function rigaNonValidaPerTappa(t: any, riga: any): string {
+  if (!t || TIPI_PASTO.test(String(t.tipo || '').trim()) || TIPO_ALLOGGIO_RIENTRO.test(String(t.tipo || ''))) return '';
+  const id = String(riga?.id || t.poi_id || '');
+  const nome = String(t.titolo_ai || t.titolo_tappa || t.titolo || '');
+  if (/^(cine-|cinema-)/i.test(id)) return 'cinema';
+  if (/^(gtfs-|ocm-)/i.test(id)) return 'non_luogo';
+  if (!riga) return '';
+  if (rigaNonLuogoDaVisitare(riga, nome)) return 'cinema';
+  if (rigaCittaPerTappa(riga, nome)) return 'citta_o_localita';
+  // Un quartiere è la tappa solo quando la tappa È il quartiere («Passeggiata nel Quartiere Latino»): tutte le parole
+  // della riga nel nome e nessun tipo di luogo in più («Basilica di Santa Maria in Trastevere» non è Trastevere).
+  if (/^(neighbourhood|neighborhood|suburb|quarter|quartiere|rione|borough|district)$/i.test(String(riga.category || ''))) {
+    const pr = paroleNome(riga.name), pn = new Set(paroleNome(nome));
+    if (!(pr.length && pr.every((w) => pn.has(w)) && !tipiLuogo(nome).size)) return 'quartiere';
+  }
+  if (riga.is_hidden === true || /^(draft|hidden|needs_revision|banned)$/i.test(String(riga.status || ''))) return 'riga_nascosta';
+  if (riga.category === 'community' || /^vision-/i.test(id)) return 'riga_utente';
+  if (/charg|colonnin|ev_|parking|parcheggi|^(transit|fermata|bus_stop|tram_stop|station)$/i.test(String(riga.category || '')) || /supercharger|q-park|parcheggio|car park/i.test(String(riga.name || ''))) return 'non_luogo';
+  if (/^(information|info|tourism_information|cartello|pannello|board|guidepost|signpost|sign)$/i.test(String(riga.category || ''))) return 'non_luogo';
+  return '';
+}
+/** c) Il tipo della tappa e quello della riga si contraddicono. '' = va bene. */
+function contraddizioneDiTipo(t: any, riga: any): string {
+  if (!t || !riga || TIPI_PASTO.test(String(t.tipo || '').trim()) || TIPO_ALLOGGIO_RIENTRO.test(String(t.tipo || ''))) return '';
+  const tipo = String(t.tipo || ''), nome = String(t.titolo_ai || t.titolo_tappa || t.titolo || '');
+  const id = String(riga.id || ''), cat = String(riga.category || '');
+  // Stesso nome = stesso luogo, qualunque sia la categoria d'archivio («Galleria Vittorio Emanuele II», tipo shopping).
+  if (normTesto(riga.name) && normTesto(riga.name) === normTesto(nomeLuogoDaTappa(nome)) && !eTipoCulturale(tipo)) return '';
+  if (eTipoCulturale(tipo) && eRigaDiGusto(riga)) return 'culturale_su_gusto';
+  const shopping = RE_TAPPA_SHOPPING.test(`${tipo} ${nome}`);
+  if (!shopping && (/^lusso-/i.test(id) || /^(lusso|luxury)$/i.test(cat) || (/^shopping$/i.test(cat) && !rigaViaPerTappaVia(tipo, nome, riga)))) return 'luogo_su_negozio';
+  if (negozioSuRigaNonNegozio(tipo, nome, riga)) return 'negozio_su_non_negozio';
+  // Tipi dei NOMI (09/10/2026, San Pietroburgo: «Museo dell'Ermitage» sul «Ponte dell'Ermitage»). Il titolo del modello
+  // (`titolo_ai`) conta più di quello riscritto col nome della riga.
+  const Tt = tipiLuogo(nome), Td = tipiLuogo(riga.name);
+  if (Tt.size && Td.size && ![...Tt].some((g) => Td.has(g))) return 'tipi_del_nome';
+  return '';
+}
+/** f) Un pranzo o una cena agganciati a ciò che non è un ristorante (mercato, pasticceria, gelateria, bar, caffè). */
+function pastoNonLocale(t: any, riga: any): boolean {
+  if (!t?.poi_id || !tipoEPastoPrincipale(t.tipo)) return false;
+  return nonAdattoAPastoPrincipale(riga?.name || nomeLuogoDaTappa(String(t.titolo_tappa || t.titolo || '')), `${riga?.sub_category || ''} ${riga?.category || ''}`.trim());
+}
+const xyTappa = (t: any): { lat: number; lon: number } | null => {
+  const a = Number(t?.coordinate?.lat), b = Number(t?.coordinate?.lng ?? t?.coordinate?.lon);
+  return Number.isFinite(a) && Number.isFinite(b) && (a !== 0 || b !== 0) ? { lat: a, lon: b } : null;
+};
+/** d) Tappe con una tratta assurda nel loro giorno (indici in g.tappe). Senza dati di strada si usa la linea d'aria:
+ *  una tappa a più di 5 km dalla precedente E dalla successiva mentre queste due stanno entro 2 km (andata e ritorno). Con la tratta
+ *  già calcolata (`legFromPrev`/`tratta_precedente`: km di strada) conta anche strada > 3× linea d'aria e > 1,5 km.
+ *  I giorni con un trasferimento (viaggio fra città) non si giudicano. Hotel e rientri non contano. */
+function tappeConTrattaAnomala(g: any): number[] {
+  const tappe: any[] = Array.isArray(g?.tappe) ? g.tappe : [];
+  if (tappe.some((t) => /trasferiment|transfer|in viaggio|spostamento/i.test(`${t?.tipo || ''}`))) return [];
+  const pt = tappe.map((t, i) => ({ i, p: TIPO_ALLOGGIO_RIENTRO.test(String(t?.tipo || '')) ? null : xyTappa(t) })).filter((x) => x.p) as Array<{ i: number; p: { lat: number; lon: number } }>;
+  const d = (a: any, b: any) => getHaversineDistance(a.lat, a.lon, b.lat, b.lon);
+  const out = new Set<number>();
+  for (let k = 1; k < pt.length; k++) {
+    const t = tappe[pt[k].i];
+    const km = Number(t?.legFromPrev?.km ?? t?.tratta_precedente?.km);
+    const aria = d(pt[k - 1].p, pt[k].p);
+    if (Number.isFinite(km) && km * 1000 > 1500 && km * 1000 > 3 * aria) out.add(pt[k].i);
+  }
+  if (pt.length < 3) return [...out];
+  for (let k = 1; k < pt.length - 1; k++) {
+    if (d(pt[k - 1].p, pt[k].p) > 5000 && d(pt[k].p, pt[k + 1].p) > 5000 && d(pt[k - 1].p, pt[k + 1].p) < 2000) out.add(pt[k].i);
+  }
+  // La prima e l'ultima tappa NON si giudicano da sole: partire dall'albergo e andare in gita (St Julian's → Mdina), o
+  // tornare a cena dove si dorme, sono giornate vere (misurato sul banco di prova, caso «gita a Mdina»).
+  return [...out].sort((a, b) => a - b);
+}
+// ══ GIORNO COMPATTO (23/11/2026, collaudo notturno 22→23/11: «salto_oltre_5km», 41 casi gravi in 12 città) ══════════
+// Mumbai G2: CST → Byculla → pranzo a Madras Talkies (6,4 km) → Alta Corte (11,6 km indietro) → Università di Mumbai
+// (riga del campus di Kalina, 15,9 km) → St. Thomas' Cathedral (15,7 km indietro). Lima G2: tre tappe in centro → pranzo
+// da «Tanta» a Miraflores (9,4 km) → MALI (7,7 km indietro). Il giorno va su e giù. REGOLA: una tappa ANOMALA — un luogo
+// lontano più di 5 km da ENTRAMBE le tappe vicine mentre queste stanno entro 2,5 km fra loro (andata e ritorno), o un
+// pasto lontano più di 2,5 km sia dalla tappa prima sia da quella dopo — si corregge, in ordine: (b) luogo: un'altra riga
+// con lo stesso nome o lo stesso QID (un secondo sito, la sede storica) entro 2 km dal baricentro del giorno; se non c'è
+// resta; (c) l'ordine del giorno si rifà (ordinaTappePerStrada: vicino più vicino dalla prima tappa, pasti fermi nella loro
+// fascia); (a) pasto (dopo il riordino): la sede con LO STESSO NOME più vicina alle tappe del giorno (localeEsistePerNome,
+// regola localeStessoNome), altrimenti un locale vero vicino (sostituisciPastoInventato → cercaLocaleVero, con tutte le
+// regole dei pasti). Due gruppi compatti con UN solo salto (la gita: Vancouver, UBC la mattina e North Vancouver il
+// pomeriggio) e la cena «a casa» in fondo al giorno restano come sono. Nessun modello; l'esito va in qualita.giorno_compatto.
+const GIORNO_SALTO_M = 5000;
+const GIORNO_VICINE_M = 2500;
+const PASTO_LONTANO_M = 2500;
+const SECONDA_SEDE_M = 2000;
+const ePastoTappa = (t: any): boolean => TIPI_PASTO.test(String(t?.tipo || '').trim()) || tipoEPastoPrincipale(t?.tipo);
+/** Le tappe ANOMALE di un giorno (regola sopra). Pura: la prova il banco. `prima`/`dopo` = metri in linea d'aria. */
+function tappeFuoriDalGiorno(g: any): Array<{ indice: number; genere: 'luogo' | 'pasto'; prima: number; dopo: number }> {
+  const tappe: any[] = Array.isArray(g?.tappe) ? g.tappe : [];
+  if (tappe.some((t) => /trasferiment|transfer|in viaggio|spostamento/i.test(`${t?.tipo || ''}`))) return [];
+  const pt = tappe.map((t, i) => ({ i, t, p: TIPO_ALLOGGIO_RIENTRO.test(String(t?.tipo || '')) ? null : xyTappa(t) })).filter((x) => x.p) as Array<{ i: number; t: any; p: { lat: number; lon: number } }>;
+  const d = (a: any, b: any) => getHaversineDistance(a.lat, a.lon, b.lat, b.lon);
+  const out: Array<{ indice: number; genere: 'luogo' | 'pasto'; prima: number; dopo: number }> = [];
+  // Luoghi: si guardano i soli luoghi (un pasto in mezzo non fa da ponte), prima e ultima esclusi (gita, cena a casa).
+  const luoghi = pt.filter((x) => !ePastoTappa(x.t));
+  for (let k = 1; k < luoghi.length - 1; k++) {
+    const a = d(luoghi[k - 1].p, luoghi[k].p), b = d(luoghi[k].p, luoghi[k + 1].p);
+    if (a > GIORNO_SALTO_M && b > GIORNO_SALTO_M && d(luoghi[k - 1].p, luoghi[k + 1].p) <= GIORNO_VICINE_M) out.push({ indice: luoghi[k].i, genere: 'luogo', prima: Math.round(a), dopo: Math.round(b) });
+  }
+  // Pasti: lontani dalla tappa prima E da quella dopo. Un pasto in fondo al giorno (la cena dove si dorme) non si giudica.
+  for (let k = 1; k < pt.length - 1; k++) {
+    if (!ePastoTappa(pt[k].t)) continue;
+    const a = d(pt[k - 1].p, pt[k].p), b = d(pt[k].p, pt[k + 1].p);
+    if (a > PASTO_LONTANO_M && b > PASTO_LONTANO_M) out.push({ indice: pt[k].i, genere: 'pasto', prima: Math.round(a), dopo: Math.round(b) });
+  }
+  return out.sort((x, y) => x.indice - y.indice);
+}
+/** Dove cercare il pasto spostato: a metà fra la tappa prima e quella dopo se stanno entro 3 km, altrimenti vicino
+ *  alla tappa prima (si mangia dove si è). Pura. */
+function ancoraPastoCompatto(tappe: any[], i: number): { lat: number; lon: number } | null {
+  let a: any = null, b: any = null;
+  for (let k = i - 1; k >= 0 && !a; k--) if (!TIPO_ALLOGGIO_RIENTRO.test(String(tappe[k]?.tipo || ''))) a = xyTappa(tappe[k]);
+  for (let k = i + 1; k < tappe.length && !b; k++) if (!TIPO_ALLOGGIO_RIENTRO.test(String(tappe[k]?.tipo || ''))) b = xyTappa(tappe[k]);
+  if (a && b && getHaversineDistance(a.lat, a.lon, b.lat, b.lon) <= 3000) return { lat: (a.lat + b.lat) / 2, lon: (a.lon + b.lon) / 2 };
+  return a || b || null;
+}
+/** Metri in linea d'aria del giorno (tappe con coordinate, alloggi esclusi). */
+function lunghezzaGiornoM(g: any): number {
+  const p = (Array.isArray(g?.tappe) ? g.tappe : []).filter((t: any) => !TIPO_ALLOGGIO_RIENTRO.test(String(t?.tipo || ''))).map(xyTappa).filter(Boolean) as Array<{ lat: number; lon: number }>;
+  let m = 0;
+  for (let k = 1; k < p.length; k++) m += getHaversineDistance(p[k - 1].lat, p[k - 1].lon, p[k].lat, p[k].lon);
+  return Math.round(m);
+}
+/** (b) La SECONDA SEDE di un luogo lontano: fra le righe lette, quella con lo stesso nome (della tappa o della riga
+ *  agganciata, anche tradotto) o lo stesso QID, entro 2 km dal baricentro del giorno, valida per la tappa (mai cinema,
+ *  città, righe nascoste, gusto per un luogo culturale, prodotti, gemelli `iti-`). La più vicina al baricentro. Pura. */
+function sceltaSecondaSede(t: any, righe: any[], baricentro: { lat: number; lon: number }, destination: any = '', rigaAttuale: any = null): any {
+  if (!t || !baricentro) return null;
+  const nomi = [String(t.titolo_ai || ''), String(t.titolo_tappa || t.titolo || ''), String(rigaAttuale?.name || '')].map((n) => nomeLuogoDaTappa(n).trim()).filter(Boolean);
+  const qid = String(rigaAttuale?.wikidata || (String(t.poi_id || '').match(/^wd-(Q\d+)/) || [])[1] || '');
+  let migliore: any = null, dMin = Infinity;
+  for (const r of righe || []) {
+    const id = String(r?.id || '');
+    const la = Number(r?.lat), lo = Number(r?.lon);
+    if (!id || id === String(t.poi_id || '') || !Number.isFinite(la) || !Number.isFinite(lo)) continue;
+    if (/^ov-/i.test(id) ? !nomi.some((n) => overtureLuogoStessoNome(r, n, destination)) : ID_NON_PROVA.test(id)) continue;
+    if (r.category === 'community' || r.is_hidden === true || /^(draft|hidden|needs_revision|banned)$/i.test(String(r.status || ''))) continue;
+    if (eEntitaAmministrativa(r) || rigaNonValidaPerTappa(t, r) || contraddizioneDiTipo({ ...t, titolo_ai: nomi[0] || t.titolo_tappa }, r)) continue;
+    if (eTipoCulturale(t.tipo) && eRigaDiGusto(r)) continue;
+    const qRiga = String(r.wikidata || (id.match(/^wd-(Q\d+)/) || [])[1] || '');
+    const stesso = (qid && qRiga === qid) || nomi.some((n) => normTesto(n) === normTesto(r.name) || nomiStessoLuogo(n, r.name, destination) || nomiStessoLuogoTradotti(n, r.name, destination));
+    if (!stesso) continue;
+    const dm = getHaversineDistance(baricentro.lat, baricentro.lon, la, lo);
+    if (!(dm <= SECONDA_SEDE_M)) continue;
+    if (dm < dMin) { dMin = dm; migliore = { ...r, __dist: Math.round(dm) }; }
+  }
+  return migliore;
+}
+const NOTE_GIORNO_COMPATTO: Record<string, string> = {
+  IT: '🔁 Locale cambiato: «{nome}» era a {km} km dalle altre tappe del giorno. Questo è vicino, nel nostro archivio: controlla gli orari e prenota.',
+  EN: '🔁 Venue changed: “{nome}” was {km} km away from the other stops of the day. This one is nearby, from our archive: check opening hours and book.',
+  FR: '🔁 Adresse changée : « {nome} » était à {km} km des autres étapes de la journée. Celle-ci est proche, dans notre archive : vérifiez les horaires et réservez.',
+  ES: '🔁 Local cambiado: «{nome}» estaba a {km} km de las otras paradas del día. Este está cerca, en nuestro archivo: comprueba horarios y reserva.',
+  DE: '🔁 Lokal gewechselt: „{nome}“ lag {km} km von den anderen Stationen des Tages entfernt. Dieses ist in der Nähe, aus unserem Archiv: Öffnungszeiten prüfen und reservieren.',
+  RU: '🔁 Заведение заменено: «{nome}» находилось в {km} км от остальных остановок дня. Это рядом, из нашего архива: уточните часы работы и забронируйте.',
+  ZH: '🔁 餐厅已更换：「{nome}」距当天其他站点 {km} 公里。这家在附近，来自我们的档案：请确认营业时间并预订。',
+};
+const notaGiornoCompatto = (language: any) => NOTE_GIORNO_COMPATTO[String(language || 'IT').toUpperCase().slice(0, 2)] || NOTE_GIORNO_COMPATTO.EN;
+async function compattaGiorni(parsed: any, opts: { destination?: any; language?: any; richiesta?: string; soloGiorni?: Set<number>; scadenza: number }): Promise<{ cambi: any[]; restano: any[] }> {
+  const esito = { cambi: [] as any[], restano: [] as any[] };
+  const giorni: any[] = Array.isArray(parsed?.giorni) ? parsed.giorni : [];
+  const destination = String(opts.destination || '');
+  const lingua = String(opts.language || 'IT');
+  const resta = () => opts.scadenza - Date.now();
+  const usati = new Set<string>(extractItineraryStops(parsed).map((s: any) => String(s?.ref?.poi_id || '')).filter(Boolean));
+  const H = supabaseUrl && supabaseServiceKey ? { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } : null;
+  const nomeDi = (t: any) => String(t?.titolo_tappa || t?.titolo || '');
+  for (let gi = 0; gi < giorni.length; gi++) {
+    const g = giorni[gi];
+    if (!Array.isArray(g?.tappe) || (opts.soloGiorni && !opts.soloGiorni.has(gi))) continue;
+    const anomale = tappeFuoriDalGiorno(g);
+    if (!anomale.length) continue;
+    const nGiorno = g?.giorno ?? gi + 1;
+    const mPrima = lunghezzaGiornoM(g);
+    let cambiato = false;
+    // (b) Luoghi lontani: la seconda sede vicina al baricentro del giorno.
+    for (const a of anomale.filter((x) => x.genere === 'luogo')) {
+      const t = g.tappe[a.indice];
+      if (!t || resta() < 6000 || !H) { esito.restano.push({ giorno: nGiorno, tappa: nomeDi(t), genere: 'luogo', motivo: 'tempo' }); continue; }
+      const altri = g.tappe.filter((x: any, i: number) => i !== a.indice && !ePastoTappa(x) && !TIPO_ALLOGGIO_RIENTRO.test(String(x?.tipo || ''))).map(xyTappa).filter(Boolean) as Array<{ lat: number; lon: number }>;
+      if (!altri.length) continue;
+      const bar = { lat: altri.reduce((s, p) => s + p.lat, 0) / altri.length, lon: altri.reduce((s, p) => s + p.lon, 0) / altri.length };
+      let rigaAttuale: any = null;
+      if (t.poi_id) {
+        const r0 = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=id,name,wikidata&id=eq.${encodeURIComponent(String(t.poi_id))}`, { headers: H, timeout: 8000 }).catch(() => null);
+        rigaAttuale = Array.isArray(r0?.data) ? r0.data[0] || null : null;
+      }
+      const qid = String(rigaAttuale?.wikidata || (String(t.poi_id || '').match(/^wd-(Q\d+)/) || [])[1] || '');
+      const parole = [...new Set([nomeDi(t), String(rigaAttuale?.name || '')].flatMap((n) => tokensNomeLuogo(n).filter((w) => !paroleCitta(destination).has(w))).sort((x, y) => y.length - x.length))];
+      const w = ordinaParoleRicerca(parole)[0];
+      if (!w && !qid) { esito.restano.push({ giorno: nGiorno, tappa: nomeDi(t), genere: 'luogo', motivo: 'nome_senza_parole' }); continue; }
+      const dLa = SECONDA_SEDE_M / 111000, dLo = SECONDA_SEDE_M / (111000 * Math.max(0.15, Math.cos(bar.lat * Math.PI / 180)));
+      const filtri = [w ? `name.ilike.*${w}*` : '', qid ? `wikidata.eq.${qid}` : ''].filter(Boolean).join(',');
+      const r = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=${SELECT_RIGA_CONTROLLO}&or=(${encodeURIComponent(filtri)})&is_hidden=not.is.true&lat=gte.${bar.lat - dLa}&lat=lte.${bar.lat + dLa}&lon=gte.${bar.lon - dLo}&lon=lte.${bar.lon + dLo}&limit=40`, { headers: H, timeout: 8000 }).catch(() => null);
+      const s = sceltaSecondaSede(t, Array.isArray(r?.data) ? r.data : [], bar, destination, rigaAttuale);
+      if (!s || usati.has(String(s.id))) { esito.restano.push({ giorno: nGiorno, tappa: nomeDi(t), genere: 'luogo', motivo: 'nessuna_seconda_sede', km: Math.round(Math.min(a.prima, a.dopo) / 100) / 10 }); continue; }
+      const da = String(t.poi_id || '');
+      if (da) usati.delete(da);
+      collegaTappaARiga(t, s);
+      usati.add(String(s.id));
+      t.seconda_sede = { da: da || null, a: String(s.id), ts: Date.now() };
+      delete t.mezzi_precedente; delete t.mezzi_tratta; delete t.tratta_lunga_confermata;
+      esito.cambi.push({ giorno: nGiorno, tappa: nomeDi(t), cosa: 'seconda_sede', da: da || null, a: String(s.id), dist_baricentro_m: s.__dist });
+      cambiato = true;
+    }
+    // (c) L'ordine del giorno si rifà (pasti fermi nella loro fascia, orari ricalcolati).
+    try { ordinaTappePerStrada(parsed, new Set([gi])); } catch { /* resta l'ordine */ }
+    // (a) Pasti lontani, guardati DOPO il riordino.
+    for (const a of tappeFuoriDalGiorno(g).filter((x) => x.genere === 'pasto')) {
+      const t = g.tappe[a.indice];
+      if (!t) continue;
+      const ancora = ancoraPastoCompatto(g.tappe, a.indice);
+      if (!ancora || resta() < 8000) { esito.restano.push({ giorno: nGiorno, tappa: nomeDi(t), genere: 'pasto', motivo: ancora ? 'tempo' : 'senza_ancora' }); continue; }
+      const nomeVecchio = nomeDi(t);
+      const km = Math.round(Math.min(a.prima, a.dopo) / 100) / 10;
+      // La sede con lo stesso nome più vicina (catene, locali con più indirizzi: «Tanta» ha una sede in centro).
+      let sede: any = null;
+      let tSede: any;
+      try {
+        sede = await Promise.race([
+          localeEsistePerNome(nomeVecchio, ancora, lingua.toLowerCase(), String(t.tipo || ''), destination, ancora),
+          new Promise((r) => { tSede = setTimeout(() => r(null), Math.max(3000, Math.min(15000, resta() - 8000))); }),
+        ]);
+      } catch { sede = null; } finally { clearTimeout(tSede); }
+      if (sede && String(sede.id) !== String(t.poi_id || '') && Number.isFinite(sede.lat) && getHaversineDistance(ancora.lat, ancora.lon, sede.lat, sede.lon) <= PASTO_LONTANO_M && localeStessoNome(nomeVecchio, sede.name, destination)) {
+        const da = String(t.poi_id || '');
+        t.poi_id = sede.id; t.coordinate = { lat: sede.lat, lng: sede.lon }; t.coordinate_fonte = sede.fonte;
+        if (sede.address) t.indirizzo = sede.address; else delete t.indirizzo;
+        if (sede.phone) t.telefono = sede.phone; else delete t.telefono;
+        if (sede.website) t.link_info = sede.website;
+        for (const k of ['orari', 'mezzi_precedente', 'mezzi_tratta']) delete t[k];
+        usati.add(String(sede.id));
+        esito.cambi.push({ giorno: nGiorno, tappa: nomeVecchio, cosa: 'stessa_insegna_vicina', da: da || null, a: String(sede.id), km_prima: km });
+        cambiato = true;
+        continue;
+      }
+      // Nessuna sede vicina con lo stesso nome: un locale vero vicino, con le regole dei pasti (cucina chiesta, mai bar/mercato).
+      const da = String(t.poi_id || '');
+      const ok = await sostituisciPastoInventato(t, ancora, destination, lingua, usati, String(opts.richiesta || '')).catch(() => false);
+      if (ok) {
+        t.nota_verifica = notaGiornoCompatto(lingua).replace('{nome}', nomeLuogoDaTappa(nomeVecchio)).replace('{km}', String(km).replace('.', /^(IT|FR|ES|DE|RU)$/i.test(lingua.slice(0, 2)) ? ',' : '.'));
+        usati.add(String(t.poi_id));
+        esito.cambi.push({ giorno: nGiorno, tappa: nomeVecchio, cosa: 'locale_vicino', da: da || null, a: String(t.poi_id), km_prima: km });
+        cambiato = true;
+      } else esito.restano.push({ giorno: nGiorno, tappa: nomeVecchio, genere: 'pasto', motivo: 'nessun_locale_vicino', km });
+    }
+    if (cambiato) {
+      // Il pasto spostato cambia le distanze: l'ordine si riguarda (e gli orari si ricalcolano in ogni caso).
+      try { ordinaTappePerStrada(parsed, new Set([gi])); } catch { /* resta l'ordine */ }
+      esito.cambi.push({ giorno: nGiorno, cosa: 'percorso', m_prima: mPrima, m_dopo: lunghezzaGiornoM(g) });
+    }
+  }
+  if (esito.cambi.length || esito.restano.length) {
+    parsed.qualita = { ...(parsed.qualita || {}), giorno_compatto: { esito: esito.restano.length ? (esito.cambi.length ? 'parziale' : 'restano') : 'corretto', cambi: esito.cambi.slice(0, 40), restano: esito.restano.slice(0, 40), ts: Date.now() } };
+  }
+  return esito;
+}
+/** e) La riga CON FONTE (QID, Wikipedia, testo ≥ 200) con lo stesso nome entro 500 m da una tappa non agganciata. */
+function rigaConFonte(riga: any): boolean {
+  return !!(riga?.wikidata || /^(wd-|unesco-)/i.test(String(riga?.id || '')) || riga?.wikipedia_url
+    || Math.max(String(riga?.description_long || '').length, String(riga?.description_short || '').length, String(riga?.description_ai || '').length) >= 200);
+}
+function candidatoConFonte(t: any, righe: any[], destination: any): any {
+  if (!t || t.poi_id || TIPI_PASTO.test(String(t.tipo || '').trim()) || TIPO_ALLOGGIO_RIENTRO.test(String(t.tipo || '')) || /trasferiment/i.test(String(t.tipo || ''))) return null;
+  const p = xyTappa(t); if (!p) return null;
+  const nome = String(t.titolo_tappa || t.titolo || '');
+  const forme = [...new Set([nome.replace(/\s*\([^()]*\)\s*$/, '').trim(), ...variantiNomeTappa(nome, destination), ...partiNomeComposto(nome).slice(0, 1)].filter(Boolean))];
+  const rifiutati: string[] = Array.isArray(t.agganci_rifiutati) ? t.agganci_rifiutati : [];
+  let migliore: any = null, dMin = Infinity;
+  for (const riga of righe || []) {
+    const id = String(riga?.id || '');
+    if (!rigaConFonte(riga) || ID_NON_PROVA.test(id) || rifiutati.includes(id)) continue;
+    if (rigaNonValidaPerTappa(t, riga) || contraddizioneDiTipo(t, riga)) continue;
+    const dm = getHaversineDistance(p.lat, p.lon, Number(riga.lat), Number(riga.lon));
+    if (!(dm <= 500)) continue;
+    if (rigaSoloNomeDelPosto(riga.name, nome, destination)) continue;
+    const stesso = forme.some((f) => normTesto(f) === normTesto(riga.name) || nomiStessoLuogo(f, riga.name, destination) || nomiStessoLuogoTradotti(f, riga.name, destination) || nomiStessoLuogoRadice(f, riga.name, destination));
+    if (stesso && dm < dMin) { migliore = { ...riga, __dist: Math.round(dm) }; dMin = dm; }
+  }
+  return migliore;
+}
+/** Il riconoscimento puro (senza rete): elenco dei problemi a, b, c, d, f. `righe` = righe del database per id. */
+function problemiQualitaItinerario(parsed: any, righe: Record<string, any> = {}, opz: { soloGiorni?: Set<number> } = {}): any[] {
+  const out: any[] = [];
+  const giorni: any[] = Array.isArray(parsed?.giorni) ? parsed.giorni : [];
+  const usati = new Map<string, number>();
+  giorni.forEach((g, gi) => {
+    const tappe: any[] = Array.isArray(g?.tappe) ? g.tappe : [];
+    const qui = !opz.soloGiorni || opz.soloGiorni.has(gi);
+    tappe.forEach((t, ti) => {
+      if (!t || TIPO_ALLOGGIO_RIENTRO.test(String(t.tipo || ''))) return;
+      const base = { giorno: g?.giorno ?? gi + 1, indice: ti, tappa: String(t.titolo_tappa || t.titolo || ''), poi_id: t.poi_id || null, ref: t };
+      const pasto = TIPI_PASTO.test(String(t.tipo || '').trim());
+      if (t.poi_id && !pasto) {
+        const k = String(t.poi_id);
+        if (usati.has(k)) { if (qui) out.push({ ...base, regola: 'a', motivo: 'poi_doppio' }); }
+        else usati.set(k, gi);
+      }
+      if (!qui || !t.poi_id) return;
+      const riga = righe[String(t.poi_id)] || null;
+      const b = rigaNonValidaPerTappa(t, riga);
+      if (b) { out.push({ ...base, regola: 'b', motivo: b }); return; }
+      const c = contraddizioneDiTipo(t, riga);
+      if (c) { out.push({ ...base, regola: 'c', motivo: c }); return; }
+      if (pastoNonLocale(t, riga)) out.push({ ...base, regola: 'f', motivo: 'pasto_non_ristorante' });
+    });
+    if (qui) for (const i of tappeConTrattaAnomala(g)) {
+      const t = tappe[i];
+      if (t?.tratta_lunga_confermata) continue;
+      out.push({ giorno: g?.giorno ?? gi + 1, indice: i, tappa: String(t?.titolo_tappa || t?.titolo || ''), poi_id: t?.poi_id || null, ref: t, regola: 'd', motivo: 'tratta_anomala' });
+    }
+  });
+  return out;
+}
+/** Testo che dipende dall'ORDINE della giornata (prompt punto 10: «inizia la giornata con…», «concludi…», «dopo
+ *  pranzo…»): l'ordine lo rifà ordinaTappePerStrada, la frase diventa falsa. Si toglie la formula d'apertura; se è
+ *  l'intera frase e il resto del testo basta, la frase intera. Trasferimenti esclusi. */
+const RE_FRASE_ORDINE = /^(?:(?:inizia(?:mo|te)?|comincia(?:mo|te)?|apri(?:amo)?|concludi(?:amo|ete)?|chiudi(?:amo)?|termina(?:mo|te)?|finisci) (?:la (?:giornata|mattinata|serata|visita|passeggiata)|il (?:giro|pomeriggio|tour))(?: di \p{L}+)?(?: con| a| da| in| presso)?|dopo (?:pranzo|cena|colazione|la visita|questa tappa)|(?:come )?ultima tappa(?: della giornata)?|prima tappa(?: della giornata)?|start (?:your|the) day (?:with|at)|end (?:your|the) day (?:with|at)|after lunch|after dinner)\s*[,:]?\s*/iu;
+function togliFrasiDiOrdine(testo: any): { testo: string; tolte: number } {
+  const t = String(testo || '').trim();
+  if (!t) return { testo: t, tolte: 0 };
+  let tolte = 0;
+  const frasi = t.split(/(?<=[.!?…])\s+/).map((f) => {
+    const m = RE_FRASE_ORDINE.exec(f);
+    if (!m) return f;
+    tolte++;
+    const resto = f.slice(m[0].length).trim();
+    // «Inizia la giornata con la visita del Duomo, …» → «La visita del Duomo, …»: resta la frase senza la formula.
+    return resto.length >= 15 ? resto.charAt(0).toUpperCase() + resto.slice(1) : '';
+  }).filter(Boolean);
+  const nuovo = frasi.join(' ').trim();
+  return nuovo.length >= Math.min(40, t.length * 0.5) ? { testo: nuovo, tolte } : { testo: t, tolte: 0 };
+}
+/** Sgancia una tappa da una riga sbagliata: l'id va fra i rifiutati, tornano le coordinate e il titolo del modello. */
+function sganciaTappa(t: any, motivo: string): void {
+  const id = String(t?.poi_id || '');
+  if (id) t.agganci_rifiutati = [...new Set([...(Array.isArray(t.agganci_rifiutati) ? t.agganci_rifiutati : []), id])].slice(-10);
+  delete t.poi_id; delete t.indirizzo; delete t.telefono; delete t.titolo_dal_db; delete t.aggancio_giudice;
+  if (t.coordinate_ai && Number.isFinite(Number(t.coordinate_ai.lat))) t.coordinate = { ...t.coordinate_ai };
+  if (t.titolo_ai) t.titolo_tappa = String(t.titolo_ai);
+  if (/^verificata$/.test(String(t.verifica || ''))) delete t.verifica;
+  t.sganciata = motivo;
+}
+/** Aggancia una tappa a una riga con fonte (regola «e»): coordinate del navigatore, id, indirizzo; il titolo resta. */
+function collegaTappaARiga(t: any, riga: any): void {
+  const p = xyTappa(t);
+  if (p && !t.coordinate_ai) t.coordinate_ai = { lat: p.lat, lng: p.lon };
+  const la = Number(riga.arrival_lat || riga.entrance_lat || riga.lat), lo = Number(riga.arrival_lon || riga.entrance_lon || riga.lon);
+  if (Number.isFinite(la) && Number.isFinite(lo) && (la !== 0 || lo !== 0)) t.coordinate = { lat: la, lng: lo };
+  t.poi_id = String(riga.id);
+  if (riga.address) t.indirizzo = `${riga.address}${riga.city && !String(riga.address).toLowerCase().includes(String(riga.city).toLowerCase()) ? `, ${riga.city}` : ''}`;
+  if (riga.contact_website && !t.link_info) t.link_info = String(riga.contact_website);
+  if (!t.verifica || t.verifica === 'da_verificare') {
+    t.verifica = 'verificata';
+    delete t.nota_verifica; delete t.posizione_incerta; delete t.verifica_rimandata;
+  }
+  t.aggancio_controllo = true;
+}
+const SELECT_RIGA_CONTROLLO = 'id,name,lat,lon,address,city,contact_website,entrance_lat,entrance_lon,arrival_lat,arrival_lon,is_gem,is_hidden,category,wikidata,wikipedia_url,status';
+/** Le righe del database delle tappe agganciate (shared_pois, e locali_pois per i pasti), per id. */
+async function righeDelleTappe(parsed: any): Promise<Record<string, any>> {
+  const out: Record<string, any> = {};
+  if (!supabaseUrl || !supabaseServiceKey) return out;
+  const H = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+  const stops = extractItineraryStops(parsed).map((s) => s.ref).filter((t: any) => t?.poi_id);
+  const luoghi = [...new Set(stops.filter((t: any) => !TIPI_PASTO.test(String(t.tipo || '').trim())).map((t: any) => String(t.poi_id)))];
+  const pasti = [...new Set(stops.filter((t: any) => TIPI_PASTO.test(String(t.tipo || '').trim())).map((t: any) => String(t.poi_id)))];
+  const lista = (ids: string[]) => ids.map((x) => `"${x.replace(/"/g, '')}"`).join(',');
+  const lavori: Promise<any>[] = [];
+  for (let i = 0; i < luoghi.length; i += 40) lavori.push(axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=${SELECT_RIGA_CONTROLLO}&id=in.(${encodeURIComponent(lista(luoghi.slice(i, i + 40)))})`, { headers: H, timeout: 10000 }).catch(() => null));
+  for (let i = 0; i < pasti.length; i += 40) lavori.push(axios.get(`${supabaseUrl}/rest/v1/locali_pois?select=id,name,lat,lon,sub_category&id=in.(${encodeURIComponent(lista(pasti.slice(i, i + 40)))})`, { headers: H, timeout: 10000 }).catch(() => null));
+  for (const r of await Promise.all(lavori)) for (const x of (Array.isArray(r?.data) ? r.data : [])) if (x?.id != null) out[String(x.id)] = x;
+  return out;
+}
+async function controlloQualitaItinerario(parsed: any, opts: { destination?: any; lat?: number; lon?: number; language?: any; tettoMs?: number; soloGiorni?: Set<number>; giudice?: boolean; userId?: any; richiesta?: string } = {}): Promise<{ problemi: any[]; corretti: number; controllo: any }> {
+  const t0 = Date.now();
+  const scadenza = t0 + Math.max(5000, Number(opts.tettoMs) || 30000);
+  const resta = () => scadenza - Date.now();
+  const destination = String(opts.destination || '');
+  const lingua = String(opts.language || 'IT');
+  const centro = Number.isFinite(Number(opts.lat)) && Number.isFinite(Number(opts.lon)) ? { lat: Number(opts.lat), lon: Number(opts.lon) } : null;
+  let corretti = 0;
+  const trovati: any[] = [];
+  const nelGiorno = (t: any) => {
+    if (!opts.soloGiorni) return true;
+    return (parsed?.giorni || []).some((g: any, gi: number) => opts.soloGiorni!.has(gi) && Array.isArray(g?.tappe) && g.tappe.includes(t));
+  };
+  // 0) Segni del giudice rimasti (un aggancio interrotto dal suo tetto): si giudicano qui o si tolgono.
+  try { await giudicaAgganciDubbi(parsed, { destination, userId: opts.userId, tettoMs: Math.min(15000, Math.max(3000, resta() / 3)), nonChiedere: !opts.giudice }); } catch { /* resta l'aggancio */ }
+  // 1) Testo che dipende dall'ordine della giornata.
+  let frasiOrdine = 0;
+  for (const s of extractItineraryStops(parsed)) {
+    const t = s.ref;
+    if (!t || /trasferiment/i.test(String(t.tipo || '')) || !nelGiorno(t)) continue;
+    for (const c of ['attivita', 'consiglio_guida']) {
+      if (typeof t[c] !== 'string') continue;
+      const r = togliFrasiDiOrdine(t[c]);
+      if (r.tolte) { t[c] = r.testo; frasiOrdine += r.tolte; }
+    }
+  }
+  if (frasiOrdine) corretti += frasiOrdine;
+  // 1-bis) (20/11/2026) Formule vietate e ragionamento del modello nei testi delle tappe: tolti, sempre.
+  try { corretti += pulisciFormuleItinerario(parsed); } catch { /* fail-open */ }
+  // 2) Riconoscimento sulle righe vere.
+  let righe = await righeDelleTappe(parsed).catch(() => ({} as Record<string, any>));
+  let problemi = problemiQualitaItinerario(parsed, righe, { soloGiorni: opts.soloGiorni });
+  for (const p of problemi) trovati.push({ regola: p.regola, motivo: p.motivo, giorno: p.giorno, tappa: p.tappa, poi_id: p.poi_id });
+  // 3a) Doppioni dello stesso poi_id: «doppioni mai», col budget del giorno.
+  if (problemi.some((p) => p.regola === 'a')) {
+    try { corretti += togliDoppioniItinerario(parsed, opts.soloGiorni, true); } catch { /* fail-open */ }
+  }
+  // 3b/c) Aggancio sbagliato: si sgancia e si riprova l'aggancio (la riga rifiutata non torna).
+  const daRiagganciare = problemi.filter((p) => (p.regola === 'b' || p.regola === 'c') && p.ref?.poi_id).map((p) => { sganciaTappa(p.ref, p.motivo); return p.ref; });
+  if (daRiagganciare.length && resta() > 6000) {
+    const cancel = { cancelled: false };
+    let timer: any;
+    const contenitore = { giorni: [{ tappe: daRiagganciare }] };
+    try {
+      await Promise.race([
+        agganciaTappeAlDatabase(contenitore, centro, destination, cancel, { giudice: !!opts.giudice }),
+        new Promise((r) => { timer = setTimeout(() => { cancel.cancelled = true; r(null); }, Math.min(15000, resta() - 3000)); }),
+      ]);
+    } catch { /* fail-open */ } finally { clearTimeout(timer); }
+    try { await giudicaAgganciDubbi(contenitore, { destination, userId: opts.userId, tettoMs: Math.min(12000, Math.max(3000, resta() - 3000)), nonChiedere: !opts.giudice }); } catch { /* resta */ }
+    if (contenitore.qualita?.giudice) parsed.qualita = { ...(parsed.qualita || {}), giudice: sommaEsitoGiudice(parsed.qualita?.giudice, contenitore.qualita.giudice) };
+    corretti += daRiagganciare.filter((t) => t.poi_id).length;
+  }
+  // 3f) Pasto su ciò che non è un ristorante: si sgancia e si sostituisce con un locale vero.
+  const usati = new Set<string>(extractItineraryStops(parsed).map((s: any) => String(s?.ref?.poi_id || '')).filter(Boolean));
+  for (const p of problemi.filter((x) => x.regola === 'f')) {
+    if (resta() < 8000) break;
+    const t = p.ref;
+    const ancora = xyTappa(t) || centro;
+    sganciaTappa(t, 'pasto_non_ristorante');
+    try { if (await sostituisciPastoInventato(t, ancora, destination, lingua, usati, String(opts.richiesta || ''))) { corretti++; usati.add(String(t.poi_id)); } } catch { /* resta da verificare */ }
+  }
+  // 3e) Luoghi non agganciati con una riga con fonte e lo stesso nome entro 500 m.
+  const nonAgganciate = extractItineraryStops(parsed).map((s) => s.ref).filter((t: any) => t && !t.poi_id && nelGiorno(t) && !TIPI_PASTO.test(String(t.tipo || '').trim()) && !TIPO_ALLOGGIO_RIENTRO.test(String(t.tipo || '')) && xyTappa(t));
+  const candidati: Array<{ t: any; riga: any }> = [];
+  if (nonAgganciate.length && supabaseUrl && supabaseServiceKey && resta() > 5000) {
+    const H = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+    const coda = [...nonAgganciate.slice(0, 20)];
+    const lavora = async () => {
+      while (coda.length && resta() > 4000) {
+        const t = coda.shift(); const p = xyTappa(t); if (!p) continue;
+        const dLa = 0.5 / 111, dLo = 0.5 / (111 * Math.max(0.15, Math.cos(p.lat * Math.PI / 180)));
+        const r = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=${SELECT_RIGA_CONTROLLO},description_short,description_long&is_hidden=not.is.true&lat=gte.${p.lat - dLa}&lat=lte.${p.lat + dLa}&lon=gte.${p.lon - dLo}&lon=lte.${p.lon + dLo}&or=(wikidata.not.is.null,wikipedia_url.not.is.null,id.like.wd-*,id.like.unesco-*,description_long.not.is.null)&limit=80`, { headers: H, timeout: 8000 }).catch(() => null);
+        const c = candidatoConFonte(t, Array.isArray(r?.data) ? r.data : [], destination);
+        if (c) candidati.push({ t, riga: c });
+      }
+    };
+    await Promise.all([lavora(), lavora(), lavora(), lavora()]);
+  }
+  if (candidati.length) {
+    const dubbi = candidati.filter((c) => aggancioDubbio(c.t.titolo_tappa || c.t.titolo, c.riga.name, c.riga.__dist, destination, c.t.tipo));
+    let verdetti: Array<boolean | null> = dubbi.map(() => null);
+    if (dubbi.length && opts.giudice && resta() > 4000) {
+      const g = await giudicaCoppieAggancio(dubbi.map((c) => ({ tappa: String(c.t.titolo_tappa || c.t.titolo || ''), tipo: String(c.t.tipo || ''), citta: destination, riga: String(c.riga.name || ''), categoria: String(c.riga.category || ''), dist: c.riga.__dist, qid: String(c.riga.wikidata || (String(c.riga.id).match(/^wd-(Q\d+)/) || [])[1] || '') })), { userId: opts.userId, tettoMs: Math.min(15000, resta() - 2000) });
+      verdetti = g.verdetti;
+      const si = verdetti.filter((v) => v === true).length, no = verdetti.filter((v) => v === false).length;
+      parsed.qualita = { ...(parsed.qualita || {}), giudice: sommaEsitoGiudice(parsed.qualita?.giudice, { esito: g.esito, coppie: dubbi.length, si, no, chiamate: g.chiamate, ms: g.ms, motore: g.motore }) };
+    } else if (dubbi.length) {
+      parsed.qualita = { ...(parsed.qualita || {}), giudice: sommaEsitoGiudice(parsed.qualita?.giudice, { esito: 'non_eseguito', coppie: dubbi.length, si: 0, no: 0, chiamate: 0, ms: 0 }) };
+    }
+    const usatiE = new Set<string>(extractItineraryStops(parsed).map((s: any) => String(s?.ref?.poi_id || '')).filter(Boolean));
+    for (const c of candidati) {
+      const k = dubbi.indexOf(c);
+      if (k >= 0 && verdetti[k] === false) {
+        c.t.agganci_rifiutati = [...new Set([...(Array.isArray(c.t.agganci_rifiutati) ? c.t.agganci_rifiutati : []), String(c.riga.id)])].slice(-10);
+        c.t.aggancio_giudice = 'no';
+        continue;
+      }
+      if (usatiE.has(String(c.riga.id))) continue; // già una tappa: sarebbe un doppione, lo decide «doppioni mai»
+      if (k >= 0 && verdetti[k] === true) c.t.aggancio_giudice = 'si';
+      collegaTappaARiga(c.t, c.riga);
+      usatiE.add(String(c.riga.id));
+      trovati.push({ regola: 'e', motivo: 'fonte_vicina_non_agganciata', tappa: String(c.t.titolo_tappa || ''), poi_id: String(c.riga.id) });
+      corretti++;
+    }
+  }
+  // 3d) Tratte assurde: posizione dalla riga agganciata o dal geocoder.
+  for (const p of problemi.filter((x) => x.regola === 'd')) {
+    if (resta() < 6000) break;
+    const t = p.ref; const prima = xyTappa(t); if (!prima) continue;
+    let nuovo: { lat: number; lon: number } | null = null, fonte = '';
+    const riga = t.poi_id ? righe[String(t.poi_id)] : null;
+    if (riga) {
+      const la = Number(riga.arrival_lat || riga.entrance_lat || riga.lat), lo = Number(riga.arrival_lon || riga.entrance_lon || riga.lon);
+      if (Number.isFinite(la) && Number.isFinite(lo)) { nuovo = { lat: la, lon: lo }; fonte = 'riga'; }
+    } else {
+      try {
+        const g = await posizioneDaGeocoder(String(t.titolo_tappa || t.titolo || ''), destination, lingua.toLowerCase(), String(t.tipo || ''), { localita: localitaDellaTappa(t, destination), riquadro: centro ? { ...centro, km: 40 } : null });
+        if (g) { nuovo = { lat: g.lat, lon: g.lon }; fonte = 'geocoder'; }
+      } catch { /* geocoder giù */ }
+    }
+    if (!nuovo) continue;
+    if (getHaversineDistance(prima.lat, prima.lon, nuovo.lat, nuovo.lon) <= 300) { t.tratta_lunga_confermata = true; continue; } // il punto è giusto: luogo vero e lontano
+    t.coordinate = { lat: nuovo.lat, lng: nuovo.lon };
+    t.coordinate_fonte = fonte;
+    t.posizione_corretta_controllo = true;
+    corretti++;
+  }
+  // 3g) (23/11/2026) GIORNO COMPATTO: luoghi andata-e-ritorno (seconda sede vicina) e pasti lontani da tutte e due le
+  //     tappe vicine (stessa insegna vicina o locale vero vicino), poi l'ordine del giorno si rifà.
+  if (resta() > 8000) {
+    try {
+      const gc = await compattaGiorni(parsed, { destination, language: lingua, richiesta: String(opts.richiesta || ''), soloGiorni: opts.soloGiorni, scadenza: scadenza - 3000 });
+      for (const c of gc.cambi) if (c.cosa !== 'percorso') { trovati.push({ regola: 'g', motivo: c.cosa, giorno: c.giorno, tappa: c.tappa, poi_id: c.a || null }); corretti++; }
+    } catch (eGc: any) { parsed.qualita = { ...(parsed.qualita || {}), giorno_compatto: { esito: 'non_eseguito', errore: String(eGc?.message || eGc).slice(0, 120), ts: Date.now() } }; }
+  } else if ((parsed?.giorni || []).some((g: any, gi: number) => (!opts.soloGiorni || opts.soloGiorni.has(gi)) && tappeFuoriDalGiorno(g).length)) {
+    parsed.qualita = { ...(parsed.qualita || {}), giorno_compatto: { esito: 'non_eseguito', motivo: 'tempo', ts: Date.now() } };
+  }
+  // 4) Doppioni e totale di nuovo (agganci nuovi = possibili doppioni), poi il riconoscimento finale.
+  try { const d = togliDoppioniItinerario(parsed, opts.soloGiorni, true); corretti += d; } catch { /* fail-open */ }
+  try { ricalcolaTotaleViaggio(parsed, lingua.toLowerCase()); } catch { /* resta il testo */ }
+  if (resta() > 2000) righe = { ...righe, ...(await righeDelleTappe(parsed).catch(() => ({}))) };
+  problemi = problemiQualitaItinerario(parsed, righe, { soloGiorni: opts.soloGiorni });
+  // Le tappe sganciate e non riagganciate, i pasti non sostituiti: non sono state smentite, ma nemmeno confermate.
+  for (const s of extractItineraryStops(parsed)) {
+    const t = s.ref;
+    if (t?.sganciata && !t.poi_id && !problemi.some((p) => p.ref === t)) problemi.push({ giorno: s.giorno, tappa: String(t.titolo_tappa || ''), poi_id: null, ref: t, regola: t.sganciata === 'pasto_non_ristorante' ? 'f' : 'b', motivo: `sganciata_${t.sganciata}` });
+  }
+  for (const p of problemi) {
+    const t = p.ref; if (!t) continue;
+    if (p.regola === 'a') continue; // un doppione rimasto lo toglie la prossima passata di «doppioni mai»
+    if (p.regola === 'b' || p.regola === 'c') { if (t.poi_id) sganciaTappa(t, p.motivo); }
+    if (p.regola === 'f' && t.poi_id) sganciaTappa(t, 'pasto_non_ristorante');
+    if (p.regola === 'd') t.posizione_incerta = true;
+    t.verifica = 'da_verificare';
+    if (!String(t.nota_verifica || '').includes(notaControllo(lingua))) t.nota_verifica = [t.nota_verifica, notaControllo(lingua)].filter(Boolean).join(' ');
+    // La cron di completamento la riprende UNA volta (firma web, archivi dei locali, geocoder): non un giro senza fine.
+    if (!t.controllo_rimandata) { t.verifica_rimandata = true; t.controllo_rimandata = true; }
+    t.controllo_qualita = p.motivo;
+  }
+  const restano = problemi.filter((p) => p.regola !== 'a').map((p) => ({ regola: p.regola, motivo: p.motivo, giorno: p.giorno, tappa: p.tappa, poi_id: p.poi_id }));
+  const controllo = { esito: restano.length ? 'restano' : (corretti || trovati.length ? 'corretto' : 'ok'), problemi: restano.length ? restano : trovati.slice(0, 40), trovati: trovati.length, corretti, frasi_ordine: frasiOrdine, ms: Date.now() - t0, ts: Date.now() };
+  parsed.qualita = { ...(parsed.qualita || {}), controllo };
+  console.log(`[controllo qualità] «${destination}»: ${trovati.length} problemi trovati, ${corretti} corretti, ${restano.length} restano (${controllo.ms} ms)`);
+  return { problemi: restano, corretti, controllo };
+}
+
+// ══ TAPPE NON CONFERMATE: RIAGGANCIARE, SOSTITUIRE O TOGLIERE (20/11/2026, committente «correggi tutto») ═════════════
+// Collaudi notturni 19–20/11: 17–18 tappe a notte consegnate «da_verificare» (Sacré-Cœur sganciata dal cinema e mai
+// riagganciata, «Cattedrale di Barcellona» e «M+ Museum» «non trovate dal geocoder», «Giardino di Odaiba», «Palazzo
+// Victoria Peak e Sky Terrace 428»). REGOLA: una tappa NON pasto la cui verifica è FINITA (non rimandata) e non la
+// conferma non si consegna così. In fila: (1) riaggancio a una riga CON FONTE dello stesso nome entro 500 m
+// (candidatoConFonte); (2) SOSTITUZIONE con un luogo vero dell'archivio (gemma, QID, UNESCO, Wikipedia) dello stesso
+// genere (museo/chiesa/monumento/natura) entro 800 m dal punto della tappa, non già nell'itinerario, con una scheda: il
+// testo è la scheda della fonte (mai prosa del modello); (3) se non c'è niente, la tappa si TOGLIE (budget del giorno
+// aggiornato, nota nel giorno e in qualita). «Doppioni mai» e i giorni pieni restano: dopo, togliDoppioniItinerario e, se
+// un giorno scende sotto i tre quarti della mediana, si aggiunge un luogo vero dell'archivio vicino alle sue tappe.
+// I pasti hanno sostituisciPastoInventato. Nessuna chiamata a un modello.
+const NOTE_TAPPA_RISOLTA: Record<string, { sostituita: string; tolta: string }> = {
+  IT: { sostituita: '🔁 Tappa sostituita: «{nome}» non è stato confermato da nessuna fonte; al suo posto un luogo vero vicino, dal nostro archivio.', tolta: 'Tolta la tappa «{nome}»: nessuna fonte ne conferma nome e posizione.' },
+  EN: { sostituita: '🔁 Stop replaced: «{nome}» could not be confirmed by any source; here is a real place nearby, from our archive.', tolta: 'Stop «{nome}» removed: no source confirms its name and location.' },
+  FR: { sostituita: '🔁 Étape remplacée : «{nome}» n’a été confirmé par aucune source ; à sa place, un vrai lieu proche, de nos archives.', tolta: 'Étape «{nome}» retirée : aucune source n’en confirme le nom et l’emplacement.' },
+  ES: { sostituita: '🔁 Parada sustituida: «{nome}» no fue confirmada por ninguna fuente; en su lugar, un lugar real cercano de nuestro archivo.', tolta: 'Parada «{nome}» eliminada: ninguna fuente confirma su nombre y ubicación.' },
+  DE: { sostituita: '🔁 Halt ersetzt: «{nome}» wurde von keiner Quelle bestätigt; stattdessen ein echter Ort in der Nähe aus unserem Archiv.', tolta: 'Halt «{nome}» entfernt: keine Quelle bestätigt Name und Lage.' },
+  RU: { sostituita: '🔁 Остановка заменена: «{nome}» не подтверждена ни одним источником; вместо неё — реальное место рядом из нашего архива.', tolta: 'Остановка «{nome}» удалена: ни один источник не подтверждает название и местоположение.' },
+  ZH: { sostituita: '🔁 站点已替换：「{nome}」未得到任何来源确认；改为我们档案中附近的真实地点。', tolta: '已移除站点「{nome}」：没有来源确认其名称和位置。' },
+};
+const notaTappaRisolta = (language: any) => NOTE_TAPPA_RISOLTA[String(language || 'IT').toUpperCase().slice(0, 2)] || NOTE_TAPPA_RISOLTA.EN;
+/** Il genere di una tappa o di una riga: musei, chiese, natura, monumenti ('' = non culturale / non giudicabile). */
+function genereLuogo(s: any): string {
+  const t = String(s || '').toLowerCase();
+  if (/muse|galler|pinacotec|museum|gallery|mus[eé]e|museo|museu/.test(t)) return 'musei';
+  if (/chies|basilic|cattedral|duomo|santuar|abbazi|monaster|convent|cappell|church|cathedral|moschea|mosque|sinagog|synagog|tempi|temple|religio/.test(t)) return 'chiese';
+  if (/parc|giardin|natur|panoram|belvedere|viewpoint|park|garden|lago|lake|spiaggia|beach|monte|collin|bosco|riserva/.test(t)) return 'natura';
+  if (/monument|castell|fort|rocca|palazz|torr|teatr|archeolog|rovin|storic|piazz|ponte|villa|castle|palace|tower|square|bridge|plaza|platz|memorial|mura|porta|arco|fontana|obelisc|statua/.test(t)) return 'monumenti';
+  return '';
+}
+function generiCompatibili(tappa: string, riga: string): boolean {
+  if (!tappa || !riga) return false;
+  if (tappa === riga) return true;
+  // un «monumento» generico del modello può essere una chiesa o un museo vero; la natura resta natura
+  return tappa === 'monumenti' && (riga === 'chiese' || riga === 'musei');
+}
+/** Lingua di un testo breve, a spie (it/en/fr/es/de); '' se non si capisce. Serve solo a non mettere in un itinerario
+ *  italiano la scheda inglese di un luogo. */
+function linguaSpia(testo: any): string {
+  const p = ` ${String(testo || '').toLowerCase().replace(/[^\p{L}\s']/gu, ' ')} `;
+  const conta = (ws: string[]) => ws.reduce((n, w) => n + (p.split(` ${w} `).length - 1), 0);
+  const punti: Record<string, number> = {
+    it: conta(['il', 'della', 'di', 'che', 'del', 'nel', 'è', 'una', 'con', 'per', 'gli']),
+    en: conta(['the', 'of', 'and', 'is', 'was', 'with', 'in', 'which', 'by']),
+    fr: conta(['le', 'la', 'les', 'des', 'du', 'est', 'et', 'une', 'dans']),
+    es: conta(['el', 'los', 'las', 'del', 'que', 'es', 'y', 'una', 'en']),
+    de: conta(['der', 'die', 'das', 'und', 'ist', 'von', 'mit', 'im', 'den']),
+  };
+  const ord = Object.entries(punti).sort((a, b) => b[1] - a[1]);
+  return ord[0][1] >= 3 && ord[0][1] >= 2 * Math.max(1, ord[1][1]) ? ord[0][0] : '';
+}
+/** La tappa da risolvere: non pasto, non alloggio/rientro/trasferimento, verdetto finale negativo, non rimandata. */
+function tappaNonConfermata(t: any): boolean {
+  if (!t || t.verifica_rimandata || TIPO_ALLOGGIO_RIENTRO.test(String(t.tipo || '')) || /trasferiment|transfer|in viaggio|spostamento|pausa/i.test(String(t.tipo || ''))) return false;
+  if (TIPI_PASTO.test(String(t.tipo || '').trim()) || tipoEPastoPrincipale(t.tipo) || /^(pranzo|cena|colazione|merenda|aperitivo|brunch|lunch|dinner)\b/i.test(String(t.titolo_tappa || t.titolo || '').trim())) return false;
+  return t.verifica === 'da_verificare' || t.verifica === 'non_conforme';
+}
+/** Sceglie fra le righe vicine la migliore sostituta di una tappa (pura, senza rete: la usa anche il banco di prova). */
+function sceltaSostituta(t: any, righe: any[], usati: Set<string>, nomiUsati: Set<string>, destination: any = ''): any {
+  const p = xyTappa(t); if (!p) return null;
+  const genT = genereLuogo(`${t.tipo || ''} ${t.titolo_tappa || t.titolo || ''}`);
+  let migliore: any = null, punti = -Infinity;
+  for (const r of righe || []) {
+    const id = String(r?.id || '');
+    const la = Number(r?.lat), lo = Number(r?.lon);
+    if (!id || usati.has(id) || !Number.isFinite(la) || !Number.isFinite(lo)) continue;
+    if (ID_NON_PROVA.test(id) || /^(cine-|cinema-|loc-|plaque-|street_art-|via-|bc-)/i.test(id) || r.category === 'community') continue;
+    if (r.is_hidden === true || /^(draft|hidden|needs_revision|banned)$/i.test(String(r.status || ''))) continue;
+    if (eEntitaAmministrativa(r) || eRigaDiGusto(r) || /plaque|targa|memorial_plaque|stolperstein|information/i.test(String(r.category || ''))) continue;
+    if (rigaNonValidaPerTappa({ tipo: t.tipo, titolo_tappa: r.name }, r)) continue;
+    if (!rigaConFonte(r) && r.is_gem !== true) continue;
+    const genR = genereLuogo(`${r.category || ''} ${r.name || ''}`);
+    if (genT ? !generiCompatibili(genT, genR) : !genR) continue;
+    const k = chiaveNomeTappa(r.name);
+    if (k && nomiUsati.has(k)) continue;
+    const testo = Math.max(String(r.description_short || '').length, String(r.description_long || '').length, String(r.description_ai || '').length);
+    if (testo < 80 && r.is_gem !== true) continue;
+    const d = getHaversineDistance(p.lat, p.lon, la, lo);
+    if (!(d <= 800)) continue;
+    const s = (r.is_gem === true ? 3 : 0) + (/^(wd-|unesco-)/i.test(id) || r.wikidata ? 2 : 0) + (testo >= 200 ? 1 : 0) + (r.image_url ? 1 : 0) - d / 400;
+    if (s > punti) { punti = s; migliore = { ...r, __dist: Math.round(d) }; }
+  }
+  return migliore;
+}
+/** Scrive la sostituta nella tappa: nome, riga, coordinate del navigatore, testo della scheda (se nella lingua giusta),
+ *  nota. Niente del vecchio luogo resta (sito, telefono, orari, mezzi, foto). */
+function scriviSostituta(t: any, r: any, language: any): void {
+  const vecchio = String(t.titolo_tappa || t.titolo || '');
+  const lingua = String(language || 'it').toLowerCase().slice(0, 2);
+  for (const k of ['link_info', 'sito', 'website', 'orari', 'prezzo', 'voto_fonte', 'mezzi_precedente', 'mezzi_tratta', 'immagine', 'image_url', 'foto', 'telefono', 'indirizzo', 'titolo_dal_db', 'aggancio_giudice', 'consiglio_guida', 'sganciata', 'controllo_qualita', 'posizione_incerta', 'agganci_rifiutati']) delete t[k];
+  collegaTappaARiga(t, r);
+  t.titolo_tappa = String(r.name);
+  const testi = [r.description_short, r.description_long, r.description_ai].map((x: any) => pulisciTestoScheda(x)).filter((x: string) => x.length >= 60);
+  const nellaLingua = testi.find((x: string) => linguaSpia(x) === lingua) || '';
+  // Senza una scheda nella lingua dell'utente resta la riga di dati (nome · città), mai prosa inventata.
+  t.attivita = nellaLingua ? accorciaBreve(testoTappaSenzaFormule(nellaLingua).testo, 420) : [String(r.name || ''), String(r.city || '')].filter(Boolean).join(' · ');
+  t.verifica = 'verificata';
+  t.nota_verifica = notaTappaRisolta(language).sostituita.replace('{nome}', vecchio);
+  t.sostituito_da_archivio = vecchio;
+  t.sostituita_ts = Date.now();
+}
+/** (20/11/2026) Un pasto AGGANCIATO a un locale dell'archivio, bocciato SOLO perché gli orari OSM «non coprono la fascia»
+ *  (Botín, Osteria del Treno): il ristorante esiste, il verdetto torna «verificata» e l'orario resta una nota. */
+function pastoSoloOrari(t: any): boolean {
+  if (!t?.poi_id || t.verifica !== 'da_verificare' || t.verifica_rimandata) return false;
+  const nota = String(t.nota_verifica || '');
+  const resto = nota.replace(/⚠ Orari del locale \([^)]*\) non coprono la fascia di [^:]*: verifica o scegli un altro locale\./g, '').trim();
+  return nota !== resto && !resto;
+}
+async function risolviTappeNonConfermate(parsed: any, opts: { destination?: any; language?: any; lat?: number; lon?: number; tettoMs?: number; soloGiorni?: Set<number>; radiusKm?: number } = {}): Promise<{ riagganciate: number; sostituite: number; tolte: number; aggiunte: number; confermate: number }> {
+  const out = { riagganciate: 0, sostituite: 0, tolte: 0, aggiunte: 0, confermate: 0 };
+  const giorni: any[] = Array.isArray(parsed?.giorni) ? parsed.giorni : [];
+  const scadenza = Date.now() + Math.max(3000, Number(opts.tettoMs) || 20000);
+  const destination = String(opts.destination || '');
+  const lingua = String(opts.language || 'IT');
+  const daFare: Array<{ g: any; gi: number; t: any }> = [];
+  giorni.forEach((g, gi) => {
+    if (opts.soloGiorni && !opts.soloGiorni.has(gi)) return;
+    for (const t of (Array.isArray(g?.tappe) ? g.tappe : [])) {
+      if (pastoSoloOrari(t)) { t.nota_orari = String(t.nota_verifica); t.verifica = 'verificata'; delete t.nota_verifica; out.confermate++; continue; }
+      if (tappaNonConfermata(t)) daFare.push({ g, gi, t });
+    }
+  });
+  if (!daFare.length || !supabaseUrl || !supabaseServiceKey) return out;
+  const H = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+  const usati = new Set<string>(extractItineraryStops(parsed).map((s: any) => String(s?.ref?.poi_id || '')).filter(Boolean));
+  const nomiUsati = new Set<string>(extractItineraryStops(parsed).map((s: any) => chiaveNomeTappa(s?.ref?.titolo_tappa || s?.ref?.titolo)).filter(Boolean));
+  // null = il database non ha risposto (allora nessuna tappa si toglie: resta segnalata e la riprende il prossimo giro)
+  const righeVicine = async (p: { lat: number; lon: number }, m: number): Promise<any[] | null> => {
+    const dLa = m / 111000, dLo = m / (111000 * Math.max(0.15, Math.cos(p.lat * Math.PI / 180)));
+    const r = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=${SELECT_RIGA_CONTROLLO},description_short,description_long,description_ai,image_url&is_hidden=not.is.true&lat=gte.${p.lat - dLa}&lat=lte.${p.lat + dLa}&lon=gte.${p.lon - dLo}&lon=lte.${p.lon + dLo}&or=(is_gem.eq.true,wikidata.not.is.null,wikipedia_url.not.is.null,id.like.wd-*,id.like.unesco-*)&limit=150`, { headers: H, timeout: 8000 }).catch(() => null);
+    if (!r || !Array.isArray(r.data)) return null;
+    return r.data.filter((x: any) => x.lat !== 'NaN' && Number.isFinite(Number(x.lat)) && Number.isFinite(Number(x.lon)));
+  };
+  const tolte = new Map<any, string[]>();
+  const centroViaggio = Number.isFinite(Number(opts.lat)) && Number.isFinite(Number(opts.lon)) ? { lat: Number(opts.lat), lon: Number(opts.lon) } : null;
+  const kmViaggio = Math.min(80, Math.max(Number(opts.radiusKm) || 40, 15));
+  const linguaMin = lingua.toLowerCase().slice(0, 2);
+  const confermata = (t: any, fonte: string) => {
+    t.verifica = 'verificata'; t.conferma_forte = fonte;
+    delete t.nota_verifica; delete t.posizione_incerta; delete t.sganciata; delete t.controllo_qualita; delete t.verifica_rimandata;
+  };
+  /** CONFERMA FORTE (20/11/2026, coordinatore: «la maggior parte delle tappe "da verificare" sono luoghi famosi veri» —
+   *  M+ Museum, East Side Gallery, Hamburger Bahnhof, Torre di Žižkov, Temple Street). In fila: Wikidata (QID del nome con
+   *  coordinate nel raggio del viaggio → riga del QID o coordinate del QID), Nominatim con le etichette inglese/locali,
+   *  firma web nome+città. 'si' = confermata; 'no' = tutte e tre hanno risposto e nessuna la cita; 'ignoto' = una fonte
+   *  non ha risposto (allora la tappa non si sostituisce né si toglie). */
+  const confermaForte = async (t: any): Promise<'si' | 'no' | 'ignoto'> => {
+    const nome = String(t.titolo_ai || t.titolo_tappa || t.titolo || '');
+    const centro = centroViaggio || xyTappa(t);
+    let ignoto = false;
+    if (centro) {
+      const w = await confermaDaWikidata(nome, linguaMin, centro, kmViaggio).catch(() => undefined);
+      if (w === undefined) ignoto = true;
+      if (w) {
+        const rr = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=${SELECT_RIGA_CONTROLLO}&or=(id.eq.wd-${w.qid},wikidata.eq.${w.qid})&is_hidden=not.is.true&limit=5`, { headers: H, timeout: 8000 }).catch(() => null);
+        const riga = (Array.isArray(rr?.data) ? rr.data : []).find((x: any) => !/^(draft|hidden|needs_revision|banned)$/i.test(String(x.status || '')) && !rigaNonValidaPerTappa(t, x));
+        if (riga && !usati.has(String(riga.id))) { collegaTappaARiga(t, riga); usati.add(String(riga.id)); }
+        else {
+          const p0 = xyTappa(t); if (p0 && !t.coordinate_ai) t.coordinate_ai = { lat: p0.lat, lng: p0.lon };
+          t.coordinate = { lat: w.lat, lng: w.lon }; t.coordinate_fonte = 'wikidata';
+        }
+        t.wikidata_qid = w.qid;
+        confermata(t, 'wikidata'); return 'si';
+      }
+      for (const et of (w === null ? (confermaDaWikidata.ultimeEtichette.get(normTesto(nome)) || []) : []).slice(0, 3)) {
+        if (Date.now() > scadenza - 2000) { ignoto = true; break; }
+        const g2: any = await posizioneDaGeocoderTutteLeForme(et, destination, linguaMin, String(t.tipo || '')).catch(() => null);
+        if (g2 && getHaversineDistance(centro.lat, centro.lon, g2.lat, g2.lon) <= kmViaggio * 1000) {
+          const p0 = xyTappa(t); if (p0 && !t.coordinate_ai) t.coordinate_ai = { lat: p0.lat, lng: p0.lon };
+          t.coordinate = { lat: g2.lat, lng: g2.lon }; t.coordinate_fonte = String(g2.fonte || 'geocoder');
+          confermata(t, 'geocoder_etichetta'); return 'si';
+        }
+      }
+    } else ignoto = true;
+    if (Date.now() > scadenza - 1500) return 'ignoto';
+    const f = await firmaWebLuogo(nomeLuogoDaTappa(nome), destination, linguaMin, false).catch(() => null);
+    if (f?.hit) { confermata(t, 'web'); return 'si'; }
+    if (!f) ignoto = true;
+    return ignoto ? 'ignoto' : 'no';
+  };
+  const coda = [...daFare];
+  const lavora = async () => {
+    while (coda.length) {
+      const { g, t } = coda.shift()!;
+      if (Date.now() > scadenza - 2500) break;
+      // Un «non conforme» che non è un pasto nasce dagli interessi (regola tolta il 20/11): il luogo è vero.
+      if (t.verifica === 'non_conforme') { confermata(t, 'interessi_non_vincolanti'); out.confermate++; continue; }
+      const p = xyTappa(t);
+      const lette = p ? await righeVicine(p, 800) : null;
+      const righe = lette || [];
+      // (1) riaggancio: stessa regola «e» del controllo qualità (stesso nome, con fonte, entro 500 m)
+      const c = righe.length ? candidatoConFonte(t, righe, destination) : null;
+      if (c && !usati.has(String(c.id))) {
+        collegaTappaARiga(t, c); confermata(t, 'archivio');
+        usati.add(String(c.id)); out.riagganciate++;
+        continue;
+      }
+      // (2) conferma forte: un luogo famoso vero non si sostituisce mai
+      const esito = await confermaForte(t);
+      if (esito === 'si') { out.confermate++; continue; }
+      if (esito === 'ignoto') continue; // una fonte non ha risposto: resta com'è, la riprende il prossimo giro
+      // (3) nessuna fonte lo cita: sostituzione con un luogo vero dello stesso genere
+      const s = righe.length ? sceltaSostituta(t, righe, usati, nomiUsati, destination) : null;
+      if (s) {
+        const vecchiaChiave = chiaveNomeTappa(t.titolo_tappa || t.titolo);
+        if (vecchiaChiave) nomiUsati.delete(vecchiaChiave);
+        scriviSostituta(t, s, lingua);
+        usati.add(String(s.id)); const k = chiaveNomeTappa(s.name); if (k) nomiUsati.add(k);
+        out.sostituite++;
+        continue;
+      }
+      // (4) si toglie, solo se la lettura del database ha risposto (database giù: la tappa resta segnalata)
+      if (!p || lette === null) continue;
+      t.__da_togliere = true;
+      const a = tolte.get(g) || []; a.push(String(t.titolo_tappa || t.titolo || '')); tolte.set(g, a);
+    }
+  };
+  await Promise.all([lavora(), lavora(), lavora()]);
+  if (tolte.size) {
+    for (const [g, nomi] of tolte) {
+      g.tappe = (g.tappe || []).filter((t: any) => !t?.__da_togliere);
+      out.tolte += nomi.length;
+      try { togliDalBudget(g, nomi, true); } catch { /* resta com'è */ }
+      const nota = nomi.map((n) => notaTappaRisolta(lingua).tolta.replace('{nome}', n)).join(' ');
+      g.nota_tappe_tolte = [g.nota_tappe_tolte, nota].filter(Boolean).join(' ');
+    }
+  }
+  // GIORNI PIENI: un giorno sceso sotto i tre quarti della mediana prende un luogo vero vicino alle sue tappe.
+  if (out.tolte) {
+    const conta = (g: any) => (g?.tappe || []).filter((t: any) => !TIPO_ALLOGGIO_RIENTRO.test(String(t?.tipo || ''))).length;
+    const ns = giorni.map(conta).sort((a, b) => a - b);
+    const mediana = ns.length ? ns[Math.floor(ns.length / 2)] : 0;
+    for (const [g] of tolte) {
+      if (Date.now() > scadenza - 1500) break;
+      if (conta(g) >= Math.ceil(mediana * 0.75)) continue;
+      const pts = (g.tappe || []).map((t: any) => xyTappa(t)).filter(Boolean) as Array<{ lat: number; lon: number }>;
+      if (!pts.length) continue;
+      const centro = { lat: pts.reduce((s, q) => s + q.lat, 0) / pts.length, lon: pts.reduce((s, q) => s + q.lon, 0) / pts.length };
+      const righe = (await righeVicine(centro, 800)) || [];
+      const finto ={ tipo: 'monumento', titolo_tappa: '', coordinate: { lat: centro.lat, lng: centro.lon } };
+      const s = sceltaSostituta(finto, righe, usati, nomiUsati, destination);
+      if (!s) continue;
+      const nuova: any = { tipo: genereLuogo(`${s.category || ''} ${s.name || ''}`) === 'musei' ? 'museo' : genereLuogo(`${s.category || ''} ${s.name || ''}`) === 'chiese' ? 'chiesa' : 'monumento', tempo_necessario: '45 min' };
+      scriviSostituta(nuova, s, lingua);
+      delete nuova.sostituito_da_archivio; delete nuova.nota_verifica;
+      nuova.aggiunta_da_archivio = true;
+      // prima del primo pasto della sera, o in fondo
+      const iCena = (g.tappe || []).findIndex((t: any) => /cena|dinner/i.test(`${t?.tipo || ''} ${t?.titolo_tappa || ''}`));
+      const prima = iCena > 0 ? g.tappe[iCena - 1] : g.tappe[g.tappe.length - 1];
+      if (prima?.ora) nuova.ora = prima.ora;
+      if (iCena > 0) g.tappe.splice(iCena, 0, nuova); else g.tappe.push(nuova);
+      usati.add(String(s.id)); const k = chiaveNomeTappa(s.name); if (k) nomiUsati.add(k);
+      out.aggiunte++;
+    }
+  }
+  if (out.riagganciate || out.sostituite || out.tolte || out.aggiunte || out.confermate) {
+    try { togliDoppioniItinerario(parsed, opts.soloGiorni, true); } catch { /* fail-open */ }
+    try { ricalcolaOrariGiorni(parsed, opts.soloGiorni); } catch { /* fail-open */ }
+    try { ricalcolaTotaleViaggio(parsed, lingua.toLowerCase()); } catch { /* resta il testo */ }
+    const prima = parsed.qualita?.tappe_non_confermate || {};
+    parsed.qualita = { ...(parsed.qualita || {}), tappe_non_confermate: { riagganciate: (prima.riagganciate || 0) + out.riagganciate, sostituite: (prima.sostituite || 0) + out.sostituite, tolte: (prima.tolte || 0) + out.tolte, aggiunte: (prima.aggiunte || 0) + out.aggiunte, confermate: (prima.confermate || 0) + out.confermate, ts: Date.now() } };
+  }
+  return out;
 }
 
 // osm_diet in locali_pois è un JSON tipo {"vegan":true,"gluten_free":true},
@@ -4424,6 +6762,8 @@ function nomeLuogoDaTappa(nome: any): string {
   }
   // «Da The Ivy», «Chez Le Procope»: un «da» davanti a un ARTICOLO di un'altra lingua non è parte del nome.
   s = s.replace(/^(?:da|dal|chez)\s+(?=(?:the|le|la|les|el|los|las|der|die|das)\s+\S)/i, '');
+  // (21/11/2026, Bruxelles: «Cena da Chez Vincent» → «Da Chez Vincent») «da» davanti a «Chez» è la preposizione italiana.
+  s = s.replace(/^(?:da|dal|dalla)\s+(?=chez\s+\S)/i, '');
   // «Ristorante 'Teplo'» → «Teplo»: la parola di tipo cade solo quando il nome vero è fra virgolette.
   const q = s.match(/^(?:il |la |lo |l')?(?:ristorante|trattoria|osteria|pizzeria|locanda|taverna|bistrot|bistro|caff[èe]|café|bar|restaurant|enoteca)\s+['"“”«‘’]\s*([^'"“”«»‘’]{2,80}?)\s*['"“”»‘’]$/i);
   if (q) s = q[1].trim();
@@ -4682,8 +7022,15 @@ async function streamUniversalAi(
               }
             }
             if (!fatto) {
-              if (!groqInstance) throw new Error("Groq instance missing");
-              totalContent = await _streamGroq(groqInstance, messages, { ...options, model }, res, acc);
+              // Poi il pool e, per ultima, la Groq a pagamento (15/11/2026) — mai se qualcosa è già stato emesso.
+              try {
+                if (!groqInstance) throw new Error("Groq instance missing");
+                totalContent = await _streamGroq(groqInstance, messages, { ...options, model }, res, acc);
+              } catch (ePool: any) {
+                if (acc.text || !groqPagamentoClient || userId === 'background-script') throw ePool;
+                console.warn(`[Groq a pagamento] gratuite fallite in streaming (${ePool?.message}), uso la chiave a pagamento`);
+                totalContent = await _streamGroq(groqPagamentoClient, messages, { ...options, model }, res, acc);
+              }
             }
           } else {
             if (!groqInstance) throw new Error("Groq instance missing");
@@ -4792,12 +7139,7 @@ async function _streamGemini(messages: any[], res: any) {
  * pur configurato e gratuito — non veniva mai usato su questo percorso.
  */
 async function _streamAgnes(messages: any[], options: any, res: any, acc: { text: string } = { text: "" }) {
-  const agnesKeys = [
-    process.env.AGNES_API_KEY,
-    process.env.AGNES_API_KEY_2,
-    process.env.AGNES_AI_API_KEY,
-    process.env.AGNES_AI_API_KEY2
-  ].filter(Boolean);
+  const agnesKeys = chiaviAgnes();
   if (agnesKeys.length === 0) throw new Error("AGNES_API_KEY mancante");
   const agnesKey = agnesKeys[agnesKeyCounter++ % agnesKeys.length];
 
@@ -5579,6 +7921,19 @@ function titoloDaUrlWikipedia(url: any): string {
 /** Il materiale della fonte si taglia a FINE FRASE, mai a metà (04/10/2026: l'iscrizione del Campanone del duomo di
  *  Carrara arrivava al modello come «…contro il bronzo si spezzò la», e finiva monca nella scheda e nelle due
  *  audioguide). Sotto il tetto il testo passa intero; sopra, si chiude all'ultima frase intera. */
+/** REGOLA 21/11/2026 (indagine C/D: spiegazioni e curiosità delle guide museo tagliate a metà parola da
+ *  `campoOpzionale(perche, 1900)` / `(curiosita, 500)`). Un campo di TESTO (tetto ≥ 300) oltre il tetto si chiude
+ *  all'ultima frase intera (tagliaAFineFrase, ≥ 60% del tetto), altrimenti all'ultimo spazio: mai a metà parola, e mai
+ *  più corto del necessario. I campi brevi (nome, autore, anno, sala: tetto < 300) restano un taglio secco come prima. */
+function tagliaTestoLungo(s: string, max: number): string {
+  if (s.length <= max) return s;
+  if (max < 300) return s.slice(0, max);
+  const t = tagliaAFineFrase(s, max);
+  if (t.length < max && /[.!?…。！？]\s*$/.test(t)) return t;
+  const pezzo = s.slice(0, max);
+  const sp = pezzo.lastIndexOf(' ');
+  return (sp > max * 0.6 ? pezzo.slice(0, sp) : pezzo).replace(/[\s,;:–-]+$/, '');
+}
 function tagliaAFineFrase(testo: any, max: number): string {
   const t = String(testo || '');
   if (t.length <= max) return t;
@@ -5608,6 +7963,17 @@ function frasiVuote(testo: any, nome: string, ammesse?: RegExp, severa = false):
 }
 /** Toglie le frasi vuote, ma solo se il testo che resta è almeno i due terzi: altrimenti non è una ripulitura,
  *  è un testo da rifare (lo decide chi chiama). */
+/** (21/11/2026) Una tappa di guida museo senza formule vietate in spiegazione e curiosità (togliFrasiVuote severa: si
+ *  tolgono le frasi con la formula, ma solo se resta almeno i due terzi del testo). Stessa tappa se non c'è nulla da
+ *  togliere. Usata da salvaInLibreriaMusei e soloLinguaGiusta. */
+function tappaMuseoSenzaFormule(t: any): any {
+  if (!t || typeof t !== 'object') return t;
+  const nome = String(t.nome || t.nomeFonte || '');
+  const p = typeof t.perche === 'string' && t.perche ? togliFrasiVuote(t.perche, nome, undefined, true) : null;
+  const c = typeof t.curiosita === 'string' && t.curiosita ? togliFrasiVuote(t.curiosita, nome, undefined, true) : null;
+  if (!(p?.tolte) && !(c?.tolte)) return t;
+  return { ...t, ...(p?.tolte ? { perche: p.testo } : {}), ...(c?.tolte ? { curiosita: c.testo } : {}) };
+}
 function togliFrasiVuote(testo: any, nome: string, ammesse?: RegExp, severa = false): { testo: string; tolte: number } {
   const t = String(testo || '');
   const vuote = new Set(frasiVuote(t, nome, ammesse, severa));
@@ -5622,6 +7988,97 @@ function togliFrasiVuote(testo: any, nome: string, ammesse?: RegExp, severa = fa
 function narrazioneSenzaFormule(testo: any, nome: string, personaggio: any = ''): string {
   const ammesse = /^nicky/.test(String(personaggio || '')) ? /^must-see$/i : undefined;
   return togliFrasiVuote(String(testo || ''), nome || '', ammesse, true).testo;
+}
+/** REGOLA 20/11/2026 (committente «correggi tutto»; collaudi notturni 19–20/11: 18 e 26 formule vietate rimaste nei testi
+ *  delle tappe — «Da non perdere», «imperdibile», «vale la pena», «un must», «cuore pulsante», «atmosfera magica»).
+ *  Le formule delle tappe = quelle delle narrazioni (frasiDiManiera) + quelle che il modello degli itinerari usa di più.
+ *  Stessa lista nel prompt (REGOLE_PREVENZIONE_ITINERARIO) e nel collaudo notturno (RE_FORMULE). */
+const FORMULE_TAPPA_EXTRA = /vale (davvero |proprio )?la pena|tappa obbligat|un must\b|atmosfera (magica|suggestiva|incantevole|unica)|gioiello (nascosto|della|del)|perla (del|della|nascosta)|immerg[ei]r[sv]i nella storia|tuffo nel passato|ricc[oa] di (storia|fascino)|esperienza (unica|indimenticabile|magica)|luogo magico|imperdibil|da non perdere|cuore pulsante|punto di riferimento/i;
+/** PREVENZIONE NEL PROMPT (20/11/2026, committente: «quando si creano i nuovi itinerari DeepSeek verifica le regole e le
+ *  applica?»). Le correzioni nel codice restano la garanzia; queste sono le quattro regole che i collaudi notturni
+ *  trovano più spesso violate, dette al modello in UN solo testo riusato da: generatore (/api/groq/itinerary-stream,
+ *  blocchi successivi e riempimento dei giorni vuoti, che usano lo stesso prompt di sistema) e «Aggiungi giorno»
+ *  (/api/itinerary/extend). Non toglie né cambia le regole fisse (giorni pieni, doppioni mai, niente database). */
+const REGOLE_PREVENZIONE_ITINERARIO = `REGOLE DEI COLLAUDI (FISSE, controllate da un software dopo di te: ciò che le viola viene tolto o sostituito):
+A) NIENTE FORMULE: in "attivita", "consiglio_guida" e "info_viaggio" sono VIETATE le formule vuote: «da non perdere», «imperdibile», «vale la pena», «un must», «tappa obbligata», «cuore pulsante», «punto di riferimento», «ricco di storia», «atmosfera unica/magica/suggestiva», «esperienza unica/indimenticabile», «gioiello nascosto», «perla», «tuffo nel passato», «luogo magico», «senza tempo», «si respira». Al loro posto un fatto concreto del luogo (un'opera, una data, un materiale, un nome, una misura).
+B) PRANZO E CENA SOLO IN UN RISTORANTE VERO: una trattoria, osteria, ristorante, brasserie, taverna con il suo NOME proprio esatto. MAI un mercato, un food hall, un bar, un caffè, una pasticceria, una gelateria, un chiosco, una catena di fast food come pranzo o cena.
+C) SOLO LUOGHI REALI CON IL NOME UFFICIALE ESATTO nella città, verificabili per nome: una tappa = UN luogo («Nieuwmarkt e De Waag», «Palazzo X e Sky Terrace» sono due tappe o una sola, mai un nome composto con «e»). Mai «Passeggiata a …», «Esplorazione di …», «Giro per …», «Tempo libero a …» come tappa-luogo: la tappa si chiama come il luogo.
+D) NIENTE ATTIVITÀ-PRODOTTO COME TAPPE: tour, crociere, giri in barca/bici, diving, snorkeling, kayak, biglietti, degustazioni, lezioni non sono luoghi (si possono citare nel "consiglio_guida" della tappa vicina).`;
+function haFormulaTappa(testo: any): boolean {
+  const s = String(testo || '');
+  // «scopri» in un itinerario è un'istruzione («scopri le sale del primo piano»), non una formula: resta.
+  return FORMULE_TAPPA_EXTRA.test(s) || (s.match(frasiDiManiera()) || []).some((m) => !/^scopri$/i.test(m));
+}
+/** Toglie da UN testo di tappa le formule vietate, senza soglia dei due terzi (la regola è severa): prima la sola parte
+ *  della frase che la contiene («…di Rembrandt, da non perdere.» → «…di Rembrandt.»), e se non resta niente di sensato la
+ *  frase intera. Le righe (indirizzo dei locali, \n) restano righe. Il ragionamento del modello svuota il campo. */
+function testoTappaSenzaFormule(testo: any): { testo: string; tolte: number } {
+  const t = String(testo ?? '');
+  if (!t.trim()) return { testo: t, tolte: 0 };
+  if (ragionamentoDelModello(t)) return { testo: '', tolte: 1 };
+  if (!haFormulaTappa(t)) return { testo: t, tolte: 0 };
+  let tolte = 0;
+  const righe = t.split('\n').map((riga) => {
+    if (!haFormulaTappa(riga)) return riga;
+    const frasi = riga.split(/(?<=[.!?…])\s+/).map((f) => {
+      if (!haFormulaTappa(f)) return f;
+      tolte++;
+      const fine = (f.match(/[.!?…]+\s*$/) || ['.'])[0].trim();
+      const corpo = f.replace(/[.!?…]+\s*$/, '');
+      const parti = corpo.split(/(,\s+|;\s+|:\s+|\s+[–—-]\s+)/);
+      const tenute: string[] = [];
+      for (let i = 0; i < parti.length; i += 2) if (!haFormulaTappa(parti[i])) tenute.push(parti[i].trim());
+      let resto = tenute.filter(Boolean).join(', ').replace(/^(e|ed|ma|and|but|et|y|und|o|or)\s+/i, '').trim();
+      // una parte di frase che resta senza verbo né sostanza («Infine,») non è una frase
+      if (resto.split(/\s+/).length < 4 || resto.length < 20) return '';
+      resto = resto.charAt(0).toUpperCase() + resto.slice(1);
+      return `${resto}${fine}`;
+    }).filter(Boolean);
+    return frasi.join(' ').trim();
+  });
+  const out = righe.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return { testo: out, tolte };
+}
+/** Applica testoTappaSenzaFormule ai testi di ogni tappa (attivita, consiglio_guida, descrizione) e a info_viaggio
+ *  (stringhe, anche annidate). Scrive il conto in qualita.formule_tolte. Si chiama prima dell'evento `verified` e di ogni
+ *  salvataggio: stream, «Aggiungi giorno», cron di completamento, libreria. */
+function pulisciFormuleItinerario(itin: any): number {
+  if (!itin || typeof itin !== 'object') return 0;
+  let n = 0;
+  for (const s of extractItineraryStops(itin)) {
+    const t = s?.ref;
+    if (!t || typeof t !== 'object') continue;
+    for (const c of ['attivita', 'consiglio_guida', 'descrizione', 'descrizione_breve']) {
+      if (typeof t[c] !== 'string' || !t[c]) continue;
+      const r = testoTappaSenzaFormule(t[c]);
+      if (r.tolte) { t[c] = r.testo; n += r.tolte; }
+    }
+  }
+  const visita = (o: any, prof: number): void => {
+    if (!o || typeof o !== 'object' || prof > 4) return;
+    for (const k of Object.keys(o)) {
+      const v = o[k];
+      if (typeof v === 'string') { if (v.length >= 20 && !/^https?:/i.test(v)) { const r = testoTappaSenzaFormule(v); if (r.tolte) { o[k] = r.testo; n += r.tolte; } } }
+      else if (v && typeof v === 'object') visita(v, prof + 1);
+    }
+  };
+  for (const k of ['info_viaggio', 'infoViaggio', 'consigli_viaggio']) if (itin[k] && typeof itin[k] === 'object') visita(itin[k], 0);
+  for (const k of ['descrizione', 'introduzione', 'sottotitolo']) if (typeof itin[k] === 'string') { const r = testoTappaSenzaFormule(itin[k]); if (r.tolte) { itin[k] = r.testo; n += r.tolte; } }
+  if (n) itin.qualita = { ...(itin.qualita || {}), formule_tolte: Number(itin.qualita?.formule_tolte || 0) + n };
+  return n;
+}
+/** REGOLA 16/11/2026: il podcast del giorno (/api/generate-daily-podcast) non dice frasi di maniera. Oltre a
+ *  frasiDiManiera() conta le formule da conduttore radiofonico che il prompt «entusiasta» produceva (Rimini, Bruxelles).
+ *  Si tolgono le FRASI che le contengono, ma mai più di un terzo del testo (altrimenti resta com'è: lo segnala il log). */
+const FORMULE_PODCAST = /a bocca aperta|senza parole|vale la pena|vi far[aà] innamorare|momento magico|conquistare il cuore|lasciatevi|indimenticabil|bellezza rara|(vero|piccolo) gioiello|sorprende a ogni angolo|esperienza (intima e )?affascinante|davvero speciale|ancora pi[uù] speciale|qualcosa di speciale/i;
+function podcastSenzaFormule(testo: any): { testo: string; tolte: number } {
+  const t = String(testo || '').trim();
+  const frasi = t.split(/(?<=[.!?…])\s+/);
+  const tieni = frasi.filter((f) => !FORMULE_PODCAST.test(f) && !(f.match(frasiDiManiera()) || []).length);
+  const tolte = frasi.length - tieni.length;
+  if (!tolte) return { testo: t, tolte: 0 };
+  const resto = tieni.join(' ').trim();
+  return resto.length >= t.length * 0.66 ? { testo: resto, tolte } : { testo: t, tolte: 0 };
 }
 /** REGOLA 23/10/2026 (ricollaudo Lugano, MASI): una narrazione GIÀ salvata (o un testo mandato alla sintesi come
  *  guida) che, anche dopo narrazioneSenzaFormule, contiene ancora una formula vietata — succede quando le frasi da
@@ -6318,7 +8775,12 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
     // (in-memory, si resetta a ogni cold start): non è un controllo di sicurezza.
     const ip = req.ip || req.socket?.remoteAddress || "unknown";
     const now = Date.now();
-    
+    // (23/11/2026) I nostri lavori di sfondo (Oracle, `x-script-secret` giusto) non passano dal tetto di cortesia: con
+    // 20 chiamate in parallelo da un solo indirizzo prendevano 429 in 30 ms e li contavano come «guasto». Il loro freno
+    // è il numero di lavori in parallelo deciso da chi li lancia, non questo contatore.
+    const segretoScript = String(process.env.SCRIPT_SHARED_SECRET || '');
+    if (segretoScript && req.headers?.['x-script-secret'] === segretoScript) return next();
+
     const limitData = ipLimits.get(ip);
     if (!limitData || now > limitData.resetTime) {
       ipLimits.set(ip, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
@@ -6707,6 +9169,8 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
     // (PRICING_LIST): il gate crediti server-side deve usare gli STESSI valori.
     replace_stop: 8,
     photo_search: 5, poi_detail: 5, podcast_daily: 15,
+    // Podcast di UNA tappa (18/11/2026, committente: «costo del podcast della tappa 1 credito»).
+    podcast_tappa: 1,
     // WIP Day Pass: 24 ore hands-free, 40 audioguide. Mancava (03/09/2026):
     // finche' l'attivazione stava nel client il server non doveva conoscerne
     // il prezzo, ma ora l'addebito lo fa lui e senza questa voce `prezzoDi`
@@ -6953,9 +9417,15 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
    * Invio email con Resend. `allegati` = [{ filename, content: Buffer|base64 }].
    * Ritorna { ok, errore? }. Destinatari validati e al massimo 6 (account + 5).
    */
-  async function inviaEmail(a: { a: string[]; oggetto: string; html: string; testo?: string; allegati?: Array<{ filename: string; content: Buffer | string }> }): Promise<{ ok: boolean; errore?: string }> {
+  async function inviaEmail(a: { a: string[]; oggetto: string; html: string; testo?: string; allegati?: Array<{ filename: string; content: Buffer | string }>; copiaANoi?: boolean }): Promise<{ ok: boolean; errore?: string }> {
     const validi = Array.from(new Set(a.a.map(x => String(x || '').trim().toLowerCase()).filter(x => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(x)))).slice(0, 6);
     if (!validi.length) return { ok: false, errore: 'nessun_destinatario' };
+    // COPIA A NOI (13/11/2026, committente: «tutto quello che si invia deve sempre mandare copia a wip15775»). Le email
+    // a enti e hotel partite dal server (conferma del modulo, risposta dal pannello, codice coupon) arrivano in copia
+    // nascosta alla casella di lavoro: il coupon di Avicena era partito senza che nessuno potesse rileggerlo. Non vale
+    // per le notifiche agli utenti (riga 7256: sono migliaia e sono loro, non corrispondenza nostra).
+    const copia = a.copiaANoi ? String(process.env.ENTI_EMAIL_AVVISO || 'wip15775@gmail.com').trim().toLowerCase() : '';
+    const bcc = copia && !validi.includes(copia) ? [copia] : [];
     // BREVO prima di tutto (06/09/2026): e' il provider gia' in uso per le
     // email di Supabase Auth (smtp-relay.brevo.com, noreply@wip.guide), col
     // dominio gia' verificato. API transazionale, allegati in base64.
@@ -6966,6 +9436,7 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
         const r = await axios.post('https://api.brevo.com/v3/smtp/email', {
           sender: { name: mitt ? mitt[1].trim() : 'WIP', email: mitt ? mitt[2] : 'noreply@wip.guide' },
           to: validi.map(email => ({ email })),
+          ...(bcc.length ? { bcc: bcc.map(email => ({ email })) } : {}),
           subject: a.oggetto,
           htmlContent: a.html,
           textContent: a.testo,
@@ -6982,6 +9453,7 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       const r = await axios.post('https://api.resend.com/emails', {
         from: process.env.RESEND_FROM || process.env.EMAIL_FROM || 'WIP - World in Pocket <noreply@wip.guide>',
         to: validi,
+        ...(bcc.length ? { bcc } : {}),
         subject: a.oggetto,
         html: a.html,
         text: a.testo,
@@ -7019,13 +9491,13 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
     ZH: { oggetto: 'WIP — 我们已收到您的申请', testo: '您好：\n\n我们已收到 {ente} 的申请。每一份申请都由我们亲自阅读，并会回复到此邮箱。\n\n我们的地点介绍和语音导览只依据可核实的资料撰写：如果您有关于这些地点的宣传册、资料页或网站页面，可以直接回复此邮件并附上。\n\n没有任何费用，也没有任何义务。\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
   };
   const HOTEL_CONFERMA: Record<string, { oggetto: string; testo: string }> = {
-    IT: { oggetto: 'WIP — richiesta del coupon di prova ricevuta', testo: 'Buongiorno,\n\nabbiamo ricevuto la richiesta di {ente}. La leggiamo di persona: se tutto torna, vi mandiamo a questo indirizzo il codice del coupon di prova, con il numero di utilizzi e la scadenza, e due righe pronte da stampare o inviare agli ospiti.\n\nOgni ospite riscatta il codice una sola volta sul sito wip.guide (pagina «Riscatta»), e usa i crediti nell\'app per iPhone e, a breve, anche su Android; i crediti servono per le audioguide complete e gli itinerari su misura.\n\nNon ci sono costi né obblighi.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
-    EN: { oggetto: 'WIP — trial coupon request received', testo: 'Hello,\n\nwe have received the request from {ente}. We read every request ourselves: if everything checks out, we will send the trial coupon code to this address, with the number of uses and the expiry date, and a short text ready to print or send to your guests.\n\nEach guest redeems the code once on the wip.guide website (“Redeem” page) and uses the credits in the iPhone app and, soon, on Android too; the credits pay for full audio guides and custom itineraries.\n\nThere are no costs and no obligations.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
-    FR: { oggetto: 'WIP — demande de coupon d\'essai reçue', testo: 'Bonjour,\n\nnous avons bien reçu la demande de {ente}. Nous lisons chaque demande nous-mêmes : si tout est en ordre, nous vous enverrons à cette adresse le code du coupon d\'essai, avec le nombre d\'utilisations et la date d\'expiration, ainsi qu\'un court texte prêt à imprimer ou à envoyer à vos clients.\n\nChaque client utilise le code une seule fois sur le site wip.guide (page « Utiliser ») et se sert des crédits dans l\'application iPhone et, bientôt, sur Android ; les crédits servent aux audioguides complets et aux itinéraires sur mesure.\n\nAucun coût, aucune obligation.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
-    ES: { oggetto: 'WIP — solicitud del cupón de prueba recibida', testo: 'Hola:\n\nhemos recibido la solicitud de {ente}. Leemos cada solicitud personalmente: si todo está en orden, les enviaremos a esta dirección el código del cupón de prueba, con el número de usos y la fecha de caducidad, y un texto breve listo para imprimir o enviar a sus huéspedes.\n\nCada huésped canjea el código una sola vez en la web wip.guide (página «Canjear») y usa los créditos en la app para iPhone y, pronto, también en Android; los créditos sirven para las audioguías completas y los itinerarios a medida.\n\nSin costes ni compromisos.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
-    DE: { oggetto: 'WIP — Anfrage für den Test-Gutschein erhalten', testo: 'Guten Tag,\n\nwir haben die Anfrage von {ente} erhalten. Wir lesen jede Anfrage persönlich: Wenn alles passt, senden wir Ihnen an diese Adresse den Code des Test-Gutscheins mit Anzahl der Einlösungen und Ablaufdatum sowie einen kurzen Text zum Ausdrucken oder Versenden an Ihre Gäste.\n\nJeder Gast löst den Code einmal auf der Website wip.guide ein (Seite „Einlösen“) und nutzt das Guthaben in der iPhone-App und bald auch auf Android; die Guthaben gelten für vollständige Audioguides und maßgeschneiderte Routen.\n\nEs entstehen keine Kosten und keine Verpflichtungen.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
-    RU: { oggetto: 'WIP — заявка на пробный купон получена', testo: 'Здравствуйте!\n\nМы получили заявку от {ente}. Каждую заявку мы читаем сами: если всё в порядке, мы пришлём на этот адрес код пробного купона с числом активаций и сроком действия, а также короткий текст для печати или рассылки гостям.\n\nКаждый гость активирует код один раз на сайте wip.guide (страница «Активировать») и использует кредиты в приложении для iPhone, а вскоре и на Android; кредиты идут на полные аудиогиды и индивидуальные маршруты.\n\nЭто бесплатно и ни к чему не обязывает.\n\nФабрицио\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
-    ZH: { oggetto: 'WIP — 已收到试用优惠券申请', testo: '您好：\n\n我们已收到 {ente} 的申请。每一份申请都由我们亲自阅读：核对无误后，我们会把试用优惠券代码发到此邮箱，并注明使用次数和有效期，附上一段可打印或发送给客人的简短文字。\n\n每位客人在 wip.guide 网站（"兑换"页面）兑换一次，并在 iPhone 应用中使用积分，不久也将支持 Android；积分用于完整语音导览和定制行程。\n\n没有任何费用，也没有任何义务。\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
+    IT: { oggetto: 'WIP — richiesta del coupon di prova ricevuta', testo: 'Buongiorno,\n\nabbiamo ricevuto la richiesta di {ente}. La leggiamo di persona: se tutto torna, vi mandiamo a questo indirizzo il codice del coupon di prova, con il numero di utilizzi e la scadenza, e due righe pronte da stampare o inviare agli ospiti.\n\nOgni ospite riscatta il codice una sola volta sul sito wip.guide (pagina «Riscatta»), e usa i crediti nell\'app per iPhone o per Android; i crediti servono per le audioguide complete e gli itinerari su misura.\n\nNon ci sono costi né obblighi.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
+    EN: { oggetto: 'WIP — trial coupon request received', testo: 'Hello,\n\nwe have received the request from {ente}. We read every request ourselves: if everything checks out, we will send the trial coupon code to this address, with the number of uses and the expiry date, and a short text ready to print or send to your guests.\n\nEach guest redeems the code once on the wip.guide website (“Redeem” page) and uses the credits in the iPhone or Android app; the credits pay for full audio guides and custom itineraries.\n\nThere are no costs and no obligations.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
+    FR: { oggetto: 'WIP — demande de coupon d\'essai reçue', testo: 'Bonjour,\n\nnous avons bien reçu la demande de {ente}. Nous lisons chaque demande nous-mêmes : si tout est en ordre, nous vous enverrons à cette adresse le code du coupon d\'essai, avec le nombre d\'utilisations et la date d\'expiration, ainsi qu\'un court texte prêt à imprimer ou à envoyer à vos clients.\n\nChaque client utilise le code une seule fois sur le site wip.guide (page « Utiliser ») et se sert des crédits dans l\'application iPhone ou Android ; les crédits servent aux audioguides complets et aux itinéraires sur mesure.\n\nAucun coût, aucune obligation.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
+    ES: { oggetto: 'WIP — solicitud del cupón de prueba recibida', testo: 'Hola:\n\nhemos recibido la solicitud de {ente}. Leemos cada solicitud personalmente: si todo está en orden, les enviaremos a esta dirección el código del cupón de prueba, con el número de usos y la fecha de caducidad, y un texto breve listo para imprimir o enviar a sus huéspedes.\n\nCada huésped canjea el código una sola vez en la web wip.guide (página «Canjear») y usa los créditos en la app para iPhone o para Android; los créditos sirven para las audioguías completas y los itinerarios a medida.\n\nSin costes ni compromisos.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
+    DE: { oggetto: 'WIP — Anfrage für den Test-Gutschein erhalten', testo: 'Guten Tag,\n\nwir haben die Anfrage von {ente} erhalten. Wir lesen jede Anfrage persönlich: Wenn alles passt, senden wir Ihnen an diese Adresse den Code des Test-Gutscheins mit Anzahl der Einlösungen und Ablaufdatum sowie einen kurzen Text zum Ausdrucken oder Versenden an Ihre Gäste.\n\nJeder Gast löst den Code einmal auf der Website wip.guide ein (Seite „Einlösen“) und nutzt das Guthaben in der iPhone- oder Android-App; die Guthaben gelten für vollständige Audioguides und maßgeschneiderte Routen.\n\nEs entstehen keine Kosten und keine Verpflichtungen.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
+    RU: { oggetto: 'WIP — заявка на пробный купон получена', testo: 'Здравствуйте!\n\nМы получили заявку от {ente}. Каждую заявку мы читаем сами: если всё в порядке, мы пришлём на этот адрес код пробного купона с числом активаций и сроком действия, а также короткий текст для печати или рассылки гостям.\n\nКаждый гость активирует код один раз на сайте wip.guide (страница «Активировать») и использует кредиты в приложении для iPhone или Android; кредиты идут на полные аудиогиды и индивидуальные маршруты.\n\nЭто бесплатно и ни к чему не обязывает.\n\nФабрицио\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
+    ZH: { oggetto: 'WIP — 已收到试用优惠券申请', testo: '您好：\n\n我们已收到 {ente} 的申请。每一份申请都由我们亲自阅读：核对无误后，我们会把试用优惠券代码发到此邮箱，并注明使用次数和有效期，附上一段可打印或发送给客人的简短文字。\n\n每位客人在 wip.guide 网站（"兑换"页面）兑换一次，并在 iPhone 或 Android 应用中使用积分；积分用于完整语音导览和定制行程。\n\n没有任何费用，也没有任何义务。\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide' },
   };
   // MISURA (stesso giorno, committente: «un controllo di quanti vedono… se non c'è creiamolo»): le aperture delle
   // email non si misurano (testo semplice, niente pixel); si conta chi ARRIVA sulle pagine e da quale campagna
@@ -7091,6 +9563,32 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
     }
   });
 
+  // GIORNALISTI DI VIAGGIO (24/11/2026, committente: «aggiungi a hotel ed enti e crea anche una tab in admin nelle
+  // campagne con i dettagli»). Ricerca (`giornalisti-ricerca.py`) e invio (`giornalisti-invia.py`) girano su Oracle e
+  // scrivono file; ogni 30 minuti `giornalisti-stato.py` manda qui il conto e gli ultimi contatti/invii. Una riga in api_cache.
+  app.post("/api/campagne/giornalisti-stato", async (req, res) => {
+    if (!SCRIPT_SHARED_SECRET || req.headers['x-script-secret'] !== SCRIPT_SHARED_SECRET) return res.status(401).json({ error: 'non autorizzato' });
+    try {
+      const b = req.body || {};
+      const num = (v: any) => Math.max(0, Math.round(Number(v) || 0));
+      const s = (v: any, max: number) => String(v ?? '').trim().slice(0, max);
+      const conti = (o: any) => Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {}).slice(0, 80).map(([k, v]) => [String(k).slice(0, 40), num(v)]));
+      await salvaCacheDatata('campagne_giornalisti_stato', 'campagne', {
+        trovati: num(b.trovati), ammessi: num(b.ammessi), inviate: num(b.inviate), errori: num(b.errori), da_contattare: num(b.da_contattare),
+        al_giorno: num(b.al_giorno), nuovi_24h: num(b.nuovi_24h),
+        per_paese: conti(b.per_paese), per_lingua: conti(b.per_lingua), scarti: conti(b.scarti),
+        ricerca_attiva: !!b.ricerca_attiva, invio_attivo: !!b.invio_attivo, ricerca_ultima: s(b.ricerca_ultima, 200),
+        contatti: (Array.isArray(b.contatti) ? b.contatti : []).slice(0, 80).map((c: any) => ({
+          nome: s(c.nome, 80), email: s(c.email, 120), paese: s(c.paese, 4), lingua: s(c.lingua, 4), url: s(c.url, 200),
+          stato: s(c.stato, 20), motivo: s(c.motivo, 80), quando: s(c.quando, 40),
+        })),
+      });
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(503).json({ error: e?.message || 'non_salvato' });
+    }
+  });
+
   app.post("/api/enti/richiesta", rateLimiter, async (req, res) => {
     try {
       const b = req.body || {};
@@ -7128,7 +9626,7 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       const testoConferma = conferma.testo.replace('{ente}', ente);
       const [aNoi, aLoro] = await Promise.all([
         inviaEmail({ a: [process.env.ENTI_EMAIL_AVVISO || 'wip15775@gmail.com'], oggetto: `Nuova richiesta ente: ${ente} (${localita})`, testo: righeNoi, html: `<pre style="font-family:system-ui,sans-serif;white-space:pre-wrap">${esc(righeNoi)}</pre>` }),
-        inviaEmail({ a: [email], oggetto: conferma.oggetto, testo: testoConferma, html: `<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.5;white-space:pre-wrap">${esc(testoConferma)}</div>` }),
+        inviaEmail({ a: [email], copiaANoi: true, oggetto: conferma.oggetto, testo: testoConferma, html: `<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.5;white-space:pre-wrap">${esc(testoConferma)}</div>` }),
       ]);
       if (!aNoi.ok) console.warn('[enti] avviso a noi non partito:', aNoi.errore);
       res.json({ ok: true, conferma_inviata: aLoro.ok });
@@ -7635,6 +10133,17 @@ function parseSafeJSON(text: string) {
     }
   }
   const groqOnTheFlyClient: any = groqOnTheFlyClients[0] || null; // compatibilita': la prima dedicata
+  // Groq A PAGAMENTO (15/11/2026): `GROQ_API_KEY_PAGAMENTO`, account con piano a consumo. ULTIMO ripiego delle
+  // chiamate con un utente in attesa (dedicate → pool → questa); mai nel giro, mai dai lavori di sfondo.
+  // Senza la variabile non cambia nulla.
+  let groqPagamentoClient: any = null;
+  {
+    const chiave = String(process.env.GROQ_API_KEY_PAGAMENTO || '').trim();
+    if (chiave && !(groqKeys as string[]).includes(chiave)) {
+      try { const GroqConstructor = (Groq as any).default || Groq; groqPagamentoClient = new GroqConstructor({ apiKey: chiave }); console.log('✅ [STARTUP] Groq a pagamento configurata (ultimo ripiego in diretta).'); }
+      catch (e: any) { console.warn('Failed to initialize Groq a pagamento client:', e.message); }
+    }
+  }
   if (groqOnTheFlyClients.length) {
     console.log(`✅ [STARTUP] Groq On the fly configurato (${groqOnTheFlyClients.length} chiave/i dedicata/e, in ordine; mai nel pool).`);
   } else {
@@ -7719,8 +10228,11 @@ async function chiamaRevisore(messages: any[], opzioni: any, etichetta: string, 
   // MiniMax ne manca uno e mette il ragionamento nel testo: non si usa.
   const { model: _scartato, strictEngine: _s, gonkaPool: _gp, gonkaPrimo: _gpr, ...senzaModello } = opzioni || {};
   const nonVuota = (r: any) => { if (!String(r?.data || '').trim()) throw new Error('risposta vuota'); return r; };
+  // (15/11/2026, committente: «revisore / 2 on the fly / pool», poi la Groq a pagamento) Per ogni revisione chiesta
+  // con un utente in attesa: itinerario, podcast, Guida d'Autore. Mai nei lavori di sfondo.
+  const utenteInAttesaRev = !!senzaModello.groqOnTheFly || (!!userId && userId !== 'background-script');
   try {
-    const r = nonVuota(await callUniversalAi('groq', messages, { ...senzaModello, model: 'openai/gpt-oss-120b', revisore: true, strictEngine: true, excludeEngines: VIETATI_REVISORE }, etichetta, sbUrl, sbKey, groqClient, userId));
+    const r = nonVuota(await callUniversalAi('groq', messages, { ...senzaModello, groqOnTheFly: utenteInAttesaRev, model: 'openai/gpt-oss-120b', revisore: true, strictEngine: true, excludeEngines: VIETATI_REVISORE }, etichetta, sbUrl, sbKey, groqClient, userId));
     return { ...r, motoreRevisore: 'Groq (gpt-oss-120b)' };
   } catch (e: any) {
     console.warn(`[revisore] Groq fallito (${etichetta}): ${String(e?.status || '')} ${String(e?.message || e).slice(0, 200)}`);
@@ -7730,6 +10242,13 @@ async function chiamaRevisore(messages: any[], opzioni: any, etichetta: string, 
     return { ...r, motoreRevisore: 'ripiego GLM-5.3-Flash (Gonka)' };
   } catch (e: any) {
     console.warn(`[revisore] GLM via Gonka fallito (${etichetta}): ${String(e?.status || '')} ${String(e?.message || e).slice(0, 200)}`);
+  }
+  // (23/11/2026) Z.ai gratuito (glm-4.5-flash) prima di Gemini 3.6, che ha 20 richieste al giorno per account.
+  try {
+    const r = await chiamaZaiGratis(messages, { json: opzioni?.response_format?.type === 'json_object', maxTokens: Math.min(Number(opzioni?.max_tokens) || 3000, 6000), timeoutMs: 45000 });
+    return { ...r, motoreRevisore: 'ripiego GLM-4.5-Flash (Z.ai gratuito)' };
+  } catch (e: any) {
+    console.warn(`[revisore] Z.ai fallito (${etichetta}): ${String(e?.message || e).slice(0, 160)}`);
   }
   try {
     const r = nonVuota(await callUniversalAi('gemini', messages, { ...opzioni, model: 'gemini-3.6-flash', revisore: true, strictEngine: true, excludeEngines: VIETATI_REVISORE }, etichetta, sbUrl, sbKey, groqClient, userId));
@@ -7756,7 +10275,8 @@ app.post("/api/generate-daily-podcast", rateLimiter, async (req, res) => {
       .digest('hex')}`;
     const cachedPodcast = await getFromCache(podcastCacheKey);
     if (cachedPodcast?.text_content) {
-      return res.json({ text: cachedPodcast.text_content, cached: true });
+      // Anche un podcast GIÀ salvato esce senza le frasi di maniera (stessa regola delle narrazioni servite dalla cache).
+      return res.json({ text: podcastSenzaFormule(cachedPodcast.text_content).testo, cached: true });
     }
     // Solo cache (25/09/2026): il client chiede prima se il podcast esiste, così la conferma «15 crediti»
     // compare solo quando va davvero generato. 204 = da generare, nessun addebito.
@@ -7778,7 +10298,7 @@ app.post("/api/generate-daily-podcast", rateLimiter, async (req, res) => {
     let userPrompt = `Giorno ${dayNum} dell'itinerario a ${destination}. Crea una presentazione audio completa di circa 2-3 minuti.\n\n`;
     
     if (dayNum === 1 || dayNum === '1') {
-      userPrompt += `Prima di presentare le tappe, dedica 3-4 frasi di introduzione entusiasmante alla città di ${destination}: cosa la rende speciale, l'atmosfera, un fatto curioso.\n\n`;
+      userPrompt += `Prima di presentare le tappe, dedica 3-4 frasi di introduzione alla città di ${destination}: dove si trova, la sua epoca o origine, un fatto concreto e certo (una data, una persona, un'opera). Niente aggettivi d'atmosfera.\n\n`;
     }
 
     userPrompt += `TAPPE DI OGGI (${numTappe} in totale - DEVI presentarle TUTTE, una per una):\n${tappeList}\n\n`;
@@ -7786,7 +10306,7 @@ app.post("/api/generate-daily-podcast", rateLimiter, async (req, res) => {
     userPrompt += `STRUTTURA OBBLIGATORIA del testo audio (rispetta questo ordine):\n`;
     userPrompt += `1. Saluto iniziale e presentazione come WIP\n`;
     userPrompt += `2. ${dayNum === 1 || dayNum === '1' ? 'Introduzione a ' + destination + ' (3-4 frasi)' : 'Breve introduzione alla giornata'}\n`;
-    userPrompt += `3. Presentazione di OGNI SINGOLA TAPPA (tutte e ${numTappe}): per ciascuna descrivi brevemente cosa si vedrà, perché è speciale, e un consiglio pratico\n`;
+    userPrompt += `3. Presentazione di OGNI SINGOLA TAPPA (tutte e ${numTappe}): per ciascuna descrivi brevemente cosa si vedrà, un fatto concreto che la distingue, e un consiglio pratico\n`;
     
     if (isLastDay) {
       userPrompt += `4. Saluto finale: ringrazia l'utente per aver viaggiato con WIP, augura un buon rientro, invita a tornare per il prossimo viaggio con frasi creative e calde\n`;
@@ -7796,7 +10316,10 @@ app.post("/api/generate-daily-podcast", rateLimiter, async (req, res) => {
 
     userPrompt += `\nREGOLE ASSOLUTE:\n`;
     userPrompt += `- Scrivi SOLO il testo da leggere ad alta voce. Nessun titolo, nessun markdown (no **, no #, no ---), nessuna emoji, nessuna nota di regia tra parentesi.\n`;
-    userPrompt += `- Tono: caldo, entusiasta, come un amico esperto di viaggi che parla direttamente a te.\n`;
+    userPrompt += `- Tono: caldo e preciso, come un amico esperto di viaggi che parla direttamente a te: il calore sta nel modo di parlare, non negli aggettivi.\n`;
+    // REGOLA 16/11/2026 (committente, esempi del centro guida: i podcast di Rimini e Bruxelles dicevano «l'atmosfera è
+    // unica», «vi lascerà a bocca aperta», «vale la pena»): nel podcast valgono le stesse formule vietate delle audioguide.
+    userPrompt += `- VIETATE le frasi che andrebbero bene per qualunque luogo: «atmosfera unica», «vi lascerà a bocca aperta / senza parole», «vale la pena», «da non perdere», «imperdibile», «gioiello», «cuore pulsante», «si respira», «momento magico», «vi farà innamorare», «esperienza indimenticabile», «ricco di storia», «viaggio nel tempo». Al loro posto un fatto concreto della tappa, oppure niente.\n`;
     userPrompt += `- Lingua OBBLIGATORIA: ${langStr}. Non usare mai altre lingue.\n`;
     userPrompt += `- NON troncare il testo. Presenta TUTTE le ${numTappe} tappe senza eccezioni.\n`;
     userPrompt += `- Ogni tappa deve avere almeno 2-3 frasi di presentazione.\n`;
@@ -7893,12 +10416,99 @@ app.post("/api/generate-daily-podcast", rateLimiter, async (req, res) => {
       if (esito?.ok === false) console.log(`[Podcast] revisore: estranei [${(esito.luoghi_estranei || []).join('; ')}] dubbi [${(esito.fatti_dubbi || []).slice(0, 4).join('; ')}] -> ${revisionePodcast}`);
     } catch (e: any) { console.warn('[Podcast] revisore non eseguito:', String(e?.message || e).slice(0, 140)); }
 
+    // Ultimo filtro deterministico: le frasi con una formula vietata escono (anche dal saluto e dal congedo).
+    const pulitoPodcast = podcastSenzaFormule(podcastText);
+    if (pulitoPodcast.tolte) { podcastText = pulitoPodcast.testo; console.log(`[Podcast] frasi di maniera tolte: ${pulitoPodcast.tolte}`); }
     console.log(`[Podcast] Day ${dayNum} | ${tappe.length} stops | ${podcastText.length} chars | revisione ${revisionePodcast}`);
     // In cache per i prossimi ascolti / altri utenti (best-effort).
     await saveToCache(podcastCacheKey, 'podcast', podcastText).catch(() => {});
     res.json({ text: podcastText });
   } catch (err: any) {
     console.error("[Podcast] Error:", err);
+    res.status(500).json({ error: "Errore generazione podcast" });
+  }
+});
+
+// --- PODCAST DI UNA TAPPA (18/11/2026, committente: «va bene il podcast per tutto il giorno, ma anche podcast per ogni
+// singola tappa»; «il costo del podcast della tappa 1 credito») ---
+// Stessa voce (Uip) e stesse regole del podcast del giorno, ma il materiale è VERO: i testi del luogo nel database
+// (scheda, narrazioni già salvate) — mai l'`attivita` dell'itinerario, che è prosa del modello a memoria. Senza materiale
+// (< 120 caratteri veri) niente podcast e niente addebito: risposta 422 `no_material` (regola «No source → no text»).
+// Cache per (luogo, lingua): il secondo utente non paga una generazione. Revisore = motore diverso da DeepSeek.
+app.post("/api/podcast/tappa", rateLimiter, async (req, res) => {
+  try {
+    const { poiId, nome, destination, language } = req.body || {};
+    const lingua = String(language || 'IT').toUpperCase();
+    if (!poiId || !nome) return res.status(400).json({ error: "Dati mancanti" });
+    if (!/^[\p{L}\p{N}_.:-]{2,200}$/u.test(String(poiId))) return res.status(400).json({ error: "poiId non valido" });
+    const chiave = `podcast_tappa_${crypto.createHash('md5').update(`${poiId}|${lingua}`).digest('hex')}`;
+    const inCache = await getFromCache(chiave);
+    if (inCache?.text_content) return res.json({ text: podcastSenzaFormule(inCache.text_content).testo, cached: true });
+
+    // MATERIALE: i testi del luogo (il più lungo per primo) + le narrazioni già salvate, ripuliti da righe dati ed etichette.
+    const sUrl = process.env.VITE_SUPABASE_URL || '';
+    const sKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+    const h = { apikey: sKey, Authorization: `Bearer ${sKey}` };
+    const [rRiga, rGuide] = await Promise.all([
+      axios.get(`${sUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=name,city,description_short,description_long,description_ai&limit=1`, { headers: h, timeout: 8000 }).catch(() => null),
+      axios.get(`${sUrl}/rest/v1/poi_audioguides?poi_id=eq.${encodeURIComponent(poiId)}&select=language,audio_text&limit=6`, { headers: h, timeout: 8000 }).catch(() => null),
+    ]);
+    const riga = rRiga?.data?.[0] || {};
+    const pezzi: string[] = [];
+    const aggiungi = (t: any) => {
+      const s = togliFrasiModello(String(t || '').replace(/\s+/g, ' ').trim());
+      if (!s || s.length < 60 || eEtichettaImport(s) || eRigaDati(s) || ragionamentoDelModello(s) || rifiutoDelModello(s)) return;
+      if (pezzi.some((p) => p.includes(s.slice(0, 80)))) return;
+      pezzi.push(s);
+    };
+    [riga.description_long, riga.description_ai, riga.description_short].sort((a, b) => String(b || '').length - String(a || '').length).forEach(aggiungi);
+    // Le narrazioni nella lingua dell'utente prima, poi le altre (sono già scritte dalle fonti, regole delle audioguide).
+    (rGuide?.data || []).sort((a: any, b: any) => (String(b.language).toUpperCase() === lingua ? 1 : 0) - (String(a.language).toUpperCase() === lingua ? 1 : 0)).forEach((g: any) => aggiungi(g.audio_text));
+    const materiale = pezzi.join('\n\n').slice(0, 7000);
+    if (materiale.length < 120) return res.status(422).json({ error: 'no_material', message: 'Di questo luogo non abbiamo ancora fonti verificate.' });
+    if (req.body?.soloCache === true) return res.status(204).end();
+
+    const charge = await chargeOrReject(req, res, 'podcast_tappa', 1);
+    if (!charge) return;
+
+    const PODCAST_LANGS: Record<string, string> = { EN: 'English', FR: 'francese (français)', ES: 'spagnolo (español)', DE: 'tedesco (Deutsch)', RU: 'russo (русский)', ZH: 'cinese semplificato (简体中文)', IT: 'italiano' };
+    const langStr = PODCAST_LANGS[lingua] || 'italiano';
+    const nomeLuogo = String(nome).slice(0, 160);
+    const sysPrompt = `Sei Uip (scritto WIP), la voce ufficiale dell'app di viaggio "World in Pocket". Nel testo scrivi sempre il tuo nome come "Uip" (non "WIP"): il testo viene letto da una voce sintetizzata. Parli in prima persona con un tono caldo e preciso, come un conduttore radiofonico di viaggi. Generi testo SOLO in lingua ${langStr}.`;
+    const userPrompt = `Episodio dedicato a UNA tappa: «${nomeLuogo}»${destination ? ` (${String(destination).slice(0, 80)})` : ''}. Circa 1-2 minuti di parlato.\n\n<materiale>\n${materiale}\n</materiale>\n\nSTRUTTURA: un saluto breve come Uip; poi la tappa raccontata con i fatti del materiale (che cos'è, la sua storia, cosa guardare e dove); un consiglio pratico SOLO se sta nel materiale; un congedo di una frase.\nREGOLE ASSOLUTE:\n- Ogni fatto (date, nomi, cifre, opere, persone) deve stare nel materiale: NON aggiungere nulla che il materiale non dica. Se il materiale è breve, il podcast è breve.\n- Non copiare frasi del materiale: racconta con parole tue.\n- Parla SOLO di «${nomeLuogo}»: nessun altro luogo da visitare.\n- VIETATE le frasi che andrebbero bene per qualunque luogo: «atmosfera unica», «vi lascerà a bocca aperta», «vale la pena», «da non perdere», «imperdibile», «gioiello», «cuore pulsante», «si respira», «momento magico», «esperienza indimenticabile», «ricco di storia», «viaggio nel tempo».\n- Solo il testo da leggere: niente titoli, markdown, emoji, note di regia. Non citare «il materiale» né queste regole.\n- Lingua OBBLIGATORIA: ${langStr}.`;
+
+    let testo = '';
+    try {
+      const r: any = await callUniversalAi("deepseek", [{ role: "system", content: sysPrompt }, { role: "user", content: userPrompt }],
+        { temperature: 0.6, max_tokens: 3000 }, "podcast_tappa", sUrl, sKey, getGroqClient());
+      testo = narrazioneSenzaPensiero(String(r?.data || ''));
+    } catch (e: any) { console.error('[Podcast tappa] AI:', e?.message); }
+    if (!testo || ragionamentoDelModello(testo) || rifiutoDelModello(testo)) {
+      await refundServer(charge.userId, charge.cost);
+      return res.status(502).json({ error: "PODCAST_GENERATION_FAILED", message: "Il motore AI non è riuscito a generare il podcast. Riprova." });
+    }
+    testo = testo.replace(/[#*_`~]/g, '').replace(/\[.*?\]/g, '').replace(/^\s*[-•]\s*/gm, '').replace(/\n{3,}/g, '\n\n').replace(/([.!?])\s*\n/g, '$1 ').trim();
+
+    // REVISORE (motore diverso da DeepSeek): fatti che il materiale non sostiene → tolti; fail-open dichiarato.
+    let revisione = 'non_eseguita';
+    try {
+      const rv: any = await chiamaRevisore([
+        { role: 'system', content: 'Sei un revisore severo di testi per audioguide di viaggio. Rispondi solo con JSON.' },
+        { role: 'user', content: `MATERIALE (unica fonte dei fatti):\n"""${materiale}"""\n\nTESTO DA CONTROLLARE:\n"""${testo.slice(0, 6000)}"""\n\nSegna i fatti (date, cifre, persone, opere, storie) che il materiale NON contiene, i luoghi diversi da «${nomeLuogo}» e le frasi generiche valide per qualunque luogo. Se ne trovi, restituisci in "testo" la versione corretta: stessa lingua e tono, quei punti tolti, nessun fatto nuovo. Se è tutto a posto lascia "testo" vuoto.\nJSON: {"ok":true,"fatti_dubbi":[],"testo":""}` },
+      ], { temperature: 0, max_tokens: 4000, response_format: { type: 'json_object' }, ultimaSpiaggiaPagante: false }, 'podcast_tappa_revisore', sUrl, sKey, getGroqClient(), charge.userId);
+      const raw = String(rv?.data || '');
+      const esito = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+      revisione = 'ok';
+      const corretto = String(esito?.testo || '').replace(/[#*_`~]/g, '').trim();
+      if (esito?.ok === false && corretto && corretto.length >= testo.length * 0.5 && narrazioneCompleta(corretto)) { testo = corretto; revisione = 'corretto'; }
+    } catch (e: any) { console.warn('[Podcast tappa] revisore non eseguito:', String(e?.message || e).slice(0, 140)); }
+    const pulito = podcastSenzaFormule(testo);
+    if (pulito.tolte) testo = pulito.testo;
+    console.log(`[Podcast tappa] ${poiId} ${lingua} | materiale ${materiale.length} | ${testo.length} chars | revisione ${revisione}`);
+    await saveToCache(chiave, 'podcast', testo).catch(() => {});
+    res.json({ text: testo, revisione });
+  } catch (err: any) {
+    console.error("[Podcast tappa] Error:", err);
     res.status(500).json({ error: "Errore generazione podcast" });
   }
 });
@@ -8147,6 +10757,13 @@ app.post("/api/groq/itinerary", rateLimiter, async (req, res) => {
   });
 
   app.post("/api/groq/itinerary-stream", rateLimiter, async (req, res) => {
+    // (18/11/2026) Inizio della richiesta: la verifica prende il tempo che RESTA dei 300 s di Vercel (maxDuration).
+    const tInizioRichiesta = Date.now();
+    // (18/11/2026, collaudo Malta in locale: 342 s) Lo stream non deve mai superare ~280 s su Vercel. I blocchi di giorni
+    // devono finire entro 170 s dall'inizio, i rifacimenti dei giorni vuoti entro 190 s; ciò che resta va alla verifica e
+    // al revisore, e se non basta la verifica passa alla cron di completamento. Fuori da Vercel nessun taglio.
+    const SCADENZA_BLOCCHI_MS = process.env.VERCEL ? 170000 : 600000;
+    const SCADENZA_RIEMPI_MS = process.env.VERCEL ? 190000 : 700000;
     // Fuori dal try: servono anche nel catch per il rimborso del pre-addebito.
     let itinUserId: string | null = null;
     let itinCost = 0;
@@ -8317,6 +10934,16 @@ ${dayLines.join("\n")}
       if (chargeOutcome === 'error') {
         res.write(`data: ${JSON.stringify({ error: "CHARGE_FAILED" })}\n\n`);
         return res.end();
+      }
+
+      // BASE VERIFICATA (18/11/2026, ordine del committente; SPENTA finché BASE_VERIFICATE_ATTIVE non è 1): se per questa città
+      // c'è un itinerario che ha passato il collaudo notturno (voto ≥ 8) con gli stessi giorni o più, si parte da lì invece
+      // di far generare tutto a DeepSeek (vedi `streamDaBase` più sotto). Mai per roadtrip, tappe bloccate o «solo gratis».
+      // PREZZO UGUALE (committente 20/11/2026): il riuso è interno, l'utente paga come sempre e non vede nulla di diverso.
+      let baseTrovata: any = null;
+      if (baseVerificateAttive() && !isRoadtrip && !soloGratis && !(Array.isArray(lockedStops) && lockedStops.length)) {
+        try { baseTrovata = await baseVerificataPerRichiesta(destination, lat, lon, requestedDays, interestsArr); } catch (eBase: any) { console.warn('[itinerary-stream] base verificata non letta:', eBase?.message); }
+        if (baseTrovata) console.log(`[itinerary-stream] «${destination}» ${requestedDays} g: base verificata ${baseTrovata.slug} (voto ${baseTrovata.meta?.verificato?.voto_generale}, ${baseTrovata.giorniDaBase} giorni${baseTrovata.estesa ? ', da estendere' : ''})`);
       }
 
       // LOGICA FISSA (committente, 20/09/2026: «deve cercare la miglior soluzione SENZA vedere il nostro database; le
@@ -8565,9 +11192,11 @@ REGOLE STRUTTURA GIORNATA (OBBLIGATORIE PER OGNI GIORNO):
 6. PERCORSO PIÙ BREVE E TEMPI OTTIMIZZATI (REGOLA FISSA, controllata da un algoritmo dopo di te): ogni giorno copre UNA sola zona/quartiere compatto e le tappe si susseguono in ordine di prossimità geografica (dalla più vicina alla successiva, mai a zig-zag attraverso la città). Due luoghi a meno di 500 m l'uno dall'altro vanno in tappe CONSECUTIVE (il Reina Sofía sta accanto al Prado: subito dopo il Prado, non a fine giornata). Pranzo e cena vanno scelti LUNGO il percorso: la cena entro 800 m dall'ultima tappa del pomeriggio, mai dall'altra parte della città. Un'escursione lontana (parco, collina, periferia) si fa per ultima e la cena resta lì vicino, oppure non si fa. La PRIORITÀ resta il numero di tappe (punti 5 e 7): se nella zona i luoghi veri non bastano, il percorso si ALLUNGA fino ai luoghi successivi più vicini, sempre in ordine di strada — mai un giorno corto per restare compatti. Prima di chiudere il JSON rileggi ogni giorno e correggi tu stesso l'ordine se una tappa è più vicina a una tappa non adiacente: il nostro algoritmo misura i metri di ogni giorno e riordina le tappe che hai messo a zig-zag.
 7. GIORNI PIENI (REGOLA FISSA): nessun giorno è vuoto o quasi vuoto. Ogni giorno ha le sue tappe reali, dal mattino alla cena, con almeno il minimo del punto 5. Se i luoghi veri sono pochi, ripartiscili tra i giorni: mai un giorno con una sola tappa.
 8. DOPPIONI MAI (REGOLA FISSA): lo stesso luogo compare UNA sola volta in tutto l'itinerario, in un solo giorno e con un solo nome: «place du Louvre» e «Musée du Louvre» sono lo stesso luogo.
-9. I MIGLIORI LUOGHI (REGOLA FISSA): le tappe le scegli tu, cercando nella tua conoscenza i luoghi migliori e piu' celebri per gli interessi dell'utente, e i ristoranti migliori per qualita' e vincoli, non i piu' vicini al centro. Prima i classici imperdibili (i musei, i monumenti e i panorami che ogni guida autorevole cita per quella citta'), poi si completa con luoghi minori. Non ti viene mostrato nessun database: dopo, le tappe si agganciano ai luoghi che esistono gia' e quelle nuove diventano nuovi luoghi. Per questo il nome deve essere quello ufficiale e le coordinate esatte.
+9. I MIGLIORI LUOGHI (REGOLA FISSA): le tappe le scegli tu, cercando nella tua conoscenza i luoghi migliori e piu' celebri per gli interessi dell'utente, e i ristoranti migliori per qualita' e vincoli, non i piu' vicini al centro. Prima i classici (i musei, i monumenti e i panorami che ogni guida autorevole cita per quella citta'), poi si completa con luoghi minori. Non ti viene mostrato nessun database: dopo, le tappe si agganciano ai luoghi che esistono gia' e quelle nuove diventano nuovi luoghi. Per questo il nome deve essere quello ufficiale e le coordinate esatte.
 10. OGNI TESTO VALE DA SOLO (REGOLA FISSA): "attivita" e "consiglio_guida" descrivono il luogo, non il suo posto nella giornata. L'ordine delle tappe viene riordinato da un algoritmo dopo di te: MAI «inizia la giornata/la visita con…», «concludi la giornata con…», «prosegui verso…», «dopo pranzo…», «dopo la basilica…», «ultima tappa», né rimandi alla tappa prima o dopo. Unica eccezione: la tappa di tipo "trasferimento".
 11. MAI LA STESSA CITAZIONE IN DUE TAPPE (REGOLA FISSA, committente 09/10/2026): nel "consiglio_guida" la voce di 📜 Dante NON ripete lo stesso verso o la stessa formula da una tappa all'altra (a San Pietroburgo «Fatti non foste a viver come bruti… ma per…» compariva in 13 tappe su 13). Un verso si cita al massimo UNA volta in tutto l'itinerario; nelle altre tappe Dante parla con parole sue, di QUEL luogo. Lo stesso vale per ✨ Nicky: nessuna frase-stampo ripetuta.
+
+${REGOLE_PREVENZIONE_ITINERARIO}
 
 COME SI COSTRUISCE IL PERCORSO (fallo PRIMA di scrivere le tappe):
 a) Dividi il territorio in settori (es. centro storico / colline a nord / valle a sud) e assegna a ogni giorno UN settore: due giorni non devono incrociarsi. Un giorno che va a nord e poi torna a sud per cena è sbagliato.
@@ -8641,7 +11270,14 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
         // In PARALLELO: su Vercel la function muore a 300 s e lo stream del
         // primo blocco ne usa gia' ~150. Ogni blocco sa quali giorni coprire
         // e quali luoghi del primo blocco evitare.
+        // (18/11/2026, collaudo Malta in locale: generazione + verifica 342 s, su Vercel sarebbe stato tagliato) Ogni blocco
+        // ha un TETTO: deve finire entro SCADENZA_BLOCCHI_MS dall'inizio della richiesta. Un blocco che non arriva in tempo
+        // vale come vuoto: i giorni consegnati restano contigui e il conguaglio rimborsa il resto.
+        const restaBlocchi = Math.max(20000, SCADENZA_BLOCCHI_MS - (Date.now() - tInizioRichiesta));
         const esiti = await Promise.all(blocchi.map(async ({ da, a }) => {
+          let tBlocco: any;
+          const scaduto = new Promise<any[]>((r) => { tBlocco = setTimeout(() => { console.warn(`[itinerary-stream] blocco giorni ${da}-${a} oltre il tetto di tempo`); r([]); }, restaBlocchi); });
+          return Promise.race([scaduto, (async () => {
           const contPrompt = `${prompt}\n\nGENERAZIONE A BLOCCHI — ORA restituisci SOLO i giorni da ${da} a ${a} dello STESSO itinerario di ${requestedDays} giorni. JSON: {"giorni":[...]} con esattamente ${a - da + 1} elementi ("giorno" numerati da ${da} a ${a}), stessa struttura delle tappe e tabella_budget per ogni giorno. Non ripetere questi luoghi gia' usati nei giorni 1-${parsed.giorni.length}: ${fatti.slice(0, 60).join('; ')}. I giorni ${da}-${a} coprono zone/quartieri diversi da quelli dei giorni precedenti${blocchi.length > 1 ? ` e dagli altri blocchi (giorni ${blocchi.filter(b => b.da !== da).map(b => `${b.da}-${b.a}`).join(', ')}): scegli per questo blocco la zona n. ${blocchi.findIndex(b => b.da === da) + 2} in ordine di distanza dal centro` : ''}.`;
           try {
             const r = await callUniversalAi("deepseek", [
@@ -8656,6 +11292,7 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
             console.warn(`[itinerary-stream] blocco giorni ${da}-${a} fallito:`, e?.message);
             return [] as any[];
           }
+          })()]).finally(() => clearTimeout(tBlocco));
         }));
         // Ricucitura in ordine; al primo blocco vuoto ci si ferma (i giorni
         // consegnati restano contigui e il conguaglio rimborsa il resto).
@@ -8669,7 +11306,7 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
         for (const g of parsed.giorni) {
           if (!Array.isArray(g?.tappe)) continue;
           g.tappe = g.tappe.filter((t: any) => {
-            const chiave = chiaveNomeTappa(t?.titolo_tappa);
+            const chiave = chiaveDoppioneTappa(t);
             if (!chiave) return true;
             if (visti.has(chiave)) return false;
             visti.add(chiave);
@@ -8699,19 +11336,24 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
         for (let i = 0; i < parsed.giorni.length; i++) {
           if (conta(parsed.giorni[i]) >= soglia) continue;
           for (let tentativo = 1; tentativo <= 3 && conta(parsed.giorni[i]) < soglia; tentativo++) {
+            // (18/11/2026) Tetto: oltre SCADENZA_RIEMPI_MS dall'inizio della richiesta non si chiede più (un giorno rimasto
+            // vuoto in fondo si toglie e si rimborsa, come sempre).
+            const restaRiempi = SCADENZA_RIEMPI_MS - (Date.now() - tInizioRichiesta);
+            if (restaRiempi < 30000) { console.warn(`[itinerary-stream] giorno ${i + 1}: niente rifacimento, tempo finito`); break; }
             const usati = parsed.giorni.flatMap((g: any, k: number) => k === i ? [] : (g?.tappe || []).map((t: any) => t?.titolo_tappa)).filter(Boolean);
             const giorno = i + 1;
             try {
-              const r = await callUniversalAi("deepseek", [
+              let tRiempi: any;
+              const r: any = await Promise.race([new Promise((_, rej) => { tRiempi = setTimeout(() => rej(new Error('tetto di tempo')), restaRiempi); }), callUniversalAi("deepseek", [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: `${prompt}\n\nGENERAZIONE A BLOCCHI — ORA restituisci SOLO il giorno ${giorno} dello STESSO itinerario di ${requestedDays} giorni. JSON: {"giorni":[...]} con esattamente 1 elemento ("giorno": ${giorno}), stessa struttura delle tappe e tabella_budget. Il giorno ${giorno} deve essere PIENO come gli altri giorni (circa ${Math.max(soglia + 1, mediana)} tappe tra visite e pasti). NON ripetere questi luoghi, gia' usati negli altri giorni: ${usati.slice(0, 80).join('; ')}.` },
-              ], { temperature: 0.7, response_format: { type: "json_object" }, ultimaSpiaggiaPagante: true }, "generazione_itinerario_blocco", supabaseUrl, supabaseServiceKey, groq, itinUserId);
+              ], { temperature: 0.7, response_format: { type: "json_object" }, ultimaSpiaggiaPagante: true }, "generazione_itinerario_blocco", supabaseUrl, supabaseServiceKey, groq, itinUserId)]).finally(() => clearTimeout(tRiempi));
               const blk = JSON.parse(String(r?.data || "{}").replace(/^```json\s*/i, "").replace(/```\s*$/, ""));
               const nuovo = Array.isArray(blk?.giorni) ? blk.giorni[0] : null;
               if (!nuovo || !Array.isArray(nuovo.tappe)) continue;
-              const visti2 = new Set<string>(usati.map((n: any) => chiaveNomeTappa(n)).filter(Boolean));
+              const visti2 = new Set<string>(parsed.giorni.flatMap((g: any, k: number) => k === i ? [] : (g?.tappe || [])).map((t: any) => chiaveDoppioneTappa(t)).filter(Boolean));
               nuovo.tappe = nuovo.tappe.filter((t: any) => {
-                const chiave = chiaveNomeTappa(t?.titolo_tappa);
+                const chiave = chiaveDoppioneTappa(t);
                 if (!chiave) return true;
                 if (visti2.has(chiave)) return false;
                 visti2.add(chiave);
@@ -8730,7 +11372,23 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
       // Utilizza DeepSeek in streaming per gli itinerari.
       // onComplete (awaited PRIMA di [DONE]): conguaglio dell'addebito sui
       // giorni realmente consegnati — il client non paga più nulla da sé.
-      await streamUniversalAi("deepseek", [
+      // BASE VERIFICATA: stessa firma di streamUniversalAi e stesso onComplete (quindi stesso conguaglio, aggancio, verifica,
+      // controllo qualità, revisore dei fatti, salvataggio), ma il «testo del modello» è la base ripulita con i pasti rifatti.
+      // I giorni oltre la base li riempie `riempiGiorniVuoti` / `generaBlocchiRestanti` (luoghi già usati da evitare).
+      // Qualunque cosa vada storta si ripiega sulla generazione normale: la base non può mai far perdere un itinerario.
+      const streamDaBase = async (motore: any, msgs: any[], opz: any, r: any, x: any, ctx: string, uid: any, onComplete: (t: string) => Promise<void>) => {
+        const ping = setInterval(() => { try { r.write(`data: ${JSON.stringify({ ping: Date.now() })}\n\n`); } catch { /* stream chiuso */ } }, 10000);
+        let itin: any = null;
+        try { itin = await preparaItinerarioDaBaseVerificata(baseTrovata, { destination: String(destination || ''), language, richiesta: `${specialRequests || ''} ${interestsArr.join(' ')}`.trim() }); }
+        catch (eP: any) { console.warn('[itinerary-stream] base verificata non assemblata, si genera:', eP?.message); }
+        finally { clearInterval(ping); }
+        if (!itin?.giorni?.length) return streamUniversalAi(motore, msgs, opz, r, x, ctx, uid, onComplete);
+        // Nessun evento al client: il riuso resta interno (la traccia è solo in qualita.base_verificata, per noi).
+        try { await onComplete(JSON.stringify(itin)); } catch (eC: any) { console.error('[itinerary-stream] onComplete (base verificata) fallito:', eC?.message || eC); }
+        r.write(`data: [DONE]\n\n`);
+        r.end();
+      };
+      await (baseTrovata ? streamDaBase : streamUniversalAi)("deepseek", [
         { role: "system", content: systemPrompt },
         { role: "user", content: promptBlocco1 }
       ], { temperature: 0.7, response_format: { type: "json_object" } }, res, null,
@@ -8844,10 +11502,13 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
               let aggTimer: any;
               try {
                 await Promise.race([
-                  agganciaTappeAlDatabase(parsed, centro, destination, aggCancel),
+                  agganciaTappeAlDatabase(parsed, centro, destination, aggCancel, { giudice: true }),
                   new Promise((r) => { aggTimer = setTimeout(() => { aggCancel.cancelled = true; r(null); }, 12000); }),
                 ]);
               } catch { /* fail-open */ } finally { clearTimeout(aggTimer); }
+              // GIUDICE NEI CASI DUBBI (18/11/2026): una domanda sì/no a Groq (chiamaRevisore) per gli agganci con nomi
+              // diversi o lontani dal punto del modello; senza risposta resta l'aggancio e l'esito dice `non_eseguito`.
+              try { await giudicaAgganciDubbi(parsed, { destination, userId: itinUserId, tettoMs: 15000 }); } catch { /* fail-open */ }
               // Regola fissa «doppioni mai»: dopo l'aggancio due nomi dell'AI possono essere lo stesso luogo. Se un giorno
               // si svuota troppo lo si riempie e si ricontrolla: meglio una tappa in meno che un luogo ripetuto.
               try {
@@ -8857,6 +11518,8 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
                 if (tolti) {
                   console.log(`[itinerary-stream] ${tolti} doppioni tra giorni tolti dopo l'aggancio al database`);
                   await riempiGiorniVuoti(parsed);
+                  // (18/11/2026) Anche i giorni rifatti possono portare prodotti («Esperienza avventura: Diving…»).
+                  togliTappeProdotto(parsed);
                   togliDoppioni(parsed);
                 }
               } catch { /* fail-open: l'itinerario resta com'e' */ }
@@ -8874,14 +11537,79 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
               // non arrivava mai ai pasti e nessuna tappa riceveva `verifica`. Ora la verifica ha 75 s con la scadenza
               // passata DENTRO (ogni fase si misura su quella) e il battito dello stream ({ping} ogni 10 s) la copre;
               // se non finisce, le tappe non controllate escono «da_verificare» (verificaItinerarioConTetto).
-              const report: any = await verificaItinerarioConTetto(parsed, { destination, lat, lon, radiusKm: radius, specialRequests, interests: interestsArr, language, inDiretta: true, centri: legsArr }, TETTO_VERIFICA_DIRETTA_MS);
-              // REVISORE DEI FATTI del testo (25/09/2026, ordine del committente): toglie le frasi con fatti
-              // falsi o non verificabili; tetto 45 s, fail-open con esito scritto nell'itinerario.
+              // (18/11/2026, committente: «aumenta il tempo per la revisione… tutti i giorni, anche se fossero 7, verificati
+              // tappa per tappa») Il tetto non è più 75 s fissi: è ciò che RESTA dei 300 s di Vercel, meno quanto serve
+              // dopo — mezzi (8 s), revisore dei fatti (≥ 45 s), salvataggio + PDF + email (30 s) e i 12 s di margine di
+              // verificaItinerarioConTetto. Massimo 200 s; minimo 30 s (oltre si sforerebbe il taglio di Vercel e si
+              // perderebbe il salvataggio). Fuori da Vercel (server locale di Oracle) nessun taglio: 200 s. Ciò che non si
+              // fa in tempo resta «da_verificare» con `verifica_rimandata` e lo finisce la cron /api/cron/completa-verifiche.
+              // (18/11/2026 sera) Il limite di lavoro è 280 s, non 300: 20 s di margine sul taglio di Vercel. Se per la
+              // verifica restano meno di 30 s NON si comincia: le tappe non agganciate escono «da_verificare» con
+              // `verifica_rimandata` e la cron le finisce entro 5 minuti (mai sforare e perdere il salvataggio).
+              const LIMITE_FUNZIONE_MS = process.env.VERCEL ? 280000 : 3600000, DOPO_VERIFICA_MS = 8000 + 45000 + 30000 + 12000;
+              const restoPerVerifica = LIMITE_FUNZIONE_MS - (Date.now() - tInizioRichiesta) - DOPO_VERIFICA_MS;
+              const tettoVerifica = Math.max(30000, Math.min(200000, restoPerVerifica));
+              const tVerifica0 = Date.now();
+              let report: any;
+              if (restoPerVerifica < 30000) {
+                const chiuse = chiudiVerificaNonFinita(parsed, language, true, true);
+                report = { rimandataAllaCron: true, chiuse };
+                console.warn(`[itinerary-stream] «${destination}»: tempo finito prima della verifica (${Math.round((Date.now() - tInizioRichiesta) / 1000)} s) — ${chiuse} tappe passano alla cron di completamento`);
+              } else {
+                report = await verificaItinerarioConTetto(parsed, { destination, lat, lon, radiusKm: radius, specialRequests, interests: interestsArr, language, inDiretta: true, centri: legsArr, giudice: true, userIdGiudice: itinUserId }, tettoVerifica);
+              }
+              // DOPPIONI MAI, di nuovo (18/11/2026, collaudo New York): la verifica aggancia altre tappe e sostituisce
+              // pasti — due tappe possono finire sullo stesso poi_id o su due righe dello stesso edificio («Columbia
+              // University - Campus» e «… - Low Memorial Library», «The Cloisters» e «The Met Cloisters - Giardino»).
               try {
-                const rf = await revisoreFattiItinerario(parsed, { destination, language, userId: itinUserId, tettoMs: 45000 });
+                const prodDopo = togliTappeProdotto(parsed); // prodotti e rientri arrivati con i giorni rifatti
+                const doppiDopo = togliDoppioniItinerario(parsed, undefined, true) + prodDopo; // con il budget del giorno aggiornato
+                if (doppiDopo) { console.log(`[itinerary-stream] ${doppiDopo} doppioni tolti dopo la verifica`); parsed.qualita = { ...(parsed.qualita || {}), doppioni_dopo_verifica: doppiDopo }; }
+              } catch { /* fail-open */ }
+              // CONTROLLO QUALITÀ AUTOMATICO (18/11/2026, committente: «questi errori non devono mai più succedere»): doppioni
+              // di poi_id, agganci a cinema/quartieri/città, tipi contraddetti, tratte assurde, righe con fonte non agganciate,
+              // pasti su un non-ristorante. Corregge ciò che può; il resto esce «da_verificare» e lo riprende la cron.
+              try {
+                const restoControllo = LIMITE_FUNZIONE_MS - (Date.now() - tInizioRichiesta) - 30000 - 45000;
+                if (restoControllo < 6000) parsed.qualita = { ...(parsed.qualita || {}), controllo: { esito: 'rimandato', ts: Date.now() } };
+                else await controlloQualitaItinerario(parsed, { destination, lat, lon, language, tettoMs: Math.min(35000, restoControllo), giudice: true, userId: itinUserId, richiesta: String(specialRequests || '') });
+              } catch (eCq: any) { parsed.qualita = { ...(parsed.qualita || {}), controllo: { esito: 'non_eseguito', errore: String(eCq?.message || eCq).slice(0, 120), ts: Date.now() } }; }
+              // Esito della verifica scritto nell'itinerario: mai un tetto raggiunto in silenzio.
+              parsed.qualita = { ...(parsed.qualita || {}), verifica: statoVerifica(parsed, { tetto_ms: tettoVerifica, durata_ms: Date.now() - tVerifica0, fasi_ms: report?.fasi_ms, scaduta: !!(report?.tempoScaduto || report?.timedOut), richiesta: { destination: String(destination || ''), language: String(language || 'IT'), lat, lon, radius, centri: legsArr, specialRequests: String(specialRequests || '').slice(0, 300) } }) };
+              // POI delle tappe confermate: li crea la cron dopo (non blocca lo stream).
+              parsed.qualita.poi_server = { fase: 'da_fare' };
+              // (14/11/2026) La verifica può aver spostato tappe e sostituito pasti: le righe dei mezzi si rifanno
+              // sulle posizioni definitive (le tratte non cambiate tornano dalla cache).
+              if (LIMITE_FUNZIONE_MS - (Date.now() - tInizioRichiesta) > 45000) { try { await mezziPerTratteLunghe(parsed, { lingua: language, tettoMs: 8000, rifai: true }); } catch { /* fail-open */ } }
+              // REVISORE DEI FATTI del testo (25/09/2026, ordine del committente): toglie le frasi con fatti
+              // falsi o non verificabili; fail-open con esito scritto nell'itinerario. (18/11/2026) Prende il tempo che
+              // resta (almeno 45 s, al massimo 90 s) meno i 30 s del salvataggio; i lotti non letti li legge la cron.
+              try {
+                const restoRevisore = LIMITE_FUNZIONE_MS - (Date.now() - tInizioRichiesta) - 30000;
+                // Meno di 15 s: il revisore non parte e la cron lo fa (esito «rimandato», letto da /api/cron/completa-verifiche).
+                if (restoRevisore < 15000) throw Object.assign(new Error('rimandato'), { rimandato: true });
+                const tettoRevisore = Math.min(90000, restoRevisore);
+                const rf = await revisoreFattiItinerario(parsed, { destination, language, userId: itinUserId, tettoMs: tettoRevisore });
                 parsed.qualita = { ...(parsed.qualita || {}), revisore_fatti: rf };
                 console.log(`[itinerary-stream] revisore fatti: ${rf.esito}, ${rf.controllate} tappe, ${rf.frasi_tolte} frasi tolte`);
-              } catch { parsed.qualita = { ...(parsed.qualita || {}), revisore_fatti: { esito: 'non_eseguito', controllate: 0, frasi_tolte: 0 } }; }
+              } catch (eRev: any) { parsed.qualita = { ...(parsed.qualita || {}), revisore_fatti: { esito: eRev?.rimandato ? 'rimandato' : 'non_eseguito', controllate: 0, frasi_tolte: 0 } }; }
+              // Revisore non finito (rimandato o parziale): lo riprende la cron, che guarda anche questo.
+              if (parsed.qualita?.revisore_fatti?.esito !== 'ok') parsed.qualita.poi_server = { ...(parsed.qualita.poi_server || {}), fase: parsed.qualita.poi_server?.fase || 'da_fare' };
+              // (20/11/2026, collaudi notturni) Una tappa NON pasto che la verifica non conferma non si consegna «da
+              // verificare»: si riaggancia, si sostituisce con un luogo vero dell'archivio o si toglie (con la nota).
+              // Solo le tappe con verdetto definitivo: le rimandate le finisce la cron, che poi fa lo stesso.
+              try {
+                const restoRisolvi = LIMITE_FUNZIONE_MS - (Date.now() - tInizioRichiesta) - 25000;
+                if (restoRisolvi > 5000) {
+                  const rs = await risolviTappeNonConfermate(parsed, { destination, language, lat, lon, radiusKm: radius, tettoMs: Math.min(40000, restoRisolvi) });
+                  if (rs.riagganciate || rs.sostituite || rs.tolte || rs.confermate) console.log(`[itinerary-stream] tappe non confermate: ${rs.confermate} confermate da fonte, ${rs.riagganciate} riagganciate, ${rs.sostituite} sostituite, ${rs.tolte} tolte`);
+                }
+              } catch { /* fail-open */ }
+              // Formule vietate nei testi (anche quelli arrivati dopo il controllo qualità): mai consegnate.
+              try { pulisciFormuleItinerario(parsed); } catch { /* fail-open */ }
+              // (20/11/2026) Da una base verificata: le tratte collaudate restano solo fra tappe ancora uguali e consecutive.
+              try { tieniPercorsiCollaudatiCoerenti(parsed); } catch { /* fail-open */ }
+              try { ricalcolaTotaleViaggio(parsed, language); } catch { /* resta il testo del modello */ }
               // Si manda SEMPRE: anche col revisore in ritardo, l'aggancio al
               // DB c'e' gia' e il client deve riceverlo.
               res.write(`data: ${JSON.stringify({ verified: parsed, report })}\n\n`);
@@ -8893,6 +11621,7 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
             // (itinCost / requestedDays), non sul listino corrente: se un
             // admin cambia il prezzo mentre lo stream è in corso, rileggerlo
             // qui rimborserebbe più di quanto incassato (conio di crediti).
+            // Base verificata: PREZZO UGUALE (committente 20/11/2026: il riuso è interno, nessuno sconto né conguaglio a parte).
             const owed = (itinCost / requestedDays) * Math.min(requestedDays, delivered);
             if (owed < itinCost) await refundServer(itinUserId, itinCost - owed);
             if (lavoro) await generazioneAggiorna(lavoro.id, { crediti: Math.round(owed) });
@@ -8939,7 +11668,8 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
               const pdf = await pdfItinerarioPerEmail(parsed, language);
               if (lavoro) {
                 await generazionePronta(lavoro.id, idItin, titoloItin, pdf);
-              } else {
+              } else if (req.body?.collaudo !== true) {
+                // (18/11/2026) Gli itinerari del collaudo serale non mandano «pronto» (email, push, notifica in app).
                 const t = testiPronta('itinerario', language, titoloItin);
                 await notificaUtente(itinUserId, { titolo: t.titolo, corpo: t.corpo, tipo: 'servizio', dati: { azione: 'archivio', tipo: 'itinerario', id: idItin },
                   email: { oggetto: t.oggetto, html: htmlEmailPronta(t, titoloItin, 'https://www.wip.guide/?archivio=itinerari'), testo: t.intro, allegati: pdf ? [pdf] : [] } });
@@ -10475,7 +13205,8 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
         }
         if (!shot) {
           // Il catch esterno rimborsa l'addebito best-effort.
-          throw new Error(`Impossibile analizzare lo screenshot: tutti i provider vision hanno fallito (${shotErr?.response?.data?.error?.message || shotErr?.message || 'errore sconosciuto'})`);
+          console.error('[Vision:screenshot] tutti i provider hanno fallito:', String(shotErr?.response?.data?.error?.message || shotErr?.message || 'errore sconosciuto').slice(0, 400));
+          throw new Error("Il riconoscimento non è disponibile in questo momento. Riprova fra poco: non ti è stato addebitato nulla.");
         }
 
         const rawPlaces = (Array.isArray(shot?.places) ? shot.places : [])
@@ -10599,7 +13330,12 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
       }
 
       if (!result) {
-        throw new Error(`Impossibile analizzare l'immagine: tutti i provider vision hanno fallito (${lastEngineErr?.response?.data?.error?.message || lastEngineErr?.message || 'errore sconosciuto'})`);
+        // (14/11/2026) L'errore del fornitore (quote, chiavi, link interni) resta nei log e negli Errori di Sistema:
+        // al telefono va una frase pulita. Prima arrivava il corpo intero della risposta di Google.
+        const dettaglioVision = String(lastEngineErr?.response?.data?.error?.message || lastEngineErr?.message || 'errore sconosciuto').slice(0, 400);
+        console.error('[Vision] tutti i provider hanno fallito:', dettaglioVision);
+        try { await logSystemError('critical', 'Vision: tutti i motori hanno fallito', { source: 'vision', dettaglio: dettaglioVision }); } catch { /* il registro non deve fermare la risposta */ }
+        throw new Error("Il riconoscimento non è disponibile in questo momento. Riprova fra poco: non ti è stato addebitato nulla.");
       }
 
       // ── Normalizzazione output modello (Vision v2) ────────────────────────
@@ -11277,7 +14013,7 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
   const campoOpzionale = (v: any, max: number): string => {
     const s = String(v ?? '').trim().replace(/^['"`]+|['"`]+$/g, '').trim();
     if (!s || /^(n\/?d|n\/?a|null|undefined|sconosciut[oa]|unknown|ignoto|non\s+(noto|identificat[oa]|disponibile|specificat[oa])|not\s+(known|available|specified)|-{1,2})$/i.test(s)) return '';
-    return s.slice(0, max);
+    return tagliaTestoLungo(s, max);
   };
   // Parole di TIPOLOGIA: non identificano nulla da sole. Senza toglierle,
   // "Palazzo delle Logge" (Carrara) somigliava al 50% a "Palazzo dei Priori"
@@ -11586,6 +14322,44 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
    */
   /** Un'opera censita, dati separati — per le tappe «d'ufficio» (vedi sotto). */
   type OperaCensita = { titolo: string; autore: string; anno: string; inv: string; foto: string; tipo: 'dipinto' | 'scultura' | 'altro' };
+  // Classi Wikidata (P31 diretto) che NON sono opere da visitare in un museo: film, film per la TV, film d'animazione,
+  // cortometraggio, serie di film, serie TV, episodio, videogioco, album, singolo, brano, persona, evento, mostra.
+  const WD_NON_OPERE = 'wd:Q11424 wd:Q506240 wd:Q202866 wd:Q24862 wd:Q24856 wd:Q5398426 wd:Q21191270 wd:Q7889 wd:Q482994 wd:Q134556 wd:Q7366 wd:Q5 wd:Q1656682 wd:Q464980';
+  /** (20/11/2026, guida MoMA rifatta in produzione: 28 tappe su 30 erano film e videogiochi — Minecraft, Toy Story, WALL•E,
+   *  Tetris, Pac-Man…) Il filtro su P31 DIRETTO non basta: Toy Story è «film d'animazione» (sottoclasse di film), e la
+   *  strada principale (opereDelMuseo, opereMuseo.ts) non lo aveva affatto. Qui la domanda con le SOTTOCLASSI, fatta DOPO
+   *  la scelta, su ≤ 100 QID precisi (VALUES, veloce). Risultato: i QID che NON sono opere. Una persona conta solo con
+   *  P31 = essere umano DIRETTO (le mummie e l'Uomo di Lindow risalgono a «umano» e sono proprio ciò che si va a vedere).
+   *  null = Wikidata non ha risposto (chi chiama non toglie niente). */
+  async function qidCheNonSonoOpere(qids: string[]): Promise<Set<string> | null> {
+    const lista = [...new Set((qids || []).map((q) => String(q || '').trim()).filter((q) => /^Q\d+$/.test(q)))];
+    if (!lista.length) return new Set();
+    const fuori = new Set<string>();
+    for (let i = 0; i < lista.length; i += 100) {
+      const pezzo = lista.slice(i, i + 100);
+      const q = `SELECT DISTINCT ?o ?t ?c WHERE { VALUES ?o { ${pezzo.map((x) => `wd:${x}`).join(' ')} } VALUES ?c { ${CLASSI_NON_OPERA.map((x) => `wd:${x}`).join(' ')} } ?o wdt:P31 ?t . ?t wdt:P279* ?c . hint:Prior hint:gearing "forward" . }`;
+      let r: any = null;
+      for (let k = 0; k < 2 && !r; k++) {
+        r = await axios.get(`https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(q)}`, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)', Accept: 'application/sparql-results+json' }, timeout: k ? 15000 : 9000 }).catch(() => null);
+      }
+      if (!r) return null;
+      for (const b of (r.data?.results?.bindings || [])) {
+        const o = String(b?.o?.value || '').split('/').pop() || '', t = String(b?.t?.value || '').split('/').pop() || '', c = String(b?.c?.value || '').split('/').pop() || '';
+        if (classeNonOpera(t, c)) fuori.add(o);
+      }
+    }
+    return fuori;
+  }
+  /** Ultimo controllo su ogni guida museo prima di salvarla: una tappa col QID di un film, videogioco, album, brano,
+   *  serie, evento o persona esce. Le tappe senza QID restano (nessuna prova). */
+  async function togliTappeNonOpere(tappe: any[], dove = ''): Promise<any[]> {
+    const lista = Array.isArray(tappe) ? tappe : [];
+    const fuori = await qidCheNonSonoOpere(lista.map((t: any) => String(t?.qid || '')));
+    if (!fuori || !fuori.size) return lista;
+    const tenute = lista.filter((t: any) => !fuori.has(String(t?.qid || '')));
+    console.log(`[VenueGuide] ${dove}: ${lista.length - tenute.length} tappe non sono opere (film, videogiochi, album, persone, eventi) — tolte`);
+    return tenute;
+  }
   async function opereDaWikidata(qid: string, lang: string, tipoLuogo: 'museo' | 'chiesa' = 'museo'): Promise<{ righe: string[]; foto: Record<string, string>; titoli: Set<string>; originali: Record<string, string>; famose: string[]; tipi: Record<string, 'dipinto' | 'scultura' | 'altro'>; top: OperaCensita[]; errore?: boolean }> {
     if (!/^Q\d+$/.test(qid)) return { righe: [], foto: {}, titoli: new Set(), originali: {}, famose: [], tipi: {}, top: [] };
 
@@ -11604,7 +14378,11 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     // v2 (25/09/2026): la conservata non si leggeva mai (getFromCache usato con tre
     // argomenti, vedi leggiCacheFresca) e per le chiese mancava P361, sotto.
     // v3 (26/09/2026): fuori eventi e persone (il funerale di Berlusconi era una «opera» del Duomo).
-    const chiaveOpere = `wd_opere_v3_${qid}_${lang}_${tipoLuogo}`;
+    // v4 (18/11/2026, collaudo notturno: la guida del MoMA aveva 19 «opere» su 20 che erano FILM — Biancaneve, Toy
+    // Story, Pulp Fiction…: il MoMA ha una collezione di film, P195 = MoMA, e un film ha più Wikipedia di un quadro,
+    // quindi vinceva il taglio per fama). Film, serie, videogiochi, album, persone ed eventi escono già nella query.
+    // v5 (20/11/2026): anche le SOTTOCLASSI (Toy Story «film d'animazione»), con qidNonOpere dopo la scelta.
+    const chiaveOpere = `wd_opere_v5_${qid}_${lang}_${tipoLuogo}`;
     const conservata = await leggiCacheFresca(chiaveOpere, 30 * 24 * 60 * 60 * 1000);
     if (conservata) {
       try {
@@ -11680,6 +14458,7 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
   { SELECT DISTINCT ?opera ?fama WHERE {
       ${dovePrende}
       ?opera wikibase:sitelinks ?fama .
+      FILTER NOT EXISTS { ?opera wdt:P31 ?nonOpera . VALUES ?nonOpera { ${WD_NON_OPERE} } }
     } ORDER BY DESC(?fama) LIMIT 80 }
   OPTIONAL { ?opera rdfs:label ?labUser . FILTER(LANG(?labUser) = "${lang}") }
   OPTIONAL { ?opera wdt:P31 ?tipo . }
@@ -11767,7 +14546,13 @@ ORDER BY DESC(?fama)`;
         const t = String(b?.tipo?.value || '').split('/').pop() || '';
         if (tipiNonOpera.has(t)) qidNonOpere.add(String(b?.opera?.value || '').split('/').pop() || '');
       }
-      if (qidNonOpere.size) console.log(`[VenueGuide] ${qid}: ${qidNonOpere.size} righe Wikidata non sono opere (eventi/persone), escluse`);
+      // (20/11/2026) Film, videogiochi, album, brani, serie, persone, eventi anche per SOTTOCLASSE (P31/P279*), sulle opere
+      // già scelte: Toy Story è «film d'animazione» e passava il filtro su P31 diretto della query.
+      try {
+        const sottoclassi = await qidCheNonSonoOpere([...new Set((r?.data?.results?.bindings || []).map((b: any) => String(b?.opera?.value || '').split('/').pop() || ''))] as string[]);
+        for (const q of (sottoclassi || [])) qidNonOpere.add(q);
+      } catch { /* senza risposta resta il filtro della query */ }
+      if (qidNonOpere.size) console.log(`[VenueGuide] ${qid}: ${qidNonOpere.size} righe Wikidata non sono opere (eventi/persone/film/videogiochi), escluse`);
       for (const q of qidNonOpere) qidVietati.add(q);
       const righe: string[] = [];
       const foto: Record<string, string> = {};
@@ -12373,7 +15158,11 @@ Rispondi ESCLUSIVAMENTE con JSON: {"perche": "la spiegazione", "curiosita": "un 
         const linguaAttesa = o.langWiki.toUpperCase();
         const lp = linguaTestoCorto(nuova);
         if (lp && lp !== linguaAttesa) console.warn(`[TappeVuote] ${o.nomeLuogo}: «${t.nome}» scritta in ${lp} invece di ${linguaAttesa}: scartata`);
-        if (nuova.length >= 60 && nuova.length <= 900 && !/^Opera \(/i.test(nuova) && !RE_SEGNAPOSTO_TAPPA.test(nuova) && (!lp || lp === linguaAttesa)) {
+        // (21/11/2026) Un testo nuovo non sostituisce MAI uno più lungo: se la tappa aveva già una spiegazione vera
+        // (non vuota) più lunga della nuova, resta la vecchia con i suoi fatti.
+        const vecchiaPiuLunga = !tappaVuota(t) && String(t.perche || '').trim().length > nuova.length;
+        if (vecchiaPiuLunga) console.warn(`[TappeVuote] ${o.nomeLuogo}: «${t.nome}» nuova spiegazione più corta della vecchia (${nuova.length} < ${String(t.perche || '').trim().length}): resta la vecchia`);
+        if (!vecchiaPiuLunga && nuova.length >= 60 && nuova.length <= 900 && !/^Opera \(/i.test(nuova) && !RE_SEGNAPOSTO_TAPPA.test(nuova) && (!lp || lp === linguaAttesa)) {
           t.perche = nuova;
           if (t.soloCollezione) { delete t.soloCollezione; esito.promosse++; }
           let cur = togliFrasiGeneriche(campoOpzionale(j?.curiosita, 300));
@@ -12500,6 +15289,7 @@ Rispondi ESCLUSIVAMENTE con JSON: {"perche": "la spiegazione", "curiosita": "un 
           if (!/html|text/i.test(String(p.headers?.['content-type'] || 'text/html'))) return null;
           const testo = testoPaginaMuseo(String(p.data || ''));
           if (testo.length < 500) return null;
+          if (paginaSpam(testo, nomiWeb[0] || '')) { console.warn(`[MaterialeWeb] ${c.host}: pagina di spam (dominio scaduto?), scartata`); return null; }
           if (!paginaWebDellOpera({ url: c.url, testo, tokOpera: o.tokOpera, titolo: nomiWeb[0] || '', museo: o.museo, citta: o.citta, autore: o.autore, luoghi: o.luoghi, regione: o.regione })) return null;
           return { ...c, passo: passaggioIntorno(testo, o.tokOpera) };
         } catch { return null; }
@@ -12533,6 +15323,8 @@ Rispondi ESCLUSIVAMENTE con JSON: {"perche": "la spiegazione", "curiosita": "un 
     try {
       const home = await axios.get(base.href, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 8000, maxRedirects: 3, validateStatus: (s) => s < 400 });
       const html = String(home.data || '');
+      // (23/11/2026) Un sito scaduto e ricomprato da un casinò non è il sito del museo: niente testo, niente pianta.
+      if (paginaSpam(testoPaginaMuseo(html))) { console.warn(`[SitoUfficiale] ${base.hostname}: pagina di spam (dominio scaduto?), scartato`); return { testo: '', pagine: [], pianta: '' }; }
       out.push(testoPaginaMuseo(html).slice(0, 3500));
       visitate.push(base.href);
       // I link si pesano invece di filtrarli: si guarda l'indirizzo intero e
@@ -12601,6 +15393,11 @@ Rispondi ESCLUSIVAMENTE con JSON: {"perche": "la spiegazione", "curiosita": "un 
     venuePhoto?: string | null;
   }): Promise<void> {
     try {
+      // (20/11/2026) Nessuna tappa-film/videogioco/persona entra in libreria, da qualunque strada (semina, traduzione).
+      if (Array.isArray(args.guide?.tappe)) { try { args.guide.tappe = await togliTappeNonOpere(args.guide.tappe, String(args.venue?.name || '')); } catch { /* resta com'è */ } }
+      // (21/11/2026, collaudo notturno «museo_formule») Nessuna formula vietata entra in libreria: spiegazione e curiosità
+      // passano da togliFrasiVuote severa, come audioguide e schede. Il resto della tappa non cambia.
+      if (Array.isArray(args.guide?.tappe)) args.guide.tappe = args.guide.tappe.map(tappaMuseoSenzaFormule);
       const tappe = Array.isArray(args.guide?.tappe) ? args.guide.tappe : [];
       // ANTI-REGRESSIONE (14/09/2026, «finalizza i primi 100»). Il secondo
       // giro sui musei 1-100 ha peggiorato alcune guide (Orsay 30→20 tappe,
@@ -12870,6 +15667,11 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
     const L = String(lingua || '').toUpperCase().slice(0, 2);
     const altra = (s: any) => { const x = String(s || '').trim(); if (x.length < 25) return false; const lp = linguaTestoCorto(x); return !!lp && lp !== L; };
     let tolti = 0;
+    // (21/11/2026, collaudo notturno «museo_formule») Anche le formule vietate escono da ogni guida servita (cache,
+    // libreria, traduzione fresca): stessa pulizia di salvaInLibreriaMusei.
+    let conFormule = false;
+    const pulite = guida.tappe.map((t: any) => { const n = tappaMuseoSenzaFormule(t); if (n !== t) conFormule = true; return n; });
+    if (conFormule) guida = { ...guida, tappe: pulite };
     const tappe = guida.tappe.map((t: any) => {
       const p = altra(t?.perche), c = altra(t?.curiosita);
       if (!p && !c) return t;
@@ -13598,7 +16400,11 @@ Rispondi SOLO con JSON: {"t": ["traduzione 0", "traduzione 1", ...]} con ESATTAM
         const ev = await riempiTappeVuote(tappe, {
           nomeLuogo, langWiki: lc.wiki, langName: lc.name, hostSitoMuseo: hostSito,
           inDiretta: false, userId: 'background-script', tetto: 60, parallelo: 2,
-          tempoOk: () => Date.now() - avvio < 200_000, daRiscrivere,
+          // (21/11/2026, guide danneggiate dalla riparazione notturna: Themis 1.507 → 482 caratteri, Myeonje 768 → 323)
+          // In modo «vuoti» si toccano SOLO le tappe vuote (tappaVuota). Una tappa in un'altra lingua si TRADUCE (modo
+          // «lingua»), non si riscrive; una tappa che non contiene le parole del nome dell'opera (Temi/Ramnunte contro
+          // «themis/rhamnous») non è vuota. `daRiscrivere` resta solo per il rapporto (daRiscrivereAncora).
+          tempoOk: () => Date.now() - avvio < 200_000,
           // modi «vuoti,collezione»: anche le opere «solo collezione» con una voce propria diventano tappe vere.
           ancheCollezione: modi.has('collezione'),
         });
@@ -13861,9 +16667,9 @@ Rispondi SOLO con JSON: {"t": ["traduzione 0", "traduzione 1", ...]} con ESATTAM
       const MIN_OPERE_PASS = 12;
       // GRATUITA (12/09/2026 sera, committente: «quelle che non hanno foto o
       // poche opere sono gratuite», «sotto 8»): sotto le 8 opere, o con meno
-      // di 8 opere fotografate, la guida non si vende — si dà, MA SOLO SE GIÀ
-      // GENERATA (cache o libreria): chiediPass riceve la guida solo lì; la
-      // generazione al volo e la traduzione passano dal pass. Niente pass,
+      // di 8 opere fotografate, la guida non si vende — si dà. Dal 21/11/2026
+      // anche alla PRIMA generazione e nella traduzione (committente: «se ha
+      // meno di 8 opere deve essere gratuita»; vedi passDopo). Niente pass,
       // niente scansioni a pagamento, e la risposta lo dice (gratuita: true)
       // così la scheda lo mostra. La regola vive in guidaGratuita() a livello
       // di modulo: la usano anche le audioguide delle opere, la descrizione
@@ -14211,7 +17017,8 @@ Rispondi SOLO con JSON: {"t": ["traduzione 0", "traduzione 1", ...]} con ESATTAM
           // La traduzione costa una chiamata AI: si fa solo per chi ha il pass.
           // «Gratuita solo se già generata» (committente): la traduzione è una
           // generazione, quindi qui la regola gratuita non vale.
-          const gate = await chiediPass();
+          // Sotto le 8 opere anche la traduzione è gratuita (21/11/2026, vedi passDopo più sotto).
+          const gate = guidaGratuita(sorgente.guide) ? null : await chiediPass();
           if (gate) return res.json(gate);
           const tradottaGrezza = await traduciGuidaMuseo(sorgente.guide, sorgente.language, outLang, sorgente.venue_name || venue.name, inDiretta);
           // Un pezzo rimasto nella lingua d'origine non entra né in risposta né in libreria (06/10/2026).
@@ -14224,9 +17031,8 @@ Rispondi SOLO con JSON: {"t": ["traduzione 0", "traduzione 1", ...]} con ESATTAM
               source: sorgente.source || null,
               officialSite: sorgente.official_site || null,
               ...fotoDaRiga(sorgente),
-              // Appena tradotta: pagata da chi l'ha chiesta. Dalla prossima
-              // lettura (cache/libreria) la regola gratuita si applica da sola.
-              gratuita: false,
+              // Appena tradotta: pagata da chi l'ha chiesta, gratuita sotto le 8 opere (21/11/2026).
+              gratuita: guidaGratuita(tradotta),
             };
             await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payloadTr));
             await salvaInLibreriaMusei({
@@ -14674,7 +17480,15 @@ Rispondi SOLO con JSON: {"t": ["traduzione 0", "traduzione 1", ...]} con ESATTAM
       // Le fonti ci sono e bastano: SOLO ADESSO ha senso chiedere il pass.
       // Chi non ce l'ha ha aspettato qualche secondo per una risposta onesta
       // — «questo luogo ha una guida, costa 150» — invece di pagare al buio.
-      {
+      // SOTTO LE 8 OPERE È GRATUITA ANCHE LA PRIMA VOLTA (21/11/2026, committente: «se ha meno di 8
+      // opere deve essere gratuita»; supera la regola del 12/09 «gratuita solo se già generata»). Le
+      // opere si stimano qui dalle fonti già lette (Wikidata P195/P276, catalogo del museo): sotto la
+      // soglia si genera senza chiedere il pass, e dopo decide la guida VERA (guidaGratuita). Se ne esce
+      // una guida da pagamento, si chiede il pass a quel punto: la guida resta in libreria, generata una
+      // volta per tutti, e chi non paga ne riceve l'assaggio.
+      const stimaOpere = Math.max(Array.isArray(opereWd?.righe) ? opereWd.righe.length : 0, opereMuseoResult?.opere?.length || 0);
+      const passDopo = stimaOpere < MIN_OPERE_GUIDA_A_PAGAMENTO;
+      if (!passDopo) {
         const gate = await chiediPass();
         if (gate) return res.json(gate);
       }
@@ -15508,14 +18322,23 @@ ${JSON.stringify(elenco)}`;
       };
       // La foto del luogo si cerca PRIMA di mettere in cache, così la testata
       // della visita ce l'ha anche al secondo ingresso senza ricercarla.
+      // (20/11/2026) ULTIMO CONTROLLO prima di cache e libreria: nessuna tappa con il QID di un film, videogioco, album,
+      // brano, serie, evento o persona (MoMA: 28 su 30), qualunque strada l'abbia portata.
+      try { guide.tappe = await togliTappeNonOpere(guide.tappe, String(venue?.name || '')); } catch { /* resta com'è */ }
       const fotoLuogoRaw = await fotoDelMuseo(wikidataId, venue.id);
       const daCommonsLuogo = /commons\.wikimedia\.org/i.test(fotoLuogoRaw);
+      // (21/11/2026, collaudo notturno «museo_senza_sito»: official_site mancava anche quando Wikidata lo dichiara) Il
+      // sito ufficiale è la prima pagina letta del sito; se il sito non si è lasciato leggere, quello dichiarato da
+      // Wikidata (P856) o dalla riga del luogo (contact_website). Mai un sito trovato per ricerca senza verifica.
+      const sitoUfficialeGuida: string | null = sitoOut.pagine[0]
+        || (wikidataId ? await sitoUfficialeDaWikidata(String(wikidataId)).catch(() => '') : '')
+        || (/^https?:\/\//i.test(String((venue as any)?.contact_website || '')) ? String((venue as any).contact_website) : '')
+        || null;
       const payload = {
-        ok: true, venue, guide, source: wikiSource, officialSite: sitoOut.pagine[0] || null,
-        // GRATUITA SOLO SE GIÀ GENERATA (12/09/2026 sera, committente): la
-        // prima generazione la paga chi la chiede; da cache e libreria, se è
-        // piccola (guidaGratuita), sarà gratuita per tutti.
-        gratuita: false,
+        ok: true, venue, guide, source: wikiSource, officialSite: sitoUfficialeGuida,
+        // Sotto le 8 opere gratuita anche alla prima generazione (21/11/2026, committente; prima era
+        // «gratuita solo se già generata», 12/09/2026).
+        gratuita: guidaGratuita(guide),
         venuePhoto: fotoLuogoRaw ? (daCommonsLuogo ? fotoCommons(fotoLuogoRaw, 900) : fotoLuogoRaw) : '',
         venuePhotoIcon: fotoLuogoRaw ? (daCommonsLuogo ? fotoCommons(fotoLuogoRaw, 160) : fotoLuogoRaw) : '',
         // Le tappe uscite e perché — per non dover indovinare, collaudando,
@@ -15549,10 +18372,16 @@ ${JSON.stringify(elenco)}`;
       }
       await salvaInLibreriaMusei({
         venueKey: chiaveLuogo, venue, guide, source: wikiSource,
-        officialSite: sitoOut.pagine[0] || null, language: outLang, origin: 'auto',
+        officialSite: sitoUfficialeGuida, language: outLang, origin: 'auto',
         city: cittaLuogo, countryCode: paeseLuogo, venuePhoto: fotoLuogoRaw || null,
       });
       if (daScript) axios.delete(`${supabaseUrl}/rest/v1/api_cache?cache_key=eq.${encodeURIComponent(chiaveBozza)}`, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 8000 }).catch(() => { /* scade da sola */ });
+      // Generata senza pass perché la stima diceva «poche opere» (vedi passDopo): ora decide la guida vera.
+      if (passDopo) {
+        if (guidaGratuita(guide)) return res.json({ ...payload, gratuita: true, cached: false });
+        const gate = await chiediPass(assaggioDa(guide?.intro), guide);
+        if (gate) return res.json(gate);
+      }
       res.json({ ...payload, cached: false });
     } catch (e: any) {
       console.error('[VenueGuide] Errore:', e?.message);
@@ -16008,12 +18837,25 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON valido:
       }
       if (!rawAi.includes('{')) return res.json({ ok: false, reason: 'ai_unavailable', artwork: opera });
       let parsed: any = null;
-      try {
-        const raw = rawAi.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
-        parsed = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
-      } catch {
-        return res.json({ ok: false, reason: 'ai_parse_failed', artwork: opera });
+      const leggiJson = (s: string): any => {
+        const raw = String(s || '').replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+        try { return JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)); } catch { return null; }
+      };
+      parsed = leggiJson(rawAi);
+      // (21/11/2026, indagine C/D: schede opera «ai_parse_failed») JSON illeggibile (troncato, testo fuori dal JSON):
+      // UNA seconda richiesta, stesso prompt, a un altro motore (si esclude quello chiesto per primo). Poi si rinuncia.
+      if (!parsed) {
+        try {
+          const ai2 = await callUniversalAi(inDiretta ? 'groq' : 'gemini', [{ role: 'user', content: prompt }], {
+            temperature: 0.3, max_tokens: 2000, response_format: { type: 'json_object' },
+            excludeEngines: inDiretta ? ['deepseek', 'agnes'] : ['groq'], ultimaSpiaggiaPagante: inDiretta,
+          }, 'artwork_guide', supabaseUrl, supabaseServiceKey, groq, userId);
+          const raw2 = String(ai2?.data || '');
+          parsed = raw2.includes('{') ? leggiJson(raw2) : null;
+          if (parsed) rawAi = raw2;
+        } catch (e: any) { console.warn('[ArtworkGuide] seconda richiesta dopo JSON illeggibile fallita:', e?.message); }
       }
+      if (!parsed) return res.json({ ok: false, reason: 'ai_parse_failed', artwork: opera });
 
       let testo = String(parsed?.testo || '').replace(/[*#`]/g, '').trim();
       let curiositaAi = campoOpzionale(parsed?.curiosita, 400);
@@ -16648,7 +19490,21 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
         const tt = ` ${normalizzaTesto(titolo)} `;
         return tok.filter(x => tt.includes(` ${x} `)).length >= Math.ceil(tok.length / 2);
       };
-      const eIngresso = (e: any) => RE_INGRESSO.test(e.titolo) && !RE_NON_INGRESSO.test(e.titolo) && nominaIlLuogo(e.titolo);
+      // IL BIGLIETTO DI UN'ALTRA ATTRAZIONE COL NOME DI QUESTA DENTRO (23/11/2026, Gardaland: l'ingresso scelto era
+      // «Gardaland SEA LIFE Aquarium: Biglietto d'ingresso», 9 €, che è l'acquario accanto al parco). Quando il titolo
+      // ha la forma «LUOGO: cosa» / «LUOGO - cosa», il LUOGO è la parte prima del separatore: se oltre al nostro nome
+      // porta due o più parole proprie in più («sea», «life», «aquarium») è un altro posto. Una sola parola in più
+      // («Gardaland Park», «Uffizi Gallery») resta lo stesso luogo. Senza separatore la regola non si applica.
+      const GENERICHE_LUOGO = new Set(['park', 'parco', 'parc', 'parque', 'resort', 'museum', 'museo', 'musee', 'museu', 'official', 'ufficiale', 'the', 'del', 'della', 'dei', 'degli', 'des', 'and']);
+      const altraAttrazione = (titolo: string): boolean => {
+        const m = String(titolo || '').match(/^(.{3,80}?)\s*(?::|\s[-–—|]\s)/);
+        if (!m) return false;
+        const nostre = new Set(tokenTutti(museo));
+        const parte = normalizzaTesto(m[1]).split(' ').filter(x => x.length > 2);
+        if (!parte.some(x => nostre.has(x))) return false;   // il separatore non segue il nome del luogo
+        return parte.filter(x => !nostre.has(x) && !paroleCitta.has(x) && !GENERICHE_LUOGO.has(x)).length >= 2;
+      };
+      const eIngresso = (e: any) => RE_INGRESSO.test(e.titolo) && !RE_NON_INGRESSO.test(e.titolo) && nominaIlLuogo(e.titolo) && !altraAttrazione(e.titolo);
 
       const delMuseo = [
         ...tiqets.map((p: any) => ({ fonte: 'tiqets', id: String(p.id || ''), titolo: String(p.name || ''), descrizione: String(p.description || '').slice(0, 240), prezzo: String(p.price || ''), immagine: String(p.imageUrl || ''), voto: String(p.rating || ''), durata: String(p.duration || ''), url: String(p.bookingUrl || p.product_url || p.url || '') })),
@@ -17808,6 +20664,14 @@ Massimo 3 mostre. "sale", "riga" e "opere" in ${nomeLingua(langKey)} (traduci se
             }
           } catch { /* la ricerca è un di più */ }
           candidati.sort((a, b) => b.peso - a.peso);
+          // LA VERSIONE DEL SITO IN UN'ALTRA LINGUA NON SI LEGGE (23/11/2026, Gardaland: per un utente italiano la pagina
+          // scelta era «gardaland.it/de/tickets-saisonkarten/» e «gratis» usciva «Kinder unter 90 cm Größe»). Un indirizzo
+          // che comincia con un codice lingua («/de/», «/en-gb/») vale solo se è la lingua della pagina di partenza o
+          // quella dell'utente; se così non resta niente, si tengono tutte (meglio un orario in tedesco che nessuno).
+          const versioneLingua = (percorso: string): string => (String(percorso || '').toLowerCase().match(/^\/(it|en|fr|es|de|ru|zh|pt|nl|ja|ko|pl|cs|sv|da|no|fi|el|tr|ar|hu|ro)(?:[-_][a-z]{2})?(?:\/|$)/) || [])[1] || '';
+          const linguaBase = versioneLingua(base.pathname);
+          const nellaLinguaGiusta = candidati.filter(c => { try { const l = versioneLingua(new URL(c.href).pathname); return !l || l === linguaBase || l === wl; } catch { return true; } });
+          if (nellaLinguaGiusta.length) candidati.splice(0, candidati.length, ...nellaLinguaGiusta);
           const scelti = candidati.slice(0, 4).map(c => c.href);
           const htmlPagine: string[] = [];
           for (const u of scelti) {
@@ -17993,14 +20857,26 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
           ? { chiuso: false, apre: mOggi[1].replace('.', ':'), chiude: mOggi[2].replace('.', ':') }
           : null;
 
-      // La fila: consiglio dichiarato, solo dove ha senso.
+      // La fila: consiglio dichiarato, solo dove un DATO dice che c'è folla (16/11/2026, committente «aggiusta tutto»:
+      // il museo archeologico di Luni diceva «davanti alle opere più famose c'è la fila dalle 11 alle 15» perché la
+      // regola era «guida con almeno 8 opere»). Ora: visitatori annui su Wikidata (P1174) ≥ 1 milione, letti dal QID
+      // del luogo e ricordati 30 giorni. Senza QID o senza il dato, nessun consiglio.
       let consiglio = '';
       try {
-        const lib = await axios.get(
-          `${supabaseUrl}/rest/v1/museum_guides?${poiId ? `venue_key=eq.${encodeURIComponent(`poi_${poiId}`)}` : `venue_name=ilike.${encodeURIComponent(venueName)}`}&select=stops_count&limit=1`,
-          { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 4000 }
-        );
-        if ((lib.data?.[0]?.stops_count || 0) >= 8) consiglio = 'fila_ore_centrali';
+        const qid = String(poiId || '').match(/\bQ\d+\b/)?.[0];
+        if (qid) {
+          const chiaveV = `visitatori_annui_${qid}`;
+          const salvato = await leggiCacheFresca(chiaveV, 30 * 24 * 3600 * 1000);
+          let visitatori = NaN;
+          try { visitatori = Number(JSON.parse(String(salvato || 'null'))?.n); } catch { /* da rileggere */ }
+          if (!Number.isFinite(visitatori)) {
+            const w = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${qid}&property=P1174&format=json`, { headers: { 'User-Agent': 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)' }, timeout: 4000 });
+            const valori = (w.data?.claims?.P1174 || []).map((c: any) => Number(String(c?.mainsnak?.datavalue?.value?.amount || '').replace('+', ''))).filter((n: number) => Number.isFinite(n));
+            visitatori = valori.length ? Math.max(...valori) : 0;
+            salvaCacheDatata(chiaveV, 'visitatori_annui', { n: visitatori }).catch(() => {});
+          }
+          if (visitatori >= 1_000_000) consiglio = 'fila_ore_centrali';
+        }
       } catch { /* niente consiglio */ }
 
       res.set('Cache-Control', 'private, max-age=3600');
@@ -18053,9 +20929,32 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
       const lon = parseFloat(String(req.query.lon || ''));
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) return res.status(400).json({ ok: false, reason: 'no_gps' });
       const svcH = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+      // IL LUOGO DOVE SEI VINCE SU UNA GUIDA PIÙ IN LÀ (21/11/2026, committente davanti alla Chiesa del
+      // Carmine di Carrara: «Sei a Palazzo delle Logge», 149 m, perché il palazzo aveva una guida pronta e
+      // la chiesa — gemma, con voce Wikipedia — no). Una chiesa o un museo CON FONTE (gemma, Wikidata,
+      // Wikipedia) entro 60 m passa davanti a una guida di libreria più lontana; la sua guida si prepara
+      // al tocco. Riquadro piccolo senza ordinamento: costa quanto la bbox qui sotto.
+      const VICINO_CON_FONTE_M = 60;
+      const vicinoConFonteP = (async () => {
+        try {
+          const d = 0.0008, dn = 0.0008 / Math.max(0.2, Math.cos(lat * Math.PI / 180));
+          const r = await axios.get(
+            `${supabaseUrl}/rest/v1/shared_pois?lat=gte.${(lat - d).toFixed(5)}&lat=lte.${(lat + d).toFixed(5)}&lon=gte.${(lon - dn).toFixed(5)}&lon=lte.${(lon + dn).toFixed(5)}&select=id,name,lat,lon,category,poi_type,status,is_hidden,is_gem,wikidata,wikipedia_url,image_url&limit=80`,
+            { headers: svcH, timeout: 4000 });
+          return (Array.isArray(r.data) ? r.data : [])
+            .filter((p: any) => p?.name && Number.isFinite(p.lat) && Number.isFinite(p.lon) && !p.is_hidden && !['rejected', 'hidden', 'draft', 'needs_revision'].includes(String(p.status || '')))
+            .filter((p: any) => String(p.category || '') !== 'community' && !/^(iti-|tappa_|vision-)/.test(String(p.id || '')))
+            .filter((p: any) => MUSEI_TYPES_VENUE.has(String(p.category || '').toLowerCase()) || MUSEI_TYPES_VENUE.has(String(p.poi_type || '').toLowerCase()))
+            .filter((p: any) => p.is_gem === true || /^Q\d+$/.test(String(p.wikidata || '')) || !!p.wikipedia_url || /^wd-Q\d+$/.test(String(p.id || '')))
+            .map((p: any) => ({ ...p, _dist: getHaversineDistance(lat, lon, p.lat, p.lon) }))
+            .filter((p: any) => p._dist <= VICINO_CON_FONTE_M)
+            .sort((a: any, b: any) => (b.is_gem === true ? 1 : 0) - (a.is_gem === true ? 1 : 0) || a._dist - b._dist)[0] || null;
+        } catch { return null; }
+      })();
       // PRIMA LA LIBRERIA (25/09/2026, collaudo: a Pisa «Sei al Blu Cafè», al British «The Lewis
       // Chessmen», agli Uffizi e al Louvre una tappa creata da un itinerario — e «inLibrary:false» con
-      // la guida a pochi metri). Una guida entro 250 m è un museo vero con la sua visita: vince.
+      // la guida a pochi metri). Una guida entro 250 m è un museo vero con la sua visita: vince —
+      // tranne sul luogo con fonte entro 60 m (sopra), quando la guida è di un altro luogo più lontano.
       try {
         const dl = 0.003, dn = 0.003 / Math.max(0.2, Math.cos(lat * Math.PI / 180));
         const rl = await axios.get(
@@ -18067,7 +20966,14 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
           .map((g: any) => ({ ...g, _dist: getHaversineDistance(lat, lon, g.lat, g.lon) }))
           .filter((g: any) => g._dist <= 250)
           .sort((a: any, b: any) => (a._dist - b._dist) || ((a.language === lingua ? 0 : 1) - (b.language === lingua ? 0 : 1)));
-        const g = guide[0];
+        let g = guide[0];
+        if (g) {
+          const qui = await vicinoConFonteP;
+          const stessaSedeQui = qui && (String(g.poi_id || '') === String(qui.id) || String(g.venue_key || '') === `poi_${qui.id}`
+            || normalizzaTesto(String(g.venue_name || '').replace(/\([^)]*\)/g, ' ')) === normalizzaTesto(String(qui.name).replace(/\([^)]*\)/g, ' ')));
+          // Se il luogo con fonte è più vicino di almeno 20 m e non è la stessa sede, la guida pronta cede.
+          if (qui && !stessaSedeQui && g._dist > qui._dist + 20) g = null;
+        }
         if (g) {
           const f = String(g.venue_photo || '');
           const daCommonsG = /commons\.wikimedia\.org/i.test(f);
@@ -18111,7 +21017,10 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
         }))
         .filter((p: any) => p._dist <= 200)
         .sort((a: any, b: any) => (a._rank - b._rank) || (a._dist - b._dist));
-      const best = cands[0];
+      // Il luogo con fonte entro 60 m vale anche qui: la RPC può non portarlo (60 righe di bar e
+      // negozi) o metterlo dietro un museo senza fonte più lontano.
+      const qui = await vicinoConFonteP;
+      const best = (qui && (!cands[0] || cands[0]._dist > qui._dist + 20)) ? qui : cands[0];
       if (!best) return res.json({ ok: false, reason: 'nessuno_vicino' });
 
       // La foto: prima quella della libreria (già scelta per la visita), poi
@@ -18235,10 +21144,22 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
           const d = kmArchivio / 111;
           const dLon = d / Math.max(0.2, Math.cos(lat * Math.PI / 180));
           const categorie = [...MUSEI_TYPES_VENUE].map(c => c.replace(/[(),]/g, '')).join(',');
-          const r = await axios.get(
-            `${supabaseUrl}/rest/v1/shared_pois?lat=gte.${(lat - d).toFixed(4)}&lat=lte.${(lat + d).toFixed(4)}&lon=gte.${(lon - dLon).toFixed(4)}&lon=lte.${(lon + dLon).toFixed(4)}&category=in.(${categorie})&is_hidden=not.is.true&status=not.in.(rejected,hidden,draft)&select=id,name,lat,lon,category,poi_type,status,is_hidden,is_gem,wikidata,wikipedia_url,image_url,city&limit=800`,
+          const leggiRiquadro = (dl: number, dn: number, limite: number) => axios.get(
+            `${supabaseUrl}/rest/v1/shared_pois?lat=gte.${(lat - dl).toFixed(4)}&lat=lte.${(lat + dl).toFixed(4)}&lon=gte.${(lon - dn).toFixed(4)}&lon=lte.${(lon + dn).toFixed(4)}&category=in.(${categorie})&is_hidden=not.is.true&status=not.in.(rejected,hidden,draft)&select=id,name,lat,lon,category,poi_type,status,is_hidden,is_gem,wikidata,wikipedia_url,image_url,city&limit=${limite}`,
             { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 6000 });
-          const vicini = (Array.isArray(r.data) ? r.data : [])
+          // QUELLO CHE HAI DAVANTI ENTRA SEMPRE (21/11/2026, committente alla Chiesa del Carmine di
+          // Carrara, gemma a 0 m e assente dall'elenco): il riquadro di 15 km si ferma a 800 righe senza
+          // ordine e le 30 voci si riempivano di musei fino a 14 km. Un secondo riquadro di 500 m, letto
+          // insieme, e i luoghi entro 500 m passano per primi nel tetto delle 30.
+          const VICINI_SEMPRE_M = 500;
+          const dVic = VICINI_SEMPRE_M / 111000, dVicLon = dVic / Math.max(0.2, Math.cos(lat * Math.PI / 180));
+          const [r, rVic] = await Promise.all([
+            leggiRiquadro(d, dLon, 800),
+            leggiRiquadro(dVic, dVicLon, 200).catch(() => ({ data: [] as any[] })),
+          ]);
+          const unite = new Map<string, any>();
+          for (const p of [...(Array.isArray(rVic.data) ? rVic.data : []), ...(Array.isArray(r.data) ? r.data : [])]) if (p?.id && !unite.has(String(p.id))) unite.set(String(p.id), p);
+          const vicini = [...unite.values()]
             .filter((p: any) => p?.name && Number.isFinite(p.lat) && Number.isFinite(p.lon))
             .filter((p: any) => !['rejected', 'hidden', 'draft'].includes(String(p.status || '')) && !p.is_hidden)
             .filter((p: any) => String(p.category || '') !== 'community' && !String(p.id || '').startsWith('vision-'))
@@ -18291,7 +21212,7 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
             return [...piccolo].every(t => grande.has(t));
           };
           const daArchivio: any[] = [];
-          for (const p of vicini) {
+          for (const p of [...vicini.filter((v: any) => v.distance_m <= VICINI_SEMPRE_M), ...vicini.filter((v: any) => v.distance_m > VICINI_SEMPRE_M)]) {
             if (daArchivio.length >= 30) break;
             const comeSede = { venue_name: p.name, lat: p.lat, lon: p.lon, source: null };
             const gia = righe.some((r: any) => r.poi_id === String(p.id) || stessaSedeLarga(r, comeSede))
@@ -20898,7 +23819,7 @@ ${wikiExtracts.join('\n') || 'nessuno'}`;
       // ripiego in attesa di una riscrittura AI — e questa e' la riscrittura).
       // Si passano anche le descrizioni: il teaser si ANCORA ai fatti che ci
       // sono, non si inventa.
-      const { data: poisToEnrich, error: fetchErr } = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?id=in.(${idsSafe.join(',')})&select=id,name,category,city,country,${langCol}${langSafe === 'it' ? '' : ',teaser_text_it'},description_short,description_long,description_ai,technical_data`, {
+      const { data: poisToEnrich, error: fetchErr } = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?id=in.(${idsSafe.join(',')})&select=id,name,category,poi_type,is_gem,city,country,${langCol}${langSafe === 'it' ? '' : ',teaser_text_it'},description_short,description_long,description_ai,technical_data`, {
         headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }
       });
 
@@ -21295,6 +24216,8 @@ Regole:
       if (j) break;
       try { const r = await callUniversalAi('gemini' as any, messaggi, { response_format: { type: 'json_object' }, temperature: 0, model: mR, strictEngine: true }, 'scheda_sul_luogo', supabaseUrl, supabaseServiceKey, null, 'background-script'); j = leggi(r?.data); } catch { j = null; }
     }
+    // (23/11/2026) Z.ai gratuito prima di Groq/Gonka, che sotto carico sono pieni e lasciavano il controllo «non_eseguito».
+    if (!j) { try { j = leggi((await chiamaZaiGratis(messaggi, { json: true, maxTokens: 200, timeoutMs: 20000 })).data); } catch { j = null; } }
     if (!j) { try { const r = await callUniversalAi('groq', messaggi, { response_format: { type: 'json_object' }, temperature: 0, max_tokens: 200, gonkaPool: 'poi', excludeEngines: ['agnes', 'together', 'mistral', 'cerebras', 'deepseek', 'omniroute'] }, 'scheda_sul_luogo', supabaseUrl, supabaseServiceKey, getGroqClient(), 'background-script'); j = leggi(r?.data); } catch { j = null; } }
     if (!j || typeof j.sul_luogo !== 'boolean') return null;
     return { sulLuogo: j.sul_luogo, motivo: String(j.motivo || '').slice(0, 120) };
@@ -21322,6 +24245,8 @@ Regole:
           }
         }
       }
+      // (23/11/2026) Z.ai gratuito (glm-4.5-flash, altra famiglia) prima di ricadere su Gonka, che è anche chi scrive.
+      if (!String(r?.data || '').trim()) { try { r = await chiamaZaiGratis(messaggiRev, { json: true, maxTokens: 3000, timeoutMs: 40000 }); } catch { r = null; } }
       if (!String(r?.data || '').trim()) r = await callUniversalAi('groq',
         messaggiRev,
         { response_format: { type: 'json_object' }, temperature: 0.1, max_tokens: 3000, gonkaPool: 'poi', excludeEngines: ['agnes', 'gemini', 'together', 'mistral', 'cerebras', 'deepseek', 'omniroute'] },
@@ -21810,7 +24735,8 @@ ${manuale}`;
         const testiGuida = [req.body?.guida, previousText, text.replace(/\n*DOMANDA DEL VISITATORE[\s\S]*$/i, '')]
           .map((x: any) => (typeof x === 'string' ? x.trim().slice(0, 6000) : '')).filter(Boolean);
         const risposta = await rispondiDomandaVisitatore({ domanda: domandaVisitatore, poiName: String(poiName || ''), lang: langSafe, materiale: materialeDomanda, guida: [...new Set(testiGuida)].join('\n\n'), utenteInAttesa: regenUser !== 'background-script' });
-        return res.json({ result: risposta, domanda: true });
+        // Vuoto = guasto dei motori (vedi rispondiDomandaVisitatore, 21/11/2026): lo si dichiara, l'app mostra l'errore.
+        return res.json({ result: risposta, domanda: true, ...(risposta ? {} : { errore: 'risposta_non_disponibile' }) });
       }
       // Una RIGA DI DATI («Plaza de la Administración · Guayaquil») non è una guida né materiale per scriverne una:
       // da lì il modello inventerebbe. Nessuna narrazione (il client mostra la scheda com'è).
@@ -22071,7 +24997,9 @@ ${manuale}`;
       if (cacheValida && !forzaRigenerazione) {
         const daRivedere = callerUserId === 'background-script' && req.body?.ricontrolla === true && !/duetto/.test(String(guideChar));
         // REGOLA 23/10/2026: anche la narrazione GIÀ salvata si serve senza le frasi con formule vietate.
-        if (!daRivedere) return res.json({ text: narrazioneSenzaFormule(cachedText, poiName, guideChar), cached: true });
+        // (18/11/2026) `poiName` qui NON esiste ancora (è un `const` più sotto, dopo la lettura della riga): usarlo dava
+        // «Cannot access 'poiName' before initialization» → 500 su OGNI audioguida già in cache servita da questa rotta.
+        if (!daRivedere) return res.json({ text: narrazioneSenzaFormule(cachedText, '', guideChar), cached: true });
         const gia = await getFromCache(chiaveRev).catch(() => null);
         if (String(gia?.text_content ?? '').replace(/"/g, '') === String(String(cachedText).length)) return res.json({ text: cachedText, cached: true, revisore: { esito: 'gia_rivista' } });
         rivediCache = true;
@@ -22113,7 +25041,7 @@ ${manuale}`;
       //     la fonte (QID/Wikipedia/Wikivoyage, come fa la scheda), e il NOME da
       //     solo non e` mai materiale.
       const spRes = await axios.get(
-        `${sUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=name,lat,lon,city,category,poi_type,wikidata,wikipedia_url,audio_script,description_long,description_ai,description_short&limit=1`,
+        `${sUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=name,lat,lon,city,category,poi_type,is_gem,wikidata,wikipedia_url,audio_script,description_long,description_ai,description_short&limit=1`,
         { headers: H }
       ).catch((e: any) => { console.error('[api/poi/audioguide] lettura shared_pois FALLITA:', e?.response?.status, e?.response?.data?.message || e?.message); return null; });
       const sp = spRes?.data?.[0] || {};
@@ -22301,9 +25229,12 @@ ${manuale}`;
           await axios.delete(`${sUrl}/rest/v1/poi_audioguides?poi_id=eq.${encodeURIComponent(poiId)}&language=eq.${languageDb}&guide_character=eq.${guideChar}`, { headers: H })
             .catch((e: any) => console.warn('[api/poi/audioguide] narrazione-ragionamento non tolta:', e?.message));
         }
-        // `non_generata`: il lavoratore di sfondo sa che questo NON è una narrazione (è il materiale grezzo, e non
-        // è stato salvato) e lo rimette nel ripasso invece di contarlo fra le audioguide fatte.
-        return res.json({ text: base, ...(callerUserId === 'background-script' ? { non_generata: true } : {}) }); // mai silenzio: almeno la base
+        // MAI IL MATERIALE GREZZO AL POSTO DELLA GUIDA (13/11/2026, Cuernavaca). Qui si restituiva `base` («mai silenzio:
+        // almeno la base»): l'estratto di Wikipedia, nella lingua della fonte e tagliato a 6.000 caratteri — a un utente
+        // italiano di La Tallera arrivava «La Tallera es un museo… Historia…» da leggere ad alta voce. Va contro le regole
+        // del materiale grezzo e della lingua dell'utente. Ora: 503 `non_generata`, nessun testo; l'app non legge nulla e
+        // il prossimo arrivo riprova. Il lavoratore di sfondo riceve `non_generata` e rimette il luogo nel ripasso.
+        return res.status(503).json({ error: 'non_generata', non_generata: true, text: '' });
       }
 
       // 4. Salva in poi_audioguides per lingua (formato MAIUSCOLO come il web:
@@ -23190,18 +26121,18 @@ ${manuale}`;
     // con l'URL zero risposte, con l'immagine dentro risposte valide. Era il
     // difetto che sulla passata di massa produceva zero foto sembrando che
     // il giudice bocciasse tutto.
-    const chiaviAgnes = [process.env.AGNES_API_KEY, process.env.AGNES_API_KEY_2, process.env.AGNES_AI_API_KEY, process.env.AGNES_AI_API_KEY2].filter(Boolean);
+    const chiaviAgnesFoto = chiaviAgnes();
     let dentro = '';
-    if (chiaviAgnes.length) {
+    if (chiaviAgnesFoto.length) {
       try {
         const img = await axios.get(urlFoto, { responseType: 'arraybuffer', timeout: 15000 });
         dentro = `data:image/jpeg;base64,${Buffer.from(img.data).toString('base64')}`;
       } catch { dentro = ''; }
     }
-    if (chiaviAgnes.length && dentro) {
+    if (chiaviAgnesFoto.length && dentro) {
       const chiediAdAgnes = async (): Promise<boolean | null> => {
         try {
-          const chiave = chiaviAgnes[agnesKeyCounter++ % chiaviAgnes.length];
+          const chiave = chiaviAgnesFoto[agnesKeyCounter++ % chiaviAgnesFoto.length];
           const r = await axios.post('https://apihub.agnes-ai.com/v1/chat/completions', {
             model: 'agnes-2.5-flash',
             messages: [{ role: 'user', content: [
@@ -25111,6 +28042,35 @@ ${description}
   // si paga una volta sola (api_cache, chiave `poidesc_<lang>_<id>`), poi e`
   // gratis per tutti — ospiti compresi (leggono la cache, non generano: vedi
   // puoGenerare qui sotto, stessa regola "ospiti no" di ogni altra rotta).
+  // RIPIEGO DI TRADUZIONE: Azure Translator, fascia gratuita di 2.000.000 caratteri al mese (14/11/2026, committente:
+  // «fai solo i sempre gratis»). Si usa SOLO quando i motori AI non hanno tradotto (quote finite): traduce i campi
+  // così come sono, senza le nostre regole di stile, quindi vale per le schede dei luoghi, non per le audioguide.
+  // Tetto nostro sotto la soglia (AZURE_TRANSLATOR_MONTHLY_LIMIT, default 1.900.000): oltre, non si chiama.
+  // Senza AZURE_TRANSLATOR_KEY non fa nulla.
+  async function traduciConAzureTranslator(sorgente: Record<string, string>, lang: string): Promise<Record<string, string> | null> {
+    const key = (process.env.AZURE_TRANSLATOR_KEY || '').trim();
+    if (!key) return null;
+    const chiavi = Object.keys(sorgente).filter(k => typeof sorgente[k] === 'string' && sorgente[k].trim());
+    if (!chiavi.length) return null;
+    const caratteri = chiavi.reduce((n, k) => n + sorgente[k].length, 0);
+    const limite = Number(process.env.AZURE_TRANSLATOR_MONTHLY_LIMIT) || 1900000;
+    if ((await getTtsUsage('azure_translator')) + caratteri > limite) { console.warn(`[Translator] oltre il tetto mensile (${limite} caratteri), salto`); return null; }
+    try {
+      const a = lang === 'zh' ? 'zh-Hans' : lang;
+      const r = await axios.post(`https://api.cognitive.microsofttranslator.com/translate?api-version=3.0&to=${encodeURIComponent(a)}`,
+        chiavi.map(k => ({ Text: sorgente[k] })),
+        { headers: { 'Ocp-Apim-Subscription-Key': key, 'Ocp-Apim-Subscription-Region': (process.env.AZURE_TRANSLATOR_REGION || 'northeurope').trim(), 'Content-Type': 'application/json' }, timeout: 20000 });
+      const out: Record<string, string> = {};
+      chiavi.forEach((k, i) => { const t = r.data?.[i]?.translations?.[0]?.text; if (typeof t === 'string' && t.trim()) out[k] = t.trim(); });
+      await updateTtsUsage('azure_translator', caratteri);
+      insertApiUsageLog({ api_name: 'azure_translator', feature_context: 'poi_details_i18n', cost_estimation: 0, tokens_used: caratteri, success: true }).catch(() => {});
+      return Object.keys(out).length ? out : null;
+    } catch (e: any) {
+      console.warn('[Translator] fallito:', e?.response?.status, e?.message);
+      return null;
+    }
+  }
+
   async function traduciCampiPoi(poi: any, langRaw: string, req: any): Promise<any> {
     const testoDaControllare = String(poi?.description_long || poi?.description_short || '');
     // LA LINGUA SI LEGGE DAL TESTO, l'etichetta è solo un ripiego (06/10/2026, committente: «le lingue esatte
@@ -25153,7 +28113,7 @@ ${description}
         const puo = Object.keys(sorgente).length > 0 && await puoGenerare(req);
         if (Object.keys(sorgente).length > 0 && !puo) console.warn(`[traduciCampiPoi] ${poi.id} → ${langRaw}: niente traduzione (${req?.headers?.authorization ? 'token non valido o tetto' : 'ospite'})`);
         if (puo) {
-          const ai = await callUniversalAi(
+          const ai: any = await callUniversalAi(
             'groq',
             [
               { role: 'system', content: `Traduci in ${nomeLingua(langRaw)} i testi descrittivi di un luogo, campo per campo. Rispondi SOLO con JSON con le STESSE chiavi ricevute. NON tradurre i nomi propri (luoghi, persone, monumenti). Mantieni registro e lunghezza dell'originale, nessuna aggiunta.` },
@@ -25166,8 +28126,12 @@ ${description}
             // falliva in silenzio. Ora Gonka (pool POI) resta l'ultimo ripiego anche in diretta, mai il primo.
             { response_format: { type: 'json_object' }, temperature: 0.2, max_tokens: 6000, gonkaPool: 'poi', ...(req?.userId === 'background-script' ? { gonkaPrimo: true } : {}) },
             'poi_details_i18n', supabaseUrl, supabaseServiceKey, null, req?.userId === 'background-script' ? 'background-script' : undefined,
-          );
-          try { tradotti = JSON.parse(String(ai.data || '').replace(/```json|```/g, '').trim()); } catch { console.warn(`[traduciCampiPoi] ${poi.id} → ${langRaw}: risposta AI non JSON (${ai?.engine || '?'})`); }
+          ).catch((e: any) => { console.warn(`[traduciCampiPoi] ${poi.id} → ${langRaw}: motori AI non disponibili (${e?.message})`); return null; });
+          try { tradotti = ai ? JSON.parse(String(ai.data || '').replace(/```json|```/g, '').trim()) : null; } catch { console.warn(`[traduciCampiPoi] ${poi.id} → ${langRaw}: risposta AI non JSON (${ai?.engine || '?'})`); }
+          // I motori AI non hanno tradotto: ripiego su Azure Translator (fascia gratuita), solo con un utente in attesa.
+          if (!(tradotti && typeof tradotti === 'object' && Object.keys(tradotti).length) && req?.userId !== 'background-script') {
+            tradotti = await traduciConAzureTranslator(sorgente, langRaw);
+          }
           if (tradotti && typeof tradotti === 'object' && Object.keys(tradotti).length) {
             saveToCache(chiave, 'poi_details_i18n', JSON.stringify(tradotti));
           } else tradotti = null;
@@ -25742,13 +28706,13 @@ ${description}
     ZH: { hotel: '赠送给您的住宿礼物：', ente: (l) => `送给${l}游客的礼物：` },
   };
   const HOTEL_CODICE: Record<string, (p: { ente: string; codice: string; usi: number; crediti: number; scade: string; intro: string }) => { oggetto: string; testo: string }> = {
-    IT: (p) => ({ oggetto: `WIP — il coupon di prova di ${p.ente}`, testo: `Buongiorno,\n\necco il coupon di prova riservato a ${p.ente}:\n\n    ${p.codice}\n\nVale ${p.usi} utilizzi da ${p.crediti} crediti ciascuno (un utilizzo per ospite) e scade il ${p.scade}.\n\nDue righe pronte per gli ospiti, da stampare o inviare:\n«${p.intro} WIP, l'audioguida che parte da sola mentre visitate la città. Riscattate il codice ${p.codice} su https://www.wip.guide/riscatta?codice=${p.codice} e ricevete ${p.crediti} crediti, da usare nell'app per iPhone e, a breve, anche su Android.»\n\nAlla fine della prova vi scriviamo per sapere com'è andata. Per qualunque cosa, rispondete a questa email.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide` }),
-    EN: (p) => ({ oggetto: `WIP — the trial coupon for ${p.ente}`, testo: `Hello,\n\nhere is the trial coupon reserved for ${p.ente}:\n\n    ${p.codice}\n\nIt is valid for ${p.usi} uses of ${p.crediti} credits each (one use per guest) and expires on ${p.scade}.\n\nA short text ready for your guests, to print or send:\n"${p.intro} WIP, the audio guide that starts by itself as you explore the city. Redeem the code ${p.codice} at https://www.wip.guide/riscatta?codice=${p.codice}&lang=EN and receive ${p.crediti} credits, to use in the iPhone app and, soon, on Android too."\n\nAt the end of the trial we will write to ask how it went. For anything at all, just reply to this email.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide` }),
-    FR: (p) => ({ oggetto: `WIP — le coupon d'essai de ${p.ente}`, testo: `Bonjour,\n\nvoici le coupon d'essai réservé à ${p.ente} :\n\n    ${p.codice}\n\nIl vaut ${p.usi} utilisations de ${p.crediti} crédits chacune (une par client) et expire le ${p.scade}.\n\nUn court texte prêt pour vos clients, à imprimer ou à envoyer :\n« ${p.intro} WIP, l'audioguide qui démarre tout seul pendant que vous visitez la ville. Utilisez le code ${p.codice} sur https://www.wip.guide/riscatta?codice=${p.codice}&lang=FR et recevez ${p.crediti} crédits, à utiliser dans l'application iPhone et, bientôt, sur Android. »\n\nÀ la fin de l'essai, nous vous écrirons pour savoir comment cela s'est passé. Pour toute question, répondez à cet e-mail.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide` }),
-    ES: (p) => ({ oggetto: `WIP — el cupón de prueba de ${p.ente}`, testo: `Hola:\n\naquí está el cupón de prueba reservado a ${p.ente}:\n\n    ${p.codice}\n\nVale ${p.usi} usos de ${p.crediti} créditos cada uno (un uso por huésped) y caduca el ${p.scade}.\n\nUn texto breve listo para sus huéspedes, para imprimir o enviar:\n«${p.intro} WIP, la audioguía que empieza sola mientras visitan la ciudad. Canjeen el código ${p.codice} en https://www.wip.guide/riscatta?codice=${p.codice}&lang=ES y reciban ${p.crediti} créditos, para usar en la app para iPhone y, pronto, también en Android.»\n\nAl final de la prueba les escribiremos para saber cómo ha ido. Para cualquier cosa, respondan a este correo.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide` }),
-    DE: (p) => ({ oggetto: `WIP — der Test-Gutschein für ${p.ente}`, testo: `Guten Tag,\n\nhier ist der Test-Gutschein für ${p.ente}:\n\n    ${p.codice}\n\nEr gilt für ${p.usi} Einlösungen zu je ${p.crediti} Guthaben (eine pro Gast) und läuft am ${p.scade} ab.\n\nEin kurzer Text für Ihre Gäste, zum Ausdrucken oder Versenden:\n„${p.intro} WIP, der Audioguide, der von selbst startet, während Sie die Stadt erkunden. Lösen Sie den Code ${p.codice} unter https://www.wip.guide/riscatta?codice=${p.codice}&lang=DE ein und erhalten Sie ${p.crediti} Guthaben, nutzbar in der iPhone-App und bald auch auf Android.“\n\nAm Ende der Testphase melden wir uns, um zu erfahren, wie es gelaufen ist. Bei Fragen antworten Sie einfach auf diese E-Mail.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide` }),
-    RU: (p) => ({ oggetto: `WIP — пробный купон для ${p.ente}`, testo: `Здравствуйте!\n\nВот пробный купон, закреплённый за ${p.ente}:\n\n    ${p.codice}\n\nОн рассчитан на ${p.usi} активаций по ${p.crediti} кредитов (по одной на гостя) и действует до ${p.scade}.\n\nКороткий текст для гостей, для печати или рассылки:\n«${p.intro} WIP — аудиогид, который включается сам во время прогулки по городу. Активируйте код ${p.codice} на https://www.wip.guide/riscatta?codice=${p.codice}&lang=RU и получите ${p.crediti} кредитов для приложения на iPhone, а вскоре и на Android.»\n\nПо окончании пробного периода мы напишем, чтобы узнать, как всё прошло. По любым вопросам отвечайте на это письмо.\n\nФабрицио\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide` }),
-    ZH: (p) => ({ oggetto: `WIP — ${p.ente} 的试用优惠券`, testo: `您好：\n\n这是专属于 ${p.ente} 的试用优惠券：\n\n    ${p.codice}\n\n可使用 ${p.usi} 次，每次 ${p.crediti} 积分（每位客人一次），有效期至 ${p.scade}。\n\n一段可打印或发送给客人的简短文字：\n"${p.intro}WIP，一款在您游览城市时自动开始讲解的语音导览。请访问 https://www.wip.guide/riscatta?codice=${p.codice}&lang=ZH 兑换代码 ${p.codice}，即可获得 ${p.crediti} 积分，可在 iPhone 应用中使用，不久也将支持 Android。"\n\n试用结束后我们会写信了解效果。如有任何问题，请直接回复此邮件。\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide` }),
+    IT: (p) => ({ oggetto: `WIP — il coupon di prova di ${p.ente}`, testo: `Buongiorno,\n\necco il coupon di prova riservato a ${p.ente}:\n\n    ${p.codice}\n\nVale ${p.usi} utilizzi da ${p.crediti} crediti ciascuno (un utilizzo per ospite) e scade il ${p.scade}.\n\nImportante: il codice si riscatta SOLO sul sito wip.guide, non dentro l'app (l'app non ha questa funzione). L'ospite apre questo link, con il codice già inserito: https://www.wip.guide/riscatta?codice=${p.codice} — accede o crea un account con la sua email, e i crediti compaiono poi nell'app accedendo con lo stesso account.\n\nDue righe pronte per gli ospiti, da stampare o inviare:\n«${p.intro} WIP, l'audioguida che parte da sola mentre visitate la città. Riscattate il codice ${p.codice} sul sito (non dentro l'app): https://www.wip.guide/riscatta?codice=${p.codice} — poi accedete all'app con lo stesso account e ricevete ${p.crediti} crediti, da usare nell'app per iPhone o per Android.»\n\nAlla fine della prova vi scriviamo per sapere com'è andata. Per qualunque cosa, rispondete a questa email.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide` }),
+    EN: (p) => ({ oggetto: `WIP — the trial coupon for ${p.ente}`, testo: `Hello,\n\nhere is the trial coupon reserved for ${p.ente}:\n\n    ${p.codice}\n\nIt is valid for ${p.usi} uses of ${p.crediti} credits each (one use per guest) and expires on ${p.scade}.\n\nImportant: the code can be redeemed ONLY on the wip.guide website, not inside the app (the app does not have this function). The guest opens this link, with the code already filled in: https://www.wip.guide/riscatta?codice=${p.codice}&lang=EN — signs in or creates an account with their email, and the credits then appear in the app when they sign in with the same account.\n\nA short text ready for your guests, to print or send:\n"${p.intro} WIP, the audio guide that starts by itself as you explore the city. Redeem the code ${p.codice} on the website (not inside the app): https://www.wip.guide/riscatta?codice=${p.codice}&lang=EN — then sign in to the app with the same account and receive ${p.crediti} credits, to use in the iPhone or Android app."\n\nAt the end of the trial we will write to ask how it went. For anything at all, just reply to this email.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide` }),
+    FR: (p) => ({ oggetto: `WIP — le coupon d'essai de ${p.ente}`, testo: `Bonjour,\n\nvoici le coupon d'essai réservé à ${p.ente} :\n\n    ${p.codice}\n\nIl vaut ${p.usi} utilisations de ${p.crediti} crédits chacune (une par client) et expire le ${p.scade}.\n\nImportant : le code s'utilise UNIQUEMENT sur le site wip.guide, pas dans l'application (l'application n'a pas cette fonction). Le client ouvre ce lien, avec le code déjà saisi : https://www.wip.guide/riscatta?codice=${p.codice}&lang=FR — se connecte ou crée un compte avec son e-mail, puis retrouve les crédits dans l'application en se connectant avec le même compte.\n\nUn court texte prêt pour vos clients, à imprimer ou à envoyer :\n« ${p.intro} WIP, l'audioguide qui démarre tout seul pendant que vous visitez la ville. Utilisez le code ${p.codice} sur le site (pas dans l'application) : https://www.wip.guide/riscatta?codice=${p.codice}&lang=FR — puis connectez-vous à l'application avec le même compte et recevez ${p.crediti} crédits, à utiliser dans l'application iPhone ou Android. »\n\nÀ la fin de l'essai, nous vous écrirons pour savoir comment cela s'est passé. Pour toute question, répondez à cet e-mail.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide` }),
+    ES: (p) => ({ oggetto: `WIP — el cupón de prueba de ${p.ente}`, testo: `Hola:\n\naquí está el cupón de prueba reservado a ${p.ente}:\n\n    ${p.codice}\n\nVale ${p.usi} usos de ${p.crediti} créditos cada uno (un uso por huésped) y caduca el ${p.scade}.\n\nImportante: el código se canjea SOLO en el sitio web wip.guide, no dentro de la app (la app no tiene esta función). El huésped abre este enlace, con el código ya escrito: https://www.wip.guide/riscatta?codice=${p.codice}&lang=ES — inicia sesión o crea una cuenta con su correo, y luego encuentra los créditos en la app al entrar con la misma cuenta.\n\nUn texto breve listo para sus huéspedes, para imprimir o enviar:\n«${p.intro} WIP, la audioguía que empieza sola mientras visitan la ciudad. Canjeen el código ${p.codice} en el sitio web (no dentro de la app): https://www.wip.guide/riscatta?codice=${p.codice}&lang=ES — después entren en la app con la misma cuenta y reciban ${p.crediti} créditos, para usar en la app para iPhone o para Android.»\n\nAl final de la prueba les escribiremos para saber cómo ha ido. Para cualquier cosa, respondan a este correo.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide` }),
+    DE: (p) => ({ oggetto: `WIP — der Test-Gutschein für ${p.ente}`, testo: `Guten Tag,\n\nhier ist der Test-Gutschein für ${p.ente}:\n\n    ${p.codice}\n\nEr gilt für ${p.usi} Einlösungen zu je ${p.crediti} Guthaben (eine pro Gast) und läuft am ${p.scade} ab.\n\nWichtig: Der Code wird NUR auf der Website wip.guide eingelöst, nicht in der App (die App hat diese Funktion nicht). Der Gast öffnet diesen Link, der Code ist schon eingetragen: https://www.wip.guide/riscatta?codice=${p.codice}&lang=DE — meldet sich an oder erstellt ein Konto mit seiner E-Mail und findet das Guthaben dann in der App, wenn er sich mit demselben Konto anmeldet.\n\nEin kurzer Text für Ihre Gäste, zum Ausdrucken oder Versenden:\n„${p.intro} WIP, der Audioguide, der von selbst startet, während Sie die Stadt erkunden. Lösen Sie den Code ${p.codice} auf der Website ein (nicht in der App): https://www.wip.guide/riscatta?codice=${p.codice}&lang=DE — melden Sie sich dann mit demselben Konto in der App an und erhalten Sie ${p.crediti} Guthaben, nutzbar in der iPhone- oder Android-App.“\n\nAm Ende der Testphase melden wir uns, um zu erfahren, wie es gelaufen ist. Bei Fragen antworten Sie einfach auf diese E-Mail.\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide` }),
+    RU: (p) => ({ oggetto: `WIP — пробный купон для ${p.ente}`, testo: `Здравствуйте!\n\nВот пробный купон, закреплённый за ${p.ente}:\n\n    ${p.codice}\n\nОн рассчитан на ${p.usi} активаций по ${p.crediti} кредитов (по одной на гостя) и действует до ${p.scade}.\n\nВажно: код активируется ТОЛЬКО на сайте wip.guide, а не в приложении (в приложении этой функции нет). Гость открывает эту ссылку, код уже вписан: https://www.wip.guide/riscatta?codice=${p.codice}&lang=RU — входит или создаёт аккаунт со своей эл. почтой, а затем видит кредиты в приложении, войдя в тот же аккаунт.\n\nКороткий текст для гостей, для печати или рассылки:\n«${p.intro} WIP — аудиогид, который включается сам во время прогулки по городу. Активируйте код ${p.codice} на сайте (не в приложении): https://www.wip.guide/riscatta?codice=${p.codice}&lang=RU — затем войдите в приложение с тем же аккаунтом и получите ${p.crediti} кредитов для приложения на iPhone или Android.»\n\nПо окончании пробного периода мы напишем, чтобы узнать, как всё прошло. По любым вопросам отвечайте на это письмо.\n\nФабрицио\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide` }),
+    ZH: (p) => ({ oggetto: `WIP — ${p.ente} 的试用优惠券`, testo: `您好：\n\n这是专属于 ${p.ente} 的试用优惠券：\n\n    ${p.codice}\n\n可使用 ${p.usi} 次，每次 ${p.crediti} 积分（每位客人一次），有效期至 ${p.scade}。\n\n重要：代码只能在 wip.guide 网站上兑换，不能在应用内兑换（应用没有此功能）。客人打开此链接（代码已自动填入）：https://www.wip.guide/riscatta?codice=${p.codice}&lang=ZH ，用自己的邮箱登录或创建账户，之后用同一账户登录应用即可看到积分。\n\n一段可打印或发送给客人的简短文字：\n"${p.intro}WIP，一款在您游览城市时自动开始讲解的语音导览。请在网站上（不是在应用内）兑换代码 ${p.codice}：https://www.wip.guide/riscatta?codice=${p.codice}&lang=ZH，然后用同一账户登录应用，即可获得 ${p.crediti} 积分，可在 iPhone 或 Android 应用中使用。"\n\n试用结束后我们会写信了解效果。如有任何问题，请直接回复此邮件。\n\nFabrizio\nWIP Marketing Team\nWIP · World in Pocket — https://www.wip.guide` }),
   };
   const entiEmailHtml = (testo: string) => `<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.5;white-space:pre-wrap">${testo.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c])}</div>`;
 
@@ -25756,7 +28720,7 @@ ${description}
   // Armada, chiave DKIM) restano su Oracle in /root/locale/posta-server.py (servizio wip-posta): qui solo proxy
   // con l'header segreto condiviso. POSTA_URL / POSTA_SECRET assenti → 503 chiaro.
   const postaProxy = async (req: any, res: any, metodo: 'get' | 'post', percorso: string, binario = false) => {
-    const base = String(process.env.POSTA_URL || '').replace(/\/+$/, '');
+    const base = String(process.env.POSTA_URL || '').trim().replace(/\/+$/, '');
     const segreto = process.env.POSTA_SECRET || '';
     if (!base || !segreto) return res.status(503).json({ ok: false, errore: 'posta_non_configurata', dettaglio: 'Mancano POSTA_URL e/o POSTA_SECRET nelle variabili del server.' });
     try {
@@ -25790,6 +28754,72 @@ ${description}
   // Azioni su più messaggi insieme (24/10/2026): uids[] + azione letto | non_letto | archivia | ripristina.
   app.post("/api/admin/posta/segna", requireAdmin, (req, res) => postaProxy(req, res, 'post', '/segna'));
   app.post("/api/admin/posta/invia", requireAdmin, express.json({ limit: "4mb" }), (req, res) => postaProxy(req, res, 'post', '/invia'));
+
+  // REGISTRO DEL COLLAUDO (18/11/2026, committente: «il registro dove lo vedo?»): la cartella Test dell'admin legge
+  // qui il registro delle regole del banco di prova (api_cache `banco_prova_registro`) e i rapporti delle notti di
+  // collaudo (api_cache `collaudo_notte_<YYYY-MM-DD>`), scritti dal collaudo serale su Oracle. Solo lettura.
+  app.get("/api/admin/collaudo", requireAdmin, async (_req, res) => {
+    try {
+      const h = { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY || '', Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY || ''}` };
+      // (20/11/2026) Le notti si leggono per CHIAVE ESATTA (ultimi 60 giorni): `cache_key=like.collaudo_notte_*` su
+      // api_cache (tabella enorme) andava in timeout di statement e, con l'errore nascosto, la cartella Test restava
+      // vuota anche con i report salvati. Un errore di lettura ora si dice (`errori`), non si nasconde.
+      const giorni: string[] = [];
+      for (let i = 0; i < 60; i++) giorni.push(new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
+      const chiavi = giorni.map((d) => `"collaudo_notte_${d}"`).join(',');
+      const errori: string[] = [];
+      const [rr, rn] = await Promise.all([
+        axios.get(`${supabaseUrl}/rest/v1/api_cache?cache_key=eq.banco_prova_registro&select=text_content&limit=1`, { headers: h, timeout: 15000 }).catch((e: any) => { errori.push(`registro: ${e?.response?.data?.message || e?.message}`); return null; }),
+        axios.get(`${supabaseUrl}/rest/v1/api_cache?cache_key=in.(${encodeURIComponent(chiavi)})&select=cache_key,text_content`, { headers: h, timeout: 15000 }).catch((e: any) => { errori.push(`notti: ${e?.response?.data?.message || e?.message}`); return null; }),
+      ]);
+      const leggi = (s: any) => { if (s && typeof s === 'object') return s; try { return JSON.parse(String(s || '')); } catch { return null; } };
+      const reg = leggi(rr?.data?.[0]?.text_content);
+      const regole = Array.isArray(reg) ? reg : Array.isArray(reg?.regole) ? reg.regole : [];
+      const notti = (rn?.data || [])
+        .sort((a: any, b: any) => String(b.cache_key).localeCompare(String(a.cache_key)))
+        .map((r: any) => leggi(r.text_content)).filter(Boolean);
+      if (errori.length) console.warn('[admin/collaudo]', errori.join(' | '));
+      res.json({ regole, notti, ...(errori.length ? { errori } : {}) });
+    } catch (e: any) {
+      res.status(503).json({ error: e?.message || 'lettura_fallita' });
+    }
+  });
+
+  // REPORT «LAVORI IN BACK» (20/11/2026, committente: «tutte le mattine lo metti nella cartella i miei download, tab admin,
+  // cartella Report, sottocartella LAVORI IN BACK; ogni giorno aggiorni il file e lasci i giorni precedenti; anche un tasto
+  // aggiorna»). Il report lo scrive Oracle (`/root/report-lavori/report-lavori.mjs`, servizio `wip-report-lavori`) in
+  // api_cache `report_lavori_<YYYY-MM-DD>` (data italiana, uno per giorno, l'ultimo del giorno vince) alle 07:00 e a ogni
+  // richiesta. Il tasto scrive `report_lavori_richiesta`; Oracle la vede entro un minuto. Chiavi esatte, come il collaudo.
+  app.get("/api/admin/report-lavori", requireAdmin, async (_req, res) => {
+    try {
+      const h = { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY || '', Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY || ''}` };
+      const chiavi: string[] = ['"report_lavori_richiesta"'];
+      for (let i = 0; i < 90; i++) chiavi.push(`"report_lavori_${new Date(Date.now() - i * 86400000).toISOString().slice(0, 10)}"`);
+      // il giorno italiano può essere già «domani» rispetto a UTC
+      chiavi.push(`"report_lavori_${new Date(Date.now() + 86400000).toISOString().slice(0, 10)}"`);
+      const r = await axios.get(`${supabaseUrl}/rest/v1/api_cache?cache_key=in.(${encodeURIComponent(chiavi.join(','))})&select=cache_key,text_content`, { headers: h, timeout: 15000 });
+      const leggi = (s: any) => { if (s && typeof s === 'object') return s; try { return JSON.parse(String(s || '')); } catch { return null; } };
+      let richiesta: any = null;
+      const report: any[] = [];
+      for (const row of r.data || []) {
+        const v = leggi(row.text_content);
+        if (!v) continue;
+        if (row.cache_key === 'report_lavori_richiesta') richiesta = v; else report.push(v);
+      }
+      report.sort((a, b) => String(b.giorno || '').localeCompare(String(a.giorno || '')));
+      res.json({ report, richiesta });
+    } catch (e: any) {
+      res.status(503).json({ error: e?.response?.data?.message || e?.message || 'lettura_fallita' });
+    }
+  });
+  app.post("/api/admin/report-lavori/aggiorna", rateLimiter, requireAdmin, async (req: any, res) => {
+    try {
+      await saveToCache('report_lavori_richiesta', 'report_lavori', { t: Date.now(), da: req.user?.email || 'admin' });
+      res.json({ ok: true, t: Date.now() });
+    } catch (e: any) {
+      res.status(503).json({ error: e?.message || 'scrittura_fallita' });
+    }
+  });
 
   app.get("/api/admin/enti", requireAdmin, async (req, res) => {
     try {
@@ -25913,7 +28943,9 @@ ${description}
       // Lo stato della ricerca dei contatti su Oracle (riga scritta da /api/campagne/ricerca-stato).
       let ricerca: any = null;
       try { const riga = await getFromCache('campagne_ricerca_stato'); if (riga?.text_content) ricerca = typeof riga.text_content === 'string' ? JSON.parse(riga.text_content) : riga.text_content; } catch { /* nessuno stato ancora */ }
-      res.json({ giorni, campagne: elenco, totale: tot, perPaese, perGiorno: giorniElenco, ultimi: invii.slice(0, 60), errori, ricerca });
+      let giornalisti: any = null;
+      try { const riga = await getFromCache('campagne_giornalisti_stato'); if (riga?.text_content) giornalisti = typeof riga.text_content === 'string' ? JSON.parse(riga.text_content) : riga.text_content; } catch { /* nessuno stato ancora */ }
+      res.json({ giorni, campagne: elenco, totale: tot, perPaese, perGiorno: giorniElenco, ultimi: invii.slice(0, 60), errori, ricerca, giornalisti });
     } catch (e: any) {
       res.status(503).json({ error: e?.response?.data?.message || e?.message || 'lettura_fallita' });
     }
@@ -25937,7 +28969,7 @@ ${description}
       const oggetto = String(req.body?.oggetto || '').trim().slice(0, 200);
       const testo = String(req.body?.testo || '').trim().slice(0, 6000);
       if (!oggetto || !testo) return res.status(400).json({ error: 'oggetto_e_testo' });
-      const esito = await inviaEmail({ a: [riga.email], oggetto, testo, html: entiEmailHtml(testo) });
+      const esito = await inviaEmail({ a: [riga.email], copiaANoi: true, oggetto, testo, html: entiEmailHtml(testo) });
       if (!esito.ok) return res.status(503).json({ error: `email_non_inviata: ${esito.errore}` });
       const agg = await entiAggiorna(riga.id, riga.stato === 'nuova' ? { stato: 'in_lavorazione' } : {}, { tipo: 'email_inviata', oggetto, testo });
       res.json({ ok: true, richiesta: agg });
@@ -25990,7 +29022,7 @@ ${description}
       const firma = '\n\nFabrizio\n';
       const linkRegalo = `${rigaRegalo[lingua] || rigaRegalo.EN}\nhttps://www.wip.guide/regalo?codice=${codice}${lingua === 'IT' ? '' : `&lang=${lingua}`}`;
       mail.testo = mail.testo.includes(firma) ? mail.testo.replace(firma, `\n\n${linkRegalo}${firma}`) : `${mail.testo}\n\n${linkRegalo}`;
-      const esito = await inviaEmail({ a: [riga.email], oggetto: mail.oggetto, testo: mail.testo, html: entiEmailHtml(mail.testo) });
+      const esito = await inviaEmail({ a: [riga.email], copiaANoi: true, oggetto: mail.oggetto, testo: mail.testo, html: entiEmailHtml(mail.testo) });
       const agg = await entiAggiorna(riga.id, { stato: 'fatta' }, { tipo: 'coupon_inviato', codice, usi, crediti, scade: scadenza.toISOString(), email_ok: esito.ok, email_errore: esito.ok ? undefined : esito.errore });
       res.json({ ok: true, codice, usi, crediti, scade: scadenza.toISOString(), email_inviata: esito.ok, email_errore: esito.ok ? undefined : esito.errore, richiesta: agg });
     } catch (e: any) {
@@ -26206,6 +29238,8 @@ ${description}
       const userId = await verifyUserToken(req);
       if (!userId) return res.status(401).json({ error: 'login_required' });
       const amount = Math.floor(Number(req.body?.amount) || 0);
+      // (14/11/2026) Un importo nullo o negativo rispondeva «success» senza fare nulla.
+      if (amount <= 0 || amount > 2000) return res.status(400).json({ error: 'invalid_amount' });
       // La causale arriva dal client (`feature`): e` indicativa, non fa testo
       // sull'importo — quello lo decide comunque il server.
       const featureCliente = String(req.body?.feature || '').replace(/[^\w .×-]/g, '').slice(0, 60);
@@ -27104,6 +30138,8 @@ ${description}
       '',
       `Sitemap: ${SEO_SITO}/sitemap.xml`,
       `Sitemap: ${SEO_SITO}/sitemap-pagine.xml`,
+      // (16/11/2026) Il centro guida: 65 pagine statiche, sitemap generata da scripts/guida/build.mjs.
+      `Sitemap: ${SEO_SITO}/guida/sitemap-guida.xml`,
       '',
     ].flatMap((riga, i, tutte) => (riga === 'Allow: /' && tutte[i - 1] !== 'User-agent: *' ? [riga, ...NO_LINK_APP] : [riga])).join('\n'));
   });
@@ -27126,6 +30162,11 @@ ${description}
       `<url><loc>${scopriUrl()}</loc><lastmod>${oggi}</lastmod><priority>0.8</priority>${alternates()}</url>`,
       ...['en', 'fr', 'es', 'de', 'ru', 'zh'].map(l =>
         `<url><loc>${scopriUrl(l)}</loc><lastmod>${oggi}</lastmod><priority>0.8</priority>${alternates(l)}</url>`),
+      // (16/11/2026, controllo delle pagine statiche) Le pagine pubbliche di public/ che non erano in nessuna sitemap.
+      // /regalo e /riscatta no: si aprono da un link ricevuto, non da una ricerca. La guida ha la sua sitemap.
+      ...['guida/', 'comuni/', 'hotel/', 'scarica/', 'press/', 'presentazione/'].map(p =>
+        `<url><loc>${SEO_SITO}/${p}</loc><lastmod>${oggi}</lastmod><priority>${p === 'guida/' ? '0.9' : '0.6'}</priority></url>`),
+      ...['privacy', 'terms', 'support'].map(p => `<url><loc>${SEO_SITO}/${p}</loc><priority>0.3</priority></url>`),
     ];
     res.type('application/xml').send(
       `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">\n${righe.join('\n')}\n</urlset>`,
@@ -27360,7 +30401,7 @@ ${description}
 
       const { data } = await axios.get(
         `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(id)}`
-        + `&select=id,name,description_short,description_long,image_url,city,country,lat,lon,category,is_hidden,status,updated_at&limit=1`,
+        + `&select=id,name,description_short,description_long,image_url,city,country,lat,lon,category,is_hidden,status,updated_at,contact_website&limit=1`,
         { headers: SB_HDR(), timeout: 15000 },
       );
       const poi = Array.isArray(data) ? data[0] : null;
@@ -27398,7 +30439,37 @@ ${description}
       // La lingua e' quella del TESTO, non la nostra: vedi seoLingua(). Va
       // calcolata PRIMA del titolo: anche il testo di contorno (titolo, CTA,
       // "Qui vicino", footer) deve seguirla, non restare fisso in italiano.
-      const lingua = seoLingua(seoTesto(poi));
+      const linguaTesto = seoLingua(seoTesto(poi));
+
+      // ── LA PAGINA IN TUTTE LE LINGUE (21/11/2026, committente: «una serie di pagine per ogni poi… in tutte
+      // le lingue») ── `/luogo/<slug>` resta la pagina nella lingua del TESTO; `?lang=xx` è la stessa pagina
+      // nelle altre 6 lingue dell'app. Il testo tradotto si prende SOLO dalla cache che l'app ha già scritto
+      // aprendo il luogo in quella lingua (`poidesc_<lang>_<id>`, traduciCampiPoi): un crawler non deve mai far
+      // partire una traduzione AI, sarebbero milioni di chiamate. Senza traduzione la pagina esce con il contorno
+      // nella lingua chiesta e il testo originale, ma `noindex` e fuori dagli hreflang: è un doppione sottile.
+      const LINGUE_SEO = ['it', 'en', 'fr', 'es', 'de', 'ru', 'zh'];
+      const linguaChiesta = String((req.query as any)?.lang || '').toLowerCase().slice(0, 2);
+      const tradotti: Record<string, string> = {};
+      try {
+        const chiavi = LINGUE_SEO.filter(l => l !== linguaTesto).map(l => `"poidesc_${l}_${String(poi.id).replace(/"/g, '')}"`);
+        const { data: righeTrad } = await axios.get(
+          `${supabaseUrl}/rest/v1/api_cache?cache_key=in.(${encodeURIComponent(chiavi.join(','))})&select=cache_key,text_content`,
+          { headers: SB_HDR(), timeout: 6000 },
+        );
+        for (const r of Array.isArray(righeTrad) ? righeTrad : []) {
+          const l = String(r.cache_key).split('_')[1];
+          let campi: any = null;
+          try { campi = JSON.parse(String(r.text_content || '')); } catch { campi = null; }
+          const corto = seoTestoProprio(campi?.description_short);
+          const lungo = seoTestoProprio(campi?.description_long);
+          const t = lungo.length > corto.length ? lungo : corto;
+          if (t.length >= 60) tradotti[l] = t;
+        }
+      } catch { /* senza traduzioni la pagina esce nella lingua del testo, come prima */ }
+      const lingueDisponibili = LINGUE_SEO.filter(l => l === linguaTesto || tradotti[l]);
+      const lingua = LINGUE_SEO.includes(linguaChiesta) ? linguaChiesta : (LINGUE_SEO.includes(linguaTesto) ? linguaTesto : 'en');
+      const testoPagina = lingua !== linguaTesto && tradotti[lingua] ? tradotti[lingua] : seoTesto(poi);
+      const senzaTraduzione = lingua !== linguaTesto && !tradotti[lingua];
       const ui = seoLuoghiUI(lingua);
       // Il titolo non promette la foto quando la foto non c'e'. Da quando la
       // soglia di ammissione non richiede piu' l'immagine (09/09/2026) una
@@ -27410,9 +30481,11 @@ ${description}
       // Il testo migliore disponibile, non per forza quello «corto»: molti
       // luoghi hanno solo description_long, e prima finivano in 404 pur
       // avendo una scheda ricca.
-      const descr = seoTesto(poi).replace(/\s+/g, ' ').trim().slice(0, 300);
-      const url = `${SEO_SITO}/luogo/${seoUrlLuogo(poi)}`;
-      const completo = seoTesto(poi).replace(/\s+/g, ' ').trim();
+      const descr = testoPagina.replace(/\s+/g, ' ').trim().slice(0, 300);
+      const urlBase = `${SEO_SITO}/luogo/${seoUrlLuogo(poi)}`;
+      const urlLingua = (l: string) => l === linguaTesto ? urlBase : `${urlBase}?lang=${l}`;
+      const url = urlLingua(lingua);
+      const completo = testoPagina.replace(/\s+/g, ' ').trim();
       // Il seguito, solo se aggiunge davvero qualcosa oltre ai primi 300
       // caratteri gia' mostrati (altrimenti si ripeterebbe il paragrafo).
       const testoLungo = completo.length > 320 ? completo.slice(300) : '';
@@ -27466,7 +30539,23 @@ ${description}
       // Nessuna pagina del sito portava all'App Store. Ogni pagina luogo ora ha il banner di Safari
       // (`apple-itunes-app`, lo mostra solo Safari su iPhone/iPad) e un collegamento dichiarato sotto l'invito.
       const APP_STORE_URL = 'https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct=sito&mt=8';
-      const scaricaIphone = ({ it: "Scarica l'app per iPhone", en: 'Get the iPhone app', fr: "Télécharger l'app pour iPhone", es: 'Descarga la app para iPhone', de: 'iPhone-App laden', ru: 'Скачать приложение для iPhone', zh: '下载 iPhone 应用' } as Record<string, string>)[String(lingua).toLowerCase()] || 'Get the iPhone app';
+      // (21/11/2026) Anche Google Play (l'app è pubblica), il sito ufficiale del luogo e la presentazione di WIP.
+      const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.itaintasca.app&referrer=utm_source%3Dsito%26utm_medium%3Dluogo';
+      const ET_LINK: Record<string, { iphone: string; android: string; sito: string; presentazione: string; lingue: string }> = {
+        it: { iphone: "Scarica l'app per iPhone", android: "Scarica l'app per Android", sito: 'Sito ufficiale', presentazione: 'Cos’è WIP: la presentazione', lingue: 'Lingue' },
+        en: { iphone: 'Get the iPhone app', android: 'Get the Android app', sito: 'Official website', presentazione: 'What WIP is: the presentation', lingue: 'Languages' },
+        fr: { iphone: "Télécharger l'app pour iPhone", android: "Télécharger l'app pour Android", sito: 'Site officiel', presentazione: 'Découvrir WIP : la présentation', lingue: 'Langues' },
+        es: { iphone: 'Descarga la app para iPhone', android: 'Descarga la app para Android', sito: 'Sitio oficial', presentazione: 'Qué es WIP: la presentación', lingue: 'Idiomas' },
+        de: { iphone: 'iPhone-App laden', android: 'Android-App laden', sito: 'Offizielle Website', presentazione: 'Was ist WIP: die Präsentation', lingue: 'Sprachen' },
+        ru: { iphone: 'Скачать приложение для iPhone', android: 'Скачать приложение для Android', sito: 'Официальный сайт', presentazione: 'Что такое WIP: презентация', lingue: 'Языки' },
+        zh: { iphone: '下载 iPhone 应用', android: '下载 Android 应用', sito: '官方网站', presentazione: '了解 WIP：产品介绍', lingue: '语言' },
+      };
+      const et = ET_LINK[lingua] || ET_LINK.en;
+      const scaricaIphone = et.iphone;
+      const NOMI_LINGUE: Record<string, string> = { it: 'Italiano', en: 'English', fr: 'Français', es: 'Español', de: 'Deutsch', ru: 'Русский', zh: '中文' };
+      // Il sito del luogo solo se è un indirizzo web vero: niente mailto, niente testo libero.
+      const sitoLuogo = /^https?:\/\/[^\s"'<>]+\.[^\s"'<>]+$/i.test(String(poi.contact_website || '').trim()) ? String(poi.contact_website).trim() : '';
+      const urlPresentazione = `${SEO_SITO}/presentazione/?lang=${lingua.toUpperCase()}`;
       res.type('text/html').set('Cache-Control', 'public, max-age=3600, s-maxage=86400').send(`<!doctype html>
 <html lang="${lingua}">
 <head>
@@ -27475,7 +30564,8 @@ ${description}
 <meta name="apple-itunes-app" content="app-id=6806769883">
 <title>${seoEscape(titolo.slice(0, 60))}</title>
 <meta name="description" content="${seoEscape(descr.slice(0, 160))}">
-${noindexDebole ? '<meta name="robots" content="noindex">\n' : ''}<link rel="canonical" href="${seoEscape(url)}">
+${noindexDebole || senzaTraduzione ? '<meta name="robots" content="noindex">\n' : ''}<link rel="canonical" href="${seoEscape(url)}">
+${lingueDisponibili.length > 1 ? lingueDisponibili.map(l => `<link rel="alternate" hreflang="${l}" href="${seoEscape(urlLingua(l))}">`).join('\n') + `\n<link rel="alternate" hreflang="x-default" href="${seoEscape(urlBase)}">` : ''}
 <meta property="og:type" content="article">
 <meta property="og:title" content="${seoEscape(titolo)}">
 <meta property="og:description" content="${seoEscape(descr.slice(0, 200))}">
@@ -27504,6 +30594,16 @@ section.vicini h2{font-size:19px;margin:0 0 12px}
 ul.vicini{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 ul.vicini a{color:#1e3a8a;text-decoration:none;font-weight:600}
 ul.vicini .d{color:#777;font-size:14px;font-weight:400;display:block}
+.store{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:-12px 0 16px}
+.store a{display:block;border:1.5px solid #1e3a8a;color:#1e3a8a;text-decoration:none;font-weight:700;
+     padding:10px 12px;border-radius:12px;text-align:center;font-size:15px}
+.store a small{display:block;font-weight:400;font-size:13px;opacity:.8}
+ul.link{list-style:none;margin:0 0 10px;padding:0;text-align:center}
+ul.link li{margin:6px 0}
+ul.link a{color:#1e3a8a;font-weight:600}
+nav.lingue{font-size:14px;color:#666;text-align:center;margin:18px 0 0;line-height:2}
+nav.lingue a{color:#1e3a8a;text-decoration:none}
+@media (max-width:420px){.store{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -27518,7 +30618,17 @@ ${poi.image_url ? `<img class="hero" src="${seoEscape(poi.image_url)}" alt="${se
 ${testoLungo ? `<p>${seoEscape(testoLungo.slice(0, 1200))}</p>` : ''}
 <a class="cta" rel="nofollow" href="${seoEscape(seoLinkApp(poi))}">${seoEscape(ui.ctaAscolta)} ${seoEscape(poi.name)}
 <small>${seoEscape(ui.ctaSotto)}</small></a>
-<p style="text-align:center;margin:-14px 0 0"><a href="${APP_STORE_URL}" style="color:#1e3a8a;font-weight:700;text-decoration:none">&#63743; ${seoEscape(scaricaIphone)} · App Store</a></p>
+<div class="store">
+<a href="${APP_STORE_URL}">&#63743; ${seoEscape(scaricaIphone)}<small>App Store</small></a>
+<a href="${seoEscape(PLAY_STORE_URL)}">&#9654; ${seoEscape(et.android)}<small>Google Play</small></a>
+</div>
+<ul class="link">
+${sitoLuogo ? `<li><a href="${seoEscape(sitoLuogo)}" rel="nofollow noopener" target="_blank">${seoEscape(et.sito)} ↗</a></li>` : ''}
+<li><a href="${seoEscape(urlPresentazione)}">${seoEscape(et.presentazione)}</a></li>
+</ul>
+<nav class="lingue" aria-label="${seoEscape(et.lingue)}">${LINGUE_SEO.map(l => l === lingua
+  ? `<strong>${NOMI_LINGUE[l]}</strong>`
+  : `<a href="${seoEscape(urlLingua(l))}" hreflang="${l}"${lingueDisponibili.includes(l) ? '' : ' rel="nofollow"'}>${NOMI_LINGUE[l]}</a>`).join(' · ')}</nav>
 ${vicini.length ? `<section class="vicini">
 <h2>${seoEscape(ui.quiVicino)}</h2>
 <ul class="vicini">${vicini.map((v: any) => `<li><a href="${seoEscape(SEO_SITO)}/luogo/${seoEscape(v.u)}">${seoEscape(v.n)}</a>
@@ -35033,7 +38143,9 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
     // chiudere il JSON, e una risposta troncata per callUniversalAi e' un
     // «successo»: la coda dei ripieghi non partiva mai. Un solo secondo
     // giro, senza Gonka (senza pool il motore resta fuori per costruzione).
-    if (resp?.truncated && daSfondo && String(resp?.model || '').startsWith('gonka:')) {
+    // Chi ha troncato si legge da `motore` (nome interno, «gonka:…»), non da `model` (nome del fornitore).
+    const motoreDi = (r: any) => r?.motore || r?.model;
+    if (resp?.truncated && daSfondo && String(motoreDi(resp) || '').startsWith('gonka:')) {
       // Niente «recupero» dal testo troncato: questo modello ragiona in prosa
       // PRIMA del JSON (vedi libOggettoJsonPiuGrande), quindi a essere
       // tagliato e' proprio il JSON, e l'unico oggetto intero rimasto
@@ -35050,14 +38162,22 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
     // Gonka qui sopra copriva solo Gonka. Un solo giro in più, senza Gonka e
     // senza il motore che ha troncato; l'errore finale dice quale modello era.
     if (resp?.truncated) {
-      const colpevole = libEngineName(resp?.model);
+      const colpevole = libEngineName(motoreDi(resp));
       if ((FREE_ENGINES_LIB as string[]).includes(colpevole) || colpevole === 'gonka') {
         const { gonkaPool: _gp2, ...senzaGonka2 } = opts;
         const vietati = [...new Set([...(opts.excludeEngines || []), ...(colpevole === 'gonka' ? [] : [colpevole])])];
-        console.warn(`[Library] ${feature}: output troncato su ${resp?.model}, ritento senza ${colpevole}`);
+        console.warn(`[Library] ${feature}: output troncato su ${motoreDi(resp)}, ritento senza ${colpevole}`);
         const primo = engine === colpevole ? (FREE_ENGINES_LIB.find((e) => !vietati.includes(e)) || engine) : engine;
+        // GONKA PRIMA, NON TOLTA (16/11/2026, misurato su Oracle: 392 scarti «troncato» su 425 in 27 h, tutti
+        // agnes-2.5-flash, e ZERO chiamate a Gonka). Gonka sta in coda ai gratuiti e Agnes risponde sempre (anche
+        // troncata), quindi Gonka non veniva mai raggiunta; e questo secondo giro la toglieva di proposito. Quando a
+        // troncare è un gratuito, in sfondo il secondo giro parte da Gonka (pool itinerari, credito presente); se a
+        // troncare è stata Gonka, resta fuori come prima.
+        const conGonka = daSfondo && colpevole !== 'gonka';
+        const opzioni2 = conGonka ? { ...opts, excludeEngines: vietati, gonkaPrimo: true } : { ...senzaGonka2, excludeEngines: vietati };
+        if (conGonka) console.warn(`[Library] ${feature}: secondo giro con Gonka per primo`);
         try {
-          const r2 = await callUniversalAi(primo as any, messaggi, { ...senzaGonka2, excludeEngines: vietati },
+          const r2 = await callUniversalAi(primo as any, messaggi, opzioni2,
             feature, supabaseUrl, supabaseServiceKey, null, daSfondo ? 'background-script' : undefined);
           if (r2) resp = r2;
         } catch (e: any) {
@@ -35065,7 +38185,7 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
         }
       }
     }
-    if (resp?.truncated) throw new Error(`output del generatore troncato (finish_reason=length, ${String(resp?.model || '?').slice(0, 60)})`);
+    if (resp?.truncated) throw new Error(`output del generatore troncato (finish_reason=length, ${String(motoreDi(resp) || '?').slice(0, 60)})`);
     const obj = libParseJsonLoose(resp?.data);
     if (!obj) throw new Error('output del generatore non è JSON valido');
     return { itin: obj, engine: libEngineName(resp?.model) };
@@ -36511,6 +39631,315 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
   }
 
   // ── ROTTE ───────────────────────────────────────────────────────────────
+  // ═══ ITINERARI VERIFICATI (18/11/2026, committente: «via») ═══════════════════════════════════════════════════
+  // Sopra la libreria esistente (che diventa «Itinerari veloci», senza garanzia) c'è un insieme più piccolo di
+  // itinerari PASSATI DAL COLLAUDO NOTTURNO (Oracle, scratch/collaudo-notte): voto generale ≥ 8, esito ok|corretto,
+  // nessuna tappa da_verificare, ogni tappa non-pasto agganciata al database. Vivono come `lib_item_<slug>` con
+  // `meta.verificato = {data, voto, voto_generale, citta, giorni, interessi, test_id, lat, lon}` (slug
+  // `verificato-<citta>-<N>g`: una base per città e numero di giorni) e hanno la loro riga d'indice `lib_meta_<slug>`.
+  //   · POST /api/library/promuovi-verificato  (CRON_SECRET | x-script-secret | admin): promuove (o, se il ritest di
+  //     una base esistente è sotto soglia, la SOSPENDE).
+  //   · GET  /api/library/verificati?city=&days=&da_ritestare=1
+  //   · /api/library/search marca `verificato` e mette per primi i verificati.
+  //   · RIUSO dentro /api/groq/itinerary-stream, SPENTO finché `BASE_VERIFICATE_ATTIVE` non è 1: `baseVerificataPerRichiesta`
+  //     → `preparaItinerarioDaBaseVerificata` (attrazioni della base, PASTI rifatti con locali veri vicini alle tappe,
+  //     giorni in più generati dalla logica «giorni pieni») → poi lo stesso aggancio/verifica/controllo qualità/revisore.
+  // Le funzioni pure stanno qui sotto e sono provate da scratch/banco-prova-itinerari.mjs (area «libreria»).
+  const VERIFICATI_VOTO_MIN = 8;
+  const VERIFICATI_SCADENZA_GIORNI = 45;      // oltre questa età la base non si usa finché non è ritestata
+  const VERIFICATI_DA_RITESTARE_GIORNI = 30;  // da qui in poi la notte la mette in coda per il ritest
+  function giorniTraDate(a: any, b: any): number {
+    const ta = new Date(String(a || '')).getTime(), tb = new Date(String(b || '')).getTime();
+    if (!Number.isFinite(ta) || !Number.isFinite(tb)) return Infinity;
+    return Math.floor((tb - ta) / 86400000);
+  }
+  function chiaveCittaVerificata(s: any): string {
+    return pianaLettere(String(s || '').split(',')[0]).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+  function slugVerificato(citta: any, giorni: any): string {
+    const c = chiaveCittaVerificata(citta) || 'citta';
+    return `verificato-${c}-${Math.max(1, Math.floor(Number(giorni)) || 1)}g`.slice(0, 79);
+  }
+  function tappaPastoDaBase(t: any): boolean {
+    return TIPI_PASTO.test(String(t?.tipo || '').trim()) || /^(pranzo|cena|colazione|aperitivo|merenda|brunch|lunch|dinner|breakfast)\b/i.test(String(t?.titolo_tappa || t?.titolo || '').trim());
+  }
+  function tappaEsenteDaAggancio(t: any): boolean {
+    return tappaPastoDaBase(t) || TIPO_ALLOGGIO_RIENTRO.test(String(t?.tipo || '')) || /trasferiment|transfer/i.test(String(t?.tipo || ''));
+  }
+  /** La regola di ingresso nell'insieme dei verificati: voto ≥ 8, esito ok|corretto, nessuna tappa da_verificare o
+   *  non_conforme, ogni tappa che non è un pasto/rientro/trasferimento agganciata a un poi_id, itinerario completo. */
+  // Problemi GRAVI DELL'ITINERARIO (scelta delle tappe, aggancio, pasti, distanze): codici del collaudo notturno
+  // (`collaudo.problemi` = «area/codice: …»). NON ne fanno parte schede/foto/audioguide mancanti (si riempiono dopo), punti
+  // d'arrivo e scatto della guida (dati del luogo, li correggono i lavori dei punti d'arrivo), revisore/giudice/controllo.
+  const CODICI_GRAVI_ITINERARIO = /^(aggancio\/(doppio_poi|riga_cinema_localita|riga_inesistente|riga_nascosta|tipo_contraddittorio|non_agganciata)|deepseek\/(pasto_non_ristorante|tappa_da_verificare|ragionamento_del_modello)|percorso\/(salto_oltre_5km|nessun_percorso|percorso_lungo))\b/;
+  function graviDellItinerario(problemi: any): string[] {
+    return (Array.isArray(problemi) ? problemi : []).map((p: any) => String(p || '').trim()).filter((p: string) => CODICI_GRAVI_ITINERARIO.test(p));
+  }
+  /** DECISIONE del committente 20/11/2026: contano SOLO i gravi DELL'ITINERARIO. Un esito «restano» entra se nessuno dei
+   *  problemi rimasti è un grave dell'itinerario (19–20/11: 19 itinerari su 20 «restano» per schede/audioguide/ingressi);
+   *  per lo stesso motivo un ritest così non sospende la base. «scartato» non entra mai. */
+  function valutaPromozioneVerificato(coll: any, itin: any): { ok: boolean; motivi: string[] } {
+    const motivi: string[] = [];
+    if (!coll || typeof coll !== 'object') return { ok: false, motivi: ['non collaudato'] };
+    const esito = String(coll.esito || '');
+    if (esito === 'restano') {
+      const gravi = graviDellItinerario(coll.problemi);
+      if (gravi.length) motivi.push(`gravi dell'itinerario: ${gravi.slice(0, 3).join(' | ').slice(0, 200)}`);
+    } else if (!/^(ok|corretto)$/.test(esito)) motivi.push(`esito ${coll.esito || 'assente'}`);
+    const voto = Number(coll.voto_generale);
+    if (!Number.isFinite(voto) || voto < VERIFICATI_VOTO_MIN) motivi.push(`voto ${Number.isFinite(voto) ? voto : 'assente'} sotto ${VERIFICATI_VOTO_MIN}`);
+    const giorni = Array.isArray(itin?.giorni) ? itin.giorni : [];
+    if (!giorni.length) motivi.push('nessun giorno');
+    if (itin?.incompleto) motivi.push('itinerario incompleto');
+    for (const g of giorni) for (const t of (g?.tappe || [])) {
+      const nome = String(t?.titolo_tappa || t?.titolo || '?').slice(0, 50);
+      if (/^(da_verificare|non_conforme)$/.test(String(t?.verifica || ''))) motivi.push(`tappa «${nome}» ${t.verifica}`);
+      else if (!tappaEsenteDaAggancio(t) && !t?.poi_id) motivi.push(`tappa «${nome}» non agganciata`);
+    }
+    return { ok: motivi.length === 0, motivi: motivi.slice(0, 12) };
+  }
+  /** Una base è usabile: non sospesa, voto sopra soglia, collaudata da meno di 45 giorni. */
+  function verificatoAttivo(v: any, adesso: any = new Date().toISOString()): boolean {
+    if (!v || v.sospeso) return false;
+    if (!(Number(v.voto_generale) >= VERIFICATI_VOTO_MIN)) return false;
+    return giorniTraDate(v.data, adesso) <= VERIFICATI_SCADENZA_GIORNI;
+  }
+  function interessiCompatibili(base: any, richiesti: any): boolean {
+    const n = (a: any) => (Array.isArray(a) ? a : (a ? [a] : [])).map((x: any) => pianaLettere(x).trim()).filter(Boolean);
+    const b = new Set(n(base)), r = n(richiesti);
+    if (!b.size || !r.length) return true;       // un lato non dice nulla: nessun contrasto
+    return r.some((x: string) => b.has(x));       // almeno un interesse in comune
+  }
+  function cittaCoincide(v: any, req: { citta?: any; lat?: any; lon?: any }): boolean {
+    const la = Number(req.lat), lo = Number(req.lon), vl = Number(v?.lat), vo = Number(v?.lon);
+    if ([la, lo, vl, vo].every(Number.isFinite) && !(la === 0 && lo === 0)) return getHaversineDistance(la, lo, vl, vo) <= 15000;
+    const a = chiaveCittaVerificata(req.citta), b = chiaveCittaVerificata(v?.citta);
+    return !!a && a === b;
+  }
+  /** Sceglie la base per una richiesta: stessa città, stessi giorni o PIÙ giorni (si prendono i primi N); se non c'è,
+   *  la più lunga con almeno metà dei giorni chiesti (gli altri si generano). Mai una base sospesa, scaduta o con
+   *  interessi senza nulla in comune. A parità: meno giorni in eccesso, voto più alto, test più recente. */
+  function scegliBaseVerificata(metas: any[], req: { citta?: any; lat?: any; lon?: any; giorni: number; interessi?: any }, adesso: any = new Date().toISOString()): { slug: string; meta: any; giorniDaBase: number; estesa: boolean } | null {
+    const N = Math.max(1, Math.floor(Number(req.giorni)) || 1);
+    const ok = (metas || []).filter((m: any) => m?.slug && verificatoAttivo(m.verificato, adesso) && cittaCoincide(m.verificato, req) && interessiCompatibili(m.verificato?.interessi, req.interessi));
+    const gg = (m: any) => Number(m.verificato?.giorni ?? m.days) || 1;
+    const migliore = (a: any, b: any) => (Number(b.verificato.voto_generale) - Number(a.verificato.voto_generale)) || String(b.verificato.data).localeCompare(String(a.verificato.data));
+    const interi = ok.filter((m: any) => gg(m) >= N).sort((a: any, b: any) => (gg(a) - gg(b)) || migliore(a, b));
+    if (interi.length) return { slug: interi[0].slug, meta: interi[0], giorniDaBase: N, estesa: false };
+    const corti = ok.filter((m: any) => gg(m) >= 2 && gg(m) * 2 >= N).sort((a: any, b: any) => (gg(b) - gg(a)) || migliore(a, b));
+    if (corti.length) return { slug: corti[0].slug, meta: corti[0], giorniDaBase: gg(corti[0]), estesa: true };
+    return null;
+  }
+  /** Copia pulita dell'itinerario di una base: niente id, niente marcature del collaudo, niente qualità vecchia (la
+   *  verifica la rifà la rotta). Prende i primi `giorni` giorni, rinumerati. */
+  function assemblaDaBaseVerificata(itin: any, giorni: number, meta: any): any {
+    const out = JSON.parse(JSON.stringify(itin || {}));
+    for (const k of ['id', 'qualita', 'collaudo', 'credits_paid', 'credits_paid_earned', 'credits_paid_ts', 'incompleto', 'verified']) delete out[k];
+    if (out.titolo) out.titolo = String(out.titolo).replace(/^\s*\[TEST\]\s*/i, '');
+    const N = Math.max(1, Math.floor(Number(giorni)) || 1);
+    out.giorni = (Array.isArray(out.giorni) ? out.giorni : []).slice(0, N).map((g: any, i: number) => ({ ...(g || {}), giorno: i + 1, tappe: Array.isArray(g?.tappe) ? g.tappe : [] }));
+    if (meta) out.qualita = { base_verificata: { slug: meta.slug, data: meta.verificato?.data, voto_generale: meta.verificato?.voto_generale, giorni_base: meta.verificato?.giorni, giorni_usati: out.giorni.length, test_id: meta.verificato?.test_id || null } };
+    return out;
+  }
+  // ── PERCORSO COLLAUDATO (20/11/2026, committente: «sì, salva il percorso collaudato negli itinerari verificati») ──
+  // Il collaudo notturno cammina col telefono simulato ogni tratta fra tappe consecutive (simula-tappe.mts) e manda con
+  // la promozione, per giorno, le tratte: {da, a (poi_id + punto d'arrivo), geometria decimata [lat, lon], manovre grezze
+  // con il testo IT, metri, minuti, data, scatto della tappa d'arrivo, punto usato}. Entra SOLO una tratta con scatto
+  // «giusto» fra due tappe che nel giorno sono davvero consecutive; si salva in `giorni[i].percorso_collaudato`. L'app la
+  // usa come percorso iniziale del navigatore (src/lib/nav/percorsiCollaudati.ts), < 45 giorni.
+  function trattaCollaudataPulita(x: any): any | null {
+    if (!x || x.scatto !== 'giusto') return null;
+    const n = (v: any) => (v === null || v === undefined || v === '' ? NaN : Number(v));
+    const punto = (p: any) => ({ poi_id: p?.poi_id ? String(p.poi_id).slice(0, 120) : null, lat: Math.round(n(p?.lat) * 1e6) / 1e6, lon: Math.round(n(p?.lon) * 1e6) / 1e6 });
+    const da = punto(x.da), a = punto(x.a);
+    if (![da.lat, da.lon, a.lat, a.lon].every(Number.isFinite) || !da.poi_id || !a.poi_id) return null;
+    const geom = (Array.isArray(x.geometria) ? x.geometria : []).map((p: any) => [n(p?.[0]), n(p?.[1])]).filter((p: number[]) => p.every(Number.isFinite) && Math.abs(p[0]) <= 90 && Math.abs(p[1]) <= 180);
+    if (geom.length < 2) return null;
+    const passo = Math.max(1, Math.ceil(geom.length / 250));
+    const geometria = geom.filter((_: any, i: number) => i % passo === 0 || i === geom.length - 1).map((p: number[]) => [Math.round(p[0] * 1e5) / 1e5, Math.round(p[1] * 1e5) / 1e5]);
+    const manovre = (Array.isArray(x.manovre) ? x.manovre : []).slice(0, 120).map((s: any) => ({ t: String(s?.t || 'continue').slice(0, 30), ...(s?.m ? { m: String(s.m).slice(0, 30) } : {}), ...(Number.isFinite(n(s?.x)) ? { x: n(s.x) } : {}), ...(s?.n ? { n: String(s.n).slice(0, 120) } : {}), lat: n(s?.lat), lon: n(s?.lon), d: Math.round(n(s?.d) || 0), ...(s?.it ? { it: String(s.it).slice(0, 300) } : {}) }))
+      .filter((s: any) => Number.isFinite(s.lat) && Number.isFinite(s.lon));
+    const data = String(x.data || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) return null;
+    return { da, a, geometria, manovre, metri: Math.round(n(x.metri) || 0), minuti: Math.round(n(x.minuti) || 0), data, scatto: 'giusto', punto: String(x.punto || '').slice(0, 20) };
+  }
+  /** Tiene in ogni giorno solo le tratte fra tappe ancora CONSECUTIVE con quei poi_id (dopo pasti rifatti, riordini,
+   *  doppioni tolti la tratta non vale più). Restituisce quante ne restano. */
+  function tieniPercorsiCollaudatiCoerenti(itin: any): number {
+    let n = 0;
+    for (const g of (Array.isArray(itin?.giorni) ? itin.giorni : [])) {
+      if (!Array.isArray(g?.percorso_collaudato)) continue;
+      const tappe: any[] = Array.isArray(g.tappe) ? g.tappe : [];
+      const coppie = new Set<string>();
+      for (let i = 0; i + 1 < tappe.length; i++) if (tappe[i]?.poi_id && tappe[i + 1]?.poi_id) coppie.add(`${tappe[i].poi_id}→${tappe[i + 1].poi_id}`);
+      g.percorso_collaudato = g.percorso_collaudato.filter((x: any) => x?.scatto === 'giusto' && coppie.has(`${x?.da?.poi_id}→${x?.a?.poi_id}`));
+      if (!g.percorso_collaudato.length) delete g.percorso_collaudato;
+      else n += g.percorso_collaudato.length;
+    }
+    return n;
+  }
+  /** Mette nel giorno le tratte mandate dal collaudo (`perGiorno`: {"1": [...], "2": [...]} o array per indice). */
+  function applicaPercorsoCollaudato(itin: any, perGiorno: any): number {
+    if (!perGiorno || typeof perGiorno !== 'object') return 0;
+    (Array.isArray(itin?.giorni) ? itin.giorni : []).forEach((g: any, i: number) => {
+      const grezze = Array.isArray(perGiorno) ? perGiorno[i] : (perGiorno[String(i + 1)] ?? perGiorno[i + 1]);
+      const pulite = (Array.isArray(grezze) ? grezze : []).map(trattaCollaudataPulita).filter(Boolean);
+      if (pulite.length) g.percorso_collaudato = pulite; else delete g.percorso_collaudato;
+    });
+    return tieniPercorsiCollaudatiCoerenti(itin);
+  }
+  function ancoraPastoInGiorno(tappe: any[], i: number): { lat: number; lon: number } | null {
+    const xy = (t: any) => {
+      const la = Number(t?.coordinate?.lat), lo = Number(t?.coordinate?.lng ?? t?.coordinate?.lon);
+      return Number.isFinite(la) && Number.isFinite(lo) && !(la === 0 && lo === 0) ? { lat: la, lon: lo } : null;
+    };
+    let prima: any = null, dopo: any = null;
+    for (let k = i - 1; k >= 0 && !prima; k--) if (!tappaPastoDaBase(tappe[k])) prima = xy(tappe[k]);
+    for (let k = i + 1; k < tappe.length && !dopo; k++) if (!tappaPastoDaBase(tappe[k])) dopo = xy(tappe[k]);
+    if (prima && dopo) return { lat: (prima.lat + dopo.lat) / 2, lon: (prima.lon + dopo.lon) / 2 }; // a metà fra la tappa prima e quella dopo
+    return prima || dopo;
+  }
+  /** I pasti si RIFANNO a ogni richiesta (regola del committente): per ogni pranzo/cena/colazione si cerca un locale
+   *  vero vicino alle tappe del giorno con le stesse funzioni degli itinerari in diretta (cercaLocaleVero via
+   *  sostituisciPastoInventato: TripAdvisor/Foursquare/archivio, mai un nome inventato). Se non si trova nulla il pasto
+   *  della base — già verificato dal collaudo — resta com'è. */
+  async function ricostruisciPastiDaBase(itin: any, ctx: { destination: string; language: any; richiesta?: string; tettoMs?: number }): Promise<{ rifatti: number; mantenuti: number }> {
+    const usati = new Set<string>(extractItineraryStops(itin).filter((s: any) => !tappaPastoDaBase(s.ref)).map((s: any) => String(s.ref?.poi_id || '')).filter(Boolean));
+    const t0 = Date.now(), tetto = ctx.tettoMs || 40000;
+    let rifatti = 0, mantenuti = 0;
+    for (const g of (itin?.giorni || [])) {
+      const tappe = g?.tappe || [];
+      for (let i = 0; i < tappe.length; i++) {
+        if (!tappaPastoDaBase(tappe[i])) continue;
+        const ancora = ancoraPastoInGiorno(tappe, i);
+        let ok = false;
+        if (ancora && Date.now() - t0 < tetto) { try { ok = await sostituisciPastoInventato(tappe[i], ancora, ctx.destination, ctx.language, usati, ctx.richiesta || ''); } catch { ok = false; } }
+        if (ok) { rifatti++; usati.add(String(tappe[i].poi_id)); } else mantenuti++;
+      }
+    }
+    return { rifatti, mantenuti };
+  }
+  /** Quale base serve a una richiesta (solo lettura dell'indice). Spenta se `BASE_VERIFICATE_ATTIVE` non è 1. */
+  function baseVerificateAttive(): boolean { return /^(1|true|on|si)$/i.test(String(process.env.BASE_VERIFICATE_ATTIVE || '')); }
+  async function baseVerificataPerRichiesta(destination: any, lat: any, lon: any, days: number, interests: any): Promise<{ slug: string; meta: any; giorniDaBase: number; estesa: boolean } | null> {
+    if (!baseVerificateAttive()) return null;
+    const metas = (await libraryLoadMetas()).filter((m: any) => m?.verificato);
+    if (!metas.length) return null;
+    return scegliBaseVerificata(metas, { citta: destination, lat, lon, giorni: days, interessi: interests });
+  }
+  /** L'itinerario da consegnare partendo dalla base: attrazioni della base (agganciate, con schede/foto/audioguide),
+   *  pasti rifatti, nella lingua dell'utente (libTraduci; se la traduzione non c'è → null e si genera come sempre).
+   *  I giorni oltre la base li aggiunge la logica «giorni pieni» della rotta (stesso prompt, luoghi già usati da evitare). */
+  async function preparaItinerarioDaBaseVerificata(sel: { slug: string; meta: any; giorniDaBase: number; estesa: boolean }, ctx: { destination: string; language: any; richiesta?: string }): Promise<any | null> {
+    const obj = libParseCachedJson((await getFromCache(`lib_item_${sel.slug}`))?.text_content);
+    if (!obj?.itinerary?.giorni?.length) return null;
+    let itin = obj.itinerary;
+    const L = String(ctx.language || 'IT').toUpperCase().slice(0, 2);
+    if (L !== 'IT') {
+      const tr = await libTraduci(sel.slug, itin, L);
+      if (!tr || tr === itin) return null; // nessuna traduzione: meglio generare nella lingua giusta
+      libRiportaAggancio(itin, tr);
+      // Il percorso collaudato NON si traduce (manovre grezze, poi_id, «giusto»): si riporta quello della base.
+      (tr.giorni || []).forEach((g: any, i: number) => { const o = itin.giorni?.[i]?.percorso_collaudato; if (Array.isArray(o)) g.percorso_collaudato = JSON.parse(JSON.stringify(o)); else delete g.percorso_collaudato; });
+      itin = tr;
+    }
+    const out = assemblaDaBaseVerificata(itin, sel.giorniDaBase, { ...sel.meta, slug: sel.slug });
+    const pasti = await ricostruisciPastiDaBase(out, { destination: ctx.destination, language: ctx.language, richiesta: ctx.richiesta });
+    // Pasti rifatti: le tratte verso/da un locale cambiato non valgono più.
+    try { tieniPercorsiCollaudatiCoerenti(out); } catch { /* fail-open */ }
+    out.qualita.base_verificata = { ...out.qualita.base_verificata, estesa: sel.estesa, pasti_rifatti: pasti.rifatti, pasti_della_base: pasti.mantenuti };
+    return out;
+  }
+  const libAutorizzaScript = async (req: any): Promise<boolean> => {
+    const a = String(req.headers.authorization || '');
+    if (process.env.CRON_SECRET && a === `Bearer ${process.env.CRON_SECRET}`) return true;
+    if (SCRIPT_SHARED_SECRET && req.headers['x-script-secret'] === SCRIPT_SHARED_SECRET) return true;
+    return !!(await verifyAdminToken(req));
+  };
+
+  // POST /api/library/promuovi-verificato { id, interessi?, forza? } — `id` = riga di user_itineraries già COLLAUDATA
+  // (dati_itinerario.collaudo). Idoneo → salvato come base verificata; non idoneo e già esistente una base per la stessa
+  // città e giorni → la base viene SOSPESA (il ritest dice che non regge più); altrimenti risponde i motivi.
+  app.post('/api/library/promuovi-verificato', rateLimiter, async (req, res) => {
+    try {
+      if (!(await libAutorizzaScript(req))) return res.status(401).json({ error: 'Non autorizzato: serve CRON_SECRET, x-script-secret o un token admin.' });
+      const id = String(req.body?.id || '').trim();
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return res.status(400).json({ error: 'id itinerario non valido' });
+      const r = await axios.get(`${supabaseUrl}/rest/v1/user_itineraries`, { params: { id: `eq.${id}`, select: 'id,titolo,dati_itinerario' }, headers: SB_HDR(), timeout: 15000 });
+      const riga = r.data?.[0];
+      const dati = riga?.dati_itinerario;
+      if (!dati?.giorni?.length) return res.status(404).json({ error: 'itinerario non trovato' });
+      const coll = dati.collaudo;
+      const rich = dati.qualita?.verifica?.richiesta || {};
+      const citta = String(rich.destination || coll?.citta || '').trim();
+      const giorni = dati.giorni.length;
+      if (!citta) return res.status(422).json({ ok: false, motivi: ['città non nota (qualita.verifica.richiesta.destination)'] });
+      const slug = slugVerificato(citta, giorni);
+      const verdetto = valutaPromozioneVerificato(coll, dati);
+      const esistente = libParseCachedJson((await getFromCache(`lib_item_${slug}`))?.text_content);
+      if (!verdetto.ok) {
+        // Un ritest bocciato sospende la base che c'è: stessa città e stessi giorni, collaudo vero (non «scartato» di un tentativo).
+        if (esistente?.meta?.verificato && !esistente.meta.verificato.sospeso && coll && coll.esito !== 'scartato') {
+          esistente.meta.verificato = { ...esistente.meta.verificato, sospeso: true, sospeso_il: new Date().toISOString(), sospeso_motivo: verdetto.motivi.join(' | ').slice(0, 300), sospeso_da_test: id };
+          await saveToCache(`lib_item_${slug}`, 'library_itinerary', esistente);
+          await libraryUpdateIndex(esistente.meta);
+          libMetaCache = null;
+          console.warn(`[library/verificati] base "${slug}" SOSPESA dal ritest ${id}: ${verdetto.motivi.join(' | ')}`);
+          return res.json({ ok: false, sospesa: slug, motivi: verdetto.motivi });
+        }
+        return res.json({ ok: false, motivi: verdetto.motivi });
+      }
+      const voto = Number(coll.voto_generale);
+      const ev = esistente?.meta?.verificato;
+      if (!req.body?.forza && ev && !ev.sospeso && ev.test_id !== id && Number(ev.voto_generale) > voto && giorniTraDate(ev.data, new Date().toISOString()) < VERIFICATI_DA_RITESTARE_GIORNI) {
+        return res.json({ ok: true, slug, tenuta_precedente: true, voto_precedente: ev.voto_generale });
+      }
+      const itinerary = assemblaDaBaseVerificata(dati, giorni, null);
+      // (20/11/2026) Il percorso camminato dal collaudo: solo tratte con scatto «giusto» fra tappe consecutive.
+      for (const g of (itinerary.giorni || [])) delete g.percorso_collaudato;
+      const tratteCollaudate = applicaPercorsoCollaudato(itinerary, req.body?.percorso_collaudato);
+      const stops = extractItineraryStops(itinerary);
+      const interessi = Array.isArray(req.body?.interessi) ? req.body.interessi.map((x: any) => String(x).slice(0, 40)).slice(0, 12) : [];
+      const meta: any = {
+        slug, kind: 'zone', title: String(itinerary.titolo || riga.titolo || citta).slice(0, 200).replace(/^\s*\[TEST\]\s*/i, ''), city: citta.split(',')[0].trim(),
+        country: String(dati.paese || rich.country || ''), angle: 'verificato', days: giorni, score: Math.round(voto * 10) / 10,
+        verifiedBy: ['collaudo-notte'], deepseekReviewed: true, agganciato: true,
+        tappe_agganciate: stops.filter((s: any) => s.ref?.poi_id).length, tappe_totali: stops.length, createdAt: new Date().toISOString(),
+        verificato: { data: String(coll.data || new Date().toISOString().slice(0, 10)), voto_generale: voto, voti: coll.voti || null, esito: coll.esito, citta, giorni, interessi, test_id: id, lat: Number.isFinite(Number(rich.lat)) ? Number(rich.lat) : null, lon: Number.isFinite(Number(rich.lon)) ? Number(rich.lon) : null, sospeso: false },
+      };
+      await saveToCache(`lib_item_${slug}`, 'library_itinerary', { itinerary, meta });
+      await libraryUpdateIndex(meta);
+      libMetaCache = null;
+      // Le copie tradotte della versione precedente non valgono più: si rifanno alla prima apertura.
+      try { await axios.delete(`${supabaseUrl}/rest/v1/api_cache`, { params: { cache_key: `like.lib_item_${slug}_%`, content_type: 'eq.library_itinerary_lang' }, headers: SB_HDR(), timeout: 15000 }); } catch { /* restano, ma rifatte dal ritest */ }
+      console.log(`[library/verificati] promossa "${slug}" (voto ${voto}, test ${id}, ${tratteCollaudate} tratte collaudate)`);
+      res.json({ ok: true, slug, voto_generale: voto, giorni, tratte_collaudate: tratteCollaudate });
+    } catch (e: any) {
+      console.error('[library/promuovi-verificato] Errore:', e?.message);
+      res.status(500).json({ error: 'promozione non riuscita: ' + String(e?.message || e).slice(0, 160) });
+    }
+  });
+
+  // GET /api/library/verificati?city=&days=&da_ritestare=1 — elenco snello delle basi verificate (con stato).
+  app.get('/api/library/verificati', rateLimiter, async (req, res) => {
+    try {
+      const city = chiaveCittaVerificata(req.query.city);
+      const daysQ = parseInt(String(req.query.days || ''), 10);
+      const adesso = new Date().toISOString();
+      let righe = (await libraryLoadMetas()).filter((m: any) => m?.verificato).map((m: any) => {
+        const v = m.verificato, eta = giorniTraDate(v.data, adesso);
+        return { slug: m.slug, title: m.title, city: v.citta || m.city, days: v.giorni ?? m.days, voto_generale: v.voto_generale, data: v.data, sospeso: !!v.sospeso, scaduto: eta > VERIFICATI_SCADENZA_GIORNI, attivo: verificatoAttivo(v, adesso), da_ritestare: !!v.sospeso || eta >= VERIFICATI_DA_RITESTARE_GIORNI, eta_giorni: Number.isFinite(eta) ? eta : null };
+      });
+      if (city) righe = righe.filter((x: any) => chiaveCittaVerificata(x.city) === city);
+      if (Number.isFinite(daysQ)) righe = righe.filter((x: any) => Number(x.days) === daysQ);
+      if (req.query.da_ritestare === '1') righe = righe.filter((x: any) => x.da_ritestare);
+      righe.sort((a: any, b: any) => (Number(b.voto_generale) - Number(a.voto_generale)) || String(b.data).localeCompare(String(a.data)));
+      res.json({ items: righe, total: righe.length, attive: baseVerificateAttive() });
+    } catch (e: any) {
+      res.status(500).json({ error: 'elenco non disponibile' });
+    }
+  });
+
   // GET /api/library/search?q=&kind=&theme=&city=&country=&maxHours=&days=
   //                         &themes=a,b,c&kinds=x,y&limit=
   // Legge l'indice (righe lib_meta_* + vecchi shard) e filtra server-side.
@@ -36561,8 +39990,12 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
       if (country) out = out.filter((m: any) => norm(m.country) === country);
       if (Number.isFinite(maxHours)) out = out.filter((m: any) => Number(m.hours) > 0 && Number(m.hours) <= maxHours);
       if (Number.isFinite(daysQ)) out = out.filter((m: any) => Number(m.days || 1) === daysQ);
-      out.sort((a: any, b: any) => (b?.score || 0) - (a?.score || 0));
-      res.json({ items: out.slice(0, limit), total: out.length });
+      // ITINERARI VERIFICATI (18/11/2026): quelli ancora validi (non sospesi, collaudati da meno di 45 giorni, voto ≥ 8) per
+      // primi, col campo `verificato`; una base sospesa o scaduta torna una voce «veloce» come le altre (senza il campo).
+      const adesso = new Date().toISOString();
+      out = out.map((m: any) => (m?.verificato && !verificatoAttivo(m.verificato, adesso) ? (({ verificato, ...resto }: any) => resto)(m) : m));
+      out.sort((a: any, b: any) => (b?.verificato ? 1 : 0) - (a?.verificato ? 1 : 0) || (b?.score || 0) - (a?.score || 0));
+      res.json({ items: out.slice(0, limit), total: out.length, verificati: out.filter((m: any) => m?.verificato).length });
     } catch (e: any) {
       console.error('[library/search] Errore:', e?.message);
       res.status(500).json({ error: 'Ricerca libreria non disponibile al momento: riprova.' });
@@ -36585,74 +40018,152 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
     IT: 'italiano', EN: 'inglese', FR: 'francese', ES: 'spagnolo',
     DE: 'tedesco', RU: 'russo', ZH: 'cinese semplificato',
   };
+  // ── TRADUZIONI DELLA LIBRERIA: regole del 18/11/2026 (collaudo notturno: `theme-cinema-roma` in EN con 8 tappe su 10
+  // rimaste in ITALIANO). Cause: UNA sola chiamata per tutto l'itinerario (se l'AI rispondeva con un numero di righe
+  // diverso si tornava all'originale in silenzio, se ne saltava alcune restavano italiane), nessun controllo sul
+  // risultato, e la copia veniva salvata «completa» comunque; in piu' i campi `dettaglio`/`nota`/… del budget non
+  // erano nell'elenco. Ora: pezzi a gruppi piccoli, ogni pezzo controllato (`libPezzoTradotto`: lingua giusta, non
+  // identico all'originale), i non tradotti si rifanno, e una copia incompleta NON entra in cache.
+  const LIB_TRAD_VERSIONE = 2;
+  const LIB_RE_CAMPO_TESTO = /^(titolo|titolo_tappa|titolo_giorno|tema_giorno|attivita|consiglio_guida|tempo_necessario|spostamento_precedente|mezzi_precedente|tema|dettaglio|nota|note|descrizione|sottotitolo|riepilogo)$/;
+  /** Tutti i testi visibili dell'itinerario, numerati per percorso. Nomi propri dei luoghi, id, coordinate e link non entrano. */
+  function libRaccogliTesti(itinerary: any): Array<{ p: string; v: string }> {
+    const pezzi: Array<{ p: string; v: string }> = [];
+    const buono = (s: any) => typeof s === 'string' && s.trim() && /\p{L}/u.test(s) && !/^https?:\/\/\S+$/i.test(s.trim());
+    const raccogli = (obj: any, percorso: string) => {
+      if (!obj || typeof obj !== 'object') return;
+      for (const [k, v] of Object.entries(obj)) {
+        const q = percorso + '.' + k;
+        if (typeof v === 'string') { if (buono(v) && LIB_RE_CAMPO_TESTO.test(k)) pezzi.push({ p: q, v }); }
+        else if (Array.isArray(v)) v.forEach((x, i) => (typeof x === 'string' ? (buono(x) ? pezzi.push({ p: q + '.' + i, v: x }) : null) : raccogli(x, q + '.' + i)));
+        else if (v && typeof v === 'object') raccogli(v, q);
+      }
+    };
+    raccogli(itinerary, '');
+    return pezzi;
+  }
+  /** Un pezzo e' tradotto bene se non e' vuoto, non e' rimasto uguale (salvo sigle/nomi di 1-3 parole) e non e' riconoscibile come altra lingua. */
+  function libPezzoTradotto(orig: string, nuovo: string, L: string): boolean {
+    const n = String(nuovo || '').trim(), o = String(orig || '').trim();
+    if (!n) return false;
+    const paroleO = o.split(/\s+/).filter(Boolean).length;
+    if (n === o) return paroleO <= 3;
+    if (L === 'ZH') return (n.match(/[一-鿿]/g) || []).length >= Math.min(4, Math.ceil(n.length / 4)) || paroleO <= 3;
+    if (L === 'RU') return (n.match(/[Ѐ-ӿ]/g) || []).length >= Math.min(4, Math.ceil(n.length / 4)) || paroleO <= 3;
+    if (o.length < 25) return true;
+    const lp = linguaTestoCorto(n);
+    return !lp || lp === L;
+  }
+  /** Indici dei pezzi ancora non tradotti. */
+  function libNonTradotti(pezzi: Array<{ p: string; v: string }>, tradotti: Array<string | undefined>, L: string): number[] {
+    const r: number[] = [];
+    pezzi.forEach((x, i) => { if (!libPezzoTradotto(x.v, String(tradotti[i] ?? ''), L)) r.push(i); });
+    return r;
+  }
+  /** Gruppi di indici per chiamata: al massimo `maxN` righe e `maxCar` caratteri. */
+  function libGruppi(pezzi: Array<{ p: string; v: string }>, indici: number[], maxN = 12, maxCar = 5000): number[][] {
+    const gruppi: number[][] = [];
+    let cur: number[] = [], car = 0;
+    for (const i of indici) {
+      const l = pezzi[i].v.length;
+      if (cur.length && (cur.length >= maxN || car + l > maxCar)) { gruppi.push(cur); cur = []; car = 0; }
+      cur.push(i); car += l;
+    }
+    if (cur.length) gruppi.push(cur);
+    return gruppi;
+  }
+  /** Mette i testi tradotti su una COPIA: solo stringhe, mai id, coordinate o link. */
+  function libApplicaTraduzioni(itinerary: any, pezzi: Array<{ p: string; v: string }>, tradotti: Array<string | undefined>): any {
+    const copia = JSON.parse(JSON.stringify(itinerary));
+    pezzi.forEach((x, i) => {
+      const val = String(tradotti[i] ?? '').trim();
+      if (!val) return;
+      const parti = x.p.split('.').filter(Boolean);
+      let n: any = copia;
+      for (let j = 0; j < parti.length - 1; j++) n = n?.[parti[j]];
+      if (n) n[parti[parti.length - 1]] = val;
+    });
+    return copia;
+  }
+  /** Una copia in cache vale solo se e' della versione corrente e tutti i suoi testi sono nella lingua giusta. */
+  function libCopiaValida(gia: any, originale: any, L: string): boolean {
+    if (!gia?.itinerary || gia.v !== LIB_TRAD_VERSIONE) return false;
+    const po = libRaccogliTesti(originale), pc = libRaccogliTesti(gia.itinerary);
+    if (po.length !== pc.length) return false;
+    return libNonTradotti(po, pc.map((x) => x.v), L).length === 0;
+  }
+
   /** Testi tradotti di un itinerario, con cache per lingua. IT torna com'è. */
   async function libTraduci(slug: string, itinerary: any, lang: string): Promise<any> {
     const L = String(lang || 'IT').toUpperCase().slice(0, 2);
     if (L === 'IT' || !LIB_LINGUE[L]) return itinerary;
     const chiave = `lib_item_${slug}_${L.toLowerCase()}`;
     const gia = libParseCachedJson((await getFromCache(chiave))?.text_content);
-    if (gia?.itinerary) return gia.itinerary;
+    // Una copia salvata prima della regola (senza versione) o con testi in italiano non si serve: si rifa.
+    if (libCopiaValida(gia, itinerary, L)) return gia.itinerary;
 
     // Si manda all'AI SOLO il testo, numerato: niente coordinate, niente id.
     // Così non può spostare un luogo nemmeno volendo, e il prompt resta corto.
-    const pezzi: Array<{ p: string; v: string }> = [];
-    const raccogli = (obj: any, percorso: string) => {
-      if (!obj || typeof obj !== 'object') return;
-      for (const [k, v] of Object.entries(obj)) {
-        const q = `${percorso}.${k}`;
-        if (typeof v === 'string' && v.trim() && /^(titolo|titolo_tappa|attivita|consiglio_guida|tempo_necessario|spostamento_precedente|tema)$/.test(k)) pezzi.push({ p: q, v });
-        else if (Array.isArray(v)) v.forEach((x, i) => (typeof x === 'string' && x.trim() ? pezzi.push({ p: `${q}.${i}`, v: x }) : raccogli(x, `${q}.${i}`)));
-        else if (v && typeof v === 'object') raccogli(v, q);
-      }
-    };
-    raccogli(itinerary, '');
+    const pezzi = libRaccogliTesti(itinerary);
     if (!pezzi.length) return itinerary;
+    const tradotti: Array<string | undefined> = new Array(pezzi.length).fill(undefined);
 
-    const elenco = pezzi.map((x, i) => `${i}. ${x.v}`).join('\n');
-    const prompt = `Traduci in ${LIB_LINGUE[L]} le righe numerate qui sotto, prese da un itinerario di viaggio.
+    // Una chiamata per un gruppo di righe; se il numero di righe non torna si dimezza il gruppo (fino a una riga).
+    const traduciGruppo = async (idx: number[], profondita = 0): Promise<void> => {
+      if (!idx.length) return;
+      const elenco = idx.map((pi, k) => `${k}. ${pezzi[pi].v}`).join('\n');
+      const prompt = `Traduci in ${LIB_LINGUE[L]} le righe numerate qui sotto, prese da un itinerario di viaggio.
 
 REGOLE TASSATIVE:
+- Traduci OGNI riga per intero nella lingua richiesta: nessuna riga resta in italiano.
 - I NOMI PROPRI DI LUOGO restano IDENTICI all'originale: musei, chiese, palazzi, piazze, vie, quartieri, ristoranti, città. «Ponte Vecchio» resta «Ponte Vecchio», «Galleria degli Uffizi» resta «Galleria degli Uffizi». Traduci solo le parole intorno (visita, passeggiata, salita, mattina…).
 - Non aggiungere, non togliere, non riassumere: una riga tradotta per ogni riga ricevuta.
 - Mantieni i prefissi «✨ Nicky» e «📜 Dante» invariati.
-- Mantieni numeri, orari e durate come sono.
+- Mantieni numeri, orari, durate, importi e indirizzi web come sono.
 
-Rispondi SOLO con un oggetto JSON: {"t": ["riga 0 tradotta", "riga 1 tradotta", ...]} con ESATTAMENTE ${pezzi.length} elementi, nell'ordine ricevuto.
+Rispondi SOLO con un oggetto JSON: {"t": ["riga 0 tradotta", "riga 1 tradotta", ...]} con ESATTAMENTE ${idx.length} elementi, nell'ordine ricevuto.
 
 RIGHE:
 ${elenco}`;
-
-    try {
-      // Motore gratuito in testa: è una traduzione, non serve il modello caro.
-      const r = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
-        temperature: 0.1,
-        response_format: { type: 'json_object' },
-      }, 'library_translate', supabaseUrl, supabaseServiceKey, null);
-      // Il testo sta in `.data` (come ogni altro chiamante di callUniversalAi):
-      // leggere `.textContent` restituiva sempre vuoto, la traduzione falliva
-      // in silenzio e l'utente straniero continuava a vedere l'italiano.
-      const out = parseSafeJSON(String(r?.data || '{}').replace(/^```json\s*/i, '').replace(/```\s*$/, ''));
-      const t = Array.isArray(out?.t) ? out.t : null;
-      if (!t || t.length !== pezzi.length) {
-        // Traduzione incompleta: meglio l'originale che un itinerario a metà.
-        console.warn(`[library/lang] "${slug}" ${L}: attese ${pezzi.length} righe, ricevute ${t?.length ?? 0}`);
-        return itinerary;
+      try {
+        // Motore gratuito in testa: è una traduzione, non serve il modello caro.
+        const r = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+          temperature: 0.1,
+          response_format: { type: 'json_object' },
+        }, 'library_translate', supabaseUrl, supabaseServiceKey, null);
+        // Il testo sta in `.data` (come ogni altro chiamante di callUniversalAi).
+        const out = parseSafeJSON(String(r?.data || '{}').replace(/^```json\s*/i, '').replace(/```\s*$/, ''));
+        const t = Array.isArray(out?.t) ? out.t : null;
+        if (t && t.length === idx.length) { idx.forEach((pi, k) => { tradotti[pi] = String(t[k] ?? ''); }); return; }
+        console.warn(`[library/lang] "${slug}" ${L}: attese ${idx.length} righe, ricevute ${t?.length ?? 0}`);
+      } catch (e: any) {
+        console.warn(`[library/lang] "${slug}" ${L} gruppo non tradotto:`, e?.message);
       }
-      const copia = JSON.parse(JSON.stringify(itinerary));
-      pezzi.forEach((x, i) => {
-        const val = String(t[i] ?? '').trim();
-        if (!val) return;
-        const parti = x.p.split('.').filter(Boolean);
-        let n: any = copia;
-        for (let j = 0; j < parti.length - 1; j++) n = n?.[parti[j]];
-        if (n) n[parti[parti.length - 1]] = val;
-      });
-      await saveToCache(chiave, 'library_itinerary_lang', { itinerary: copia, lang: L });
-      return copia;
-    } catch (e: any) {
-      console.warn(`[library/lang] "${slug}" ${L} non tradotto:`, e?.message);
-      return itinerary;
+      if (idx.length > 1 && profondita < 3) {
+        const m = Math.ceil(idx.length / 2);
+        await traduciGruppo(idx.slice(0, m), profondita + 1);
+        await traduciGruppo(idx.slice(m), profondita + 1);
+      }
+    };
+    const inParallelo = async (gruppi: number[][]) => {
+      for (let i = 0; i < gruppi.length; i += 3) await Promise.all(gruppi.slice(i, i + 3).map((g) => traduciGruppo(g)));
+    };
+
+    let rimasti = pezzi.map((_, i) => i);
+    for (let giro = 0; giro < 3 && rimasti.length; giro++) {
+      await inParallelo(libGruppi(pezzi, rimasti, giro === 0 ? 12 : 4));
+      // Quello che e' tornato uguale/in italiano si rifa; il risultato sbagliato si scarta.
+      rimasti = libNonTradotti(pezzi, tradotti, L);
+      rimasti.forEach((i) => { tradotti[i] = undefined; });
     }
+    const copia = libApplicaTraduzioni(itinerary, pezzi, tradotti);
+    if (rimasti.length) {
+      // Incompleta: si serve cio' che e' tradotto ma NON si salva come completa (la prossima apertura riprova).
+      console.warn(`[library/lang] "${slug}" ${L}: ${rimasti.length} di ${pezzi.length} testi non tradotti, copia non salvata`);
+      return copia;
+    }
+    await saveToCache(chiave, 'library_itinerary_lang', { itinerary: copia, lang: L, v: LIB_TRAD_VERSIONE });
+    return copia;
   }
 
   /** COLLEGAMENTO AL DATABASE DEGLI ITINERARI DI LIBRERIA (21/09/2026, committente: «si procedi»). La semina sceglie
@@ -36739,6 +40250,8 @@ ${elenco}`;
       // esce nella lingua dell'utente (tradotto una volta e messo in cache).
       const itinLang = await libTraduci(slug, obj.itinerary, String(req.query.lang || 'IT'));
       libRiportaAggancio(obj.itinerary, itinLang);
+      // (20/11/2026) Le formule vietate non escono nemmeno dalla libreria (testi seminati prima della regola).
+      try { pulisciFormuleItinerario(itinLang); } catch { /* fail-open */ }
       res.json({ slug, itinerary: itinLang, meta: obj.meta || null });
     } catch (e: any) {
       console.error('[library/item] Errore:', e?.message);
@@ -38076,7 +41589,9 @@ REGOLE:
       // una race fra due click quasi simultanei può perderne uno, accettabile
       // per una statistica. Il redirect non deve MAI fallire per il contatore.
       try {
-        const key = `affil_clicks_${oggiYYYYMM()}`;
+        // (25/11/2026) I clic del COLLAUDO notturno (`collaudo=1`) vanno in un contatore a parte: prima ogni notte ~150
+        // clic finti per partner finivano nelle statistiche affiliate vere. Il collaudo verifica proprio questo contatore.
+        const key = req.query.collaudo === '1' ? `affil_clicks_collaudo_${oggiYYYYMM()}` : `affil_clicks_${oggiYYYYMM()}`;
         const row = await getFromCache(key);
         const counts = (row?.text_content && typeof row.text_content === 'object' && !Array.isArray(row.text_content))
           ? { ...row.text_content } : {};
@@ -38770,6 +42285,38 @@ Wikipedia: <materiale>${String(extract || "Nessuna fonte trovata").replace(/<\/?
 // (enrichmentService.ensurePoiDetails) deve mandare il Bearer; gli script di
 // arricchimento di sfondo usano un token utente/admin. `userId` dal body non
 // vale più: si usa quello del token.
+// OPERE GIRATE O AMBIENTATE QUI → MATERIALE (21/11/2026). `works_json` (import cinema del 29/08 e del 26/09) ha per
+// opera titolo, tipo, anno/anni, regista o autore, attori, ruolo («riprese» o «ambientazione»), fonte e a volte una frase
+// di Wikipedia che cita il luogo (`scena`, CC BY-SA 4.0). Si tengono solo le fonti che danno un fatto verificabile
+// (Wikidata, Wikipedia, Atlas): movie-locations.com è «All material Copyright» (27/09: tenere solo coppie confermate da
+// Wikidata) e qui non entra. Prima le opere con una scena, poi le riprese, poi le più recenti; al più 12. Le frasi di
+// Wikipedia perdono i titoletti di sezione («==Production==»). È un elenco di fatti, non un articolo.
+// Prova del 21/11 (Dubrovnik, Essaouira): con 12 opere e frasi lunghe il modello scriveva elenchi di 3.000 caratteri con
+// compensi degli attori e litigi sul set: al più 8 opere (5 se c'è già un articolo sul luogo), frasi fino a 300 caratteri,
+// e fuori le frasi che parlano di soldi, scioperi, incidenti o accuse invece che di che cosa si è girato qui.
+const FRASE_SCENA_FUORI_TEMA = /\b(paid|salary|salaries|\$\s?\d|dollars?|strike|SAG-AFTRA|COVID|pandemic|lawsuit|sued|allegedly|accused|yell|grabbed|assault|arrest|injur|died|death|budget|box office|gross(ed)?)\b/i;
+function materialeOpereCinema(opere: any, haArticolo = false): string {
+  if (!Array.isArray(opere) || !opere.length) return '';
+  const pulisci = (s: any) => String(s || '').replace(/={2,}[^=\n]{1,80}={2,}/g, ' ').replace(/\s+/g, ' ').trim();
+  const scenaUtile = (s: any) => { const t = pulisci(s); return t.length > 30 && !FRASE_SCENA_FUORI_TEMA.test(t) ? t : ''; };
+  const valide = opere.filter((w: any) => w && String(w.titolo || '').trim() && String(w.fonte || '') !== 'movie-locations');
+  if (!valide.length) return '';
+  const scelte = [...valide].sort((a: any, b: any) =>
+    (scenaUtile(b.scena) ? 1 : 0) - (scenaUtile(a.scena) ? 1 : 0)
+    || (a.ruolo === 'riprese' ? 0 : 1) - (b.ruolo === 'riprese' ? 0 : 1)
+    || (Number(b.anno) || 0) - (Number(a.anno) || 0)).slice(0, haArticolo ? 5 : 8);
+  const righe = scelte.map((w: any) => {
+    const dati = [`«${String(w.titolo).trim()}»`, String(w.tipo || 'film'), w.anni || w.anno || '',
+      w.regista ? `regia di ${w.regista}` : '', w.autore ? `di ${w.autore}` : '',
+      Array.isArray(w.attori) && w.attori.length ? `con ${w.attori.slice(0, 3).join(', ')}` : ''].filter(Boolean).join(', ');
+    const legame = w.ruolo === 'ambientazione' ? 'è AMBIENTATA in questo luogo (non è detto che vi sia stata girata)' : 'ha avuto RIPRESE in questo luogo';
+    const scena = scenaUtile(w.scena);
+    const corta = scena.length > 300 ? (scena.slice(0, 300).match(/^[\s\S]*[.!?](?=\s|$)/)?.[0] || '') : scena;
+    return `- ${dati}: ${legame}.${corta ? ` Dalla voce Wikipedia dell'opera: «${corta}»` : ''}`;
+  });
+  return `OPERE LEGATE A QUESTO LUOGO (fonti: Wikidata e Wikipedia; un elenco di fatti, non un articolo):\n${righe.join('\n')}`;
+}
+
 app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => {
     try {
       // `engine` (23/08/2026): DEFAULT invariato (groq). Questa è la rotta che
@@ -38815,7 +42362,7 @@ app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => 
       if (id) {
         try {
           const rSalvato = await axios.get(
-            `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(String(id))}&select=wikipedia_url,wikidata,city,region,country,source,poi_type,category,address,image_url,photo_url,contact_website,technical_data,description_short,description_long,description_ai,description_lang,is_gem,enrichment_source&limit=1`,
+            `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(String(id))}&select=wikipedia_url,wikidata,city,region,country,source,poi_type,category,address,image_url,photo_url,contact_website,technical_data,description_short,description_long,description_ai,description_lang,is_gem,enrichment_source,works_json&limit=1`,
             { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 5000 }
           );
           const riga = rSalvato.data?.[0];
@@ -39328,11 +42875,21 @@ app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => 
         thumbnail = await findFallbackPhoto(name || "", "") || "";
       }
 
+      // FILM E SERIE GIRATI QUI (21/11/2026, committente: «le scene, i film del cinema non sono già inserite nei poi?»):
+      // 44.095 luoghi cinema hanno l'elenco delle opere (works_json: Wikidata P915/P840, Wikipedia, Atlas) e 20.271 una
+      // scena citata da Wikipedia, ma questa rotta non le leggeva mai: 41.520 restavano senza scheda e senza audioguida.
+      // L'elenco diventa materiale del modello (fatti, mai testo da copiare). Mai in `fast`: lì il materiale diventa la
+      // breve così com'è.
+      // Mai per una città, una regione o un luogo immaginario (prova del 21/11: Girona, Ouarzazate e Dubrovnik diventavano
+      // elenchi di film): lì la scheda parla della città, e i film restano nell'elenco della scheda dell'app.
+      const tipoCinema = String(rigaNota?.technical_data?.moviescenemap?.tipo_luogo || '');
+      const luogoCinemaVero = !/^(city|region|fiction)$/.test(tipoCinema) && !/^film_(city|region|fictional)$/.test(String(rigaNota?.poi_type || ''));
+      const bloccoOpere = (!fast && !commercialePoi && luogoCinemaVero) ? materialeOpereCinema(rigaNota?.works_json, !!extract) : '';
       // Se l'AI fallisce, `description_short` resta questo valore e VIENE SALVATO:
       // l'incipit di Wikipedia va bene, la pagina web altrui no (19/09/2026).
       let jsonResponse = { description_short: (materialeDalWeb || materialeDaiDatiStrutturati) ? "" : (extract || ""), description_long: "", is_gem: false, error: false };
       // Diagnostica per gli script (`debug:true` + segreto di servizio): cosa e` arrivato al modello e cosa ne e` uscito.
-      const diag: any = { extractLen: String(extract || '').length, materialeDalWeb, fontiTerziWeb, materialeDaiDatiStrutturati, pageUrl, inizioMateriale: String(extract || '').slice(0, 300) };
+      const diag: any = { extractLen: String(extract || '').length, materialeDalWeb, fontiTerziWeb, materialeDaiDatiStrutturati, pageUrl, inizioMateriale: String(extract || '').slice(0, 300), ...(bloccoOpere ? { opere: bloccoOpere.length } : {}) };
 
       
       // AI Synthesis (Deep Mode)
@@ -39351,7 +42908,7 @@ app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => 
           // conoscenza generale, E il codice sotto forza a vuoto
           // description_short/long/audio_script quando `extract` era già
           // vuoto in partenza — qualunque cosa il modello abbia scritto.
-          const nienteMateriale = !extract;
+          const nienteMateriale = !extract && !bloccoOpere;
           const regolaSenzaMateriale = `\nSE il blocco <materiale> contiene ESATTAMENTE "Nessuna fonte trovata": NON hai nessuna fonte su questo luogo specifico. È VIETATO scrivere una descrizione basata sulla tua conoscenza generale della zona, della città o di luoghi con nomi simili — anche se pensi di riconoscere il posto dalle coordinate. In quel caso restituisci description_short e description_long come stringhe VUOTE ("") e is_gem:false. Una descrizione dettagliata ma del posto sbagliato è peggio di nessuna descrizione.`;
           // (19/09/2026) Materiale dal web (sito ufficiale o SearXNG): non si
           // copia, la lunghezza segue i fatti, la fascia B solo se confermata.
@@ -39373,9 +42930,13 @@ app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => 
               if (intero.length > materialePerAi.length) materialePerAi = intero;
             }
           }
+          // Le opere girate o ambientate qui si aggiungono DOPO l'articolo intero (che altrimenti le sostituirebbe) e
+          // PRIMA che il materiale passi al revisore: il revisore deve vedere gli stessi fatti che ha visto lo scrittore.
+          if (bloccoOpere) materialePerAi = materialePerAi ? `${materialePerAi}\n\n${bloccoOpere}` : bloccoOpere;
           materialeLettoDalModello = materialePerAi;
           const regolaLunghezza = regolaPiuFattiMaiAria();
           const regoleWebEnrich = regolaLunghezza + (materialeDalWeb ? `\nREGOLE PER IL MATERIALE DAL WEB:${regoleMaterialeWeb(fontiTerziWeb)}` : '')
+            + (bloccoOpere ? `\nIL MATERIALE CONTIENE UN ELENCO DI OPERE (film, serie, libri) LEGATE A QUESTO LUOGO: puoi dire quali opere vi sono state girate o vi sono ambientate (titolo, anno, regista o autore, interpreti) e, SOLO se la frase di Wikipedia citata lo dice, che cosa vi è stato girato. Distingui sempre «girato qui» da «ambientato qui». NON raccontare trame, NON aggiungere opere, anni, nomi o premi che non siano nell'elenco, NON copiare le frasi citate (riscrivile con parole tue), lascia i titoli come sono scritti. Niente compensi, incassi, scioperi, incidenti o polemiche delle produzioni: solo che cosa vi è stato girato e quale luogo della finzione rappresenta. MAI le coordinate. Se il materiale non dice che cosa è il luogo, non inventarlo: parla del luogo solo con i fatti che hai. Senza un articolo sul luogo, description_long resta fra 3 e 8 frasi; con un articolo, le opere sono al più un paragrafo finale. Il minimo di caratteri NON vale: corto e vero. audio_script: lo stesso contenuto, parlato, una frase per opera al massimo.` : '')
             + (materialeDaiDatiStrutturati ? `\nIL MATERIALE SONO DATI STRUTTURATI, NON UN ARTICOLO: description_short 1-2 frasi, description_long 3-6 frasi, usando SOLO questi dati, uno per frase, senza storia, aneddoti, giudizi o descrizioni di aspetto che non siano nei dati. Non aggiungere aggettivi o funzioni non scritti (es. «pedonale», «suggestivo»). MAI citare le coordinate. Il minimo di caratteri NON vale: corto e vero. audio_script: lo stesso contenuto, parlato.` : '');
           let curatorPrompt = "";
           if (mode === "short") {
@@ -39446,13 +43007,58 @@ ${materialePerAi || "Nessuna fonte trovata"}
           let aiResponse: any = null;
           const materialeNetto = materialePerAi.replace(/\s+/g, ' ').trim().length;
           const haVoceSua = /wikipedia\.org\/wiki\//i.test(String(pageUrl || ''));
-          if (!utenteInAttesa && userId === 'background-script' && String(process.env.MISTRAL_SCRIVE_SECONDARI || '').trim() === '1' && process.env.MISTRAL_API_KEY
-            && mode !== 'short' && !materialeDaiDatiStrutturati && !haVoceSua && materialeNetto >= 120 && materialeNetto < (Number(process.env.SECONDARIO_MAX_MATERIALE) || 1500) && !engineInPausa('mistral:code')) {
+          const promptSchedaCorta = `Sei un curatore di guide culturali. Scrivi in ${nomeLingua(lang)}, SOLO dal materiale, la scheda CORTA di un luogo. Rispondi con un oggetto JSON con ESATTAMENTE due chiavi di tipo stringa: "description_short" (1-2 frasi: che cos'è e dove si trova) e "description_long" (da 3 a 6 frasi, testo continuo, un fatto per frase). REGOLE: nessun fatto, data, nome o numero che non sia nel materiale; NON copiare le frasi del materiale, riscrivi i fatti con parole tue; nessuna frase generica o di contorno, nessun aggettivo di lode; mai le coordinate; nessun titolo, nessun elenco; se i fatti sono pochi scrivi meno, non allungare. La scheda descrive IL LUOGO (tipo: ${category || 'non noto'}), non la persona o il tema a cui è intitolato né un'altra attività della zona: se il materiale non descrive il luogo stesso, o parla di un luogo con lo stesso nome in un'altra città, restituisci le due chiavi VUOTE.${materialeDalWeb ? `\n${regoleMaterialeWeb(fontiTerziWeb)}` : ''}${materialeDaiDatiStrutturati ? `\nIL MATERIALE SONO DATI STRUTTURATI, NON UN ARTICOLO: usa SOLO questi dati, uno per frase, senza storia, aneddoti, giudizi o aggettivi che non siano nei dati.` : ''}`;
+          // NATURA E FAMIGLIE NON GEMME → SCHEDA CORTA SCRITTA DA AGNES (23/11/2026, committente: «per parchi gioco e natura
+          // non serve tanto parole, a meno che non è gemma: allora puoi usare Gonka»). Misurato lo stesso giorno su 50
+          // luoghi della lista natura (prova a secco): 15/15 schede con 0 numeri fuori dal materiale, copia media 3%, 15/15
+          // frasi chiuse, 7 s di mediana, nessun 429 con 12 chiamate insieme su 4 chiavi (~10 contemporanee per account
+          // gratuito). Vale anche per i secondari generici della vecchia corsia Mistral (credito finito l'11/10), sempre
+          // non gemme. Solo `background-script`: un utente in attesa resta sulla catena di sempre. Le gemme restano a Gonka.
+          // Revisore, cancello e regole di salvataggio sotto restano identici. AGNES_SCRIVE_SECONDARI=1.
+          const CATEGORIE_SCHEDA_CORTA = /^(natura|panorami|viewpoint|waterfall|island|beach|lake|glacier|peak|cave|volcano|street_art|theme_park|playground|water_park|zoo|aquarium|famiglie)$/i;
+          const nonGemma = rigaNota?.is_gem !== true;
+          const luogoDaSchedaCorta = nonGemma && (CATEGORIE_SCHEDA_CORTA.test(String(rigaNota?.category || category || ''))
+            || (!materialeDaiDatiStrutturati && !haVoceSua && materialeNetto < (Number(process.env.SECONDARIO_MAX_MATERIALE) || 1500)));
+          if (!utenteInAttesa && userId === 'background-script' && String(process.env.AGNES_SCRIVE_SECONDARI || '').trim() === '1'
+            && mode !== 'short' && !bloccoOpere && luogoDaSchedaCorta && materialeNetto >= 120 && !engineInPausa('agnes:corta')) {
+            const chiavi = chiaviAgnes();
+            for (let tentativo = 0; tentativo < Math.min(3, chiavi.length) && !aiResponse; tentativo++) {
+              const chiave = chiavi[agnesKeyCounter++ % chiavi.length];
+              try {
+                const rA = await axios.post('https://apihub.agnes-ai.com/v1/chat/completions', {
+                  model: process.env.AGNES_MODELLO_SECONDARI || 'agnes-2.5-flash', temperature: 0.3, max_tokens: 1500, response_format: { type: 'json_object' },
+                  messages: [
+                    { role: 'system', content: promptSchedaCorta },
+                    { role: 'user', content: `Luogo: ${name}\n<materiale>\n${materialePerAi.slice(0, 9000)}\n</materiale>` },
+                  ],
+                }, { headers: { Authorization: `Bearer ${chiave}` }, timeout: 90000 });
+                const tA = String(rA.data?.choices?.[0]?.message?.content || '');
+                const oA: any = parseSafeJSON(tA);
+                if (oA && typeof oA.description_long === 'string' && oA.description_long.trim().length >= 60 && rA.data?.choices?.[0]?.finish_reason !== 'length') {
+                  aiResponse = { data: JSON.stringify({ description_short: String(oA.description_short || ''), description_long: oA.description_long }), model: 'agnes-2.5-flash (scheda corta)' };
+                  diag.schedaCortaAgnes = true;
+                  console.log(`[Universal AI] Success with agnes (scheda corta, ${name})`);
+                } else {
+                  // Chiavi vuote (materiale di un altro luogo) o risposta incompleta: decide la catena di sempre (Gonka),
+                  // che ha la stessa regola e dopo di sé i controlli del comune e del tema.
+                  diag.schedaCortaAgnesVuota = true;
+                  break;
+                }
+              } catch (eA: any) {
+                // Un 429 è il limite di QUEL account gratuito: si prova la chiave dopo; tutte piene → pausa breve della corsia.
+                if (Number(eA?.response?.status) === 429) { if (tentativo === Math.min(3, chiavi.length) - 1) enginePausaFino['agnes:corta'] = Date.now() + 60_000; continue; }
+                console.warn(`[enrich] "${name}": agnes (scheda corta) non riuscito (${eA?.response?.status || eA?.message}), si passa a Gonka`);
+                break;
+              }
+            }
+          }
+          if (!aiResponse && !utenteInAttesa && userId === 'background-script' && String(process.env.MISTRAL_SCRIVE_SECONDARI || '').trim() === '1' && process.env.MISTRAL_API_KEY
+            && mode !== 'short' && !materialeDaiDatiStrutturati && !bloccoOpere && !haVoceSua && materialeNetto >= 120 && materialeNetto < (Number(process.env.SECONDARIO_MAX_MATERIALE) || 1500) && !engineInPausa('mistral:code')) {
             try {
               const rS = await axios.post('https://api.mistral.ai/v1/chat/completions', {
                 model: process.env.MISTRAL_MODELLO_SECONDARI || 'mistral-code-latest', temperature: 0.3, max_tokens: 1200, response_format: { type: 'json_object' },
                 messages: [
-                  { role: 'system', content: `Sei un curatore di guide culturali. Scrivi in ${nomeLingua(lang)}, SOLO dal materiale, la scheda CORTA di un luogo. Rispondi con un oggetto JSON con ESATTAMENTE due chiavi di tipo stringa: "description_short" (1-2 frasi: che cos'è e dove si trova) e "description_long" (da 3 a 6 frasi, testo continuo, un fatto per frase). REGOLE: nessun fatto, data, nome o numero che non sia nel materiale; NON copiare le frasi del materiale, riscrivi i fatti con parole tue; nessuna frase generica o di contorno, nessun aggettivo di lode; mai le coordinate; se i fatti sono pochi scrivi meno, non allungare. La scheda descrive IL LUOGO (tipo: ${category || 'non noto'}), non la persona o il tema a cui è intitolato né un'altra attività della zona: se il materiale non descrive il luogo stesso, o parla di un luogo con lo stesso nome in un'altra città, restituisci le due chiavi VUOTE.${materialeDalWeb ? `\n${regoleMaterialeWeb(fontiTerziWeb)}` : ''}` },
+                  { role: 'system', content: promptSchedaCorta },
                   { role: 'user', content: `Luogo: ${name}\n<materiale>\n${materialePerAi}\n</materiale>` },
                 ],
               }, { headers: { Authorization: `Bearer ${process.env.MISTRAL_API_KEY}` }, timeout: 60000 });
@@ -39505,7 +43111,13 @@ ${materialePerAi || "Nessuna fonte trovata"}
           // Ancora vuota dopo il ritento: non è «niente fonte», è un guasto del modello — si dice a chi chiama
           // (`ricerca_guasta`, niente memo «vuoto») e il testo grezzo NON diventa la scheda (vedi sotto).
           const modelloMuto = mode !== 'short' && !nienteMateriale && !parsed.description_short && !parsed.description_long;
-          if (modelloMuto) diag.erroreAi = diag.erroreAi || 'risposta_vuota_del_modello';
+          // (24/11/2026, Javsu = sito di un'acqua minerale, Lasergame Drachten = noleggio a domicilio) Un JSON VALIDO con
+          // i campi presenti e vuoti è il modello che obbedisce a «se il materiale parla d'altro, rispondi vuoto»
+          // (`regoleMaterialeWeb`): esito, non guasto. Contato come guasto, il luogo tornava in coda a ogni ripasso.
+          // Guasto resta la risposta senza i campi (vuota, troncata, non JSON).
+          const vuotoVoluto = modelloMuto && typeof parsed.description_short === 'string' && typeof parsed.description_long === 'string';
+          if (vuotoVoluto) diag.materialeNonPertinente = true;
+          else if (modelloMuto) diag.erroreAi = diag.erroreAi || 'risposta_vuota_del_modello';
 
           // Backstop di CODICE, non solo di prompt: se non c'era materiale
           // reale, il testo resta vuoto qualunque cosa il modello abbia
@@ -39577,13 +43189,15 @@ ${materialePerAi || "Nessuna fonte trovata"}
         // La scheda scritta dal modello su una fonte vera porta il nome della fonte: serve al ripasso per
         // distinguere i testi di oggi da quelli delle vecchie pipeline (`agnes_free_wiki_json`, `pending`…).
         else if (jsonResponse.description_long || jsonResponse.description_short) content.enrichment_source = materialeDalWeb ? 'fonti_web' : 'fonti_enciclopediche';
+        // (18/11/2026, Malta) Una scheda composta dai soli DATI («St. Julian's.») non è un testo: niente description_ai,
+        // altrimenti diventa il «materiale» dell'audioguida e la «descrizione dettagliata» della scheda.
         if (jsonResponse.description_short) {
           content.description_short = jsonResponse.description_short;
-          content.description_ai = jsonResponse.description_short;
+          if (!schedaDaDati) content.description_ai = jsonResponse.description_short;
         }
         if (jsonResponse.description_long) {
           content.description_long = jsonResponse.description_long;
-          content.description_ai = jsonResponse.description_long;
+          if (!schedaDaDati) content.description_ai = jsonResponse.description_long;
         }
         // LINGUA VERA della scheda (22/09/2026, vedi traduciCampiPoi): senza
         // questa colonna un POI arricchito oggi in spagnolo veniva letto come
@@ -39659,7 +43273,8 @@ ${materialePerAi || "Nessuna fonte trovata"}
         // dettagliata col materiale. Qui le frasi segnalate si TOLGONO (una scheda scritta regge il taglio di una
         // frase; nelle schede di Carrara: «architetto vincenziano», «chiese corsare», due date fuse in una frase).
         // Solo in sfondo, solo sulla generazione completa, solo se il materiale c'è.
-        if (!nuovoDaiDati && userId === 'background-script' && !fast && typeof content.description_long === 'string' && String(extract || '').replace(/\s+/g, ' ').length >= 300) {
+        // (21/11/2026) Conta anche il materiale fatto solo delle opere girate qui: prima, senza un articolo, il revisore non partiva.
+        if (!nuovoDaiDati && userId === 'background-script' && !fast && typeof content.description_long === 'string' && String(materialeLettoDalModello || extract || '').replace(/\s+/g, ' ').length >= 300) {
           const segnalate = await revisoreTestoLuogo(materialeLettoDalModello.length > String(extract).length ? materialeLettoDalModello : String(extract), content.description_long, 'descrizione');
           if (segnalate === null) diag.revisore = { esito: 'non_eseguito' };
           else if (!segnalate.length) diag.revisore = { esito: 'ok', segnalate: 0 };
@@ -39741,7 +43356,10 @@ ${materialePerAi || "Nessuna fonte trovata"}
         // REGOLA DEL TEMA (07/10/2026): la scheda deve descrivere IL LUOGO, non la persona a cui è intitolato, un'altra
         // attività della zona o un argomento. Si chiede quando la fonte NON è dichiarata sulla riga (trovata sul web, per
         // nome o per coordinate): con una voce di Wikipedia o un codice Wikidata dichiarati il tema è già quello.
+        // (21/11/2026) Una scheda scritta SOLO dalle opere girate qui (dati della riga, non trovati sul web) ha la fonte
+        // dichiarata: il controllo del tema la scarterebbe perché parla di film.
         if (!nuovoDaiDati && userId === 'background-script' && !fast && String(content.description_long || content.description_short || '').trim().length >= 120
+          && !(bloccoOpere && !extract && !materialeDalWeb)
           && (materialeDalWeb || !(typeof rigaNota !== 'undefined' && (rigaNota?.wikipedia_url || rigaNota?.wikidata)))) {
           const tema = await schedaParlaDelLuogo(String(name || ''), String(category || ''), typeof ancoraLuogo !== 'undefined' ? String(ancoraLuogo || '') : '', String(content.description_long || content.description_short || ''));
           if (tema === null) diag.tema = { esito: 'non_eseguito' };
@@ -40048,7 +43666,9 @@ ${materialePerAi || "Nessuna fonte trovata"}
         const paroleCitta = [dove, ...altriNomi].flatMap((d) => String(d || '').split(/[\/,(]/)).flatMap((p) => tokenSignificativi(p)).filter((t) => t.length >= 4);
         const nominaLaCitta = !sitoDaRicerca || (paroleCitta.length > 0 && paroleCitta.some((t) => testoNorm.includes(t)));
         if (sitoDaRicerca && !nominaLaCitta) console.warn(`[MaterialePoi] "${nome}": il sito trovato (${hostSito}) non nomina «${dove}»: è di un omonimo, scartato`);
-        if (testo.length >= 300 && parlaDelLuogo && nominaLaCitta) {
+        const spam = paginaSpam(testo, nome);
+        if (spam) console.warn(`[MaterialePoi] "${nome}": il sito ${hostSito} è una pagina di spam (dominio scaduto?), scartato`);
+        if (testo.length >= 300 && parlaDelLuogo && nominaLaCitta && !spam) {
           pezzi.push(`PAGINA DEL SITO UFFICIALE DEL LUOGO (${hostSito}, ${sito}):\n${testo.slice(0, 3500)}`);
           pageUrl = sito;
         }
@@ -41819,6 +45439,7 @@ REGOLE STRUTTURA GIORNATA:
 1. ALMENO 3-4 tappe al MATTINO, poi la tappa PRANZO (tipo "pranzo", locale reale con piatto tipico), ALMENO 3-4 tappe al POMERIGGIO, infine la tappa CENA (tipo "cena", locale reale). Totale minimo 8 tappe (incluse pranzo/cena)${opts.transferBlock ? ', OLTRE alle due tappe di trasferimento indicate sotto (le aggiungi tu, non generarne altre di quel tipo)' : ''}.
 2. PERCORSO PIÙ BREVE: una sola zona/quartiere compatto, tappe in ordine di prossimità geografica.
 REGOLE LUNGHEZZA TESTI: "attivita" ~60-80 parole; "consiglio_guida" ~40-50 parole, con ENTRAMBE le guide (✨ Nicky e 📜 Dante).
+${REGOLE_PREVENZIONE_ITINERARIO}
 ${themeBrief}${avoidBlock}${opts.transferBlock || ''}
 ${ANTI_HALLUCINATION_RULES}
 Restituisci ESATTAMENTE questo schema JSON (SOLO questo giorno, numerato "giorno": ${opts.dayNumber}):
@@ -42026,10 +45647,11 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
         let timer: any;
         try {
           await Promise.race([
-            agganciaTappeAlDatabase({ giorni: [day] }, targetCoords, targetCity, cancel),
+            agganciaTappeAlDatabase({ giorni: [day] }, targetCoords, targetCity, cancel, { giudice: true }),
             new Promise((r) => { timer = setTimeout(() => { cancel.cancelled = true; r(null); }, 12000); }),
           ]);
         } catch { /* fail-open */ } finally { clearTimeout(timer); }
+        try { await giudicaAgganciDubbi({ giorni: [day] }, { destination: targetCity, userId: extUserId, tettoMs: 12000 }); } catch { /* fail-open */ }
         try {
           const prodotti = togliTappeProdotto({ giorni: [day] });
           if (prodotti) console.log(`[itinerary/extend] ${prodotti} tappe-prodotto o shopping generico tolte dal giorno nuovo`);
@@ -42059,13 +45681,30 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
         try {
           // (23/10/2026) Stessa regola del generatore: scadenza dentro la verifica, mai «verificata» per silenzio.
           const contenitore: any = { giorni: [newDay] };
-          await verificaItinerarioConTetto(contenitore, { destination: targetCity, lat: targetCoords.lat, lon: targetCoords.lon, radiusKm: 60, language, inDiretta: true }, 45000);
+          await verificaItinerarioConTetto(contenitore, { destination: targetCity, lat: targetCoords.lat, lon: targetCoords.lon, radiusKm: 60, language, inDiretta: true, giudice: true, userIdGiudice: extUserId }, 45000);
           newDay = contenitore.giorni[0];
         } catch { /* fail-open */ }
+        // CONTROLLO QUALITÀ AUTOMATICO (18/11/2026) sul giorno nuovo, con i giorni vecchi come contesto (doppioni).
+        try {
+          const tutto: any = { giorni: [...giorniEsistenti, newDay] };
+          await controlloQualitaItinerario(tutto, { destination: targetCity, lat: targetCoords.lat, lon: targetCoords.lon, language, tettoMs: 25000, soloGiorni: new Set([giorniEsistenti.length]), giudice: true, userId: extUserId });
+          newDay.qualita = { ...(newDay.qualita || {}), controllo: tutto.qualita?.controllo, ...(tutto.qualita?.giudice ? { giudice: tutto.qualita.giudice } : {}) };
+        } catch (eCq: any) { newDay.qualita = { ...(newDay.qualita || {}), controllo: { esito: 'non_eseguito', errore: String(eCq?.message || eCq).slice(0, 120), ts: Date.now() } }; }
+        // (14/11/2026) Come nel generatore: righe dei mezzi rifatte sulle posizioni uscite dalla verifica.
+        try { if (newDay) await mezziPerTratteLunghe({ giorni: [newDay] }, { lingua: language, tettoMs: 8000, rifai: true }); } catch { /* fail-open */ }
         try {
           const rf = await revisoreFattiItinerario({ giorni: [newDay] }, { destination: targetCity, language, userId: extUserId, tettoMs: 40000 });
           newDay.qualita = { ...(newDay.qualita || {}), revisore_fatti: rf };
         } catch { newDay.qualita = { ...(newDay.qualita || {}), revisore_fatti: { esito: 'non_eseguito', controllate: 0, frasi_tolte: 0 } }; }
+        // (20/11/2026) Come nel generatore: le tappe non pasto non confermate si riagganciano, si sostituiscono con un luogo
+        // vero dell'archivio o si tolgono (giorni vecchi come contesto per «doppioni mai»); poi le formule vietate.
+        try {
+          const tutto: any = { giorni: [...giorniEsistenti, newDay] };
+          await risolviTappeNonConfermate(tutto, { destination: targetCity, language, lat: targetCoords.lat, lon: targetCoords.lon, radiusKm: 60, tettoMs: 25000, soloGiorni: new Set([giorniEsistenti.length]) });
+          newDay = tutto.giorni[giorniEsistenti.length] || newDay;
+          if (tutto.qualita?.tappe_non_confermate) newDay.qualita = { ...(newDay.qualita || {}), tappe_non_confermate: tutto.qualita.tappe_non_confermate };
+        } catch { /* fail-open */ }
+        try { pulisciFormuleItinerario({ giorni: [newDay] }); } catch { /* fail-open */ }
       }
 
       if (!newDay) {
@@ -42460,12 +46099,20 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
   // Accept-Language: prima la lingua del PAESE del museo, poi inglese. Con
   // «it,en» un sito cinese o giapponese serviva la versione inglese ridotta
   // (o nulla), e le mostre locali restavano fuori.
-  const scaricaHtml = async (url: string, linguaLocale = ''): Promise<string | null> => {
+  // (25/11/2026) `perFeed`: i feed e le API del registro (Brisbane 5,4 MB, Varsavia 3,4 MB) hanno 8 MB e 15 s.
+  const scaricaHtml = async (url: string, linguaLocale = '', perFeed = false, codifica = ''): Promise<string | null> => {
     try {
+      // (25/11/2026) file non UTF-8 (CSV giapponesi in Shift_JIS): si scaricano grezzi e si decodificano
+      if (codifica) {
+        const g = await axios.get(url, { timeout: 15000, maxRedirects: 3, maxContentLength: 8_000_000, responseType: 'arraybuffer', validateStatus: (s) => s < 400,
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WorldInPocket/1.0; +https://wip.guide)' } });
+        const testo = new TextDecoder(codifica).decode(Buffer.from(g.data));
+        return testo.length > 200 ? testo : null;
+      }
       const r = await axios.get(url, {
-        timeout: 9000,
+        timeout: perFeed ? 15000 : 9000,
         maxRedirects: 3,
-        maxContentLength: 2_000_000,
+        maxContentLength: perFeed ? 12_000_000 : 2_000_000, // (25/11/2026) 12 MB: SIT Québec è 8,6 MB
         headers: {
           'User-Agent': 'Mozilla/5.0 (compatible; WorldInPocket/1.0; +https://wip.guide)',
           'Accept': 'text/html,application/xhtml+xml',
@@ -43121,6 +46768,9 @@ ${testo}`;
           if (!/^(musei|museum|gallery|art_gallery)$/.test(String(m.category || ''))) continue;
           const d = Number(m.distanza_m) / 1000;
           if (perId.has(m.id)) continue;
+          // (25/11/2026, collaudo dei filtri + committente: «collezioni: fino a 10% di distanza in più è accettabile»)
+          // le fasce arrotondano il raggio in su (100 km → fascia 50–150): oltre il raggio CHIESTO + 10% non si mostra.
+          if (Number.isFinite(richiestoKm) && d > richiestoKm * 1.1) continue;
           // Solo musei che vengono da una FONTE (19/09/2026). Le righe `iti-…`
           // sono tappe scritte da un itinerario e le `vision-…` schede della
           // community: nell'elenco dei musei di Greve usciva «Piazza Matteotti
@@ -44724,6 +48374,20 @@ out center tags;`;
   // altri tre motori (committente 12/09/2026), ma il default resta quello
   // vero — un tetto più alto messo qui farebbe pagare Azure, non risparmiare.
   const AZURE_LIMIT = Number(process.env.AZURE_TTS_MONTHLY_LIMIT) || 500000;
+  // Seconda chiave (14/11/2026): Standard S0 sul credito di prova di 200 USD. Committente: «metti sempre il limite
+  // per non sforare i 200 US$» → tetto TOTALE, non mensile: 11.000.000 caratteri ≈ 176 USD a 16 $/M. Il contatore
+  // (tts_usage_azure2_totale) non si azzera a fine mese; raggiunto il tetto la chiave si salta per sempre, finché
+  // qualcuno non alza AZURE_TTS_TOTAL_LIMIT_2.
+  const AZURE_LIMIT_2 = Number(process.env.AZURE_TTS_TOTAL_LIMIT_2) || 11000000;
+  const AZURE_CONTI = (): { motore: string; key: string | undefined; region: string; limite: number }[] => {
+    const regione = process.env.AZURE_SPEECH_REGION || "westeurope";
+    const conti = [{ motore: 'azure', key: process.env.AZURE_SPEECH_KEY, region: regione, limite: AZURE_LIMIT }];
+    // Terza chiave (14/11/2026): Speech Free F0 sul nuovo account = altri 500.000 caratteri gratuiti al mese, per
+    // sempre. Viene PRIMA della chiave a credito: prima le due fasce gratuite, poi il credito.
+    if (process.env.AZURE_SPEECH_KEY_3) conti.push({ motore: 'azure3', key: process.env.AZURE_SPEECH_KEY_3.trim(), region: (process.env.AZURE_SPEECH_REGION_3 || process.env.AZURE_SPEECH_REGION_2 || regione).trim(), limite: Number(process.env.AZURE_TTS_MONTHLY_LIMIT_3) || 500000 });
+    if (process.env.AZURE_SPEECH_KEY_2) conti.push({ motore: 'azure2', key: process.env.AZURE_SPEECH_KEY_2.trim(), region: (process.env.AZURE_SPEECH_REGION_2 || regione).trim(), limite: AZURE_LIMIT_2 });
+    return conti;
+  };
   // Tetti mensili per motore (12/09/2026, richiesta del committente: "metti
   // i limiti a tutti i tre motori, superata la soglia ferma") — superata la
   // soglia quel motore si SALTA (come già faceva Azure), mai un costo non
@@ -44750,6 +48414,7 @@ out center tags;`;
   // il contatore già in produzione; gli altri motori ne hanno una propria.
   const ttsUsageKey = (motore: string = 'azure') => motore === 'azure'
     ? `tts_usage_${new Date().toISOString().slice(0, 7)}`
+    : motore === 'azure2' ? 'tts_usage_azure2_totale'
     : `tts_usage_${motore}_${new Date().toISOString().slice(0, 7)}`;
 
   async function getTtsUsage(motore: string = 'azure'): Promise<number> {
@@ -44909,7 +48574,10 @@ out center tags;`;
     return Buffer.concat(pezzi);
   }
 
-  async function synthesizeSpeech(text: string, voiceName: string): Promise<{ buffer: Buffer; provider: 'Azure' | 'Polly' | 'ElevenLabs' | 'Google' | 'Gemini' | 'Piper' | 'Kokoro' }> {
+  // opts.soloCredito (14/11/2026): solo per gli script di sfondo che preparano in blocco le voci delle gemme — usa
+  // SOLTANTO la seconda chiave Azure (credito di prova), Nicky e Dante con le voci Azure; se non risponde o il tetto
+  // è raggiunto fallisce, senza mai toccare la fascia gratuita della prima chiave, Polly o gli altri motori.
+  async function synthesizeSpeech(text: string, voiceName: string, opts?: { soloCredito?: boolean; soloConto?: string }): Promise<{ buffer: Buffer; provider: 'Azure' | 'Polly' | 'ElevenLabs' | 'Google' | 'Gemini' | 'Piper' | 'Kokoro' }> {
     const charCount = text.length;
     const currentUsage = await getTtsUsage();
 
@@ -44922,11 +48590,21 @@ out center tags;`;
     // ORDINE DELLE VOCI (13/09/2026, strategia del committente): Nicky =
     // Azure Elsa, Dante = Polly Adriano, finché reggono le quote gratuite;
     // poi Kokoro (Nicola) sul droplet; poi ElevenLabs, Google, Piper.
+    // DUE ACCOUNT AZURE (14/11/2026, committente: «creiamo un'altra chiave Azure», «metti il limite sia nella
+    // prima che nella seconda chiave»): prima la chiave storica (fascia gratuita, 500.000 caratteri/mese), poi
+    // AZURE_SPEECH_KEY_2 (altro account, Standard S0 pagato dal credito di prova), ognuna col SUO contatore e il
+    // SUO tetto mensile. Un errore o il tetto raggiunto sulla prima fa provare la seconda; senza la seconda
+    // variabile non cambia nulla.
+    const soloConto = opts?.soloConto || (opts?.soloCredito ? 'azure2' : '');
     const provaAzure = async (): Promise<{ buffer: Buffer; provider: 'Azure' } | null> => {
-    if (currentUsage < AZURE_LIMIT) {
+    for (const conto of AZURE_CONTI()) {
+    if (soloConto && conto.motore !== soloConto) continue;
+    const usato = conto.motore === 'azure' ? currentUsage : await getTtsUsage(conto.motore);
+    if (usato + (conto.motore === 'azure2' ? charCount : 0) >= conto.limite) { console.warn(`[TTS] ${conto.motore} oltre il tetto (${conto.limite} caratteri), salto`); continue; }
+    {
       try {
-        const key = process.env.AZURE_SPEECH_KEY;
-        const region = process.env.AZURE_SPEECH_REGION || "westeurope";
+        const key = conto.key;
+        const region = conto.region;
         if (!key) throw new Error("Azure Key Missing");
 
         // Escape XML: un "&" o "<" nel testo (comunissimo nelle audioguide)
@@ -44950,15 +48628,16 @@ out center tags;`;
             timeout: 60000
           }
         );
-        await updateTtsUsage('azure', charCount);
+        await updateTtsUsage(conto.motore, charCount);
         const audioBuffer = Buffer.from(response.data);
         // Un MP3 "vuoto" (risposta 200 anomala) non va né in cache né al client
         if (audioBuffer.length < 500) throw new Error(`Azure returned ${audioBuffer.length} bytes`);
-        insertApiUsageLog({ api_name: 'azure', feature_context: 'sintesi_vocale_tts', cost_estimation: charCount * 0.000016, tokens_used: charCount, success: true }).catch(() => {}); // tokens_used = caratteri fatturati da Azure (16 $/M neurali)
+        insertApiUsageLog({ api_name: conto.motore, feature_context: 'sintesi_vocale_tts', cost_estimation: charCount * 0.000016, tokens_used: charCount, success: true }).catch(() => {}); // tokens_used = caratteri fatturati da Azure (16 $/M neurali)
         return { buffer: audioBuffer, provider: 'Azure' };
       } catch (e: any) {
-        console.warn("Azure TTS Failed or Limit Reached, falling back... Error message:", e.message, "Status:", e.response?.status, "Data:", e.response?.data ? Buffer.from(e.response.data).toString().slice(0, 300) : "");
+        console.warn(`Azure TTS (${conto.motore}) Failed or Limit Reached, falling back... Error message:`, e.message, "Status:", e.response?.status, "Data:", e.response?.data ? Buffer.from(e.response.data).toString().slice(0, 300) : "");
       }
+    }
     }
     return null;
     };
@@ -44982,6 +48661,11 @@ out center tags;`;
     return null;
     };
 
+    if (soloConto) {
+      const r = await provaAzure();
+      if (r) return r;
+      throw new Error(`chiave Azure «${soloConto}» non disponibile (assente, tetto raggiunto o errore)`);
+    }
     // Dante: prima Polly (Adriano), poi Azure; Nicky: prima Azure (Elsa), poi Polly.
     const primi = E_VOCE_DANTE.test(voiceName) ? [provaPolly, provaAzure] : [provaAzure, provaPolly];
     for (const prova of primi) { const r = await prova(); if (r) return r; }
@@ -45168,7 +48852,10 @@ out center tags;`;
       if (!text) return res.status(400).json({ error: 'text richiesto' });
       const t0 = Date.now();
       let buffer: Buffer;
-      if (provider === 'polly') buffer = await synthesizePolly(text, voiceName);
+      // (14/11/2026) prova delle chiavi Azure una per una (azure, azure2, azure3) e del traduttore di ripiego.
+      if (provider === 'translator') return res.json({ esito: await traduciConAzureTranslator({ testo: text }, String(req.query.lang || 'en').toLowerCase().slice(0, 2)), ms: Date.now() - t0 });
+      if (/^azure[23]?$/.test(provider)) buffer = (await synthesizeSpeech(text, voiceName, { soloConto: provider })).buffer;
+      else if (provider === 'polly') buffer = await synthesizePolly(text, voiceName);
       else if (provider === 'elevenlabs') buffer = await synthesizeElevenLabs(text, voiceName);
       else if (provider === 'piper') buffer = await synthesizePiper(text, voiceName);
       else if (provider === 'kokoro') {
@@ -45316,7 +49003,7 @@ out center tags;`;
         return res.status(429).json({ error: "Quota Exceeded", message: quota.error });
       }
 
-      const { buffer: audioBuffer, provider } = await synthesizeSpeech(text, voiceName);
+      const { buffer: audioBuffer, provider } = await synthesizeSpeech(text, voiceName, daScript && req.body?.soloCredito === true ? { soloCredito: true } : undefined);
 
       if (preloadOnly) {
         // Warm-up: si aspetta il salvataggio in cache e si risponde a vuoto,
@@ -46648,6 +50335,386 @@ Non aggiungere testo prima o dopo il JSON.`;
     } catch (e: any) { res.status(500).json({ error: e?.message }); }
   });
 
+  // ═══ COMPLETAMENTO DELLE VERIFICHE E POI DELLE TAPPE (18/11/2026, ordini del committente) ═══════════════════════
+  // 1) «tutti i giorni, anche se fossero 7, devono essere verificati tappa per tappa… devono prendersi il tempo
+  //    necessario per finalizzare»: lo stream verifica quanto può dentro i 300 s; le tappe rimaste (verifica_rimandata)
+  //    le finisce questa cron, ogni 5 minuti, un itinerario alla volta, con ~200 s di verifica + il revisore dei fatti.
+  // 2) «ogni tappa deve diventare un POI per i futuri users — con foto, descrizione, audioguida»: per ogni tappa
+  //    CONFERMATA e non agganciata si cerca prima un gemello con fonte (50 m, stesso nome) e un gemello `iti-`/`tappa_`
+  //    già scritto (300 m, stesso nome: mai un secondo gemello); solo se non c'è si crea la riga `iti-…` (stesse regole
+  //    di /api/poi/from-itinerary: nome del luogo, niente prodotti, niente vie di negozi, niente description_ai). Il
+  //    poi_id torna nella tappa salvata. Poi, nei giri successivi, l'arricchimento completo (/api/poi/enrich mode full)
+  //    e l'audioguida IT + lingua dell'utente (/api/poi/audioguide, solo con materiale vero: no_material → niente),
+  //    entrambi come lavoratore di sfondo (x-script-secret: pool a rotazione, mai le chiavi dedicate).
+  // Lancio a mano su un itinerario: GET /api/cron/completa-verifiche?id=<uuid>[&forza=1] con Bearer CRON_SECRET o
+  // x-script-secret. `forza` riprende anche le tappe non agganciate «da verificare» e gli agganci non validi.
+  const TAPPA_NON_LUOGO_SERVER = /pausa|spostamento|trasferimento|esperienz/i;
+  const TIPO_VIA_SERVER = /\b(via|strada|street|corso|viale|calle|rue|avenue|boulevard|promenade|passeggiata|stra(ss|ß)e|straat)\b/i;
+  const COMMERCIALE_SERVER = /shopping|negoz|boutique|vetrin|griffe|lusso|luxury|acquist|compr(are|e)\b|shop|store|outlet|commercial|mercato|market|moda\b|fashion/i;
+  // Stessa mappa di mapItineraryCategoryToMapCategory (src/services/poiRepository.ts): chi cambia l'una cambia l'altra.
+  const categoriaDaTipoTappa = (aiType: string): string => {
+    const t = String(aiType || '').toLowerCase();
+    if (/museo|galleria|arte|museum|gallery/.test(t)) return 'musei';
+    if (/ristorante|osteria|trattoria|pizzeria|cena|pranzo|colazione|brunch|merenda|aperitivo|degustazione|enogastronom|gastronom|enoteca|pub|caff|bar|food|cibo|catering|agriturismo/.test(t)) return 'locali';
+    if (/esperienz|experience|attivit|activity|realt. virtuale|\bvr\b|laboratorio|workshop|spettacolo|show|shopping|negozio|shop|mercato|market|boutique|terme|spa\b|crociera|cruise|escursione|intrattenimento|entertainment|divertimento|parco giochi|svago/.test(t)) return 'locali';
+    if (/monumento|statua|storico|castello|castle|rovina|rocca|fortezza|torre|palazzo|monument|archeolog|nuraghe/.test(t)) return 'monumenti';
+    if (/chiesa|basilica|cattedrale|duomo|abbazia|santuario|cappella|church|monastero/.test(t)) return 'chiese';
+    if (/parco|giardino|natura|spiaggia|panoram|viewpoint|park|isola|lago|monte|vetta|cascata|mare|paesaggio|vista/.test(t)) return 'panorami';
+    if (/stazione|aeroporto|porto|trasporto|traghetto|metro/.test(t)) return 'utilita';
+    return 'monumenti';
+  };
+  const tappaDiventaPoiServer = (t: any): boolean => {
+    const tipo = String(t?.tipo || ''), nome = String(t?.titolo_tappa || t?.titolo || '').trim();
+    if (!nome || TIPO_ALLOGGIO_RIENTRO.test(tipo) || TAPPA_NON_LUOGO_SERVER.test(tipo)) return false;
+    if (NOME_PRODOTTO_NON_TAPPA.test(nome) || SHOPPING_GENERICO.test(nome)) return false;
+    const eVia = TIPO_VIA_SERVER.test(tipo) || /^(via|viale|corso|rue|calle|avenue|boulevard)\s/i.test(nome);
+    if (eVia && (COMMERCIALE_SERVER.test(tipo) || COMMERCIALE_SERVER.test(nome) || COMMERCIALE_SERVER.test(String(t?.attivita || '')))) return false;
+    // Una tappa segnalata non diventa un luogo; la crea più tardi, se la verifica la conferma.
+    if (t?.verifica === 'da_verificare' || t?.verifica === 'non_conforme' || !t?.verifica || t?.verifica_rimandata) return false;
+    return true;
+  };
+  /** Crea (o ritrova) la riga POI di ogni tappa confermata e non agganciata. Scrive poi_id nella tappa. */
+  async function poiDalleTappeServer(itin: any, destination: string, centro: { lat: number; lon: number } | null = null, giaGeocodificata = false): Promise<{ gemelli: number; riusati: number; creati: number; ids: string[]; saltate: string[]; spostate: string[] }> {
+    const out = { gemelli: 0, riusati: 0, creati: 0, ids: [] as string[], saltate: [] as string[], spostate: [] as string[] };
+    // REGOLA 21/11/2026 (collaudo notturno, Atene: «Museo dell'Acropoli» riusava `iti-acropolidiatene-…`, la riga della
+    // tappa «Acropoli di Atene» dello stesso itinerario — due tappe, un luogo; «doppioni mai»). Una riga già presa da
+    // un'altra tappa dell'itinerario non è mai il gemello di questa: la tappa cerca il suo, o ne nasce uno suo.
+    const giaUsati = new Set<string>(extractItineraryStops(itin).map((s: any) => String(s?.ref?.poi_id || '')).filter(Boolean));
+    for (const { ref: t } of extractItineraryStops(itin)) {
+      if (!t || t.poi_id || !tappaDiventaPoiServer(t)) continue;
+      const lat = Number(t?.coordinate?.lat), lon = Number(t?.coordinate?.lng ?? t?.coordinate?.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0) || Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
+      const nomeLuogo = nomeLuogoDaTappa(String(t.titolo_tappa || t.titolo || '')).slice(0, 300);
+      if (!nomeLuogo) continue;
+      const dLa = 0.3 / 111, dLo = 0.3 / (111 * Math.max(0.15, Math.cos(lat * Math.PI / 180)));
+      const r = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=id,name,lat,lon,category,status,is_hidden,wikidata,city&lat=gte.${lat - dLa}&lat=lte.${lat + dLa}&lon=gte.${lon - dLo}&lon=lte.${lon + dLo}&limit=300`, { headers: SB_HDR(), timeout: 12000 }).catch(() => null);
+      if (!r) continue; // lettura fallita: si riprova al prossimo giro, mai un gemello alla cieca
+      const righe: any[] = (Array.isArray(r.data) ? r.data : []).filter((x: any) => !giaUsati.has(String(x?.id || '')));
+      // (23/11/2026) anche per radice: «Museo delle Illusioni Montréal» / «Musée de l'Illusion Montréal».
+      const stesso = (x: any) => nomiStessoLuogo(nomeLuogo, x.name, destination) || nomiStessoLuogoTradotti(nomeLuogo, x.name, destination) || normTesto(x.name) === normTesto(nomeLuogo) || nomiStessoLuogoRadice(nomeLuogo, x.name, destination);
+      const d = (x: any) => getHaversineDistance(lat, lon, Number(x.lat), Number(x.lon));
+      const visibile = (x: any) => x.is_hidden !== true && !/^(draft|hidden|needs_revision)$/i.test(String(x.status || ''));
+      // (a) gemello CON FONTE entro 50 m (come cercaGemelloConFonte dell'app), prima le fonti enciclopediche.
+      // (20/11/2026, collaudo Los Angeles: «Walt Disney Concert Hall» sganciata dal controllo qualità perché su
+      // `cine-Q474326`, poi RIagganciata qui alla stessa riga cinema) Mai righe cinema/località/targhe, mai una riga che
+      // la tappa ha già rifiutato, mai una riga che il controllo qualità giudica non valida per la tappa.
+      const rifiutate: string[] = Array.isArray(t.agganci_rifiutati) ? t.agganci_rifiutati.map(String) : [];
+      const conFonte = righe.filter((x) => visibile(x) && !/^(iti-|tappa_|tappa-|vision-|ai_|viator-|tq-|gyg-|tm-|tiqets-|lusso-|gtfs-|ocm-|cine-|cinema-|loc-|plaque-)/i.test(String(x.id)) && x.category !== 'community'
+        && !rifiutate.includes(String(x.id)) && !rigaNonValidaPerTappa(t, x) && (normTesto(x.name) === normTesto(nomeLuogo) || (!/^loc-/i.test(String(x.id)) && !eEntitaAmministrativa({ ...x, is_gem: false })))
+        // 50 m come nell'app; fino a 300 m per una riga con QID o con lo stesso nome (anche tradotto: «St. Julian's Parish
+        // Church» / «Parrocca San Giljan», 300 m) — le coordinate del modello sono spesso spostate (18/11/2026). Una riga
+        // Overture solo se è un luogo non commerciale con lo stesso nome.
+        && !(/^ov-/i.test(String(x.id)) && !overtureLuogoStessoNome(x, nomeLuogo, destination))
+        && d(x) <= 300 && stesso(x))
+        .sort((a, b) => (/^(wd-|unesco-|wv-)/.test(String(b.id)) ? 1 : 0) - (/^(wd-|unesco-|wv-)/.test(String(a.id)) ? 1 : 0) || d(a) - d(b));
+      if (conFonte[0]) { t.poi_id = String(conFonte[0].id); giaUsati.add(t.poi_id); out.gemelli++; continue; }
+      // (b) gemello `iti-`/`tappa_` già scritto entro 300 m con lo stesso nome: si RIUSA (Portomaso Marina aveva tre righe).
+      // (18/11/2026, collaudo Malta 1ef00dbf: la cron ha riusato `iti-mercatodistjulians-…`, la riga col testo di
+      // riempimento della città, per una tappa non confermata) Un gemello `iti-`/`tappa_` si riusa SOLO per una tappa
+      // verificata, o poco nota con la posizione confermata da una fonte: le altre non diventano luoghi.
+      const confermata = t.verifica === 'verificata' || (t.verifica === 'poco_noto' && !!t.coordinate_fonte && t.coordinate_fonte !== 'modello');
+      if (!confermata) { out.saltate.push(`${nomeLuogo}: ${t.verifica === 'poco_noto' ? 'poco nota senza posizione confermata' : (t.verifica || 'senza verdetto')}`); continue; }
+      let gemelloTappa = righe.filter((x) => /^(iti-|tappa_|tappa-)/i.test(String(x.id)) && x.is_hidden !== true && d(x) <= 300 && stesso(x)).sort((a, b) => d(a) - d(b))[0];
+      // (18/11/2026, collaudo Malta) Con il NOME IDENTICO il gemello si riusa fino a 1 km: la cron aveva creato
+      // `iti-spinolabay-35p919_14p488` con `iti-spinolabay-35p915_14p496` «Spinola Bay» (scheda e foto) a 450 m.
+      // Si preferisce il gemello che ha già una scheda.
+      if (!gemelloTappa) {
+        const dLa1 = 1 / 111, dLo1 = 1 / (111 * Math.max(0.15, Math.cos(lat * Math.PI / 180)));
+        const nomeEsatto = nomeLuogo.replace(/[*,()"\\]/g, ' ').replace(/\s+/g, ' ').trim();
+        const r1 = nomeEsatto ? await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=id,name,lat,lon,is_hidden,description_short,description_long,description_ai,image_url&name=ilike.${encodeURIComponent(nomeEsatto)}&or=(id.like.iti-*,id.like.tappa*)&lat=gte.${lat - dLa1}&lat=lte.${lat + dLa1}&lon=gte.${lon - dLo1}&lon=lte.${lon + dLo1}&limit=20`, { headers: SB_HDR(), timeout: 12000 }).catch(() => null) : null;
+        const testoDi = (x: any) => Math.max(String(x.description_short || '').length, String(x.description_long || '').length, String(x.description_ai || '').length) + (x.image_url ? 500 : 0);
+        gemelloTappa = (Array.isArray(r1?.data) ? r1.data : []).filter((x: any) => x.is_hidden !== true && !giaUsati.has(String(x.id)) && normTesto(x.name) === normTesto(nomeLuogo) && d(x) <= 1000)
+          .sort((a: any, b: any) => testoDi(b) - testoDi(a) || d(a) - d(b))[0];
+      }
+      if (gemelloTappa) { t.poi_id = String(gemelloTappa.id); giaUsati.add(t.poi_id); out.riusati++; out.ids.push(t.poi_id); continue; }
+      // (18/11/2026, collaudo Malta) REGOLE PRIMA DI CREARE una riga nuova:
+      // · una tappa che è una CITTÀ o un BORGO («Mdina - Città Vecchia») non diventa mai un `iti-`: o la riga città/borgo
+      //   esiste (l'aggancio la prende per nome) o resta senza POI;
+      // · solo una tappa «verificata» (una «poco nota» non ha conferme: «Mercato di St. Julian's» ha preso la scheda della
+      //   città);
+      // · mai con coordinate non confermate: «Torri di Wignacourt» e «The Point Shopping Mall» sono nati a St. Julian's
+      //   mentre stanno a St. Paul's Bay e a Tigné. Senza una fonte della posizione si chiede al geocoder (riquadro del
+      //   viaggio); se la sposta, si riprova l'aggancio nel punto vero; se non risponde, niente riga.
+      if (/borgo|citt[aà]|villag|paese|localit|town|city|village/i.test(String(t.tipo || ''))) { out.saltate.push(`${nomeLuogo}: città/borgo`); continue; }
+      // (18/11/2026 sera, committente: «ogni tappa vera deve diventare un POI») Anche una «poco nota» diventa un luogo,
+      // ma solo se una fonte di posizione conferma il suo NOME (Wikidata, Wikipedia o Nominatim lo trovano nel riquadro
+      // del viaggio): «Mercato di St. Julian's», per cui il geocoder trova solo la città, resta senza POI.
+      if (t.verifica !== 'verificata' && t.verifica !== 'poco_noto') { out.saltate.push(`${nomeLuogo}: ${t.verifica || 'senza verdetto'}`); continue; }
+      const posizioneConfermata = !!t.coordinate_fonte && !(t.verifica === 'poco_noto' && t.coordinate_fonte === 'modello');
+      // REGOLA 23/11/2026 (collaudo notturno, «non_agganciata»: «Giardini Botanici dell'UBC», «Museo della Seconda Guerra
+      // Mondiale», «Mercato di San Pedro» saltate per «posizione non confermata» mentre l'archivio ha la riga) Prima di
+      // rinunciare, l'AGGANCIO con tutte le sue strade (nome, radice, QID, etichette vicine in più lingue): la riga trovata
+      // dà posizione e fonte. Mai una riga già di un'altra tappa (doppioni mai): in quel caso la tappa torna com'era.
+      const provaAggancio = async (): Promise<boolean> => {
+        if (giaGeocodificata) return false;
+        const prima = JSON.parse(JSON.stringify(t));
+        try { await agganciaTappeAlDatabase({ giorni: [{ tappe: [t] }] }, centro, destination); } catch { /* resta com'è */ }
+        if (t.poi_id && !giaUsati.has(String(t.poi_id))) { giaUsati.add(String(t.poi_id)); out.gemelli++; return true; }
+        if (t.poi_id) { for (const k of Object.keys(t)) delete t[k]; Object.assign(t, prima); }
+        return false;
+      };
+      if (!posizioneConfermata && giaGeocodificata) { out.saltate.push(`${nomeLuogo}: posizione non confermata`); continue; }
+      if (!posizioneConfermata && !giaGeocodificata) {
+        const g = await posizioneDaGeocoder(String(t.titolo_tappa || t.titolo || ''), destination, 'it', String(t.tipo || ''), { localita: localitaDellaTappa(t, destination), riquadro: centro ? { ...centro, km: 40 } : null }).catch(() => null);
+        if (!g || (centro && getHaversineDistance(centro.lat, centro.lon, g.lat, g.lon) > 40000)) {
+          if (await provaAggancio()) continue;
+          out.saltate.push(`${nomeLuogo}: posizione non confermata`); continue;
+        }
+        const spost = getHaversineDistance(lat, lon, g.lat, g.lon);
+        t.coordinate_fonte = String((g as any).fonte || 'geocoder');
+        if (spost > 300) {
+          t.coordinate = { lat: g.lat, lng: g.lon };
+          out.spostate.push(`${nomeLuogo}: ${Math.round(spost)} m`);
+          // Nel punto vero: prima l'aggancio (riga con fonte), poi di nuovo questa funzione (gemelli, creazione).
+          const mini = { giorni: [{ tappe: [t] }] };
+          try { await agganciaTappeAlDatabase(mini, centro, destination); } catch { /* resta com'è */ }
+          if (t.poi_id) { out.gemelli++; continue; }
+          const sotto = await poiDalleTappeServer(mini, destination, centro, true);
+          out.gemelli += sotto.gemelli; out.riusati += sotto.riusati; out.creati += sotto.creati; out.ids.push(...sotto.ids); out.saltate.push(...sotto.saltate);
+          continue;
+        }
+      }
+      // (c) riga nuova, stesse regole e stesso id dell'app (PlanScreen.idPoiDaTappa).
+      const slug = String(t.titolo_tappa || t.titolo || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+      const id = `iti-${slug}-${lat.toFixed(3)}_${lon.toFixed(3)}`.replace(/\./g, 'p').slice(0, 120);
+      if (giaUsati.has(id)) { out.saltate.push(`${nomeLuogo}: riga già di un'altra tappa`); continue; }
+      const riga = { id, name: nomeLuogo, category: categoriaDaTipoTappa(String(t.tipo || '')), lat, lon, description_ai: null, source: 'itinerary', status: 'auto', created_at: new Date().toISOString() };
+      const w = await axios.post(`${supabaseUrl}/rest/v1/shared_pois?on_conflict=id`, riga, { headers: { ...SB_HDR(), Prefer: 'resolution=ignore-duplicates,return=minimal' }, timeout: 12000 }).then(() => true).catch((e: any) => { console.warn('[poi-tappe] scrittura fallita:', id, e?.response?.status, JSON.stringify(e?.response?.data || '').slice(0, 160)); return false; });
+      if (!w) continue;
+      t.poi_id = id; giaUsati.add(id); out.creati++; out.ids.push(id);
+    }
+    return out;
+  }
+  /** (20/11/2026, committente «correggi tutto»; collaudi notturni 19–20/11: Rijksmuseum, Van Gogh, Louvre, Tower of
+   *  London, Santa Sofia… agganciati ma SENZA audioguida IT, 19 senza scheda ≥ 80 caratteri, 13 senza foto) La cron
+   *  arricchiva solo i POI che CREAVA lei. Ora mette in coda anche ogni riga GIÀ ESISTENTE di una tappa culturale (non
+   *  pasto, non locale, non servizio) a cui manca la scheda (< 80), la foto o l'audioguida IT. Tetto: 15 per itinerario;
+   *  i giri successivi riprendono la coda (`tentativi`, al massimo 3 per riga). */
+  async function poiCulturaliDaCompletare(itin: any): Promise<string[]> {
+    const tappe = extractItineraryStops(itin).map((s) => s.ref).filter((t: any) => t?.poi_id && !TIPI_PASTO.test(String(t.tipo || '').trim()) && !tipoEPastoPrincipale(t.tipo)
+      && !TIPO_ALLOGGIO_RIENTRO.test(String(t.tipo || '')) && !/^(locali|utilita)$/.test(categoriaDaTipoTappa(String(t.tipo || ''))) && !/^(cine-|cinema-|loc-|gtfs-|ocm-|lusso-|viator-|tq-|gyg-)/i.test(String(t.poi_id)));
+    const ids = [...new Set(tappe.map((t: any) => String(t.poi_id)))];
+    if (!ids.length) return [];
+    const lista = (xs: string[]) => encodeURIComponent(xs.map((x) => `"${x.replace(/"/g, '')}"`).join(','));
+    const righe: any[] = [], audio = new Set<string>();
+    for (let i = 0; i < ids.length; i += 40) {
+      const pezzo = ids.slice(i, i + 40);
+      const r = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=id,category,description_short,description_long,description_ai,image_url&id=in.(${lista(pezzo)})`, { headers: SB_HDR(), timeout: 10000 }).catch(() => null);
+      if (!r) return []; // database giù: si riprova al prossimo giro
+      righe.push(...(Array.isArray(r.data) ? r.data : []));
+      const a = await axios.get(`${supabaseUrl}/rest/v1/poi_audioguides?select=poi_id&language=in.(it,IT)&poi_id=in.(${lista(pezzo)})`, { headers: SB_HDR(), timeout: 10000 }).catch(() => null);
+      if (!a) return [];
+      for (const x of (Array.isArray(a.data) ? a.data : [])) audio.add(String(x.poi_id));
+    }
+    const out: string[] = [];
+    for (const r of righe) {
+      if (/^(locali|ristoranti|ristorante|food|restaurant|bar|cafe|shopping|lusso|luxury|negozi|shop|enogastronomia|community|cinema|localita|località|citta|città)$/i.test(String(r.category || ''))) continue;
+      const lung = Math.max(String(r.description_short || '').length, String(r.description_long || '').length, String(r.description_ai || '').length);
+      if (lung < 80 || !r.image_url || !audio.has(String(r.id))) out.push(String(r.id));
+    }
+    return out.slice(0, 15);
+  }
+  async function lucchettoItinerario(id: string): Promise<boolean> {
+    const chiave = `completa_verifica_lock_${id}`;
+    const ora = Date.now();
+    try {
+      const r = await axios.post(`${supabaseUrl}/rest/v1/api_cache?on_conflict=cache_key`, { cache_key: chiave, content_type: 'lucchetto', text_content: String(ora) }, { headers: { ...SB_HDR(), Prefer: 'resolution=ignore-duplicates,return=representation' }, timeout: 8000 });
+      if (Array.isArray(r.data) && r.data.length) return true;
+      const c = await getFromCache(chiave);
+      const ts = Number(c?.text_content) || 0;
+      if (ora - ts < 6 * 60 * 1000) return false; // un altro giro ci sta lavorando
+      // Lucchetto vecchio (giro morto): si prende solo se nessuno l'ha preso nel frattempo (confronto sul valore).
+      const p = await axios.patch(`${supabaseUrl}/rest/v1/api_cache?cache_key=eq.${encodeURIComponent(chiave)}&text_content=eq.${encodeURIComponent(String(c?.text_content || ''))}`, { text_content: String(ora) }, { headers: { ...SB_HDR(), Prefer: 'return=representation' }, timeout: 8000 });
+      return Array.isArray(p.data) && p.data.length > 0;
+    } catch { return false; }
+  }
+  async function liberaItinerario(id: string): Promise<void> {
+    await axios.delete(`${supabaseUrl}/rest/v1/api_cache?cache_key=eq.${encodeURIComponent(`completa_verifica_lock_${id}`)}`, { headers: SB_HDR(), timeout: 8000 }).catch(() => {});
+  }
+  app.get("/api/cron/completa-verifiche", async (req, res) => {
+    const daCron = !!process.env.CRON_SECRET && req.headers.authorization === `Bearer ${process.env.CRON_SECRET}`;
+    const daScript = !!SCRIPT_SHARED_SECRET && req.headers['x-script-secret'] === SCRIPT_SHARED_SECRET;
+    if (!daCron && !daScript) return res.status(401).json({ error: 'unauthorized' });
+    const t0 = Date.now();
+    // Su Vercel la function muore a 300 s: si lavora fino a 270 s. Fuori da Vercel lo stesso tetto (un giro alla volta).
+    const FINE = t0 + 270000;
+    const resta = () => FINE - Date.now();
+    const idForzato = String(req.query.id || '').trim();
+    const forza = String(req.query.forza || '') === '1';
+    if (idForzato && !/^[0-9a-f-]{36}$/i.test(idForzato)) return res.status(400).json({ error: 'id non valido' });
+    const esiti: any[] = [];
+    try {
+      let candidati: any[] = [];
+      if (idForzato) {
+        candidati = [{ id: idForzato }];
+      } else {
+        const da = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+        const q1 = await axios.get(`${supabaseUrl}/rest/v1/user_itineraries?select=id&updated_at=gte.${encodeURIComponent(da)}&dati_itinerario->qualita->verifica->>completa=eq.false&order=updated_at.asc&limit=5`, { headers: SB_HDR(), timeout: 12000 }).catch((e: any) => { console.warn('[completa-verifiche] lettura 1:', e?.response?.status, e?.message); return null; });
+        const q2 = await axios.get(`${supabaseUrl}/rest/v1/user_itineraries?select=id&updated_at=gte.${encodeURIComponent(da)}&dati_itinerario->qualita->poi_server->>fase=in.(da_fare,da_arricchire)&order=updated_at.asc&limit=5`, { headers: SB_HDR(), timeout: 12000 }).catch((e: any) => { console.warn('[completa-verifiche] lettura 2:', e?.response?.status, e?.message); return null; });
+        // (18/11/2026) E gli itinerari col revisore dei fatti non finito nello stream (parziale / rimandato / non eseguito).
+        const q3 = await axios.get(`${supabaseUrl}/rest/v1/user_itineraries?select=id&updated_at=gte.${encodeURIComponent(da)}&dati_itinerario->qualita->revisore_fatti->>esito=in.(parziale,rimandato,non_eseguito)&order=updated_at.asc&limit=5`, { headers: SB_HDR(), timeout: 12000 }).catch(() => null);
+        const visti = new Set<string>();
+        for (const x of [...(q1?.data || []), ...(q2?.data || []), ...(q3?.data || [])]) if (x?.id && !visti.has(x.id)) { visti.add(x.id); candidati.push(x); }
+      }
+      for (const c of candidati) {
+        if (resta() < 60000) break;
+        if (!(await lucchettoItinerario(c.id))) { esiti.push({ id: c.id, esito: 'occupato' }); continue; }
+        try {
+          const rr = await axios.get(`${supabaseUrl}/rest/v1/user_itineraries?id=eq.${c.id}&select=id,user_id,titolo,updated_at,dati_itinerario`, { headers: SB_HDR(), timeout: 15000 });
+          const riga = rr.data?.[0];
+          const itin = riga?.dati_itinerario;
+          if (!riga || !itin || !Array.isArray(itin.giorni)) { esiti.push({ id: c.id, esito: 'non_trovato' }); continue; }
+          const qv = itin.qualita?.verifica || {};
+          const rq = qv.richiesta || {};
+          const destination = String(rq.destination || itin.destinazione || itin.destination || riga.titolo || '').trim();
+          const language = String(rq.language || itin.lingua || itin.language || 'IT');
+          // Coordinate della destinazione: quelle salvate dallo stream; altrimenti la prima tappa agganciata.
+          let lat = Number(rq.lat), lon = Number(rq.lon);
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+            const ag = extractItineraryStops(itin).find((s) => s?.ref?.poi_id && Number.isFinite(Number(s.ref?.coordinate?.lat)));
+            if (ag) { lat = Number(ag.ref.coordinate.lat); lon = Number(ag.ref.coordinate.lng ?? ag.ref.coordinate.lon); }
+          }
+          const esito: any = { id: c.id };
+          let cambiato = false;
+          // ── 1) VERIFICA delle tappe rimaste (o, con forza, di tutte quelle non confermate)
+          const daRiprendere = tappeDaRiverificare(itin, forza).length;
+          if (daRiprendere && resta() > 60000) {
+            const cv = await completaVerificaItinerario(itin, { destination, lat, lon, language, centri: rq.centri, radiusKm: rq.radius, specialRequests: rq.specialRequests, tettoMs: Math.min(200000, resta() - 50000), forza, userId: 'background-script' });
+            esito.verifica = cv; cambiato = true;
+            try { ricalcolaTotaleViaggio(itin, language); } catch { /* resta il testo */ }
+          }
+          // Al massimo 6 giri per il revisore (quote finite, motore giù): poi l'esito resta scritto e la cron smette.
+          const giriRev = Number(itin.qualita?.revisore_fatti?.giri_cron || 0);
+          if (itin.qualita?.revisore_fatti?.esito !== 'ok' && giriRev >= 6 && itin.qualita?.revisore_fatti?.esito !== 'non_eseguito_cron') {
+            itin.qualita.revisore_fatti = { ...(itin.qualita.revisore_fatti || {}), esito: 'non_eseguito_cron' }; cambiato = true;
+          }
+          if (itin.qualita?.revisore_fatti?.esito !== 'ok' && itin.qualita?.revisore_fatti?.esito !== 'non_eseguito_cron' && resta() > 45000) {
+            itin.qualita = { ...(itin.qualita || {}), revisore_fatti: { ...(itin.qualita?.revisore_fatti || {}), giri_cron: giriRev + 1 } };
+            try {
+              const rf = await revisoreFattiItinerario(itin, { destination, language, userId: 'background-script', tettoMs: Math.min(60000, resta() - 35000), soloNonLette: true });
+              itin.qualita = { ...(itin.qualita || {}), revisore_fatti_completamento: rf };
+              // (18/11/2026, collaudo Malta: «parziale, errore tetto» nello stream) Quando la cron ha letto tutte le tappe
+              // rimaste, il revisore dei fatti dell'itinerario è completo: l'esito lo dice.
+              if (rf?.esito === 'ok') itin.qualita.revisore_fatti = { ...(itin.qualita.revisore_fatti || {}), esito: 'ok', completato_da_cron: true, controllate: Number(itin.qualita.revisore_fatti?.controllate || 0) + Number(rf.controllate || 0), frasi_tolte: Number(itin.qualita.revisore_fatti?.frasi_tolte || 0) + Number(rf.frasi_tolte || 0) };
+              esito.revisore = rf; cambiato = true;
+            } catch { /* si riprova al prossimo giro */ }
+          }
+          // ── 1-bis) CONTROLLO QUALITÀ AUTOMATICO (18/11/2026): dopo ogni completamento, o se lo stream non l'ha fatto.
+          if ((cambiato || !['ok', 'corretto', 'restano'].includes(String(itin.qualita?.controllo?.esito || ''))) && resta() > 40000) {
+            try {
+              const cq = await controlloQualitaItinerario(itin, { destination, lat, lon, language, tettoMs: Math.min(45000, resta() - 30000), giudice: true, userId: 'background-script', richiesta: String(rq.specialRequests || '') });
+              esito.controllo = { esito: cq.controllo.esito, corretti: cq.corretti, restano: cq.problemi.length }; cambiato = true;
+            } catch (e: any) { console.warn('[completa-verifiche] controllo qualità:', e?.message); }
+          }
+          // ── 1-ter) (20/11/2026) Tappe NON pasto rimaste «da verificare» a verifica finita: riagganciate, sostituite con
+          //    un luogo vero dell'archivio o tolte (mai consegnate così); poi le formule vietate nei testi.
+          if (resta() > 35000) {
+            try {
+              const rs = await risolviTappeNonConfermate(itin, { destination, language, lat, lon, radiusKm: rq.radius, tettoMs: Math.min(60000, resta() - 30000) });
+              if (rs.riagganciate || rs.sostituite || rs.tolte || rs.aggiunte || rs.confermate) { esito.tappe_non_confermate = rs; cambiato = true; }
+            } catch (e: any) { console.warn('[completa-verifiche] tappe non confermate:', e?.message); }
+          }
+          try { if (pulisciFormuleItinerario(itin)) cambiato = true; } catch { /* fail-open */ }
+          itin.qualita = { ...(itin.qualita || {}), verifica: statoVerifica(itin, { completata_da_cron: true }) };
+          // ── 2) POI delle tappe confermate (solo a verifica completa: una tappa rimandata può ancora cadere)
+          const ps = itin.qualita.poi_server || { fase: 'da_fare' };
+          if (itin.qualita.verifica.completa && (ps.fase === 'da_fare' || forza) && resta() > 30000) {
+            const p = await poiDalleTappeServer(itin, destination, Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null);
+            // (20/11/2026) anche le righe GIÀ esistenti delle tappe culturali senza scheda, foto o audioguida IT
+            const daCompletare = await poiCulturaliDaCompletare(itin).catch(() => [] as string[]);
+            const coda = [...new Set([...(ps.da_arricchire || []), ...p.ids, ...daCompletare])].filter((x) => forza || !(ps.senza_materiale || []).includes(x));
+            itin.qualita.poi_server = { fase: coda.length ? 'da_arricchire' : 'fatto', gemelli: p.gemelli, riusati: p.riusati, creati: p.creati, da_completare: daCompletare.length, saltate: p.saltate.slice(0, 40), spostate: p.spostate.slice(0, 40), da_arricchire: coda, tentativi: ps.tentativi || {}, arricchiti: ps.arricchiti || [], senza_materiale: ps.senza_materiale || [], ts: Date.now() };
+            esito.poi = p; cambiato = true;
+          }
+          // ── 3) Salvataggio PRIMA dell'arricchimento (che può durare): solo se la riga non è cambiata nel frattempo
+          //       (il client salva lo stesso id); se è cambiata, il lavoro si rifà al prossimo giro sulla versione nuova.
+          if (cambiato) {
+            const nuovoTs = new Date().toISOString();
+            const w = await axios.patch(`${supabaseUrl}/rest/v1/user_itineraries?id=eq.${c.id}&updated_at=eq.${encodeURIComponent(riga.updated_at)}`, { dati_itinerario: itin, updated_at: nuovoTs }, { headers: { ...SB_HDR(), Prefer: 'return=representation' }, timeout: 15000 }).catch((e: any) => { console.warn('[completa-verifiche] salvataggio:', e?.response?.status, e?.message); return null; });
+            esito.salvato = !!(w && Array.isArray(w.data) && w.data.length);
+            if (!esito.salvato) { esiti.push({ ...esito, esito: 'riga_cambiata_o_non_salvata' }); continue; }
+            riga.updated_at = nuovoTs;
+          }
+          // ── 4) ARRICCHIMENTO dei POI in coda: scheda dalle fonti (full), poi audioguida IT + lingua dell'utente.
+          const pq = itin.qualita.poi_server;
+          if (pq?.fase === 'da_arricchire' && Array.isArray(pq.da_arricchire) && pq.da_arricchire.length && SCRIPT_SHARED_SECRET) {
+            const fatti: string[] = [];
+            const senzaMateriale: string[] = [];
+            const tentativi: Record<string, number> = { ...(pq.tentativi || {}) };
+            const risposteEnrich: Record<string, any> = {};
+            const lingueAudio = [...new Set(['it', String(language || 'it').toLowerCase().slice(0, 2)])].filter((l) => ['it', 'en', 'fr', 'es', 'de', 'ru', 'zh'].includes(l));
+            for (const poiId of pq.da_arricchire) {
+              if (resta() < 70000) break;
+              const tappa = extractItineraryStops(itin).map((s) => s.ref).find((t: any) => t?.poi_id === poiId);
+              const hdr = { 'Content-Type': 'application/json', 'x-script-secret': SCRIPT_SHARED_SECRET };
+              const lat2 = Number(tappa?.coordinate?.lat), lon2 = Number(tappa?.coordinate?.lng ?? tappa?.coordinate?.lon);
+              // (18/11/2026, collaudo) Si scrive COSA ha risposto la rotta, e la scheda conta come arricchita solo se nel DB
+              // c'è davvero un testo (≥ 60 caratteri) o una foto: prima «arricchiti 7» contava anche le risposte vuote.
+              // (20/11/2026) Prima si legge la riga: una scheda già piena (≥ 80 caratteri e foto) non si rifà, si fa solo
+              // l'audioguida che manca. Una scheda corta o senza foto si rifà dalle fonti con `ricontrolla` (il ripasso della
+              // rotta: breve, d'import, senza dettaglio → si cerca la fonte; «cercato, niente» resta ricordato 14 giorni).
+              const leggiRiga = async () => {
+                const rr = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=description_short,description_long,description_ai,image_url,enrichment_source`, { headers: SB_HDR(), timeout: 8000 }).catch(() => null);
+                return rr ? (rr.data?.[0] || {}) : null;
+              };
+              const lunghezzaRiga = (x: any) => Math.max(String(x?.description_short || '').length, String(x?.description_long || '').length, String(x?.description_ai || '').length);
+              const rg0 = await leggiRiga();
+              const giaPiena = !!rg0 && lunghezzaRiga(rg0) >= 80 && !!rg0.image_url;
+              let re: any = { status: 'saltato', data: { cached: true } };
+              if (!giaPiena) {
+                re = await axios.post(`${baseInterna()}/api/poi/enrich`, { id: poiId, name: nomeLuogoDaTappa(String(tappa?.titolo_tappa || '')), lat: lat2, lon: lon2, category: categoriaDaTipoTappa(String(tappa?.tipo || '')), lang: 'it', mode: 'full', ricontrolla: true }, { headers: hdr, timeout: Math.min(60000, resta() - 40000) })
+                  .catch((e: any) => { console.warn('[completa-verifiche] enrich', poiId, e?.response?.status || e?.message); return { status: e?.response?.status || 0, data: { errore: String(e?.code || e?.message || '').slice(0, 80) } }; });
+              }
+              const rd = re?.data || {};
+              risposteEnrich[poiId] = { base: baseInterna(), status: re?.status, cached: rd.cached, solo_dati: rd.solo_dati, vuoto: rd.vuoto ?? rd.empty, errore: rd.error || rd.errore, testo: String(rd.description_short || rd.description || rd.description_long || '').length, foto: !!(rd.image_url || rd.image) };
+              // Esito vero: si rilegge la riga.
+              const rg: any = (giaPiena ? rg0 : await leggiRiga()) || {};
+              const lung = lunghezzaRiga(rg);
+              risposteEnrich[poiId].nel_db = { testo: lung, foto: !!rg.image_url, fonte: rg.enrichment_source || null };
+              // Audioguida solo per i luoghi che parlano (non locali, non servizi) e solo se ora c'è materiale (≥ 100
+              // caratteri): la rotta genera e salva SOLO con materiale vero (no_material → niente), come lavoratore di sfondo.
+              let audioItOk = true;
+              if (lung >= 100 && !/^(locali|utilita)$/.test(categoriaDaTipoTappa(String(tappa?.tipo || '')))) {
+                const audio: any = {};
+                for (const lg of lingueAudio) {
+                  if (resta() < 45000) { if (lg === 'it') audioItOk = false; break; }
+                  const ra: any = await axios.post(`${baseInterna()}/api/poi/audioguide`, { poiId, lang: lg, character: 'nicky' }, { headers: hdr, timeout: Math.min(60000, resta() - 30000) })
+                    .catch((e: any) => { console.warn('[completa-verifiche] audioguida', poiId, lg, e?.response?.status || e?.message); return { status: e?.response?.status || 0, data: e?.response?.data }; });
+                  const lungAudio = String(ra?.data?.text || ra?.data?.narration || '').length;
+                  audio[lg] = { status: ra?.status, esito: ra?.data?.error || ra?.data?.reason || (lungAudio ? `testo ${lungAudio}` : '') };
+                  // «no_material» è un esito vero (niente da dire): non si riprova. Un errore di rete o di quota sì.
+                  if (lg === 'it' && !lungAudio && !/no_material|non_generata/i.test(String(ra?.data?.error || ra?.data?.reason || ''))) audioItOk = false;
+                }
+                risposteEnrich[poiId].audioguida = audio;
+              }
+              if ((lung >= 60 || rg.image_url) && audioItOk) fatti.push(poiId);
+              else {
+                tentativi[poiId] = (tentativi[poiId] || 0) + 1;
+                // Tre giri senza niente: il luogo non ha fonti (regola «nessuna fonte, nessun testo»). Esce dalla coda.
+                if (tentativi[poiId] >= 3) senzaMateriale.push(poiId);
+              }
+            }
+            esito.enrich = risposteEnrich;
+            if (fatti.length || senzaMateriale.length || Object.keys(tentativi).length) {
+              const resto = pq.da_arricchire.filter((x: string) => !fatti.includes(x) && !senzaMateriale.includes(x));
+              itin.qualita.poi_server = { ...pq, da_arricchire: resto, arricchiti: [...new Set([...(pq.arricchiti || []), ...fatti])], senza_materiale: [...new Set([...(pq.senza_materiale || []), ...senzaMateriale])], tentativi, fase: resto.length ? 'da_arricchire' : 'fatto', ts: Date.now() };
+              const nuovoTs = new Date().toISOString();
+              const w2 = await axios.patch(`${supabaseUrl}/rest/v1/user_itineraries?id=eq.${c.id}&updated_at=eq.${encodeURIComponent(riga.updated_at)}`, { dati_itinerario: itin, updated_at: nuovoTs }, { headers: { ...SB_HDR(), Prefer: 'return=representation' }, timeout: 15000 }).catch(() => null);
+              esito.arricchiti = fatti.length; esito.salvato_arricchimento = !!(w2 && Array.isArray(w2.data) && w2.data.length);
+            }
+          }
+          esito.esito = 'ok';
+          esiti.push(esito);
+        } catch (e: any) {
+          esiti.push({ id: c.id, esito: 'errore', errore: String(e?.message || e).slice(0, 200) });
+        } finally {
+          await liberaItinerario(c.id);
+        }
+      }
+      res.json({ ok: true, candidati: candidati.length, esiti, secondi: Math.round((Date.now() - t0) / 1000) });
+    } catch (e: any) { res.status(500).json({ error: e?.message, esiti }); }
+  });
+
   // ═══ DISPOSITIVI PUSH E NOTIFICHE ═══════════════════════════════════════
   app.post("/api/push/registra", rateLimiter, requireAuth, async (req: any, res) => {
     try {
@@ -47052,7 +51119,7 @@ Non aggiungere testo prima o dopo il JSON.`;
         // Ristoranti, bar, negozi, alloggi: niente web aperto (regola dei locali
         // commerciali); l'articolo Wikipedia solo se il QID/link lo indica.
         const commerciale = idNoto.startsWith('ov-')
-          || /ristor|pasto|pranzo|cena|colazione|aperitiv|\bbar\b|caff|enoteca|osteria|trattoria|pizzeria|negozio|shop|hotel|alloggio|albergo/i.test(String(tappa.tipo || ''))
+          || /ristor|pasto|pranzo|cena|colazione|aperitiv|merenda|\bbar\b|caff|enoteca|osteria|trattoria|pizzeria|pasticc|gelat|bakery|negozio|shop|hotel|alloggio|albergo/i.test(String(tappa.tipo || ''))
           || eCommercialeOverture(idNoto, riga?.source, riga?.category);
         const lat = Number(tappa.coordinate?.lat);
         const lon = Number(tappa.coordinate?.lng ?? tappa.coordinate?.lon);
@@ -47064,7 +51131,12 @@ Non aggiungere testo prima o dopo il JSON.`;
         const localeVero = idNoto.startsWith('ov-')
           || /ristor|pasto|pranzo|cena|colazione|aperitiv|\bbar\b|caff|enoteca|osteria|trattoria|pizzeria|hotel|alloggio|albergo/i.test(String(tappa.tipo || ''))
           || eCommercialeOverture(idNoto, riga?.source, riga?.category);
-        const varianti = [...new Set(nomeLuogo.split(/\s+(?:e|ed|&|\/)\s+|\s+[-–—]\s+|,\s*/i).map((x) => x.trim()).filter((x) => x.length >= 6 && x !== nomeLuogo))].slice(0, 2);
+        // (20/11/2026, collaudo Amsterdam: «Museo Marittimo Nazionale (Het Scheepvaartmuseum)», «Museo Ebraico (Joods
+        // Museum)» uscivano «senza fonte») Anche il nome FRA PARENTESI (spesso l'originale, titolo della voce) e il nome
+        // senza parentesi sono forme da cercare, prima delle parti di un nome composto.
+        const traParentesi = [...nomeLuogo.matchAll(/\(([^()]{4,80})\)/g)].map((m) => m[1].trim());
+        const senzaParentesi = nomeLuogo.replace(/\s*\([^()]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
+        const varianti = [...new Set([...traParentesi, senzaParentesi, ...senzaParentesi.split(/\s+(?:e|ed|&|\/)\s+|\s+[-–—]\s+|,\s*/i)].map((x) => x.trim()).filter((x) => x.length >= 6 && x !== nomeLuogo))].slice(0, 3);
         // 1) TITOLO ESATTO. Un articolo che si chiama come il luogo e' la fonte piu'
         //    sicura; la ricerca per coordinate accetta un articolo solo perche'
         //    condivide una parola («Duomo di Milano» → «Piazza del Duomo», collaudo
@@ -47252,7 +51324,9 @@ Non aggiungere testo prima o dopo il JSON.`;
       stat[livello]++;
       poi.livello_materiale = livello;
       if (rec?.fonte) poi.fonte_url = rec.fonte;
-      const filtra = (x: any): string => { const r = pgFiltraTesto(String(x || ''), materiale); stat.rimosse += r.rimosse; return r.testo; };
+      // (20/11/2026, collaudo 20/11: «Chiesa di San Nicola» con una formula vietata) Dopo il filtro dei fatti, le formule
+      // vietate: stessa regola severa dei testi delle tappe (testoTappaSenzaFormule).
+      const filtra = (x: any): string => { const r = pgFiltraTesto(String(x || ''), materiale); stat.rimosse += r.rimosse; const f = testoTappaSenzaFormule(r.testo); stat.rimosse += f.tolte; return f.testo; };
       let desc = pgTroncaParole(filtra(poi.descrizione_lunga), PG_TETTO[livello]);
       // COPIA: quanta parte del testo e' identica al materiale (a parole consecutive). Solo misura.
       const copia = Math.round(100 * pgSovrapposizione(desc, materiale));
@@ -47420,6 +51494,7 @@ Non aggiungere testo prima o dopo il JSON.`;
   }
 
   app.post("/api/premium-guide/generate", rateLimiter, async (req, res) => {
+    const pmInizio = Date.now(); // (18/11/2026) per misurare il tempo che resta dei 300 s di Vercel
     let pmCharge: { userId: string; cost: number } | null = null;
     let lavoro: any = null; // lavoro in coda (generazioni) che ha chiesto questa guida
     let pmTimerRimborso: ReturnType<typeof setTimeout> | null = null;
@@ -47516,7 +51591,54 @@ Non aggiungere testo prima o dopo il JSON.`;
 
       // ── FASE 2: ENRICHMENT DA FONTI REALI ───────────────────────────────────
       console.log("[Premium Guide] Fetching multi-source context...");
-      const enrichedItinerary = JSON.parse(JSON.stringify(itinerary));
+      let enrichedItinerary = JSON.parse(JSON.stringify(itinerary));
+      // ── VERIFICA FINITA PRIMA DI SCEGLIERE LE TAPPE (18/11/2026, committente: «tutti i giorni… verificati tappa per
+      // tappa», Malta: il giorno 4 aveva 6 tappe su 6 «da verificare» perché il tempo della verifica era finito, e la
+      // guida le lasciava fuori tutte). Una tappa chiusa PER TEMPO non è una tappa smentita: (a) se la cron di
+      // completamento ha già finito sul piano salvato, si prende quello; (b) altrimenti le tappe rimandate si verificano
+      // qui (stesse funzioni dell'itinerario) col tempo che la guida può dare, prima del filtro qui sotto. Resta la regola:
+      // ciò che dopo la verifica è ancora «da verificare» resta fuori.
+      try {
+        const idPiano = String(itinerary?.id || '');
+        if (tappeDaRiverificare(enrichedItinerary).length && /^[0-9a-f-]{36}$/i.test(idPiano)) {
+          const rs = await axios.get(`${supabaseUrl}/rest/v1/user_itineraries?id=eq.${idPiano}&user_id=eq.${pmUserId}&select=dati_itinerario`, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 8000 }).catch(() => null);
+          const salvato = rs?.data?.[0]?.dati_itinerario;
+          if (salvato && Array.isArray(salvato.giorni) && salvato.giorni.length === (enrichedItinerary.giorni || []).length
+            && tappeDaRiverificare(salvato).length < tappeDaRiverificare(enrichedItinerary).length) {
+            enrichedItinerary = JSON.parse(JSON.stringify(salvato));
+            console.log('[Premium Guide] uso il piano salvato, già completato dalla cron di verifica');
+          }
+        }
+        const daVerificare = tappeDaRiverificare(enrichedItinerary).length;
+        if (daVerificare) {
+          // La guida ha ancora materiale + modello + revisore da fare: alla verifica va ciò che resta oltre ~190 s
+          // (su Vercel), fra 40 e 100 s. Ciò che non finisce resta fuori come prima, e la cron lo completa sul piano.
+          const giaPassati = Date.now() - pmInizio;
+          const tettoPg = process.env.VERCEL ? Math.max(40000, Math.min(100000, 300000 - giaPassati - 190000)) : 150000;
+          const rq = enrichedItinerary?.qualita?.verifica?.richiesta || {};
+          const primo = extractItineraryStops(enrichedItinerary).find((s: any) => s?.ref?.poi_id && Number.isFinite(Number(s.ref?.coordinate?.lat)));
+          const cv = await completaVerificaItinerario(enrichedItinerary, {
+            destination: String(rq.destination || destination || ''), revisore: false,
+            lat: Number.isFinite(Number(rq.lat)) ? Number(rq.lat) : Number(primo?.ref?.coordinate?.lat),
+            lon: Number.isFinite(Number(rq.lon)) ? Number(rq.lon) : Number(primo?.ref?.coordinate?.lng ?? primo?.ref?.coordinate?.lon),
+            language, centri: rq.centri, radiusKm: rq.radius, specialRequests: rq.specialRequests, tettoMs: tettoPg, userId: pmUserId,
+          });
+          console.log(`[Premium Guide] verifica completata prima della guida: ${cv.riprese} tappe riprese, ${cv.rimaste} ancora rimandate`);
+        }
+      } catch (e: any) { console.warn('[Premium Guide] completamento della verifica fallito (le tappe rimandate restano fuori):', e?.message); }
+      // CONTROLLO QUALITÀ AUTOMATICO (18/11/2026, «nessun itinerario e/o guida»): le stesse regole dell'itinerario sulle
+      // tappe, PRIMA del materiale. Una tappa che resta in dubbio esce «da_verificare» e il filtro qui sotto la lascia fuori.
+      try {
+        const rqCq = enrichedItinerary?.qualita?.verifica?.richiesta || {};
+        const primoCq = extractItineraryStops(enrichedItinerary).find((s: any) => s?.ref?.poi_id && Number.isFinite(Number(s.ref?.coordinate?.lat)));
+        const tettoCq = process.env.VERCEL ? Math.max(10000, Math.min(30000, 300000 - (Date.now() - pmInizio) - 180000)) : 40000;
+        const cq = await controlloQualitaItinerario(enrichedItinerary, {
+          destination: String(rqCq.destination || destination || ''), language, giudice: true, userId: pmUserId, tettoMs: tettoCq, richiesta: String(rqCq.specialRequests || ''),
+          lat: Number.isFinite(Number(rqCq.lat)) ? Number(rqCq.lat) : Number(primoCq?.ref?.coordinate?.lat),
+          lon: Number.isFinite(Number(rqCq.lon)) ? Number(rqCq.lon) : Number(primoCq?.ref?.coordinate?.lng ?? primoCq?.ref?.coordinate?.lon),
+        });
+        console.log(`[Premium Guide] controllo qualità: ${cq.controllo.esito}, ${cq.corretti} corretti, ${cq.problemi.length} restano`);
+      } catch (e: any) { console.warn('[Premium Guide] controllo qualità fallito:', e?.message); }
       // UNA TAPPA SEGNALATA NON ENTRA NELLA GUIDA (09/10/2026, San Pietroburgo): la «Cattedrale di Cristo
       // Salvatore» — che è a Mosca, e il piano la mostrava con «⚠ da verificare» — è finita nella Guida d'Autore
       // come «una chiesa situata a San Pietroburgo», con la fonte di un'ALTRA chiesa. La guida è un documento
@@ -47543,9 +51665,12 @@ Non aggiungere testo prima o dopo il JSON.`;
         const pgStops = extractItineraryStops(enrichedItinerary);
         const pgUsati = new Set<string>(pgStops.map((s: any) => String(s?.ref?.poi_id || '')).filter(Boolean));
         const pgLang = String(language || 'it').toLowerCase();
-        const pgTetto = Date.now() + 40000;
+        // (18/11/2026) Non più 40 s fissi: il tempo che resta oltre i ~180 s che servono a materiale, modello e revisore
+        // (su Vercel), fra 40 e 90 s. Le tappe non ricontrollate in tempo restano nella guida come prima.
+        const pgTetto = Date.now() + (process.env.VERCEL ? Math.max(40000, Math.min(90000, 300000 - (Date.now() - pmInizio) - 180000)) : 120000);
         const pgFuori = new Set<any>();
         let pgSostituiti = 0;
+        let pgAltreCitta: string[] | null = null;
         for (let i = 0; i < pgStops.length && Date.now() < pgTetto; i++) {
           const s = pgStops[i];
           if (!s?.ref || s.ref.poi_id || TIPO_ALLOGGIO_RIENTRO.test(String(s.ref.tipo || ''))) continue;
@@ -47556,14 +51681,19 @@ Non aggiungere testo prima o dopo il JSON.`;
           // dell'itinerario: sostituisciPastoInventato, con la cucina chiesta e mai un mercato/bar per pranzo e cena.
           if (String(s.ref.verifica || '') === 'verificata') continue;
           const pasto = TIPI_PASTO.test(String(s.ref.tipo || ''));
-          const f = await firmaWebLuogo(s.ref.titolo_tappa || s.ref.titolo, destination, pgLang, pasto);
+          if (pgAltreCitta === null) {
+            const conPunto = pgStops.find((x: any) => Number.isFinite(Number(x?.ref?.coordinate?.lat)) && Number.isFinite(Number(x?.ref?.coordinate?.lng ?? x?.ref?.coordinate?.lon)));
+            pgAltreCitta = conPunto ? await formeCittaDaPunto(conPunto.ref.coordinate.lat, conPunto.ref.coordinate.lng ?? conPunto.ref.coordinate.lon, pgLang).catch(() => [] as string[]) : [];
+          }
+          const f = await firmaWebLuogo(s.ref.titolo_tappa || s.ref.titolo, destination, pgLang, pasto, pgAltreCitta);
           if (!f) continue;
           if (pasto) {
             const pgAncora = ancoraPerPasto(pgStops, i, undefined, undefined);
             const eNonPasto = tipoEPastoPrincipale(s.ref.tipo) && nonAdattoAPastoPrincipale(s.ref.titolo_tappa || s.ref.titolo);
-            const trovato = eNonPasto ? null : await localeEsistePerNome(s.ref.titolo_tappa || s.ref.titolo, pgAncora, pgLang, String(s.ref.tipo || '')).catch(() => undefined);
+            const trovato = eNonPasto ? null : await localeEsistePerNome(s.ref.titolo_tappa || s.ref.titolo, pgAncora, pgLang, String(s.ref.tipo || ''), String(destination || '')).catch(() => undefined);
             if (trovato) { s.ref.poi_id = trovato.id; s.ref.coordinate = { lat: trovato.lat, lng: trovato.lon }; if (trovato.address) s.ref.indirizzo = trovato.address; pgUsati.add(trovato.id); continue; }
-            if (trovato === undefined && f.conCitta) continue;
+            // (14/11/2026) Come nell'itinerario: citato sul web col nome intero e la città → non si sostituisce.
+            if (!eNonPasto && f.conCitta) continue;
             const ok = await sostituisciPastoInventato(s.ref, pgAncora, destination, language, pgUsati, String(req.body?.specialRequests || itinerary?.richieste || '')).catch(() => false);
             if (ok) { pgUsati.add(String(s.ref.poi_id)); pgSostituiti++; } else pgFuori.add(s.ref);
           } else if (!f.hit) pgFuori.add(s.ref);
@@ -47571,6 +51701,17 @@ Non aggiungere testo prima o dopo il JSON.`;
         if (pgFuori.size) for (const g of (enrichedItinerary.giorni || [])) if (Array.isArray(g?.tappe)) g.tappe = g.tappe.filter((t: any) => !pgFuori.has(t));
         if (pgSostituiti || pgFuori.size) console.log(`[Premium Guide] regola 20/10: pasti sostituiti ${pgSostituiti}, tappe senza riscontro lasciate fuori ${pgFuori.size}`);
       } catch (e: any) { console.warn('[Premium Guide] ricontrollo delle tappe non agganciate fallito:', e?.message); }
+      // UN GIORNO RIMASTO SENZA TAPPE ESCE DALLA GUIDA (18/11/2026, Malta: il giorno 4 aveva 6 tappe su 6 «da
+      // verificare», i filtri sopra le toglievano tutte, il giorno vuoto andava al modello come blocco [] → «pois»
+      // vuoto → tutto-o-niente → 6 guide di fila fallite e rimborsate). Un giorno senza nulla di confermato non ha
+      // niente da descrivere: si omette, e la guida esce con gli altri. Senza alcun giorno, un errore che lo dice.
+      {
+        const prima = (enrichedItinerary.giorni || []).length;
+        enrichedItinerary.giorni = (enrichedItinerary.giorni || []).filter((g: any) => Array.isArray(g?.tappe) && g.tappe.length > 0);
+        const tolti = prima - enrichedItinerary.giorni.length;
+        if (tolti) console.log(`[Premium Guide] ${tolti} giorni senza tappe confermate lasciati fuori dalla guida`);
+        if (!enrichedItinerary.giorni.length) throw new Error('Nessuna tappa dell\'itinerario è confermata: impossibile preparare la guida.');
+      }
       // Chiavi solo da env: le hardcoded in chiaro nel sorgente sono state rimosse
       const foursquareKey = process.env.FOURSQUARE_API_KEY || process.env.VITE_FOURSQUARE_API_KEY || '';
       const tripadvisorKey = process.env.TRIPADVISOR_API_KEY || process.env.VITE_TRIPADVISOR_API_KEY || '';
@@ -48162,10 +52303,13 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
               // essere»). Vale per ogni fonte: database, sito ufficiale, Wikipedia, Commons.
               const tappaSrc5 = tappeSorgente.get(String(poi.poi_id));
               const idSrc5 = String(tappaSrc5?.poi_id || '');
+              // (20/11/2026, collaudo) Il luogo della guida porta il TIPO della tappa: chi legge la guida (PDF, collaudo)
+              // distingue un pasto da un luogo culturale senza indovinarlo dal titolo.
+              if (tappaSrc5?.tipo && !poi.tipo) poi.tipo = String(tappaSrc5.tipo);
               // Regola piu' larga (committente, stesso giorno): le foto sono SOLO di monumenti, musei, panorami e luoghi
               // culturali; mai ristoranti, bar, negozi, mercati. Si ammette per elenco: se il tipo non e' culturale, niente foto.
               const tipoS5 = `${tappaSrc5?.tipo || ''} ${poi.categoria_pdf || ''}`.toLowerCase();
-              const eLocaleOCommercio = idSrc5.startsWith('ov-') || /ristor|pasto|pranzo|cena|colazione|aperitiv|merenda|\bbar\b|caff|enoteca|osteria|trattoria|pizzeria|catering|street.?food|shopping|negozi|mercato|market|\bshop|boutique|grandi magazzini|department/.test(tipoS5);
+              const eLocaleOCommercio = idSrc5.startsWith('ov-') || /ristor|pasto|pranzo|cena|colazione|aperitiv|merenda|\bbar\b|caff|enoteca|osteria|trattoria|pizzeria|pasticc|gelat|bakery|panific|sushi|catering|street.?food|shopping|negozi|mercato|market|\bshop|boutique|grandi magazzini|department/.test(tipoS5);
               const eCulturale = /museo|museum|monument|panoram|viewpoint|belvedere|chiesa|church|basilica|cattedrale|duomo|castell|castle|palazz|palace|archeolog|galleria|gallery|teatr|theatre|abbazia|cultur|storic|histor|torre|ponte|fontana|santuario|memorial|piazza/.test(tipoS5)
                 || /^(wd-|wv-|unesco-|bc-|uk-nhle)/.test(idSrc5);
               if (eLocaleOCommercio || !eCulturale) {
@@ -48268,6 +52412,21 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
         generatedContent.dedica = String(dedica).trim().slice(0, 300);
       }
 
+      // (20/11/2026, collaudi notturni) ULTIMA PASSATA sulle formule vietate: revisore e riscrittura anti-copia arrivano
+      // DOPO pgApplicaFiltro e possono riportarne una. Ogni testo dei luoghi e dell'introduzione, severo.
+      try {
+        let formuleGuida = 0;
+        const pulisci = (o: any, k: string) => { if (typeof o?.[k] !== 'string' || !o[k]) return; const r = testoTappaSenzaFormule(o[k]); if (r.tolte) { o[k] = r.testo; formuleGuida += r.tolte; } };
+        for (const k of ['introduzione', 'intro', 'citta_intro', 'sottotitolo']) pulisci(generatedContent, k);
+        for (const giorno of (generatedContent?.giorni || [])) {
+          for (const k of ['introduzione', 'intro', 'descrizione']) pulisci(giorno, k);
+          for (const poi of (giorno?.pois || [])) {
+            for (const k of ['descrizione_lunga', 'dettaglio_storico_tecnico', 'consiglio_insider']) pulisci(poi, k);
+            if (Array.isArray(poi?.curiosita)) poi.curiosita = poi.curiosita.map((c: any) => typeof c === 'string' ? testoTappaSenzaFormule(c).testo : c).filter((c: any) => !(typeof c === 'string' && c.trim().length < 25));
+          }
+        }
+        if (formuleGuida) generatedContent.qualita = { ...(generatedContent.qualita || {}), formule_tolte: formuleGuida };
+      } catch { /* fail-open */ }
       // ── FASE 6: SALVATAGGIO CACHE SUPABASE ──────────────────────────────────
       if (pmTimerRimborso) { clearTimeout(pmTimerRimborso); pmTimerRimborso = null; }
       const safeHash = hash || `pg_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
@@ -48292,7 +52451,8 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
       // PDF + push «la tua guida e' pronta».
       if (lavoro) {
         await generazionePronta(lavoro.id, safeHash, String(generatedContent.guida_titolo || lavoro.titolo || destination), await pdfGuidaPerEmail(generatedContent, mediaManifest, language));
-      } else if (pmCharge?.userId) {
+      } else if (pmCharge?.userId && req.body?.collaudo !== true) {
+        // (18/11/2026) Le guide del collaudo serale non mandano «pronta».
         // Anche in diretta l'email parte sempre (committente, 06/09): «invio
         // email lo stesso sia itinerario che guida». Senza bloccare la risposta.
         const t = testiPronta('guida', language, String(generatedContent.guida_titolo || destination));
@@ -49203,8 +53363,12 @@ REGOLE:
 
       // 2. Le mostre temporanee della citta' (fino a 100), da oggi in poi.
       const oggi = giornoLocaleDaLon(lon);
+      // REGOLA 21/11/2026 (collaudo notturno: Rio, Città del Messico, Marrakech → 500 «status code 400»). Tiqets
+      // rifiuta un from_date prima del SUO oggi («from_date cannot be earlier than today»): a ovest di Greenwich, di
+      // notte, il giorno locale è ancora ieri. Si chiede dal più tardo dei due giorni; il filtro sotto resta sul locale.
+      const oggiUtc = new Date().toISOString().slice(0, 10);
       const ev = await axios.get('https://api.tiqets.com/v2/temporary-events', {
-        params: { city_id: cittaIds, lang, page_size: 100, from_date: oggi }, headers, timeout: 8000,
+        params: { city_id: cittaIds, lang, page_size: 100, from_date: oggi > oggiUtc ? oggi : oggiUtc }, headers, timeout: 8000,
         paramsSerializer: { indexes: null },
       });
       const eventi: any[] = ev.data?.temporary_events || ev.data?.events || ev.data?.data || [];
@@ -49242,6 +53406,9 @@ REGOLE:
       res.json({ mostre });
     } catch (e: any) {
       console.error('[tiqets/mostre] errore:', e?.response?.status, e?.response?.data?.message || e?.message);
+      // (21/11/2026) Un 4xx di Tiqets (richiesta rifiutata, città senza catalogo) non è un guasto nostro: lista vuota.
+      const st = Number(e?.response?.status);
+      if (st >= 400 && st < 500) return res.json({ mostre: [], motivo: `tiqets_${st}` });
       res.status(500).json({ error: 'tiqets_mostre_failed', message: e?.message });
     }
   });
@@ -49363,8 +53530,11 @@ ${testo}`;
       // dentro un evento di Patna) — quegli eventi vanno confermati con la
       // vicinanza del nome città nel testo. I portali di UN paese/città sola
       // (Virgilio, Time Out Roma...) restano senza quel controllo aggiuntivo.
-      const portali = fontiPerPaese(nomi.cc, nomi.en, nomi.locale).slice(0, 4)
-        .map((f) => ({ url: f.urlPronto, lingua: f.lingua || linguaLocale, fonte: f.id, strict: f.paesi.includes('*') }));
+      // (25/11/2026) Registro rifatto: prima le agende DELLA città, poi le nazionali; 6 invece di 4 (con 4 le mondiali
+      // restavano fuori dove c'erano più fonti del paese). `rigorosa`: biglietterie nazionali e pagine con più città
+      // tengono solo gli eventi che nominano la città, come le mondiali.
+      const portali = fontiPerPaese(nomi.cc, nomi.en, nomi.locale, lat, lon).slice(0, 6)
+        .map((f) => ({ url: f.urlPronto, lingua: f.lingua || linguaLocale, fonte: f.id, strict: f.paesi.includes('*') || !!f.rigorosa, formato: f.formato || null, campi: f.campi || null, codifica: f.codifica || '' }));
       const ricerche = eventiFeed.fornitoreRicerca()
         ? await Promise.all(eventiFeed.queryEventiLocali(nomi.locale, linguaLocale, nomi.en).map((q) => eventiFeed.ricercaWeb(q.q, { lang: q.lang, cc: nomi.cc, count: 8 })))
         : [];
@@ -49376,11 +53546,25 @@ ${testo}`;
       // Lettura in parallelo: JSON-LD subito, testo da tenere per l'AI.
       const lette = await Promise.all(pagine.map(async (p) => {
         if (!isPublicHttpUrl(p.url)) return null;
-        const html = await scaricaHtml(p.url, p.lingua);
+        const html = await scaricaHtml(p.url, p.lingua, !!(p as any).formato, (p as any).codifica || '');
         if (!html) return null;
+        // (25/11/2026) Feed e API (RSS, iCal, The Events Calendar, Opendatasoft, Linked Events, JSON): dati dichiarati,
+        // letti senza AI; il «testo» su cui validaEventi cerca titolo e città sono le voci stesse.
+        if ((p as any).formato) {
+          let dati: any[] = [];
+          try { dati = eventiFeed.eventiDaFeed(html, (p as any).formato, p.url, (p as any).campi || undefined); } catch { dati = []; }
+          return { ...p, testo: eventiFeed.testoDelFeed(dati), strutturati: dati };
+        }
         const testo = eventiFeed.testoPagina(html, 12000);
         let strutturati: any[] = [];
         try { strutturati = eventiFeed.eventiDaJsonLd(html, p.url); } catch { strutturati = []; }
+        // (25/11/2026, committente: «possiamo avere un estrattore da html?» → «fai leggere da AI») prima l'estrattore HTML
+        // senza AI (schede con titolo e data): con almeno 3 eventi la pagina non va all'AI; altrimenti la legge l'AI.
+        if (!strutturati.length) {
+          let daHtml: any[] = [];
+          try { daHtml = eventiFeed.eventiDaHtml(html, p.url); } catch { daHtml = []; }
+          if (daHtml.length >= 3) return { ...p, testo: `${testo}\n${eventiFeed.testoDelFeed(daHtml)}`, strutturati: daHtml };
+        }
         return { ...p, testo, strutturati };
       }));
       const events: any[] = [];

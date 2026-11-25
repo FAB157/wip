@@ -52,9 +52,11 @@
   .box .via { display: block; font-weight: 800; margin-top: .9mm; font-size: 7.6pt; }
   .piede { position: absolute; left: 0; right: 0; bottom: 0; height: 25mm; background: #0f2460; color: #fff; display: flex; align-items: center; justify-content: space-between; padding: 0 11mm; font-size: 8.6pt; line-height: 1.5; }
   .qr { display: flex; align-items: center; gap: 3.4mm; }
-  .qr img { width: 21mm; height: 21mm; border-radius: 2mm; background: #fff; padding: .8mm; }
-  .qr b { display: block; font-size: 10pt; }
-  .qr span { display: block; font-size: 7.6pt; opacity: .85; }
+  .qr .q { text-align: center; }
+  .qr .q i { display: block; width: 18mm; height: 18mm; border-radius: 1.6mm; background: #fff; padding: .8mm; }
+  .qr .q svg { display: block; width: 100%; height: 100%; }
+  .qr .q span { display: block; font-size: 6.4pt; font-weight: 700; margin-top: .5mm; line-height: 1; }
+  .qr b { display: block; font-size: 9pt; }
   .piede b { font-size: 10.5pt; }
   .piede .pill { background: #fff; color: #0f2460; border-radius: 99mm; padding: 1.3mm 3.4mm; font-weight: 800; font-size: 8pt; }
   @media screen { body { padding: 6mm 0; } .foglio { box-shadow: 0 2mm 10mm rgba(0,0,0,.2); } }
@@ -82,12 +84,18 @@
   </div>
   <div class="piede">
     <div><b>www.wip.guide</b><br>marketing@wip.guide<br><span style="opacity:.8" id="fatto"></span></div>
-    <div class="qr"><div style="text-align:right"><b id="store"></b><span id="android"></span></div><img src="/presentazione/qr-appstore.png" alt="QR App Store"></div>
+    <!-- (13/11/2026) Due codici: App Store e Google Play, disegnati in locale (/regalo/qrcode.min.js). -->
+    <div class="qr"><div style="text-align:right"><b id="store"></b><b id="android"></b></div>
+      <div class="q"><i id="qr_ios"></i><span>App Store</span></div><div class="q"><i id="qr_play"></i><span>Google Play</span></div></div>
   </div>
 </div>
 <script src="/presentazione/testi.js"></script>
+<script src="/regalo/qrcode.min.js"></script>
 <script>
 (function () {
+  function disegna(id, indirizzo) { try { var q = qrcode(0, "M"); q.addData(indirizzo); q.make(); document.getElementById(id).innerHTML = q.createSvgTag(4, 0); } catch (e) {} }
+  disegna("qr_ios", "https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct=scheda-pdf&mt=8");
+  disegna("qr_play", "https://play.google.com/store/apps/details?id=com.itaintasca.app");
   var l = wipLingua(), d = WIP_T[l];
   if (new URLSearchParams(location.search).get("anteprima")) document.documentElement.className = "anteprima";
   document.documentElement.lang = l.toLowerCase();

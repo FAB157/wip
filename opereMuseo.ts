@@ -164,6 +164,23 @@ export function codiceSalaDa(testo: string): string {
   return m ? m[0].replace(/\s+/g, ' ').trim() : '';
 }
 
+/**
+ * CLASSI CHE NON SONO OPERE DA VISITARE (20/11/2026, guida MoMA rifatta in produzione: 28 tappe su 30 erano film e
+ * videogiochi — Minecraft, Biancaneve, Toy Story, WALL•E, Tetris, Pac-Man, Blade Runner). Il MoMA ha film e
+ * videogiochi IN COLLEZIONE (P195 = MoMA) e hanno più Wikipedia di un quadro: vincevano il taglio per fama. Si
+ * guardano con le SOTTOCLASSI (`P31/P279*`): Toy Story è «film d'animazione», Minecraft «videogioco». Stessa lista in
+ * server.ts (opereDaWikidata e l'ultimo controllo della guida museo). Film, videogioco, album, essere umano, evento,
+ * serie TV, singolo, brano, episodio TV, mostra.
+ */
+export const CLASSI_NON_OPERA = ['Q11424', 'Q7889', 'Q482994', 'Q5', 'Q1656682', 'Q5398426', 'Q134556', 'Q7366', 'Q21191270', 'Q464980'];
+/** `t` = la classe DIRETTA (P31) dell'opera, `c` = la classe della lista a cui risale. Una persona conta solo con P31 =
+ *  essere umano diretto: mummie, corpi di palude (l'Uomo di Lindow) risalgono a «umano» e sono ciò che si va a vedere. */
+export function classeNonOpera(t: string, c: string): boolean {
+  if (!CLASSI_NON_OPERA.includes(c)) return false;
+  if (c === 'Q5') return t === 'Q5';
+  return true;
+}
+
 /** Esegue n compiti con al massimo `k` in parallelo. */
 async function aGruppi<T>(elementi: T[], k: number, fn: (e: T, i: number) => Promise<void>): Promise<void> {
   let i = 0;
@@ -284,9 +301,11 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
         VALUES ?m { ${valoriParti} }
         { ?o wdt:P195 ?m } UNION { ?o wdt:P276 ?m }
         ?o wikibase:sitelinks ?fama .
-      } ORDER BY DESC(?fama) LIMIT ${CANDIDATE} }
+      } ORDER BY DESC(?fama) LIMIT ${CANDIDATE * 3} }
   } ORDER BY DESC(?fama)`) || [];
   ms.chi = Date.now() - t0;
+  // (20/11/2026) Se ne chiedono il TRIPLO: al MoMA 28 delle prime 40 per fama sono film e videogiochi, e tolti quelli
+  // devono restare abbastanza opere vere per il percorso. Il taglio a CANDIDATE si fa DOPO il filtro qui sotto.
   const fama: Record<string, number> = {};
   for (const r of righeTop) fama[ultimo(r.o?.value)] = Number(r.fama?.value || 0);
   // IN UNA CHIESA LE TAPPE SONO ANCHE PARTI DELL'EDIFICIO (11/09, prova su 8
@@ -299,7 +318,13 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
     const righeParti = await sparql(`SELECT ?o ?fama WHERE { VALUES ?o { ${idParti.map(q => `wd:${q}`).join(' ')} } ?o wikibase:sitelinks ?fama . }`, 12000) || [];
     for (const r of righeParti) { const q = ultimo(r.o?.value); if (!(q in fama)) fama[q] = Number(r.fama?.value || 0); }
   }
-  const qidOpere = Object.keys(fama).filter(q => /^Q\d+$/.test(q)).sort((a, b) => fama[b] - fama[a] || a.localeCompare(b)).slice(0, CANDIDATE);
+  const tuttiCand = Object.keys(fama).filter(q => /^Q\d+$/.test(q)).sort((a, b) => fama[b] - fama[a] || a.localeCompare(b)).slice(0, CANDIDATE * 3);
+  // FILM, VIDEOGIOCHI, ALBUM, BRANI, SERIE, EVENTI, PERSONE: fuori SEMPRE, anche se in collezione (il MoMA possiede
+  // Minecraft e Toy Story). Classe diretta + sottoclassi (P31/P279*), su QID precisi: veloce anche al museo grande.
+  const rNonOpere = tuttiCand.length ? await sparqlUnaVolta(`SELECT DISTINCT ?o ?t ?c WHERE { VALUES ?o { ${tuttiCand.map(q => `wd:${q}`).join(' ')} } VALUES ?c { ${CLASSI_NON_OPERA.map(q => `wd:${q}`).join(' ')} } ?o wdt:P31 ?t . ?t wdt:P279* ?c . hint:Prior hint:gearing "forward" . }`, 12000) : [];
+  const nonOpereClasse = new Set((rNonOpere || []).filter(r => classeNonOpera(ultimo(r.t?.value), ultimo(r.c?.value))).map(r => ultimo(r.o?.value)));
+  if (!rNonOpere) errori.push('controllo film/videogiochi/persone non eseguito (Wikidata)');
+  const qidOpere = tuttiCand.filter(q => !nonOpereClasse.has(q)).slice(0, CANDIDATE);
   if (!qidOpere.length) return { ...vuoto, museo: { qid: qidMuseo, parti: parti.size, dominio, api: '' } };
 
   // EVENTI, ORGANIZZAZIONI, CONCETTI NON SONO TAPPE (11/09, prova su 8 chiese):
@@ -420,6 +445,7 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
     const titolo = g.lab || g.labEn;
     if (!titolo || /^Q\d+$/.test(titolo)) continue;
     if (g.nonOpera) { escluse.push({ qid: q, titolo, motivo: 'non è un\'opera (movimento, mostra…)' }); continue; }
+    if (nonOpereClasse.has(q)) { escluse.push({ qid: q, titolo, motivo: 'film, videogioco, album, brano, serie, evento o persona: non è un\'opera da vedere' }); continue; }
     const espostaQui = [...g.luoghi.keys()].some(l => parti.has(l));
     const inCollezione = [...g.coll].some(c => parti.has(c))
       || (espostaQui && [...g.coll].some(c => antenati.has(c)));

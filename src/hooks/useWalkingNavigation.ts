@@ -29,12 +29,15 @@ import { pubblicaPercorsoNativo, ritiraPercorsoNativo, battitoNav, segnaCruscott
 // Solo per sapere se c'e` un giro che riprende il cruscotto quando questa
 // navigazione lascia (21/09/2026). Nessun ciclo: tourService non importa hook.
 import { tourService } from '../services/tourService';
+import { luoghiPercorsoCheParlano, stessoLuogoAltroAlfabeto } from '../lib/geofencing/nomiAnnunciabili';
 
 export type NavState = 'idle' | 'routing' | 'navigating' | 'arrived';
 
-/** Il nome senza parentesi, accenti e articolo: «Piazza Navona» è la stessa su due righe diverse. */
+/** Il nome senza parentesi, accenti, articoli e preposizioni: «Piazza Navona» è la stessa su due righe diverse.
+ *  (21/11/2026) Come nomeNudo di foregroundTriggers: anche «de'/dei/di» interni. */
 const nomeNudoNav = (n: unknown): string => String(n || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
-  .replace(/\([^)]*\)/g, ' ').replace(/^(the|il|la|lo|le|i|gli|l')\s+/i, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  .replace(/\([^)]*\)/g, ' ').replace(/^(the|il|la|lo|le|i|gli|l')\s+/i, '').replace(/[^a-z0-9]+/g, ' ')
+  .replace(/\b(di|de|dei|degli|del|della|delle|dello|d|l|des|du|of)\b/g, ' ').replace(/\s+/g, ' ').trim();
 
 const SPEAK_DISTANCE_M = 30;    // leggi la manovra entro 30 m dalla svolta
 // PRE-ANNUNCIO (08/09/2026): a piedi 30 m sono ~25 secondi — se sei distratto
@@ -463,6 +466,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   // Metri residui alla meta nel punto di ogni manovra (lungo il tracciato).
   const stepRemainingRef = useRef<number[]>([]);
   const pendingPoisRef = useRef<RoutePoi[]>([]);
+  // (21/11/2026) Partenza della navigazione e luoghi già raccontati (per i gemelli in altra lingua o con lo stesso QID).
+  const partenzaNavRef = useRef<LatLon | null>(null);
+  const parlatiNavRef = useRef<RoutePoi[]>([]);
   const offRouteCountRef = useRef(0);
   const lastRecalcRef = useRef(0);
   const recalcInFlightRef = useRef(false);
@@ -849,6 +855,12 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   // gestito a valle come per ogni altro ascolto). Dedupe condiviso con il
   // geofencing normale via __wipLastPoiTrigger.
   const checkRoutePois = (here: LatLon) => {
+    // (21/11/2026) Senza origine scelta, la partenza è il primo fix: il luogo da cui si parte (il caffè dove si era)
+    // esce dai luoghi del percorso una volta sola.
+    if (!partenzaNavRef.current && Number.isFinite(here?.lat) && Number.isFinite(here?.lon)) {
+      partenzaNavRef.current = { lat: here.lat, lon: here.lon };
+      pendingPoisRef.current = luoghiPercorsoCheParlano(pendingPoisRef.current, null, partenzaNavRef.current);
+    }
     const pending = pendingPoisRef.current;
     if (pending.length === 0) return;
     // Le strade attorno, per misurare in metri di strada (durante la
@@ -883,6 +895,8 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     for (const { p, d } of perDistanza) {
       // già raccontato con un'altra riga: non resta nemmeno in attesa
       if (nomiDetti.has(nomeNudoNav(p.name || p.nome))) continue;
+      // (21/11/2026) …anche il gemello in un altro alfabeto entro 150 m o con lo stesso QID
+      if (parlatiNavRef.current.some(q => stessoLuogoAltroAlfabeto(p, q, haversineMeters(p.lat, p.lon, q.lat, q.lon)))) continue;
       if (d <= raggio && (!libero || scattato) && !(Capacitor.isNativePlatform() && locationService.haLuoghiWipNavNativi())) { stillPending.push(p); continue; }
       if (d <= raggio) scattato = true;
       // Dall'INGRESSO quando lo conosciamo, non dal centroide: su un edificio
@@ -903,6 +917,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
           // Roma: «Piazza Navona» raccontata due volte, una riga dopo l'altra):
           // chi ha lo stesso nome entro 150 m esce dall'attesa insieme a lui.
           nomiDetti.add(nomeNudoNav(p.name || p.nome));
+          parlatiNavRef.current.push(p);
           // Anche il cooldown di 6 h dei trigger web: senza, passati 60 s il
           // modulo di prossimita' rifaceva parlare lo stesso POI gia' raccontato
           // da WIP Nav (segnalato 22/08/2026).
@@ -1234,7 +1249,15 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       speedSamplesRef.current = [];
       lastFixRef.current = null;
       primoFixRicevutoRef.current = false;
-      pendingPoisRef.current = (routePois || []).filter(p => p && typeof p.lat === 'number' && typeof p.lon === 'number');
+      // (21/11/2026, prova a Budapest) Gli stessi filtri dell'audioguida libera, più: mai la meta né i suoi gemelli, mai
+      // il luogo di partenza (luoghiPercorsoCheParlano). La partenza è l'origine scelta, o il primo fix (checkRoutePois).
+      partenzaNavRef.current = originOverride ? { lat: originOverride.lat, lon: originOverride.lon } : null;
+      parlatiNavRef.current = [];
+      pendingPoisRef.current = luoghiPercorsoCheParlano(
+        (routePois || []).filter(p => p && typeof p.lat === 'number' && typeof p.lon === 'number'),
+        { id: target.poiId, name: target.poiName, lat: target.lat, lon: target.lon },
+        partenzaNavRef.current,
+      );
       // Con origine personalizzata (indirizzo) l'utente è tipicamente LONTANO
       // dal tracciato: ricalcolo e arrivo restano sospesi finché non si
       // "aggancia" il percorso, altrimenti il ricalcolo dalla posizione GPS

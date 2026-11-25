@@ -61,6 +61,8 @@ object NavFollower {
     const val OFFROUTE_MS = 20_000L
     const val BACK_ON_ROUTE_M = 40.0
     const val DEDUPE_MS = 20_000L
+    /** (21/11/2026) Nessun preavviso «Tra N metri» entro questo tempo dall'ultima frase detta (= WIP Nav sul web). */
+    const val PREAVVISO_PAUSA_MS = 8_000L
     // (21/09/2026, REVISIONE 2) ARRIVO FINALE NEI PARAGGI: entro 60 m
     // ininterrottamente da 45 s — la regola 3 del JS. Solo i 25 m non
     // bastavano: chi entrava da un altro lato, o col GPS in tasca a 30-50 m,
@@ -421,8 +423,10 @@ object NavFollower {
         vicinoFinaleDa = 0L
         ultimoFixFinaleTs = 0L
         fotoTerminato = null
+        // (21/11/2026, = Swift e regola della spec) Al cambio di percorso: lo scarto «stessa frase, stesso indice»
+        // non vale più (gli indici cambiano), ma l'ora dell'ultima frase RESTA: i «8 s dall'ultima frase» valgono
+        // anche dopo un ricalcolo, mai un preavviso sopra una frase appena detta.
         ultimoDetto = ""
-        ultimoDettoTs = 0L
         ultimoTestoVicino = ""
         ultimoTestoLontano = ""
         return true
@@ -505,8 +509,10 @@ object NavFollower {
         fuoriDettoTs = 0L
         fuoriRipetizioni = 0
         vicinoFinaleDa = 0L
+        // (21/11/2026, = Swift e regola della spec) Al cambio di percorso: lo scarto «stessa frase, stesso indice»
+        // non vale più (gli indici cambiano), ma l'ora dell'ultima frase RESTA: i «8 s dall'ultima frase» valgono
+        // anche dopo un ricalcolo, mai un preavviso sopra una frase appena detta.
         ultimoDetto = ""
-        ultimoDettoTs = 0L
         ultimoTestoVicino = ""
         ultimoTestoLontano = ""
     }
@@ -1001,7 +1007,12 @@ object NavFollower {
                 avanza(); continue
             } else if (p.tipo == "turn" && !inPausa && avvicina &&
                 (!dettiLontano.contains(idx) || (!jsVivo && !dettiLontanoDavvero.contains(idx))) &&
-                dS >= lontanoMin && dS <= lontanoMax && p.testo.isNotEmpty()
+                dS >= lontanoMin && dS <= lontanoMax && p.testo.isNotEmpty() &&
+                // (21/11/2026, = regola web di WIP Nav) Nessun preavviso entro PREAVVISO_PAUSA_MS dall'ultima frase:
+                // «Tra 50 metri…» arrivava 3–7 s dopo «Continua dritto». Non si segna: lo si dice dopo, se si è
+                // ancora nella finestra del preavviso.
+                // (un orologio che torna indietro — un altro avvio, un altro banco — non è «una frase appena detta»)
+                (ultimoDettoTs == 0L || nowMs - ultimoDettoTs >= PREAVVISO_PAUSA_MS || nowMs < ultimoDettoTs)
             ) {
                 // (21/09/2026, REVISIONE 2) In pausa il preavviso NON si segna.
                 // E CONTATO ≠ DETTO anche qui: un preavviso contato in silenzio

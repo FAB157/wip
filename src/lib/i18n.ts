@@ -4342,6 +4342,22 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Остановки",
     ZH: "停留点"
   , DE: "Stationen"},
+  // Podcast di una tappa (18/11/2026)
+  podcast_tappa: {
+    IT: "Podcast", EN: "Podcast", FR: "Podcast", ES: "Pódcast", DE: "Podcast", RU: "Подкаст", ZH: "播客"
+  },
+  podcast_tappa_stop: {
+    IT: "Ferma", EN: "Stop", FR: "Arrêter", ES: "Detener", DE: "Stopp", RU: "Стоп", ZH: "停止"
+  },
+  podcast_tappa_senza_fonti: {
+    IT: "Di questa tappa non abbiamo ancora fonti verificate: il podcast arriverà quando il luogo sarà arricchito. Nessun credito scalato.",
+    EN: "We don't have verified sources for this stop yet: the podcast will be available once the place is enriched. No credits charged.",
+    FR: "Nous n'avons pas encore de sources vérifiées pour cette étape : le podcast arrivera quand le lieu sera enrichi. Aucun crédit débité.",
+    ES: "Aún no tenemos fuentes verificadas de esta parada: el pódcast llegará cuando el lugar esté enriquecido. No se ha descontado ningún crédito.",
+    DE: "Für diesen Halt haben wir noch keine geprüften Quellen: Der Podcast kommt, sobald der Ort ergänzt ist. Es wurden keine Credits abgebucht.",
+    RU: "Для этой остановки пока нет проверенных источников: подкаст появится, когда место будет дополнено. Кредиты не списаны.",
+    ZH: "这一站还没有经过核实的资料：地点资料补充后即可收听播客。未扣除任何积分。"
+  },
   go_back: {
     IT: "Torna Indietro",
     EN: "Go Back",
@@ -5964,6 +5980,13 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   lib_ready: { IT: "Pronto", EN: "Ready", FR: "Prêt", ES: "Listo", DE: "Fertig", RU: "Готов", ZH: "就绪" },
   lib_one_minute: { IT: "1 minuto", EN: "1 minute", FR: "1 minute", ES: "1 minuto", DE: "1 Minute", RU: "1 минута", ZH: "1 分钟" },
   lib_generate: { IT: "Genera", EN: "Generate", FR: "Générer", ES: "Generar", DE: "Erstellen", RU: "Создать", ZH: "生成" },
+  lib_verified_section: { IT: "Itinerari verificati", EN: "Verified itineraries", FR: "Itinéraires vérifiés", ES: "Itinerarios verificados", DE: "Geprüfte Reiserouten", RU: "Проверенные маршруты", ZH: "已验证行程" },
+  lib_verified_section_hint: { IT: "Collaudati da noi: ogni tappa esiste, è sul posto giusto e ha la sua scheda.", EN: "Tested by us: every stop exists, is in the right place and has its own card.", FR: "Testés par nos soins : chaque étape existe, est au bon endroit et a sa fiche.", ES: "Probados por nosotros: cada parada existe, está en su sitio y tiene su ficha.", DE: "Von uns getestet: Jeder Halt existiert, liegt am richtigen Ort und hat seine Karte.", RU: "Проверено нами: каждая остановка существует, находится на своём месте и имеет карточку.", ZH: "我们已测试：每个站点真实存在、位置正确并有专属信息卡。" },
+  lib_quick_section: { IT: "Itinerari veloci", EN: "Quick itineraries", FR: "Itinéraires rapides", ES: "Itinerarios rápidos", DE: "Schnelle Reiserouten", RU: "Быстрые маршруты", ZH: "快速行程" },
+  lib_quick_section_hint: { IT: "Pronti subito, senza collaudo: controlla le tappe prima di partire.", EN: "Ready right away, not tested: check the stops before you go.", FR: "Prêts tout de suite, sans test : vérifiez les étapes avant de partir.", ES: "Listos al instante, sin prueba: revisa las paradas antes de salir.", DE: "Sofort fertig, ungetestet: Halte vor der Abreise prüfen.", RU: "Готовы сразу, без проверки: проверьте остановки перед поездкой.", ZH: "即时可用，未经测试：出发前请核对站点。" },
+  lib_verified_badge: { IT: "Verificato", EN: "Verified", FR: "Vérifié", ES: "Verificado", DE: "Geprüft", RU: "Проверено", ZH: "已验证" },
+  lib_verified_tested_on: { IT: "testato il", EN: "tested on", FR: "testé le", ES: "probado el", DE: "getestet am", RU: "проверено", ZH: "测试日期" },
+  lib_verified_vote: { IT: "voto", EN: "score", FR: "note", ES: "nota", DE: "Note", RU: "оценка", ZH: "评分" },
   lib_search_as: { IT: "Cerca", EN: "Search", FR: "Chercher", ES: "Buscar", DE: "Suchen", RU: "Искать", ZH: "搜索" },
   lib_real_places_note: { IT: "Itinerario sui luoghi veri (riprese, ambientazioni, opere, eventi o venue), verificati su Wikidata.", EN: "Itinerary on real places (shoots, settings, works, events or venues), verified on Wikidata.", FR: "Itinéraire sur des lieux réels (tournages, décors, œuvres, événements ou salles), vérifiés sur Wikidata.", ES: "Itinerario sobre lugares reales (rodajes, escenarios, obras, eventos o sedes), verificados en Wikidata.", DE: "Route über echte Orte (Drehorte, Schauplätze, Werke, Events oder Venues), geprüft auf Wikidata.", RU: "Маршрут по реальным местам (съёмки, локации, произведения, события или площадки), проверенным в Wikidata.", ZH: "基于真实地点（拍摄地、场景、作品、活动或场馆）的行程，已在 Wikidata 核验。" },
   lib_no_results: { IT: "Nessun itinerario per questa ricerca. Prova con un'altra città o togli qualche filtro.", EN: "No itineraries for this search. Try another city or remove some filters.", FR: "Aucun itinéraire pour cette recherche. Essayez une autre ville ou retirez des filtres.", ES: "Ningún itinerario para esta búsqueda. Prueba con otra ciudad o quita algún filtro.", DE: "Keine Routen für diese Suche. Versuche eine andere Stadt oder entferne Filter.", RU: "Маршрутов не найдено. Попробуйте другой город или уберите фильтры.", ZH: "没有符合的行程。请尝试其他城市或减少筛选条件。" },

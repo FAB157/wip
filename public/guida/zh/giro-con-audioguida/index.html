@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>带语音导览的游览：雷达、站点、仪表盘和 Day Pass | WIP Guide</title>
+<meta name="description" content="如何在 WIP 中创建和跟随带语音导览的游览：雷达、你的时间、到达时间、顺序、沿途、仪表盘、站点状态、暂停、重新计算和 Day Pass。">
+<link rel="canonical" href="https://www.wip.guide/guida/zh/giro-con-audioguida"><link rel="alternate" hreflang="it" href="https://www.wip.guide/guida/giro-con-audioguida"><link rel="alternate" hreflang="en" href="https://www.wip.guide/guida/en/giro-con-audioguida"><link rel="alternate" hreflang="fr" href="https://www.wip.guide/guida/fr/giro-con-audioguida"><link rel="alternate" hreflang="es" href="https://www.wip.guide/guida/es/giro-con-audioguida"><link rel="alternate" hreflang="de" href="https://www.wip.guide/guida/de/giro-con-audioguida"><link rel="alternate" hreflang="ru" href="https://www.wip.guide/guida/ru/giro-con-audioguida"><link rel="alternate" hreflang="zh-Hans" href="https://www.wip.guide/guida/zh/giro-con-audioguida"><link rel="alternate" hreflang="x-default" href="https://www.wip.guide/guida/giro-con-audioguida">
+<meta property="og:type" content="website"><meta property="og:title" content="带语音导览的游览：雷达、站点、仪表盘和 Day Pass"><meta property="og:description" content="如何在 WIP 中创建和跟随带语音导览的游览：雷达、你的时间、到达时间、顺序、沿途、仪表盘、站点状态、暂停、重新计算和 Day Pass。"><meta property="og:url" content="https://www.wip.guide/guida/zh/giro-con-audioguida"><meta property="og:site_name" content="WIP Guide"><meta property="og:image" content="https://www.wip.guide/scopri/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/icon.png">
+<style>
+:root{--bg:#fff;--fg:#14213d;--mut:#4b5568;--brand:#1e3a8a;--brand2:#2f56c9;--card:#f4f6fb;--line:#d9dfec;--ok:#0f6b3a;--warn:#8a4b00;--warnbg:#fff4e0;--costbg:#e8f0ff;--on:#fff}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0e1424;--fg:#e8ecf7;--mut:#a9b3c9;--brand:#8fb0ff;--brand2:#b5ccff;--card:#172038;--line:#2a3555;--ok:#6fdc9c;--warn:#ffcf8a;--warnbg:#2a2014;--costbg:#16264a;--on:#0e1424}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--brand)}a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--brand2);outline-offset:2px}
+header.top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.bar{max-width:1040px;margin:0 auto;padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.logo{font-weight:800;color:var(--brand);text-decoration:none;font-size:1.15rem}
+nav.menu{display:flex;gap:4px 14px;flex-wrap:wrap;font-size:.92rem}nav.menu a{text-decoration:none;color:var(--fg);padding:6px 2px}nav.menu a:hover{color:var(--brand)}
+.apri{margin-left:auto}
+main{max-width:1040px;margin:0 auto;padding:20px 16px 56px}
+h1{font-size:clamp(1.7rem,4.5vw,2.6rem);line-height:1.15;margin:.2em 0 .4em;color:var(--brand)}
+h2{font-size:1.45rem;margin:2em 0 .5em;line-height:1.25}h3{font-size:1.1rem}
+.lead{font-size:1.2rem;color:var(--mut);max-width:62ch}
+.crumb{font-size:.9rem;color:var(--mut)}.crumb a{color:var(--mut)}
+.btn{display:inline-block;background:var(--brand);color:var(--on);padding:11px 18px;border-radius:10px;text-decoration:none;font-weight:700;margin:4px 6px 4px 0}
+.btn.sec{background:transparent;color:var(--brand);border:2px solid var(--brand)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:22px 0;padding:16px;background:var(--card);border-radius:14px}
+.stat{display:flex;flex-direction:column}.num{font-size:1.9rem;font-weight:800;color:var(--brand);font-variant-numeric:tabular-nums}.et{font-size:.88rem;color:var(--mut)}
+.nota-stat{grid-column:1/-1;font-size:.82rem;color:var(--mut);margin:4px 0 0}
+ol.passi{counter-reset:p;list-style:none;padding:0}ol.passi li{counter-increment:p;position:relative;padding:10px 12px 10px 52px;margin:8px 0;background:var(--card);border-radius:10px}
+ol.passi li::before{content:counter(p);position:absolute;left:12px;top:9px;width:30px;height:30px;border-radius:50%;background:var(--brand);color:var(--on);display:grid;place-items:center;font-weight:800}
+.nota,.costo,.manca{border-radius:10px;padding:12px 14px;margin:14px 0}.nota{background:var(--warnbg);color:var(--warn)}.costo{background:var(--costbg)}
+.manca{border:2px dashed var(--line)}.manca h2{margin-top:0;font-size:1.1rem}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:420px}th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}th{background:var(--card)}
+figure{margin:18px 0}figure img,figure video{max-width:100%;height:auto;border-radius:12px;border:1px solid var(--line)}.esempi{margin:28px 0}.es-griglia{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}.es{border:1px solid var(--linea,#ddd);border-radius:12px;padding:12px;margin:0}.es img{max-height:360px;width:100%;object-fit:contain}.es audio{width:100%;margin-top:8px}.es-nota{font-size:.9em;margin:6px 0 0;opacity:.85}.es-pdf .btn{display:inline-block;margin-bottom:6px}
+figure img{max-height:640px;width:auto;display:block}figcaption{font-size:.85rem;color:var(--mut)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;margin:18px 0}
+.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;text-decoration:none;color:var(--fg)}
+.card:hover{border-color:var(--brand)}.card .em{font-size:1.8rem}.card h3{margin:.3em 0}.card p{margin:.2em 0;color:var(--mut);font-size:.95rem}.card .cn{font-weight:700;color:var(--brand);font-size:.95rem}
+.ricerca{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.ricerca input{flex:1;min-width:220px;padding:12px 14px;border-radius:10px;border:2px solid var(--line);font:inherit;background:var(--bg);color:var(--fg)}
+.ris{list-style:none;padding:0}.ris li{margin:6px 0}.ris a{display:block;padding:10px 12px;background:var(--card);border-radius:10px;text-decoration:none}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:999px;padding:8px 14px;font:inherit;cursor:pointer}.chip:hover{background:var(--brand);color:var(--on)}
+details{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:8px 0}summary{cursor:pointer;font-weight:700}
+.letto{display:flex;align-items:center;gap:8px;margin:28px 0}.progress{font-size:.9rem;color:var(--mut)}
+.fonte{opacity:.8}.agg{font-size:.85rem;color:var(--mut);margin-top:32px}
+footer{border-top:1px solid var(--line);padding:22px 16px;text-align:center;font-size:.9rem;color:var(--mut)}
+.lingue{max-width:1040px;margin:0 auto;padding:0 16px 8px;font-size:.85rem;color:var(--mut)}.lingue a{color:var(--mut)}.lingue strong{color:var(--fg)}footer .lingue{padding-top:10px}
+@media(max-width:600px){body{font-size:16px}nav.menu{display:none}.apri{margin-left:auto}}
+</style>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"WIP","item":"https://www.wip.guide/"},{"@type":"ListItem","position":2,"name":"指南","item":"https://www.wip.guide/guida/zh/"},{"@type":"ListItem","position":3,"name":"语音导览","item":"https://www.wip.guide/guida/zh/audioguide"},{"@type":"ListItem","position":4,"name":"带语音导览的游览","item":"https://www.wip.guide/guida/zh/giro-con-audioguida"}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"创建行程需要付费吗？","acceptedAnswer":{"@type":"Answer","text":"不需要。只有启动多站点行程导航时才需要 Day Pass。"}},{"@type":"Question","name":"我可以在走路时更改站点吗？","acceptedAnswer":{"@type":"Answer","text":"可以：通过地图上的 X 将其移除（WIP 会推荐一个替代地点）或使用“跳过此站”。"}},{"@type":"Question","name":"关闭蓝色卡片会停止行程吗？","acceptedAnswer":{"@type":"Answer","text":"不会：行程只能通过仪表盘上的 X 停止。"}}]}</script>
+</head><body>
+<a href="#main" style="position:absolute;left:-999px" onfocus="this.style.left='8px'">跳到正文</a>
+<header class="top"><div class="bar"><a class="logo" href="/guida/zh/">WIP · 指南</a><nav class="menu" aria-label="指南"><a href="/guida/zh/">指南</a><a href="/guida/zh/categorie">类别</a><a href="/guida/zh/audioguide">语音导览</a><a href="/guida/zh/itinerari">行程</a><a href="/guida/zh/tutorial">教程</a><a href="/guida/zh/domande-frequenti">常见问题</a></nav><a class="btn apri" href="https://wip.guide/">打开 WIP</a></div><nav class="lingue" aria-label="语言"><a lang="it" hreflang="it" href="/guida/giro-con-audioguida">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/giro-con-audioguida">English</a> · <a lang="fr" hreflang="fr" href="/guida/fr/giro-con-audioguida">Français</a> · <a lang="es" hreflang="es" href="/guida/es/giro-con-audioguida">Español</a> · <a lang="de" hreflang="de" href="/guida/de/giro-con-audioguida">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/giro-con-audioguida">Русский</a> · <strong lang="zh">中文</strong></nav></header>
+<main id="main">
+<p class="crumb"><a href="/">WIP</a> › <a href="/guida/zh/">指南</a> › <a href="/guida/zh/audioguide">语音导览</a> › 带语音导览的游览</p>
+<h1>带语音导览的游览：雷达、站点、仪表盘和 Day Pass</h1>
+<p class="lead"><strong>游览</strong> 是指带有路线的语音导览：选择最多 10 个地点，WIP 会将它们排序，用语音引导你，并在每个站点自动播放语音导览。<strong>创建是免费的；导航需要 Day Pass。</strong></p>
+<p class="agg">译自意大利语。截图、视频和示例显示的是意大利语界面。</p>
+<h2>简而言之</h2>
+<ul><li>可通过 <strong>“语音导览雷达”</strong>（地图上的耳机按钮）或行程某一天的 <strong>“「雷达内 (N)」”</strong> 创建。</li><li>最多 <strong>10 个站点</strong>（「满载路线：最多十个站点」）。</li><li><strong>创建</strong>路线并预览：免费。<strong>「开始导航」</strong>：需要 <strong>Day Pass</strong>（200 积分）。</li><li>如果只有一个站点，直接点<strong>导航</strong>即可，免费。</li></ul><h2>教程：创建你的路线</h2>
+<ol class="passi"><li>打开 <strong>“导览”</strong> 并轻触地图上的耳机按钮：将打开 <strong>“语音导览雷达”</strong>（「监控 N 个地点」）。</li><li>对于你想去的每个地点，轻触 <strong>+</strong>：它会变成序号（与图钉编号相同）。轻触数字可将其移除。垃圾桶图标可将地点从雷达中移除。</li><li>选择 <strong>「可用时间」</strong>：30′、1 小时、1 小时 30 分、2 小时、3 小时、4 小时或全部。WIP 会保留时间允许的站点（步行时间加上每个站点约 3 分钟的收听时间），并提示「在你的可用时间内可以游览 M 个站点中的 N 个」。</li><li>选择 <strong>「终点」</strong>：🔁 回到出发地 · 回到我当前的位置 · 🏁 在最后一个站点结束 · 🗺️ 仅路线，从第 1 个站点开始（在家时很有用）。</li><li>检查<strong>预览</strong>（「12.3 公里 · 步行 45 分钟 · 从你所在位置的环形路线」）。超过 8 公里时会出现长途步行提示。</li><li>可选，<strong>顺序</strong>：WIP 会按步行距离最短的顺序排列站点；拖动 ⠿ 可更改顺序，点击 X 可移除，<strong>「帮我重新排序」</strong> 可恢复自动排序。</li><li>可选，<strong>「沿途 · 路线经过的 N 个地点」</strong>：轻触绿色 <strong>+</strong> 将其添加。如果你路过距离小于 40 米的其他地点，也能听到它们的介绍。</li><li>轻触 <strong>「创建路线」</strong>（或“创建路线 (N)”）。状态：<strong>「准备出发」</strong>。</li><li>轻触 <strong>「开始导航」</strong>。如果没有 Day Pass，将打开收银台：<strong>「立即购买」</strong>。激活后，路线将自动开始。</li></ol><h2>从行程的一天开始</h2>
+<p>在每一天的标题中轻触 <strong>「雷达内 (N)」</strong>：将该天的站点（最多 10 个）导入雷达。餐厅、休息和交通中转站将保持为<strong>无声</strong>站点：只播报“你已到达……”，没有语音导览，也不会产生费用。</p><h2>路线进行中的仪表盘</h2>
+<div class="tw"><table><thead><tr><th>你看到了什么</th><th>含义</th></tr></thead><tbody><tr><td>第 2 / 5 站，名称及距离门口的米数</td><td>你在路线中的位置；“随后：”下一个站点。</td></tr><tr><td>剩余 N 公里 · 总共 N 公里 · 预计到达时间 ~HH:MM</td><td>按 4 公里/小时估算，不计算收听时间。</td></tr><tr><td>☔ 可能下雨 (n%)</td><td>概率达到 50% 及以上时显示。</td></tr><tr><td>🚇 公共交通</td><td>仅适用于 1.5 公里以上的路段：打开 Google Maps 并提供公共交通路线。</td></tr><tr><td>暂停 / 继续</td><td>暂停路线。</td></tr><tr><td>重听</td><td>重新朗读站点导览（定制路线中没有此功能）。</td></tr><tr><td>跳过此站</td><td>前往下一个站点。</td></tr><tr><td>从这里重新计算路线</td><td>从你当前的位置重新规划（「已从你所在位置重新计算路线」）。</td></tr><tr><td>前往下一站</td><td>当你身处该站点且导览结束时出现：标记该站点已完成。</td></tr><tr><td>▼ 收起仪表盘</td><td>将其隐藏为一个细条（轻触该细条可重新打开）。</td></tr><tr><td>X 结束路线</td><td>两次点击：第一次激活 X（变为红色），第二次关闭。已完成的站点和路线将会丢失。</td></tr></tbody></table></div>
+<p>顶部的<strong>蓝色卡片</strong>显示带有米数的转向提示；X 键会为该站点隐藏它，但<strong>不会停止行程</strong>。使用 🔊 重复提示，使用 ↻ 重新计算。</p><h2>行程如何了解你所处的位置</h2>
+<div class="tw"><table><thead><tr><th>状态</th><th>Quando</th><th>发生的情况</th></tr></thead><tbody><tr><td>即将到达</td><td>达到“步行提醒”距离（默认 150 米，至少为到达阈值 + 20 米）</td><td>简短预告。</td></tr><tr><td>在入口处</td><td>达到“语音播报起始半径”（默认 30 米）</td><td>语音导览开始播放，卡片打开。如果没有打开，行程会在 8 秒后自动打开。</td></tr><tr><td>暂停</td><td>静止 180 秒</td><td>真正的暂停（不是红绿灯）。</td></tr><tr><td>偏离路线</td><td>偏离路线 70 米以上持续 15 秒</td><td>自动重新计算：“你已偏离路线：正在从此处重新计算行程。”</td></tr><tr><td>已结束</td><td>已到达最后一个站点</td><td>“行程结束”：保存到我的行程、分享、从此处开始新行程。</td></tr></tbody></table></div>
+<ul><li><strong>擦肩而过的站点</strong>：你靠近至 60 米以内，随后又远离超过 40 米：将被视为已完成。</li><li><strong>沿途相遇</strong>：雷达内距离路线和你本人 40 米以内的地点会收到一个预告（“沿途”），每趟行程一次。</li><li><strong>地图上的 X</strong>：如果你移除一个站点，WIP 会在 250 米内推荐一个替代地点（“替换它吗？”是/否，2 分钟后失效）。</li><li>相距不到 60 米的两个站点算作一站。</li><li><strong>预下载</strong>：“正在准备离线站点…”会下载文本和音频；如果有缺失，点击“重试”。</li></ul><section class="manca"><h2>WIP 不做什么（以免产生误解）</h2><ul><li>多站点行程没有 Day Pass 无法导航（预览可以）。</li><li>行程的提醒和偏离阈值无法更改；但可以在 GeoControl 中更改提醒和到达距离。</li></ul></section><h2>常见问题</h2><details><summary>创建行程需要付费吗？</summary><p>不需要。只有启动多站点行程导航时才需要 Day Pass。</p></details><details><summary>我可以在走路时更改站点吗？</summary><p>可以：通过地图上的 X 将其移除（WIP 会推荐一个替代地点）或使用“跳过此站”。</p></details><details><summary>关闭蓝色卡片会停止行程吗？</summary><p>不会：行程只能通过仪表盘上的 X 停止。</p></details><h2>继续阅读</h2><div class="grid"><a class="card" href="/guida/zh/audioguida-libera"><h3>自由语音导览</h3><p>WIP 自由语音导览教程：指南按钮、接近卡片、到达时会发生什么、播放器的所有控制项以及如何付款。…</p></a><a class="card" href="/guida/zh/percorso-su-misura"><h3>定制路线</h3><p>如何从WIP地图上规划路线：三种方式（个人、周边Gemme、计时），费用为 30 crediti，包含修改并与Giro的区别。…</p></a><a class="card" href="/guida/zh/wipnav-passo-passo"><h3>WipNav 逐步指引</h3><p>如何使用 WipNav：从地点启动、出发点、沿途地点、蓝色卡片、语音与预告、偏离路线、重新计算、到达以及屏幕熄灭。…</p></a><a class="card" href="/guida/zh/tour-di-gruppo"><h3>团队导览</h3><p>WIP 团队游的工作原理：队长创建会话并分享 PIN，其他人加入并同时收听同一份语音导览，免费。博物馆内也适用。…</p></a></div><div class="letto"><input type="checkbox" id="letto" data-s="giro-con-audioguida"><label for="letto">我已读完本指南（仅保存在你的设备上）</label></div><p><a class="btn" href="https://wip.guide/">打开 WIP</a> <a class="btn sec" href="/guida/zh/categorie">全部类别</a></p>
+
+<p class="agg">内容已于 2026 年 11 月 16 日与应用代码核对。如有与您所见不符之处，请写信至 <a href="mailto:support@wip.guide">support@wip.guide</a>.</p>
+</main>
+<footer><a href="/guida/zh/">指南</a> · <a href="/privacy">隐私</a> · <a href="/support">支持</a> · <a href="https://wip.guide/">wip.guide</a><br><nav class="lingue" aria-label="语言"><a lang="it" hreflang="it" href="/guida/giro-con-audioguida">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/giro-con-audioguida">English</a> · <a lang="fr" hreflang="fr" href="/guida/fr/giro-con-audioguida">Français</a> · <a lang="es" hreflang="es" href="/guida/es/giro-con-audioguida">Español</a> · <a lang="de" hreflang="de" href="/guida/de/giro-con-audioguida">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/giro-con-audioguida">Русский</a> · <strong lang="zh">中文</strong></nav></footer>
+<script>(function(){
+function ready(f){document.readyState!='loading'?f():document.addEventListener('DOMContentLoaded',f)}
+ready(function(){
+ var red=matchMedia('(prefers-reduced-motion: reduce)').matches;
+ var els=document.querySelectorAll('.num[data-n]');
+ if('IntersectionObserver' in window&&!red&&els.length){var io=new IntersectionObserver(function(es){es.forEach(function(e){if(!e.isIntersecting)return;io.unobserve(e.target);var el=e.target,n=+el.dataset.n,pre=el.dataset.c||'',t0=null;function st(t){t0=t0||t;var p=Math.min((t-t0)/900,1);el.textContent=pre+Math.round(n*p).toLocaleString('zh-CN');if(p<1)requestAnimationFrame(st)}requestAnimationFrame(st)})},{threshold:.4});els.forEach(function(e){io.observe(e)})}
+ var inp=document.getElementById('q'),out=document.getElementById('ris');
+ if(inp&&out){var idx=null;fetch('/guida/zh/indice.json').then(function(r){return r.json()}).then(function(j){idx=j}).catch(function(){});
+  var norm=function(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\p{L}\p{N} ]+/gu,' ')};
+  var cerca=function(q){q=norm(q).trim();if(!q||!idx){out.innerHTML='';return}var SW='  ';var w=/[\u4e00-\u9fff]/.test(q)?Array.from(q.replace(/\s+/g,'')).reduce(function(a,c,i,s){if(i<s.length-1)a.push(c+s[i+1]);return a},[]):q.split(/\s+/).filter(function(x){return x.length>2&&SW.indexOf(' '+x+' ')<0});
+   var r=idx.map(function(d){var ks=norm(d.k),h=norm(d.t+' '+(d.r||'')+' '+(d.f||'')),s=0;w.forEach(function(x){if(ks.indexOf(x)>-1)s+=5;else if(h.indexOf(x)>-1)s+=1});for(var i=0;i<w.length-1;i++)if(ks.indexOf(w[i]+' '+w[i+1])>-1)s+=8;return {d:d,s:s}}).filter(function(x){return x.s>0}).sort(function(a,b){return b.s-a.s}).slice(0,6);
+   out.innerHTML=r.length?r.map(function(x){return '<li><a href="'+x.d.u+'"><strong>'+x.d.t+'</strong>'+(x.d.r?'<br><span class="et">'+x.d.r+'</span>':'')+'</a></li>'}).join(''):'<li>没有找到相关指南：换个词试试，或浏览类别。</li>'};
+  inp.addEventListener('input',function(){cerca(inp.value)});
+  document.querySelectorAll('[data-q]').forEach(function(b){b.addEventListener('click',function(){inp.value=b.dataset.q;cerca(b.dataset.q);inp.focus()})})}
+ var K='wip-guida-letti';function get(){try{return JSON.parse(localStorage.getItem(K)||'[]')}catch(e){return[]}}function set(a){try{localStorage.setItem(K,JSON.stringify(a))}catch(e){}}
+ var cb=document.getElementById('letto');if(cb){var a=get();cb.checked=a.indexOf(cb.dataset.s)>-1;cb.addEventListener('change',function(){var l=get().filter(function(x){return x!==cb.dataset.s});if(cb.checked)l.push(cb.dataset.s);set(l)})}
+ document.querySelectorAll('[data-lez]').forEach(function(el){var l=get();el.textContent=l.indexOf(el.dataset.lez)>-1?'✓ 已读':''});
+ document.querySelectorAll('[data-perc]').forEach(function(el){var l=get(),s=el.dataset.perc.split(','),n=s.filter(function(x){return l.indexOf(x)>-1}).length;el.textContent='已读 {n}/{t} 课'.replace('{n}',n).replace('{t}',s.length)});
+});})();</script>
+</body></html>

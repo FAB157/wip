@@ -396,6 +396,22 @@ e nativo viaggiano nello stesso pacchetto (`capacitor.config` senza
   tappa nel verso sbagliato non sente più «Tra 80 metri, gira a sinistra»
   mentre se ne allontana. (A scatti e non «il fix precedente»: a piedi con un
   fix ogni 2 s si fanno ~2,8 m e il confronto non scattava quasi mai.)
+- **«Tra N metri» mai entro 8 s dall'ultima frase** (21/11/2026, prova a Budapest:
+  «Tra 50 metri…» 3–7 s dopo «Continua dritto»). Come WIP Nav sul web: se il nativo
+  ha detto una frase da meno di `PREAVVISO_PAUSA_MS` / `preavvisoPausaMs` (8.000 ms)
+  il preavviso NON si dice e NON si segna; lo si dice al fix dopo, se si è ancora
+  nella sua finestra. Kotlin (`NavFollower.kt`) e Swift (`NavFollower` in
+  `BackgroundPoiManager.swift`) identici.
+- **Al cambio di percorso** (21/11/2026, banco iOS su Oracle: Kotlin e Swift facevano
+  diverso). `setNavRoute` / `clearNavRoute` azzerano lo scarto «stessa frase con lo
+  stesso indice entro 20 s» (`ultimoDetto = ""`: dopo un ricalcolo gli indici sono
+  altri), ma NON l'ora dell'ultima frase (`ultimoDettoTs`): la regola degli 8 s vale
+  anche dopo un ricalcolo, mai un preavviso sopra una frase appena detta.
+- **Metri per grado** (21/11/2026): ogni piano locale (fuori percorso, proiezione sui
+  segmenti, aggancio) usa il raggio terrestre 6.371.000 m, come il web (`geo.ts`,
+  `R = 6371e3`): 111.194,9 m per grado di latitudine. Swift usava 111.320 e diceva
+  «Sei fuori percorso» 2 s prima di Android sullo stesso tracciato
+  (`RAGGIO_TERRA_M` in Kotlin, `NavFollower.metriPerGrado` in Swift).
 - **`metriDopo`** (campo opzionale del passo, metri LUNGO IL PERCORSO fino al
   passo seguente, da `step.distance`): se c'è, `resto`/`restoTappa` lo usano al
   posto della linea d'aria fra i due passi — metri, ETA e avanzamento del

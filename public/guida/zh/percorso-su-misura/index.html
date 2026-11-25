@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>从地图定制路线：一步步教程 | WIP Guide</title>
+<meta name="description" content="如何从WIP地图上规划路线：三种方式（个人、周边Gemme、计时），费用为 30 crediti，包含修改并与Giro的区别。">
+<link rel="canonical" href="https://www.wip.guide/guida/zh/percorso-su-misura"><link rel="alternate" hreflang="it" href="https://www.wip.guide/guida/percorso-su-misura"><link rel="alternate" hreflang="en" href="https://www.wip.guide/guida/en/percorso-su-misura"><link rel="alternate" hreflang="fr" href="https://www.wip.guide/guida/fr/percorso-su-misura"><link rel="alternate" hreflang="es" href="https://www.wip.guide/guida/es/percorso-su-misura"><link rel="alternate" hreflang="de" href="https://www.wip.guide/guida/de/percorso-su-misura"><link rel="alternate" hreflang="ru" href="https://www.wip.guide/guida/ru/percorso-su-misura"><link rel="alternate" hreflang="zh-Hans" href="https://www.wip.guide/guida/zh/percorso-su-misura"><link rel="alternate" hreflang="x-default" href="https://www.wip.guide/guida/percorso-su-misura">
+<meta property="og:type" content="website"><meta property="og:title" content="从地图定制路线：一步步教程"><meta property="og:description" content="如何从WIP地图上规划路线：三种方式（个人、周边Gemme、计时），费用为 30 crediti，包含修改并与Giro的区别。"><meta property="og:url" content="https://www.wip.guide/guida/zh/percorso-su-misura"><meta property="og:site_name" content="WIP Guide"><meta property="og:image" content="https://www.wip.guide/scopri/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/icon.png">
+<style>
+:root{--bg:#fff;--fg:#14213d;--mut:#4b5568;--brand:#1e3a8a;--brand2:#2f56c9;--card:#f4f6fb;--line:#d9dfec;--ok:#0f6b3a;--warn:#8a4b00;--warnbg:#fff4e0;--costbg:#e8f0ff;--on:#fff}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0e1424;--fg:#e8ecf7;--mut:#a9b3c9;--brand:#8fb0ff;--brand2:#b5ccff;--card:#172038;--line:#2a3555;--ok:#6fdc9c;--warn:#ffcf8a;--warnbg:#2a2014;--costbg:#16264a;--on:#0e1424}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--brand)}a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--brand2);outline-offset:2px}
+header.top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.bar{max-width:1040px;margin:0 auto;padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.logo{font-weight:800;color:var(--brand);text-decoration:none;font-size:1.15rem}
+nav.menu{display:flex;gap:4px 14px;flex-wrap:wrap;font-size:.92rem}nav.menu a{text-decoration:none;color:var(--fg);padding:6px 2px}nav.menu a:hover{color:var(--brand)}
+.apri{margin-left:auto}
+main{max-width:1040px;margin:0 auto;padding:20px 16px 56px}
+h1{font-size:clamp(1.7rem,4.5vw,2.6rem);line-height:1.15;margin:.2em 0 .4em;color:var(--brand)}
+h2{font-size:1.45rem;margin:2em 0 .5em;line-height:1.25}h3{font-size:1.1rem}
+.lead{font-size:1.2rem;color:var(--mut);max-width:62ch}
+.crumb{font-size:.9rem;color:var(--mut)}.crumb a{color:var(--mut)}
+.btn{display:inline-block;background:var(--brand);color:var(--on);padding:11px 18px;border-radius:10px;text-decoration:none;font-weight:700;margin:4px 6px 4px 0}
+.btn.sec{background:transparent;color:var(--brand);border:2px solid var(--brand)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:22px 0;padding:16px;background:var(--card);border-radius:14px}
+.stat{display:flex;flex-direction:column}.num{font-size:1.9rem;font-weight:800;color:var(--brand);font-variant-numeric:tabular-nums}.et{font-size:.88rem;color:var(--mut)}
+.nota-stat{grid-column:1/-1;font-size:.82rem;color:var(--mut);margin:4px 0 0}
+ol.passi{counter-reset:p;list-style:none;padding:0}ol.passi li{counter-increment:p;position:relative;padding:10px 12px 10px 52px;margin:8px 0;background:var(--card);border-radius:10px}
+ol.passi li::before{content:counter(p);position:absolute;left:12px;top:9px;width:30px;height:30px;border-radius:50%;background:var(--brand);color:var(--on);display:grid;place-items:center;font-weight:800}
+.nota,.costo,.manca{border-radius:10px;padding:12px 14px;margin:14px 0}.nota{background:var(--warnbg);color:var(--warn)}.costo{background:var(--costbg)}
+.manca{border:2px dashed var(--line)}.manca h2{margin-top:0;font-size:1.1rem}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:420px}th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}th{background:var(--card)}
+figure{margin:18px 0}figure img,figure video{max-width:100%;height:auto;border-radius:12px;border:1px solid var(--line)}.esempi{margin:28px 0}.es-griglia{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}.es{border:1px solid var(--linea,#ddd);border-radius:12px;padding:12px;margin:0}.es img{max-height:360px;width:100%;object-fit:contain}.es audio{width:100%;margin-top:8px}.es-nota{font-size:.9em;margin:6px 0 0;opacity:.85}.es-pdf .btn{display:inline-block;margin-bottom:6px}
+figure img{max-height:640px;width:auto;display:block}figcaption{font-size:.85rem;color:var(--mut)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;margin:18px 0}
+.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;text-decoration:none;color:var(--fg)}
+.card:hover{border-color:var(--brand)}.card .em{font-size:1.8rem}.card h3{margin:.3em 0}.card p{margin:.2em 0;color:var(--mut);font-size:.95rem}.card .cn{font-weight:700;color:var(--brand);font-size:.95rem}
+.ricerca{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.ricerca input{flex:1;min-width:220px;padding:12px 14px;border-radius:10px;border:2px solid var(--line);font:inherit;background:var(--bg);color:var(--fg)}
+.ris{list-style:none;padding:0}.ris li{margin:6px 0}.ris a{display:block;padding:10px 12px;background:var(--card);border-radius:10px;text-decoration:none}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:999px;padding:8px 14px;font:inherit;cursor:pointer}.chip:hover{background:var(--brand);color:var(--on)}
+details{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:8px 0}summary{cursor:pointer;font-weight:700}
+.letto{display:flex;align-items:center;gap:8px;margin:28px 0}.progress{font-size:.9rem;color:var(--mut)}
+.fonte{opacity:.8}.agg{font-size:.85rem;color:var(--mut);margin-top:32px}
+footer{border-top:1px solid var(--line);padding:22px 16px;text-align:center;font-size:.9rem;color:var(--mut)}
+.lingue{max-width:1040px;margin:0 auto;padding:0 16px 8px;font-size:.85rem;color:var(--mut)}.lingue a{color:var(--mut)}.lingue strong{color:var(--fg)}footer .lingue{padding-top:10px}
+@media(max-width:600px){body{font-size:16px}nav.menu{display:none}.apri{margin-left:auto}}
+</style>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"WIP","item":"https://www.wip.guide/"},{"@type":"ListItem","position":2,"name":"指南","item":"https://www.wip.guide/guida/zh/"},{"@type":"ListItem","position":3,"name":"导航器","item":"https://www.wip.guide/guida/zh/navigatore"},{"@type":"ListItem","position":4,"name":"定制路线","item":"https://www.wip.guide/guida/zh/percorso-su-misura"}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"付款后我可以更改地点吗？","acceptedAnswer":{"@type":"Answer","text":"可以，最多可修改 3 次；之后你必须创建一个新路线。"}},{"@type":"Question","name":"如果我结束路线，能拿回积分吗？","acceptedAnswer":{"@type":"Answer","text":"否：已消耗的积分不予退还。"}},{"@type":"Question","name":"它适用于汽车吗？","acceptedAnswer":{"@type":"Answer","text":"WIP 导航器适用于步行；使用「所有站点用 Google 地图（驾车）」按钮可以在 Google Maps 中打开各个站点。"}}]}</script>
+</head><body>
+<a href="#main" style="position:absolute;left:-999px" onfocus="this.style.left='8px'">跳到正文</a>
+<header class="top"><div class="bar"><a class="logo" href="/guida/zh/">WIP · 指南</a><nav class="menu" aria-label="指南"><a href="/guida/zh/">指南</a><a href="/guida/zh/categorie">类别</a><a href="/guida/zh/audioguide">语音导览</a><a href="/guida/zh/itinerari">行程</a><a href="/guida/zh/tutorial">教程</a><a href="/guida/zh/domande-frequenti">常见问题</a></nav><a class="btn apri" href="https://wip.guide/">打开 WIP</a></div><nav class="lingue" aria-label="语言"><a lang="it" hreflang="it" href="/guida/percorso-su-misura">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/percorso-su-misura">English</a> · <a lang="fr" hreflang="fr" href="/guida/fr/percorso-su-misura">Français</a> · <a lang="es" hreflang="es" href="/guida/es/percorso-su-misura">Español</a> · <a lang="de" hreflang="de" href="/guida/de/percorso-su-misura">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/percorso-su-misura">Русский</a> · <strong lang="zh">中文</strong></nav></header>
+<main id="main">
+<p class="crumb"><a href="/">WIP</a> › <a href="/guida/zh/">指南</a> › <a href="/guida/zh/navigatore">导航器</a> › 定制路线</p>
+<h1>从地图定制路线：一步步教程</h1>
+<p class="lead">在地图上，你可以规划一条步行路线，覆盖你选择的任意类别地点。费用为 <strong>30 crediti</strong>，包含 <strong>3 modifiche</strong>，且不含音频导览。</p>
+<p class="agg">译自意大利语。截图、视频和示例显示的是意大利语界面。</p>
+<h2>简而言之</h2>
+<ul><li><strong>Cos'è</strong>：由WIP计算的路线，覆盖所有选定地点，使用导航器 WipNav。</li><li><strong>Quanto costa</strong>：30 crediti，付款前需确认。</li><li><strong>Modifiche</strong>：最多 3 次（添加或删除地点）。之后需结束并创建新路线。</li><li><strong>Audioguida</strong>：不包含。音频导览需使用带 Day Pass 的 Giro。</li></ul><h2>三种方式，说明</h2>
+<div class="tw"><table><thead><tr><th>方式</th><th>如何运作</th><th>何时使用</th></tr></thead><tbody><tr><td>个人 · 我自行选择地点</td><td>点击地图上图钉的「+」，任意类别。WIP 计算覆盖所有图钉的最短路线。</td><td>你已经知道想看什么。</td></tr><tr><td>周边Gemme</td><td>WIP 会搜索你附近的Gemme，并按行进顺序推荐。你可以去除不想要的。</td><td>不熟悉该地区。</td></tr><tr><td>计时 · 我有多少时间？</td><td>选择「1 小时」、「2 小时」或「半天」：WIP 推荐适合的Gemme。</td><td>你的时间有限。</td></tr></tbody></table></div><h2>教程：创建你的路线</h2>
+<ol class="passi"><li>在地图上点击 <strong>«Componi un percorso»</strong>。随后会打开带有三种方式的“自定义路线”面板。</li><li>选择一种方式。选择<strong>“个人”</strong>返回地图，并点击你想要的地点大头针上的 <strong>+</strong>；面板会显示“已选择 {n} 个地点”。选择<strong>“我身边的瑰宝”</strong>，等待“正在寻找你身边的瑰宝……”，然后移除你不感兴趣的地点。选择<strong>“按时间”</strong>，可选择 1 小时、2 小时或半天。</li><li>检查价格行：“30 积分 · 包含最多 3 次修改 · 无语音导览”。</li><li>点击 <strong>«Crea e avvia · 30 crediti»</strong>。如果你未登录，会显示“登录以创建路线”。</li><li>显示“确认付款？”：它会读取站点数量、3 次修改以及你的余额。点击 <strong>«Paga 30 crediti e avvia»</strong>。</li><li>导航将立即启动。像使用 WipNav 一样跟随它（参见关于导航的页面）。</li><li>如果你改变主意，可以在地图上添加或移除地点：路线会<strong>从你所在的位置重新计算</strong>。计数器会显示“已使用修改次数：n/3”。</li><li>最后点击<strong>“结束路线”</strong>（会要求确认）或<strong>“新路线”</strong>。还有一个<strong>“所有站点用 Google 地图（驾车）”</strong>选项，可用于驾车出行。</li></ol><h2>选项和消息，逐一说明</h2>
+<div class="tw"><table><thead><tr><th>你看到了什么</th><th>这是什么意思</th></tr></thead><tbody><tr><td>积分不足：路线需要 30 积分</td><td>从商店充值（个人资料 › 商店）。</td></tr><tr><td>你已用完所有 3 次修改机会</td><td>结束当前路线并创建一个新路线以再次更改它。</td></tr><tr><td>路线已满：最多 n 个地点</td><td>站点数量有上限。</td></tr><tr><td>你为另一个功能选择了地点……</td><td>环游功能和路线功能的选点是相互独立的：切换到这边会清空另一边。系统会要求你确认。</td></tr><tr><td>结束路线</td><td>已花费的积分不予退还。</td></tr></tbody></table></div><h2>自定义路线还是环游？</h2>
+<div class="tw"><table><thead><tr><th></th><th>定制路线</th><th>环游（带语音导览）</th></tr></thead><tbody><tr><td>Audioguida</td><td>否</td><td>是</td></tr><tr><td>费用</td><td>30 积分</td><td>Day Pass 200 积分用于导航</td></tr><tr><td>站点</td><td>任意类别的地点</td><td>最多 10 个站点（如果由“周边全部”创建则为 30 个）</td></tr><tr><td>顺序</td><td>经过它们的最近距离</td><td>你自己的顺序（通过拖动），或“帮我重新排序”</td></tr><tr><td>修改次数</td><td>包含 3 次</td><td>启动前无限次</td></tr></tbody></table></div><section class="manca"><h2>WIP 不做什么（以免产生误解）</h2><ul><li>自定义路线没有语音导览。</li><li>每条路线地点的上限此处未记录：应用程序会在你达到上限时提示你。</li></ul></section><h2>常见问题</h2><details><summary>付款后我可以更改地点吗？</summary><p>可以，最多可修改 3 次；之后你必须创建一个新路线。</p></details><details><summary>如果我结束路线，能拿回积分吗？</summary><p>否：已消耗的积分不予退还。</p></details><details><summary>它适用于汽车吗？</summary><p>WIP 导航器适用于步行；使用「所有站点用 Google 地图（驾车）」按钮可以在 Google Maps 中打开各个站点。</p></details><h2>继续阅读</h2><div class="grid"><a class="card" href="/guida/zh/navigatore"><h3>导航器</h3><p>如何使用 WIP 进行导航：WipNav 步行语音导航、带语音导览的行程、定制路线并在 Google Maps 或 Apple Mappe 中打开。屏幕熄灭时的运行情况。…</p></a><a class="card" href="/guida/zh/audioguide"><h3>语音导览</h3><p>WIP 语音导览的工作原理：自动播放的提示、预告片和完整导览，Nicky 与 Dante，7 种语言，播放器控制，离线使用，Day Pass 以及费用说明。…</p></a><a class="card" href="/guida/zh/gratis-e-crediti"><h3>免费与积分</h3><p>WIP 中哪些是免费的，哪些需要消耗积分：地点卡片、地图、行程库、预告片、WipNav；完整语音导览、行程、Day Pass、博物馆参观。…</p></a></div><div class="letto"><input type="checkbox" id="letto" data-s="percorso-su-misura"><label for="letto">我已读完本指南（仅保存在你的设备上）</label></div><p><a class="btn" href="https://wip.guide/">打开 WIP</a> <a class="btn sec" href="/guida/zh/categorie">全部类别</a></p>
+
+<p class="agg">内容已于 2026 年 11 月 16 日与应用代码核对。如有与您所见不符之处，请写信至 <a href="mailto:support@wip.guide">support@wip.guide</a>.</p>
+</main>
+<footer><a href="/guida/zh/">指南</a> · <a href="/privacy">隐私</a> · <a href="/support">支持</a> · <a href="https://wip.guide/">wip.guide</a><br><nav class="lingue" aria-label="语言"><a lang="it" hreflang="it" href="/guida/percorso-su-misura">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/percorso-su-misura">English</a> · <a lang="fr" hreflang="fr" href="/guida/fr/percorso-su-misura">Français</a> · <a lang="es" hreflang="es" href="/guida/es/percorso-su-misura">Español</a> · <a lang="de" hreflang="de" href="/guida/de/percorso-su-misura">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/percorso-su-misura">Русский</a> · <strong lang="zh">中文</strong></nav></footer>
+<script>(function(){
+function ready(f){document.readyState!='loading'?f():document.addEventListener('DOMContentLoaded',f)}
+ready(function(){
+ var red=matchMedia('(prefers-reduced-motion: reduce)').matches;
+ var els=document.querySelectorAll('.num[data-n]');
+ if('IntersectionObserver' in window&&!red&&els.length){var io=new IntersectionObserver(function(es){es.forEach(function(e){if(!e.isIntersecting)return;io.unobserve(e.target);var el=e.target,n=+el.dataset.n,pre=el.dataset.c||'',t0=null;function st(t){t0=t0||t;var p=Math.min((t-t0)/900,1);el.textContent=pre+Math.round(n*p).toLocaleString('zh-CN');if(p<1)requestAnimationFrame(st)}requestAnimationFrame(st)})},{threshold:.4});els.forEach(function(e){io.observe(e)})}
+ var inp=document.getElementById('q'),out=document.getElementById('ris');
+ if(inp&&out){var idx=null;fetch('/guida/zh/indice.json').then(function(r){return r.json()}).then(function(j){idx=j}).catch(function(){});
+  var norm=function(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\p{L}\p{N} ]+/gu,' ')};
+  var cerca=function(q){q=norm(q).trim();if(!q||!idx){out.innerHTML='';return}var SW='  ';var w=/[\u4e00-\u9fff]/.test(q)?Array.from(q.replace(/\s+/g,'')).reduce(function(a,c,i,s){if(i<s.length-1)a.push(c+s[i+1]);return a},[]):q.split(/\s+/).filter(function(x){return x.length>2&&SW.indexOf(' '+x+' ')<0});
+   var r=idx.map(function(d){var ks=norm(d.k),h=norm(d.t+' '+(d.r||'')+' '+(d.f||'')),s=0;w.forEach(function(x){if(ks.indexOf(x)>-1)s+=5;else if(h.indexOf(x)>-1)s+=1});for(var i=0;i<w.length-1;i++)if(ks.indexOf(w[i]+' '+w[i+1])>-1)s+=8;return {d:d,s:s}}).filter(function(x){return x.s>0}).sort(function(a,b){return b.s-a.s}).slice(0,6);
+   out.innerHTML=r.length?r.map(function(x){return '<li><a href="'+x.d.u+'"><strong>'+x.d.t+'</strong>'+(x.d.r?'<br><span class="et">'+x.d.r+'</span>':'')+'</a></li>'}).join(''):'<li>没有找到相关指南：换个词试试，或浏览类别。</li>'};
+  inp.addEventListener('input',function(){cerca(inp.value)});
+  document.querySelectorAll('[data-q]').forEach(function(b){b.addEventListener('click',function(){inp.value=b.dataset.q;cerca(b.dataset.q);inp.focus()})})}
+ var K='wip-guida-letti';function get(){try{return JSON.parse(localStorage.getItem(K)||'[]')}catch(e){return[]}}function set(a){try{localStorage.setItem(K,JSON.stringify(a))}catch(e){}}
+ var cb=document.getElementById('letto');if(cb){var a=get();cb.checked=a.indexOf(cb.dataset.s)>-1;cb.addEventListener('change',function(){var l=get().filter(function(x){return x!==cb.dataset.s});if(cb.checked)l.push(cb.dataset.s);set(l)})}
+ document.querySelectorAll('[data-lez]').forEach(function(el){var l=get();el.textContent=l.indexOf(el.dataset.lez)>-1?'✓ 已读':''});
+ document.querySelectorAll('[data-perc]').forEach(function(el){var l=get(),s=el.dataset.perc.split(','),n=s.filter(function(x){return l.indexOf(x)>-1}).length;el.textContent='已读 {n}/{t} 课'.replace('{n}',n).replace('{t}',s.length)});
+});})();</script>
+</body></html>

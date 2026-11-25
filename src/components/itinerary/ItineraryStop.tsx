@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   MapPin, Clock, Navigation, ChevronDown, ChevronUp,
   ExternalLink, Sparkles, X, ArrowUp, ArrowDown,
-  Lock, Unlock, RotateCcw, Check
+  Lock, Unlock, RotateCcw, Check, Radio, Square, Loader2
 } from 'lucide-react';
 import { getTranslation, Language } from '../../lib/i18n';
 import { ensureAffiliateUrl } from '../../lib/affiliates';
@@ -36,6 +36,8 @@ interface ItineraryStopProps {
   /** Tratta reale DALLA tappa precedente a questa (OSRM). REGOLA 20/10/2026 (committente: «gli spostamenti vanno
    *  prima della tappa»): km, minuti, tasto «Mezzi» e la riga Transitous stanno SOPRA la tappa che raggiungono. */
   legFromPrev?: { walkMin: number; carMin: number; km: number; taxiEur: number; soloMezzi?: boolean; da?: { lat: number; lon: number }; a?: { lat: number; lon: number } } | null;
+  /** Podcast di questa tappa (18/11/2026): stato del lettore, costo in crediti, avvio/arresto. */
+  podcast?: { stato: 'pronto' | 'genera' | 'suona'; costo: number; onPlay: () => void };
 }
 
 export default function ItineraryStop({
@@ -54,7 +56,8 @@ export default function ItineraryStop({
   onSelectPoi,
   freeReplacementsLeft,
   replaceCost,
-  legFromPrev
+  legFromPrev,
+  podcast
 }: ItineraryStopProps) {
   // Il pulsante deve dire in anticipo se la sostituzione è gratis o costa:
   // prima l'unico segnale era il modale crediti che compariva a sorpresa.
@@ -165,8 +168,11 @@ export default function ItineraryStop({
       }`}></div>
 
       <div className="bg-white p-6 rounded-[2rem] border border-outline-variant/10 shadow-sm relative group print:shadow-none print:border-gray-200 print:break-inside-avoid">
-        <div className="flex justify-between items-start mb-3">
-          <div className="flex items-center gap-2">
+        {/* flex-wrap (18/11/2026): sul telefono badge + 5 tasti da 44 px non
+            stanno in una riga e lo schermo taglia a destra — sparivano «Sostituisci»
+            ed «Elimina». Ora i tasti vanno a capo e restano tutti visibili. */}
+        <div className="flex flex-wrap justify-between items-start gap-2 mb-3">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             <span className="text-[10px] font-black text-on-surface-variant/40 tracking-widest bg-gray-50 px-2.5 py-1 rounded-full border border-gray-100 uppercase">
               {tappa.ora} • {tappa.tipo}
             </span>
@@ -194,7 +200,7 @@ export default function ItineraryStop({
           </div>
           {/* Target tattili 44×44 (min-w/min-h): l'icona resta piccola ma
               l'area cliccabile rispetta le linee guida touch. */}
-          <div className="flex gap-0.5 print:hidden">
+          <div className="flex gap-0.5 shrink-0 ml-auto print:hidden">
             <button
               onClick={() => onMove('up')}
               disabled={tIdx === 0}
@@ -361,6 +367,18 @@ export default function ItineraryStop({
                       className="flex items-center gap-1.5 px-3 py-2 bg-primary/10 hover:bg-primary/20 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest transition-all hover:scale-105 active:scale-95"
                     >
                       <MapPin className="w-3.5 h-3.5" /> {getTranslation("details_offline", language)}
+                    </button>
+                  )}
+
+                  {/* Podcast della tappa (18/11/2026): solo per una tappa agganciata a un luogo del database. */}
+                  {podcast && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); podcast.onPlay(); }}
+                      disabled={podcast.stato === 'genera'}
+                      className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all hover:scale-105 active:scale-95 disabled:opacity-60 ${podcast.stato === 'suona' ? 'bg-red-500 text-white' : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200'}`}
+                    >
+                      {podcast.stato === 'genera' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : podcast.stato === 'suona' ? <Square className="w-3.5 h-3.5" /> : <Radio className="w-3.5 h-3.5" />}
+                      {podcast.stato === 'suona' ? getTranslation('podcast_tappa_stop', language) : `${getTranslation('podcast_tappa', language)} · ${podcast.costo}`}
                     </button>
                   )}
 

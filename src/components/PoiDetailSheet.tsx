@@ -14,6 +14,7 @@ import { PRICING_LIST, getWalletBalance, notifyCreditsChanged } from '../lib/pri
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import PoiContactButtons from './PoiContactButtons';
 import PoiTicketsButtons from './PoiTicketsButtons';
+import PoiAttrazioneInfo from './PoiAttrazioneInfo';
 import PoiGallery from './PoiGallery';
 import AttribuzioneFoto from './AttribuzioneFoto';
 import AttribuzioneDati from './AttribuzioneDati';
@@ -546,7 +547,9 @@ export default function PoiDetailSheet({
           setIsTyping(false);
         }
       }, speed);
-      return () => clearInterval(interval);
+      // (18/11/2026, Malta) Interrotto a metà (rigenerazione, nuovo testo dallo stream) il typing restava «in corso» per
+      // sempre: cursore acceso all'infinito e nessuna nuova scrittura (la guardia !isTyping la bloccava).
+      return () => { clearInterval(interval); setIsTyping(false); };
     } else if (!isLoading && !isRegenerating && !textToType) {
        setDisplayedText("");
     }
@@ -3187,6 +3190,19 @@ export default function PoiDetailSheet({
                 category: poi.category,
                 poiType: (poi as any).poi_type || (poi as any).poiType,
                 isGem: (poi as any).is_gem ?? (poi as any).isGem,
+              }}
+              language={language}
+            />
+            {/* (23/11/2026) Zoo, acquari, parchi divertimento e acquatici: orari e prezzo dal sito
+                ufficiale + biglietto ed esperienze dei partner, come nella visita museo. */}
+            <PoiAttrazioneInfo
+              poi={{
+                id: String(poi.id),
+                lat: poi.lat,
+                lon: poi.lon,
+                name: poi.name,
+                category: poi.category,
+                poiType: (poi as any).poi_type || (poi as any).poiType,
               }}
               language={language}
             />

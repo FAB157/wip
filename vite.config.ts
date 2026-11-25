@@ -1,8 +1,27 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import fs from 'fs';
 import path from 'path';
 import {defineConfig, loadEnv} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
+
+// PAGINE STATICHE FUORI DAL SERVICE WORKER, DA SOLE (16/11/2026, committente: «tutte le pagine statiche in tutte
+// le lingue devono essere escluse, così si possono visitare»). /guida/… appena pubblicata si apriva come APP per
+// chi aveva già visitato il sito: la denylist era scritta a mano e /guida non c'era (né /scopri senza barra).
+// Ora ogni cartella di public/ con un index.html (guida, scopri, comuni, hotel, press…, con tutte le sottopagine
+// e lingue) e ogni public/*.html diventano un'esclusione e restano fuori dalla precache: si leggono sempre dal
+// server, aggiornate. Una pagina statica nuova non va più aggiunta qui.
+const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const statiche = (() => {
+  try {
+    const voci = fs.readdirSync(path.resolve(__dirname, 'public'), { withFileTypes: true });
+    const cartelle = voci.filter(v => v.isDirectory() && fs.existsSync(path.resolve(__dirname, 'public', v.name, 'index.html'))).map(v => v.name);
+    const file = voci.filter(v => v.isFile() && /\.html$/i.test(v.name) && v.name !== 'index.html').map(v => v.name.replace(/\.html$/i, ''));
+    return { cartelle, file };
+  } catch { return { cartelle: [] as string[], file: [] as string[] }; }
+})();
+const escluseStatiche = [...statiche.cartelle, ...statiche.file].map(n => new RegExp(`^/${escRe(n)}(?:\\.html)?(?:[/?#]|$)`));
+const ignoratePrecache = [...statiche.cartelle.map(n => `${n}/**`), ...statiche.file.map(n => `${n}.html`)];
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
@@ -56,6 +75,7 @@ export default defineConfig(({mode}) => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,json}'],
+          globIgnores: ['**/node_modules/**', ...ignoratePrecache],
           maximumFileSizeToCacheInBytes: 5000000,
           // Le pagine legali statiche (compliance store) vivono FUORI dalla SPA:
           // senza denylist il service worker rispondeva a /privacy &co. con
@@ -72,9 +92,11 @@ export default defineConfig(({mode}) => {
           // dalla SPA. Trovato aprendo /scopri/en da un profilo che aveva già
           // il service worker installato: tornava la mappa invece della
           // pagina, perché il navigateFallback intercetta ogni navigazione
-          // non nella denylist. Nota: /scopri (senza lingua, l'italiano) è un
-          // file statico vero e non ha questo problema — resta fuori apposta.
-          navigateFallbackDenylist: [/^\/privacy/, /^\/terms/, /^\/support/, /^\/delete-account/, /^\/api\//, /^\/luogo\//, /^\/sitemap/, /^\/robots\.txt/, /^\/llms\.txt/, /^\/scopri\//, /^\/press/, /^\/comuni/, /^\/hotel/, /^\/riscatta/, /^\/regalo/,/^\/presentazione/, /^\/scarica/],
+          // non nella denylist. (16/11/2026: anche /scopri senza lingua e /guida
+          // ora sono escluse e fuori dalla precache — vedi `escluseStatiche` in cima.)
+          // A mano restano solo le rotte servite dal SERVER (non sono file di public/); le pagine statiche le aggiunge
+          // `escluseStatiche` (vedi in cima). Le vecchie righe statiche restano: non costano e coprono un public/ illeggibile.
+          navigateFallbackDenylist: [/^\/privacy/, /^\/terms/, /^\/support/, /^\/delete-account/, /^\/api\//, /^\/luogo\//, /^\/sitemap/, /^\/robots\.txt/, /^\/llms\.txt/, /^\/scopri(?:[/?#]|$)/, /^\/guida(?:[/?#]|$)/, /^\/press/, /^\/comuni/, /^\/hotel/, /^\/riscatta/, /^\/regalo/,/^\/presentazione/, /^\/scarica/, /^\/\.well-known\//, ...escluseStatiche],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,

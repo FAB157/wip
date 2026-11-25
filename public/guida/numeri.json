@@ -1,0 +1,94 @@
+{
+  "aggiornato": "2026-11-15T19:01:18.681Z",
+  "perimetro": "Luoghi visibili nell'app (esclusi nascosti e da rivedere). «circa» = stima del database, non conteggio esatto. Le sottocategorie dei ristoranti dipendono dai tag dichiarati in OpenStreetMap: indicano la presenza del tag, non una certificazione.",
+  "numeri": {
+    "luoghi_totale": {
+      "n": 8261768,
+      "stima": true
+    },
+    "gemme": {
+      "n": 135768,
+      "stima": true
+    },
+    "musei": {
+      "n": 322484,
+      "stima": true
+    },
+    "monumenti": {
+      "n": 1756727,
+      "stima": true
+    },
+    "chiese": {
+      "n": 1060903,
+      "stima": true
+    },
+    "castelli": {
+      "n": 30010,
+      "stima": false
+    },
+    "archeologia": {
+      "n": 71969,
+      "stima": true
+    },
+    "panorami": {
+      "n": 78487,
+      "stima": true
+    },
+    "natura": {
+      "n": 695733,
+      "stima": true
+    },
+    "spiagge": null,
+    "cantine": {
+      "n": 259787,
+      "stima": true
+    },
+    "terme": {
+      "n": 7917,
+      "stima": false
+    },
+    "mercati": {
+      "n": 958,
+      "stima": false
+    },
+    "street_art": {
+      "n": 17541,
+      "stima": false
+    },
+    "cinema": {
+      "n": 45415,
+      "stima": false
+    },
+    "famiglie": {
+      "n": 22015,
+      "stima": false
+    },
+    "servizi": null,
+    "locali": {
+      "n": 9983841,
+      "stima": true
+    },
+    "locali_senza_glutine": null,
+    "locali_vegetariani": null,
+    "locali_vegani": null,
+    "locali_michelin": null,
+    "guide_musei_it": null,
+    "audioguide": {
+      "n": 611468,
+      "stima": false
+    },
+    "piante_musei": null
+  },
+  "da_rivedere": {
+    "locali_michelin": "stima = quasi tutti i locali: filtro michelin_distinzione da correggere",
+    "servizi": "26 non plausibile: valori di category per Utilità da verificare",
+    "guide_musei_it": "0 non plausibile: valore di language da verificare",
+    "non_calcolabili": [
+      "spiagge",
+      "locali_senza_glutine",
+      "locali_vegetariani",
+      "locali_vegani",
+      "piante_musei (timeout: da fare di notte con indici)"
+    ]
+  }
+}

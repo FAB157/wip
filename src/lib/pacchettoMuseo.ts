@@ -22,7 +22,7 @@ import { getApiUrl } from './api';
 import { azureVoiceName } from '../services/ttsService';
 import { getGuideCharacter } from './guideSettings';
 import { postForAudioBlob } from './audioFetch';
-import { salvaAudioPermanente, audioPermanenteEsiste } from './capacitor/nativeAudioHelper';
+import { salvaAudioPermanente, audioPermanenteEsiste, uriAudioPermanente } from './capacitor/nativeAudioHelper';
 import { Capacitor } from '@capacitor/core';
 
 /** Hash corto e stabile di testo+voce: il nome del file MP3 nel telefono. */
@@ -51,7 +51,11 @@ async function scaricaVoce(venueKey: string, language: Language, guida: ArtworkG
   }
   if (!Capacitor.isNativePlatform() || !guida?.testo) return guida;
   try {
-    if (guida.audioPath && await audioPermanenteEsiste(guida.audioPath)) return guida;
+    // Il file c'è: si riscrive anche l'URI (su iOS quello salvato muore a ogni aggiornamento dell'app).
+    if (guida.audioPath && await audioPermanenteEsiste(guida.audioPath)) {
+      const fresco = await uriAudioPermanente(guida.audioPath);
+      return fresco ? { ...guida, audioFile: fresco } : guida;
+    }
     const voice = azureVoiceName(String(language).toLowerCase(), getGuideCharacter());
     const { ok, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text: guida.testo, voice });
     if (!ok || !blob || blob.size < 500 || (blob.type || '').includes('json')) return guida;

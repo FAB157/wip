@@ -31,7 +31,9 @@
   .frase { font-size:15pt; line-height:1.4; margin:6mm 0 0; }
   .frase b { color:#f0d9ae; }
   .corpo { flex:1; padding:11mm 15mm 9mm; display:flex; flex-direction:column; align-items:center; text-align:center; }
-  .qrbox { width:78mm; padding:4mm; border:1.4mm solid var(--blu); border-radius:6mm; background:#fff; }
+  .qrs { display:flex; gap:10mm; justify-content:center; flex-wrap:wrap; }
+  .qrs b { display:block; margin-top:2mm; font-size:12pt; color:var(--blu); }
+  .qrbox { width:62mm; padding:3.4mm; border:1.4mm solid var(--blu); border-radius:6mm; background:#fff; }
   .qrbox svg { display:block; width:100%; height:auto; }
   .etichetta { margin-top:4mm; font-weight:900; font-size:15pt; color:var(--blu); }
   .sub { margin-top:1mm; font-size:11pt; color:var(--grigio); }
@@ -71,7 +73,10 @@
     <p class="frase" id="frase"></p>
   </div>
   <div class="corpo">
-    <div class="qrbox" id="qr"></div>
+    <div class="qrs">
+      <div><div class="qrbox" id="qr"></div><b>App Store · iPhone</b></div>
+      <div><div class="qrbox" id="qrPlay"></div><b>Google Play · Android</b></div>
+    </div>
     <div class="etichetta" id="etichetta"></div>
     <div class="sub" id="sub"></div>
     <div class="store">
@@ -86,7 +91,8 @@
 <script>
 (function () {
   var IOS = "https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct={ct}&mt=8";
-  var PLAY = ""; // Quando l'app è su Google Play: metti qui l'indirizzo e il blocco Android mostra il link.
+  // (13/11/2026) L'app è su Google Play: secondo codice QR e link nel blocco Android.
+  var PLAY = "https://play.google.com/store/apps/details?id=com.itaintasca.app";
   var T = {
     IT: { stampa:"Stampa o salva in PDF", titolo:"Scarica l'app", frase:"L'audioguida che <b>parte da sola</b> quando ti avvicini a un luogo, in 7 lingue.", etichetta:"Inquadra il codice con la fotocamera", sub:"Si apre la pagina dell'app: tocca «Ottieni».", ios:"Disponibile ora", android:"In arrivo a breve",
       passi:[["1 · Inquadra","Apri la fotocamera del telefono e inquadra il codice."],["2 · Scarica","Tocca «Ottieni» e installa l'app: è gratuita."],["3 · Cammina","Esplora la città: la guida parte da sola vicino a ogni luogo."]], piede:"Gratis · 9 milioni di luoghi in 196 paesi" },
@@ -114,6 +120,7 @@
   function disegna() {
     var t = T[lang], el = document.getElementById("qr");
     try { var qr = qrcode(0, "M"); qr.addData(url); qr.make(); el.innerHTML = qr.createSvgTag(4, 0); } catch (e) { el.textContent = url; }
+    try { var qp = qrcode(0, "M"); qp.addData(PLAY); qp.make(); document.getElementById("qrPlay").innerHTML = qp.createSvgTag(4, 0); } catch (e) {}
     document.documentElement.lang = lang.toLowerCase();
     document.getElementById("titolo").textContent = t.titolo;
     document.getElementById("frase").innerHTML = t.frase;

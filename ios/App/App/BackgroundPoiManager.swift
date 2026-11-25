@@ -714,6 +714,11 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     }
 
     private func handleLocation(_ location: CLLocation) {
+        #if DEBUG
+        // COLLAUDO (solo build di debug, solo con -collaudoNav): i fix veri del telefono del laboratorio non entrano,
+        // entrano solo quelli della traccia (CollaudoNavDriver, in fondo al file). In Release questa riga non esiste.
+        if BackgroundPoiManager.collaudoFixFinti && !BackgroundPoiManager.collaudoInConsegna { return }
+        #endif
         // (28/08/2026, MAP-09) Fix SIMULATI (app di spoofing GPS, Xcode
         // "Simulate Location"): mai un trigger — un'audioguida "ascoltata" da
         // casa consumerebbe pass e crediti su un luogo mai visitato. iOS 15+
@@ -2010,11 +2015,14 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // di ricerca del grafo la strada non può essere più corta: non si
             // chiede nemmeno.
             let aria = location.distance(from: punto)
+            // (21/11/2026) Il raggio d'arrivo dell'utente: a piedi serve a `decide` per la «fine sentiero».
+            let raggioArrivo = effectiveRadii(for: poi, isDriving: isDriving).arrival
             let dIngresso = aria > ricercaStrada
                 ? aria
                 : RoadGraph.misura(
                     aria: aria, sorgente: sorgenteStrada,
-                    lat: punto.coordinate.latitude, lon: punto.coordinate.longitude, isDriving: isDriving)
+                    lat: punto.coordinate.latitude, lon: punto.coordinate.longitude, isDriving: isDriving,
+                    raggioArrivoPiedi: raggioArrivo)
             let dMuro = haPerimetro
                 ? PoiFootprints.distanzaDalPerimetro(
                     poiId: poi.id, footprint: poi.footprint,
@@ -2025,10 +2033,11 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // solo per chi è già nel raggio d'arrivo secondo la prima.
             var liberaM: Double? = nil
             if let libera = sorgenteLibera, let g = grezza,
-               dIngresso <= effectiveRadii(for: poi, isDriving: isDriving).arrival {
+               dIngresso <= raggioArrivo {
                 liberaM = RoadGraph.misura(
                     aria: g.distance(from: punto), sorgente: libera,
-                    lat: punto.coordinate.latitude, lon: punto.coordinate.longitude, isDriving: isDriving)
+                    lat: punto.coordinate.latitude, lon: punto.coordinate.longitude, isDriving: isDriving,
+                    raggioArrivoPiedi: raggioArrivo)
             }
             esaminati.append(Candidate(poi: poi, punto: punto, dist: min(dIngresso, dMuro), liberaM: liberaM))
         }
@@ -3550,6 +3559,11 @@ final class NavFollower {
     private static let offrouteMs: Double = 20_000
     private static let backOnRouteM: Double = 40
     private static let dedupeMs: Double = 20_000
+    /// (21/11/2026) Nessun preavviso «Tra N metri» entro questo tempo dall'ultima frase detta (= NavFollower.kt).
+    private static let preavvisoPausaMs: Double = 8_000
+    /// (21/11/2026) Metri per grado di latitudine dal raggio terrestre 6.371.000 m (= RAGGIO_TERRA_M di NavFollower.kt,
+    /// R di geo.ts sul web): 111.194,9. Era 111.320.
+    static let metriPerGrado: Double = 6_371_000.0 * .pi / 180
     /// Il «60» letterale del ramo "manovra mancata" della specifica.
     private static let missedMinDistM: Double = 60
     /// (21/09/2026, REVISIONE 2) ARRIVO FINALE «NEI PARAGGI»: entro 60 m
@@ -4453,7 +4467,11 @@ final class NavFollower {
                 continue
             } else if p.tipo == "turn" && !inPausa && inAvvicinamento &&
                         (!dettiLontano.contains(idx) || (!jsVivo && !dettiLontanoDavvero.contains(idx))) &&
-                        dS >= lontanoMin && dS <= lontanoMax && !p.testo.isEmpty {
+                        dS >= lontanoMin && dS <= lontanoMax && !p.testo.isEmpty &&
+                        // (21/11/2026, = NavFollower.kt e WIP Nav web) Nessun preavviso entro `preavvisoPausaMs`
+                        // dall'ultima frase detta («Tra 50 metri…» 3–7 s dopo «Continua dritto»).
+                        // (un orologio che torna indietro non è «una frase appena detta», = NavFollower.kt)
+                        (ultimoDettoTs == 0 || nowMs - ultimoDettoTs >= Self.preavvisoPausaMs || nowMs < ultimoDettoTs) {
                 // (21/09/2026, REVISIONE 2) In pausa il preavviso NON si segna.
                 // E CONTATO ≠ DETTO anche qui: un preavviso contato in silenzio
                 // negli 8 s dopo il congelamento (JS creduto vivo, ma non l'ha
@@ -4544,10 +4562,11 @@ final class NavFollower {
     // MARK: - Interni (sempre a lock preso)
 
     /// Toglie il percorso e riporta il follower allo stato iniziale.
-    /// `ultimoDetto`/`ultimoDettoTs` restano di proposito: non sono nell'elenco
-    /// della specifica, e dopo un ricalcolo (nuovo setNavRoute con la stessa
-    /// svolta davanti) sono loro a impedire la stessa frase due volte in 20 s.
+    /// (21/11/2026, = NavFollower.kt e spec) Al cambio di percorso `ultimoDetto` si azzera: lo scarto «stessa frase,
+    /// stesso indice entro 20 s» non vale più, gli indici del percorso nuovo sono altri. `ultimoDettoTs` RESTA: la regola
+    /// «nessun preavviso entro 8 s dall'ultima frase» vale anche dopo un ricalcolo.
     private func azzeraSottoLock() {
+        ultimoDetto = ""
         routeId = ""
         passi = []
         linea = []
@@ -4631,8 +4650,10 @@ final class NavFollower {
     /// Proiezione del punto sul segmento k-1→k in un piano locale centrato
     /// sul punto: (distanza dalla linea, frazione t del segmento).
     private func proiettaSulSegmento(_ k: Int, lat: Double, lon: Double) -> (dist: Double, t: Double) {
-        let metriPerGradoLat = 111_320.0
-        let metriPerGradoLon = 111_320.0 * cos(lat * .pi / 180)
+        // (21/11/2026) Metri per grado dal raggio 6.371.000 m, come il web (geo.ts) e NavFollower.kt: con 111.320
+        // iOS diceva «Sei fuori percorso» 2 s prima di Android sullo stesso tracciato.
+        let metriPerGradoLat = NavFollower.metriPerGrado
+        let metriPerGradoLon = NavFollower.metriPerGrado * cos(lat * .pi / 180)
         let ax: Double = (linea[k - 1].lon - lon) * metriPerGradoLon
         let ay: Double = (linea[k - 1].lat - lat) * metriPerGradoLat
         let dx: Double = (linea[k].lon - lon) * metriPerGradoLon - ax
@@ -4810,8 +4831,8 @@ final class NavFollower {
     /// centrato sul fix: alle distanze che contano qui (decine di metri)
     /// l'errore rispetto alla sfera è di centimetri.
     private func distanzaDalTracciato(lat: Double, lon: Double) -> Double {
-        let metriPerGradoLat = 111_320.0
-        let metriPerGradoLon = 111_320.0 * cos(lat * .pi / 180)
+        let metriPerGradoLat = NavFollower.metriPerGrado
+        let metriPerGradoLon = NavFollower.metriPerGrado * cos(lat * .pi / 180)
         func x(_ p: Punto) -> Double {
             var dLon = p.lon - lon
             if dLon > 180 { dLon -= 360 } else if dLon < -180 { dLon += 360 }
@@ -5096,3 +5117,222 @@ final class RegistroCollaudo {
         scrivi("GUIDA \(tipo) \"\(poi.nome)\" id=\(poi.id) strada=\(strada) aria=\(aria) raggio=\(Int(raggioM)) acc=\(acc) \(dove) punto=\(arrivo)")
     }
 }
+
+#if DEBUG
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// COLLAUDO IN BACKGROUND (22/11/2026, committente: «deve funzionare il nativo e in background, per Android e Apple»).
+// SOLO BUILD DI DEBUG e SOLO con l'argomento di avvio -collaudoNav: in Release questo blocco non viene compilato,
+// e in Debug senza l'argomento non fa nulla. Lo usa il test di UI ios/App/AppCollaudoUITests (Firebase Test Lab).
+//
+// Cosa fa: accende il servizio di sfondo VERO (BackgroundPoiManager.start → CLLocationManager con background updates,
+// come in produzione, in «modalità navigatore» gemme:off), consegna la rotta al NavFollower e poi, con un timer
+// interno, fa entrare i fix della traccia per la strada vera (handleLocation → consegnaFixAlNavigatore → SpeechQueue).
+// I fix veri del telefono del laboratorio tengono vivo il processo come in tasca a chi cammina, ma non entrano.
+// Misura ciò che il test vuole scoprire: se iOS SOSPENDE l'app in background (buchi del timer), lo stato dell'app,
+// il blocco dello schermo. Tutte le righe vanno nel syslog col prefisso «CollaudoTestLabBG» (anche se il processo
+// muore a metà, quello che è già scritto resta).
+extension BackgroundPoiManager {
+    /// Vero solo durante il collaudo in background: i fix di CoreLocation non entrano in handleLocation.
+    static var collaudoFixFinti = false
+    /// Vero (sulla workQueue) mentre il driver consegna un fix della traccia.
+    static var collaudoInConsegna = false
+
+    /// Un fix della traccia per la strada vera, sulla workQueue come quelli di CoreLocation.
+    func collaudoConsegna(_ location: CLLocation) {
+        workQueue.async {
+            BackgroundPoiManager.collaudoInConsegna = true
+            self.handleLocation(location)
+            BackgroundPoiManager.collaudoInConsegna = false
+        }
+    }
+}
+
+final class CollaudoNavDriver {
+    static let shared = CollaudoNavDriver()
+    private init() {}
+
+    private let coda = DispatchQueue(label: "com.itaintasca.collaudo.bg")
+    private var timer: DispatchSourceTimer?
+    private var fix: [[Double]] = []
+    private var prossimo = 0
+    private var t0Ms: Double = 0
+    private var ultimoTickMs: Double = 0
+    private var consegnati = 0, saltati = 0, buchi = 0
+    private var maxBucoS: Double = 0
+    private var righeMandate = 0
+    private var statoApp = "?"
+    private var finito = false
+    private static let prefisso = "CollaudoTestLabBG"
+
+    private static func oraMs() -> Double { Double(clock_gettime_nsec_np(CLOCK_MONOTONIC)) / 1_000_000 }
+
+    private func scrivi(_ riga: String) {
+        RegistroCollaudo.shared.scrivi("TESTLAB \(riga)")
+        svuotaNelSyslog()
+    }
+
+    /// Le righe nuove del registro (NAV, GUIDA, TESTLAB) nel syslog, man mano: se iOS uccide il processo a metà
+    /// resta tutto ciò che è successo fino a lì.
+    private func svuotaNelSyslog() {
+        let righe = RegistroCollaudo.shared.tutte()
+        if righeMandate > righe.count { righeMandate = 0 }
+        for r in righe[righeMandate...] { NSLog("%@ %@", Self.prefisso, r) }
+        righeMandate = righe.count
+    }
+
+    func avviaSeRichiesto() {
+        let argomenti = ProcessInfo.processInfo.arguments
+        guard argomenti.contains("-collaudoNav") else { return }
+        let env = ProcessInfo.processInfo.environment
+        guard let rotta = env["COLLAUDO_ROTTA"], let tracciaTesto = env["COLLAUDO_TRACCIA"],
+              let grezza = (try? JSONSerialization.jsonObject(with: Data(tracciaTesto.utf8))) as? [[Any]] else {
+            NSLog("%@ TESTLAB ERRORE rotta o traccia assenti nell'ambiente di avvio", Self.prefisso)
+            return
+        }
+        fix = grezza.compactMap { f in
+            let n = f.map { ($0 as? NSNumber)?.doubleValue ?? .nan }
+            return n.count >= 2 && n[0].isFinite && n[1].isFinite ? n : nil
+        }
+        BackgroundPoiManager.collaudoFixFinti = true
+        RegistroCollaudo.shared.svuota()
+        righeMandate = 0
+        RegistroCollaudo.shared.imposta(true)
+        scrivi("BG avvio: \(fix.count) fix, iOS \(UIDevice.current.systemVersion)")
+        osservaStati()
+        NavFollower.shared.clear()
+        let ok = NavFollower.shared.setRoute(json: rotta)
+        scrivi("BG rotta \(ok ? "consegnata" : "RIFIUTATA"), JS muto (pagina vuota)")
+        // Il servizio vero, in modalità navigatore (nessun POI): come startBackgroundPoiService del plugin.
+        BackgroundPoiManager.shared.start(options: [
+            "isAutomaticMode": true, "guideMode": "walking", "transportPref": "piedi",
+            "language": "it", "categories": ["gemme:off"]
+        ])
+        attendiPermessoEParti(tentativi: 0)
+    }
+
+    private func attendiPermessoEParti(tentativi: Int) {
+        let stato = CLLocationManager().authorizationStatus
+        if stato == .authorizedAlways || stato == .authorizedWhenInUse || tentativi >= 120 {
+            let nome: String
+            switch stato {
+            case .authorizedAlways: nome = "sempre"
+            case .authorizedWhenInUse: nome = "mentre_usi"
+            case .denied: nome = "negato"
+            case .notDetermined: nome = "non_chiesto"
+            default: nome = "altro"
+            }
+            scrivi("BG permesso posizione=\(nome) dopo \(tentativi) s")
+            // 5 s perché CoreLocation parta davvero (startActiveMonitoring dal callback del permesso).
+            coda.asyncAfter(deadline: .now() + 5) { self.parti() }
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.attendiPermessoEParti(tentativi: tentativi + 1) }
+    }
+
+    private func parti() {
+        guard !fix.isEmpty else { return }
+        t0Ms = Self.oraMs()
+        ultimoTickMs = t0Ms
+        prossimo = 0
+        scrivi("BG via alla traccia")
+        let t = DispatchSource.makeTimerSource(queue: coda)
+        t.schedule(deadline: .now(), repeating: .milliseconds(500), leeway: .milliseconds(50))
+        t.setEventHandler { [weak self] in self?.tick() }
+        timer = t
+        t.resume()
+    }
+
+    /// Ogni mezzo secondo: il fix più recente fra quelli «dovuti» a questo punto della traccia. Dopo una sospensione
+    /// si consegna solo l'ultimo (come fa il GPS vero) e si contano i saltati.
+    private func tick() {
+        guard !finito else { return }
+        let ora = Self.oraMs()
+        let buco = (ora - ultimoTickMs) / 1000
+        ultimoTickMs = ora
+        aggiornaStatoApp()
+        if buco > 3 {
+            buchi += 1
+            maxBucoS = max(maxBucoS, buco)
+            scrivi(String(format: "BG BUCO secondi=%.1f dal_fix=%d app=%@", locale: Locale(identifier: "en_US_POSIX"), buco, prossimo, statoApp))
+        }
+        let tPrimo = fix[0].count > 3 ? fix[0][3] : 0
+        let trascorsoMs = ora - t0Ms
+        var dovuto = prossimo - 1
+        while dovuto + 1 < fix.count, (fix[dovuto + 1].count > 3 ? fix[dovuto + 1][3] : Double(dovuto + 1) * 1000) - tPrimo <= trascorsoMs {
+            dovuto += 1
+        }
+        if dovuto >= prossimo {
+            let f = fix[dovuto]
+            if dovuto > prossimo {
+                saltati += dovuto - prossimo
+                scrivi("BG SALTATI \(dovuto - prossimo) fix (\(prossimo)…\(dovuto - 1)) app=\(statoApp)")
+            }
+            let acc = f.count > 2 && f[2].isFinite ? f[2] : 6
+            let vel = f.count > 4 && f[4].isFinite ? f[4] : -1
+            let loc = CLLocation(coordinate: CLLocationCoordinate2D(latitude: f[0], longitude: f[1]), altitude: 0,
+                                 horizontalAccuracy: acc, verticalAccuracy: -1, course: -1, speed: vel, timestamp: Date())
+            BackgroundPoiManager.shared.collaudoConsegna(loc)
+            consegnati += 1
+            prossimo = dovuto + 1
+            if consegnati % 30 == 0 { scrivi("BG STATO fix=\(prossimo)/\(fix.count) app=\(statoApp)") }
+            svuotaNelSyslog()
+        }
+        if prossimo >= fix.count {
+            finito = true
+            // 30 s per l'arrivo e la coda della voce, poi il riepilogo.
+            coda.asyncAfter(deadline: .now() + 30) { self.chiudi() }
+        }
+    }
+
+    private func chiudi() {
+        timer?.cancel()
+        timer = nil
+        aggiornaStatoApp()
+        let p = NavFollower.shared.progress()
+        let progresso = p.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+        scrivi(String(format: "BG FINE consegnati=%d saltati=%d buchi=%d max_buco_s=%.1f app=%@", locale: Locale(identifier: "en_US_POSIX"),
+                      consegnati, saltati, buchi, maxBucoS, statoApp))
+        NSLog("%@ PROGRESS %@", Self.prefisso, progresso)
+    }
+
+    /// Lo stato dell'app si legge sul main; qui si usa l'ultimo letto (in background il main gira finché il processo vive).
+    private func aggiornaStatoApp() {
+        DispatchQueue.main.async {
+            let s: String
+            switch UIApplication.shared.applicationState {
+            case .active: s = "attiva"
+            case .inactive: s = "inattiva"
+            case .background: s = "background"
+            @unknown default: s = "?"
+            }
+            let protetti = UIApplication.shared.isProtectedDataAvailable ? "" : "+dati_protetti_chiusi"
+            self.coda.async { self.statoApp = s + protetti }
+        }
+    }
+
+    private func osservaStati() {
+        let nc = NotificationCenter.default
+        let eventi: [(Notification.Name, String)] = [
+            (UIApplication.didEnterBackgroundNotification, "APP in_background"),
+            (UIApplication.willEnterForegroundNotification, "APP torna_in_primo_piano"),
+            (UIApplication.didBecomeActiveNotification, "APP attiva"),
+            (UIApplication.willResignActiveNotification, "APP non_attiva"),
+            (UIApplication.protectedDataWillBecomeUnavailableNotification, "SCHERMO bloccato (dati protetti chiusi)"),
+            (UIApplication.protectedDataDidBecomeAvailableNotification, "SCHERMO sbloccato (dati protetti aperti)"),
+        ]
+        for (nome, testo) in eventi {
+            nc.addObserver(forName: nome, object: nil, queue: nil) { [weak self] _ in
+                self?.coda.async { self?.scrivi("BG \(testo)") }
+            }
+        }
+        // Il blocco dello schermo senza codice non chiude i dati protetti: lo dice la notifica Darwin di SpringBoard.
+        let centro = CFNotificationCenterGetDarwinNotifyCenter()
+        for nome in ["com.apple.springboard.lockcomplete", "com.apple.springboard.lockstate"] {
+            CFNotificationCenterAddObserver(centro, nil, { _, _, n, _, _ in
+                let quale = (n?.rawValue as String?) ?? "?"
+                CollaudoNavDriver.shared.coda.async { CollaudoNavDriver.shared.scrivi("BG SCHERMO evento=\(quale)") }
+            }, nome as CFString, nil, .deliverImmediately)
+        }
+    }
+}
+#endif

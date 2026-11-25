@@ -28,6 +28,8 @@ let activeAudio: HTMLAudioElement | null = null;
 let nativePlaybackActive = false;
 /** Callback di fine traccia in attesa (percorso nativo). */
 let pendingOnEnd: (() => void) | null = null;
+/** Testo del file locale in riproduzione: se il player dà errore si rilegge dalla strada normale (vedi 'playbackError'). */
+let ripiegoFile: { text: string; lang: string; character: GuideCharacter; onEnd?: () => void; etichetta?: string; meta?: { title?: string; subtitle?: string; imageUri?: string } } | null = null;
 let nativeListenersReady = false;
 /** Utterance Web Speech del fallback audioguida + watchdog di fine traccia. */
 let fallbackUtterance: SpeechSynthesisUtterance | null = null;
@@ -108,13 +110,25 @@ function ensureNativeListeners() {
     const finish = () => {
       if (!nativePlaybackActive) return;
       nativePlaybackActive = false;
+      ripiegoFile = null;
       emitAudioState(false, false);
       const cb = pendingOnEnd;
       pendingOnEnd = null;
       if (cb) cb();
     };
     WipBackgroundAudio.addListener('playbackEnded', finish);
-    WipBackgroundAudio.addListener('playbackError', finish);
+    // UN ERRORE NON È UNA FINE (18/11/2026, iPhone, Museo di Luni): il file locale di un'opera non si apriva, l'errore
+    // arrivava come «fine», partiva fineOpera e si sentiva solo «in questa sala restano…» — mai l'opera. Se a fallire è
+    // un file del telefono, lo stesso testo si legge dalla strada normale (voce dal cloud, poi voce di sistema).
+    WipBackgroundAudio.addListener('playbackError', () => {
+      const rip = ripiegoFile;
+      ripiegoFile = null;
+      if (!rip || !nativePlaybackActive) { finish(); return; }
+      nativePlaybackActive = false;
+      pendingOnEnd = null;
+      console.warn('[ttsService] file locale non riproducibile (errore del player): voce dal cloud');
+      void speakAudioguide(rip.text, rip.lang, rip.character, rip.onEnd, rip.etichetta, rip.meta);
+    });
     WipBackgroundAudio.addListener('playbackStatus', ({ isPlaying }) => {
       if (nativePlaybackActive) emitAudioState(isPlaying, true);
     });
@@ -136,6 +150,7 @@ if (typeof window !== 'undefined') {
     }
     nativePlaybackActive = false;
     pendingOnEnd = null;
+    ripiegoFile = null;
     clearFallback();
     activeUtterance = null;
     stopNativeDirect();
@@ -598,6 +613,7 @@ export function stopSpeech(): void {
     }
     nativePlaybackActive = false;
     pendingOnEnd = null;
+    ripiegoFile = null;
     clearFallback();
     activeUtterance = null;
     directPaused = null;
@@ -827,6 +843,7 @@ export async function speakAudioguideFile(
     ensureNativeListeners();
     pendingOnEnd = onEnd || null;
     nativePlaybackActive = true;
+    ripiegoFile = { text, lang, character, onEnd, etichetta, meta };
     await WipBackgroundAudio.play({
       url: fileUri,
       title: meta?.title || (text.length > 40 ? text.slice(0, 40) + '...' : text),
@@ -837,7 +854,7 @@ export async function speakAudioguideFile(
     emitAudioState(true, true);
   } catch (e) {
     console.warn('[ttsService] file locale non riproducibile, strada normale:', e);
-    nativePlaybackActive = false; pendingOnEnd = null;
+    nativePlaybackActive = false; pendingOnEnd = null; ripiegoFile = null;
     return speakAudioguide(text, lang, character, onEnd, etichetta, meta);
   }
 }

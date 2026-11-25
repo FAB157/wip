@@ -1,6 +1,7 @@
 import React from 'react';
 import { Language } from '../lib/i18n';
 import PlanMap from './PlanMap';
+import { totaleViaggioDaGiorni } from '../lib/totaleViaggio';
 
 interface Tappa {
   id_tappa: string;
@@ -538,13 +539,13 @@ export default function PrintView({ plan, language }: PrintViewProps) {
         )}
 
         {/* Totale Viaggio */}
-        {(plan as any).totale_viaggio && (
+        {totaleViaggioDaGiorni(plan, langStr) && (
           <div className="print-day-container" style={{ marginTop: '14px', padding: '10px 16px', border: '1.5px solid #1e3a8a', borderLeft: '5px solid #d4af37', borderRadius: '8px', backgroundColor: '#f8fafc', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', breakInside: 'avoid', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' } as any}>
             <h3 style={{ margin: 0, fontSize: '10pt', color: '#1e3a8a', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'sans-serif' }}>
               Totale stimato viaggio
             </h3>
             <p style={{ margin: 0, fontSize: '14pt', color: '#1e3a8a', fontWeight: 800, fontVariantNumeric: 'tabular-nums', fontFamily: 'sans-serif' }}>
-              {(plan as any).totale_viaggio}
+              {totaleViaggioDaGiorni(plan, langStr)}
             </p>
           </div>
         )}

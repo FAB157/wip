@@ -53,7 +53,8 @@
   .codice .dove { font-size:10.5pt; text-align:right; }
   .codice .dove b { color:var(--blu); }
   .piede { margin-top:auto; padding-top:6mm; display:flex; align-items:center; gap:5mm; font-size:9.5pt; color:var(--grigio); }
-  .qrapp { flex:0 0 19mm; width:19mm; }
+  .qrapp { flex:0 0 19mm; width:19mm; text-align:center; }
+  .qrapp small { display:block; font-size:6.5pt; font-weight:700; line-height:1.1; margin-top:.6mm; }
   .piede b { color:var(--testo); }
   .piede .sito { margin-left:auto; font-weight:900; color:var(--blu); font-size:12pt; white-space:nowrap; }
   .attiva { margin-top:6mm; }
@@ -155,7 +156,8 @@
       </div>
     </div>
     <div class="piede">
-      <div class="qrapp" id="qrapp"></div>
+      <div class="qrapp"><div id="qrapp"></div><small>iPhone</small></div>
+      <div class="qrapp"><div id="qrplay"></div><small>Android</small></div>
       <div><b data-t="app1"></b><br><span data-t="app2"></span><br><span id="scade"></span></div>
       <div class="sito">wip.guide</div>
     </div>
@@ -170,7 +172,7 @@ IT: { da:"Un regalo da", frase:"ha il piacere di regalarti <b>{n} crediti</b> pe
  b1:"Racconta cose vere", b2:"Storie e dettagli del luogo che hai davanti, da fonti verificate. In 7 lingue.",
  c1:"Itinerari su misura", c2:"Dimmi quanti giorni hai: WIP prepara il giro, con mappa, tempi e navigatore.",
  come:"Come ricevere il regalo", p1:"Inquadra il QR code con la fotocamera del telefono.", p2:"Accedi o crea un account gratuito: basta un'email.", p3:"I crediti arrivano subito sul tuo account, pronti da usare nell'app.",
- tuoCodice:"Il tuo codice regalo", senzaQr:"Senza QR? Scrivi il codice su", attiva:"Attiva il regalo", app1:"Scarica l'app per iPhone", app2:"A breve anche su Android. Sul web: wip.guide", scade:"Valido fino al {d}",
+ tuoCodice:"Il tuo codice regalo", senzaQr:"Senza QR? Scrivi il codice su", attiva:"Attiva il regalo", app1:"Scarica l'app: iPhone e Android", app2:"App Store · Google Play. Sul web: wip.guide", scade:"Valido fino al {d}",
  stampa:"Stampa / salva PDF", copia:"Copia il link", condividi:"Condividi", copiato:"Link copiato",
  fatto:"Fatto: {n} crediti sono sul tuo account. Buon viaggio!", gia:"Hai già riscattato questo regalo: i crediti sono sul tuo account.", finito:"Questo regalo non è più disponibile (scaduto o esaurito).", errore:"Non è riuscito: riprova fra poco.", attendi:"Un momento…",
  sospeso:"Questo regalo non è attivo in questo momento.", scaduto:"Questo regalo è scaduto.", esaurito:"Questo regalo è già stato riscattato da tutti gli ospiti previsti.",
@@ -181,7 +183,7 @@ EN: { da:"A gift from", frase:"is pleased to give you <b>{n} credits</b> to try 
  b1:"It tells true things", b2:"Stories and details of the place in front of you, from verified sources. In 7 languages.",
  c1:"Custom itineraries", c2:"Say how many days you have: WIP prepares the tour, with map, timings and navigator.",
  come:"How to get your gift", p1:"Scan the QR code with your phone camera.", p2:"Sign in or create a free account: an email is enough.", p3:"The credits land on your account right away, ready to use in the app.",
- tuoCodice:"Your gift code", senzaQr:"No QR? Type the code at", attiva:"Activate the gift", app1:"Download the iPhone app", app2:"Soon on Android too. On the web: wip.guide", scade:"Valid until {d}",
+ tuoCodice:"Your gift code", senzaQr:"No QR? Type the code at", attiva:"Activate the gift", app1:"Get the app: iPhone and Android", app2:"App Store · Google Play. On the web: wip.guide", scade:"Valid until {d}",
  stampa:"Print / save PDF", copia:"Copy the link", condividi:"Share", copiato:"Link copied",
  fatto:"Done: {n} credits are on your account. Enjoy your trip!", gia:"You have already redeemed this gift: the credits are on your account.", finito:"This gift is no longer available (expired or used up).", errore:"It did not work: please try again shortly.", attendi:"One moment…",
  sospeso:"This gift is not active at the moment.", scaduto:"This gift has expired.", esaurito:"This gift has already been redeemed by all the guests it was meant for.",
@@ -192,7 +194,7 @@ FR: { da:"Un cadeau de", frase:"a le plaisir de vous offrir <b>{n} crédits</b> 
  b1:"Il raconte du vrai", b2:"Histoires et détails du lieu devant vous, issus de sources vérifiées. En 7 langues.",
  c1:"Itinéraires sur mesure", c2:"Dites combien de jours vous avez : WIP prépare le parcours, avec carte, horaires et navigation.",
  come:"Comment recevoir le cadeau", p1:"Scannez le QR code avec l'appareil photo du téléphone.", p2:"Connectez-vous ou créez un compte gratuit : un e-mail suffit.", p3:"Les crédits arrivent aussitôt sur votre compte, prêts à utiliser dans l'application.",
- tuoCodice:"Votre code cadeau", senzaQr:"Sans QR ? Saisissez le code sur", attiva:"Activer le cadeau", app1:"Téléchargez l'application iPhone", app2:"Bientôt sur Android. Sur le web : wip.guide", scade:"Valable jusqu'au {d}",
+ tuoCodice:"Votre code cadeau", senzaQr:"Sans QR ? Saisissez le code sur", attiva:"Activer le cadeau", app1:"Téléchargez l'app : iPhone et Android", app2:"App Store · Google Play. Sur le web : wip.guide", scade:"Valable jusqu'au {d}",
  stampa:"Imprimer / enregistrer en PDF", copia:"Copier le lien", condividi:"Partager", copiato:"Lien copié",
  fatto:"C'est fait : {n} crédits sont sur votre compte. Bon voyage !", gia:"Vous avez déjà utilisé ce cadeau : les crédits sont sur votre compte.", finito:"Ce cadeau n'est plus disponible (expiré ou épuisé).", errore:"Cela n'a pas fonctionné : réessayez dans un instant.", attendi:"Un instant…",
  sospeso:"Ce cadeau n'est pas actif pour le moment.", scaduto:"Ce cadeau a expiré.", esaurito:"Ce cadeau a déjà été utilisé par tous les clients prévus.",
@@ -203,7 +205,7 @@ ES: { da:"Un regalo de", frase:"tiene el placer de regalarte <b>{n} créditos</b
  b1:"Cuenta cosas ciertas", b2:"Historias y detalles del lugar que tienes delante, de fuentes verificadas. En 7 idiomas.",
  c1:"Itinerarios a medida", c2:"Di cuántos días tienes: WIP prepara el recorrido, con mapa, tiempos y navegador.",
  come:"Cómo recibir el regalo", p1:"Escanea el código QR con la cámara del teléfono.", p2:"Inicia sesión o crea una cuenta gratuita: basta un correo.", p3:"Los créditos llegan enseguida a tu cuenta, listos para usar en la app.",
- tuoCodice:"Tu código de regalo", senzaQr:"¿Sin QR? Escribe el código en", attiva:"Activar el regalo", app1:"Descarga la app para iPhone", app2:"Pronto también en Android. En la web: wip.guide", scade:"Válido hasta el {d}",
+ tuoCodice:"Tu código de regalo", senzaQr:"¿Sin QR? Escribe el código en", attiva:"Activar el regalo", app1:"Descarga la app: iPhone y Android", app2:"App Store · Google Play. En la web: wip.guide", scade:"Válido hasta el {d}",
  stampa:"Imprimir / guardar PDF", copia:"Copiar el enlace", condividi:"Compartir", copiato:"Enlace copiado",
  fatto:"Hecho: {n} créditos están en tu cuenta. ¡Buen viaje!", gia:"Ya has canjeado este regalo: los créditos están en tu cuenta.", finito:"Este regalo ya no está disponible (caducado o agotado).", errore:"No ha funcionado: inténtalo de nuevo en un momento.", attendi:"Un momento…",
  sospeso:"Este regalo no está activo en este momento.", scaduto:"Este regalo ha caducado.", esaurito:"Este regalo ya ha sido canjeado por todos los huéspedes previstos.",
@@ -214,7 +216,7 @@ DE: { da:"Ein Geschenk von", frase:"schenkt Ihnen <b>{n} Guthaben</b>, um WIP au
  b1:"Erzählt Wahres", b2:"Geschichten und Details des Ortes vor Ihnen, aus geprüften Quellen. In 7 Sprachen.",
  c1:"Routen nach Maß", c2:"Sagen Sie, wie viele Tage Sie haben: WIP plant die Tour, mit Karte, Zeiten und Navigation.",
  come:"So erhalten Sie das Geschenk", p1:"Scannen Sie den QR-Code mit der Handykamera.", p2:"Melden Sie sich an oder erstellen Sie ein kostenloses Konto: eine E-Mail genügt.", p3:"Das Guthaben ist sofort auf Ihrem Konto und in der App nutzbar.",
- tuoCodice:"Ihr Geschenkcode", senzaQr:"Ohne QR? Code eingeben auf", attiva:"Geschenk aktivieren", app1:"iPhone-App laden", app2:"Bald auch auf Android. Im Web: wip.guide", scade:"Gültig bis {d}",
+ tuoCodice:"Ihr Geschenkcode", senzaQr:"Ohne QR? Code eingeben auf", attiva:"Geschenk aktivieren", app1:"App laden: iPhone und Android", app2:"App Store · Google Play. Im Web: wip.guide", scade:"Gültig bis {d}",
  stampa:"Drucken / als PDF speichern", copia:"Link kopieren", condividi:"Teilen", copiato:"Link kopiert",
  fatto:"Fertig: {n} Guthaben sind auf Ihrem Konto. Gute Reise!", gia:"Sie haben dieses Geschenk bereits eingelöst: Das Guthaben ist auf Ihrem Konto.", finito:"Dieses Geschenk ist nicht mehr verfügbar (abgelaufen oder aufgebraucht).", errore:"Das hat nicht geklappt: Bitte versuchen Sie es gleich noch einmal.", attendi:"Einen Moment…",
  sospeso:"Dieses Geschenk ist derzeit nicht aktiv.", scaduto:"Dieses Geschenk ist abgelaufen.", esaurito:"Dieses Geschenk wurde bereits von allen vorgesehenen Gästen eingelöst.",
@@ -225,7 +227,7 @@ RU: { da:"Подарок от", frase:"дарит вам <b>{n} кредитов
  b1:"Рассказывает правду", b2:"Истории и детали места перед вами — из проверенных источников. На 7 языках.",
  c1:"Маршруты под вас", c2:"Скажите, сколько у вас дней: WIP составит маршрут с картой, временем и навигатором.",
  come:"Как получить подарок", p1:"Наведите камеру телефона на QR-код.", p2:"Войдите или создайте бесплатный аккаунт: достаточно эл. почты.", p3:"Кредиты сразу поступят на ваш аккаунт и будут доступны в приложении.",
- tuoCodice:"Ваш подарочный код", senzaQr:"Нет QR? Введите код на", attiva:"Активировать подарок", app1:"Скачайте приложение для iPhone", app2:"Скоро и на Android. В браузере: wip.guide", scade:"Действует до {d}",
+ tuoCodice:"Ваш подарочный код", senzaQr:"Нет QR? Введите код на", attiva:"Активировать подарок", app1:"Скачайте приложение: iPhone и Android", app2:"App Store · Google Play. В браузере: wip.guide", scade:"Действует до {d}",
  stampa:"Печать / сохранить PDF", copia:"Скопировать ссылку", condividi:"Поделиться", copiato:"Ссылка скопирована",
  fatto:"Готово: {n} кредитов на вашем аккаунте. Приятного путешествия!", gia:"Вы уже активировали этот подарок: кредиты на вашем аккаунте.", finito:"Этот подарок больше недоступен (истёк или исчерпан).", errore:"Не получилось: попробуйте ещё раз чуть позже.", attendi:"Минуту…",
  sospeso:"Этот подарок сейчас не активен.", scaduto:"Срок действия подарка истёк.", esaurito:"Этот подарок уже активировали все гости, для которых он предназначен.",
@@ -236,7 +238,7 @@ ZH: { da:"来自以下机构的礼物", frase:"很高兴送您 <b>{n} 积分</b>
  b1:"讲述真实内容", b2:"您眼前景点的故事与细节，来自经过核实的资料。支持 7 种语言。",
  c1:"定制行程", c2:"告诉它您有几天：WIP 会安排路线，附地图、时间和导航。",
  come:"如何领取礼物", p1:"用手机相机扫描二维码。", p2:"登录或免费注册账户：一个邮箱即可。", p3:"积分立即到账，可在应用中使用。",
- tuoCodice:"您的礼品代码", senzaQr:"没有二维码？请在此输入代码", attiva:"领取礼物", app1:"下载 iPhone 应用", app2:"不久也将支持 Android。网页版：wip.guide", scade:"有效期至 {d}",
+ tuoCodice:"您的礼品代码", senzaQr:"没有二维码？请在此输入代码", attiva:"领取礼物", app1:"下载应用：iPhone 与 Android", app2:"App Store · Google Play。网页版：wip.guide", scade:"有效期至 {d}",
  stampa:"打印 / 保存 PDF", copia:"复制链接", condividi:"分享", copiato:"链接已复制",
  fatto:"完成：{n} 积分已到账。祝您旅途愉快！", gia:"您已领取过此礼物：积分已在您的账户中。", finito:"此礼物已不可用（已过期或已领完）。", errore:"未成功：请稍后再试。", attendi:"请稍候…",
  sospeso:"此礼物目前未启用。", scaduto:"此礼物已过期。", esaurito:"此礼物已被所有预定客人领取。",
@@ -246,17 +248,20 @@ ZH: { da:"来自以下机构的礼物", frase:"很高兴送您 <b>{n} 积分</b>
 // Dopo l'accredito: l'invito a scaricare l'app (committente 12/10/2026: «per ora solo Apple»), e i due rifiuti
 // del riscatto «per ospite con email da attivare».
 var T2 = {
-IT: { dopo:"Ora scarica l'app per iPhone e accedi con lo stesso account: i crediti sono già lì.", scarica:"Scarica l'app per iPhone", conferma:"Conferma la tua email per ricevere il regalo: apri il link che ti abbiamo mandato, poi torna qui.", temporanea:"Con un indirizzo email temporaneo il regalo non si può attivare: usa la tua email." },
-EN: { dopo:"Now download the iPhone app and sign in with the same account: your credits are already there.", scarica:"Download the iPhone app", conferma:"Confirm your email to receive the gift: open the link we sent you, then come back here.", temporanea:"The gift cannot be activated with a temporary email address: use your own email." },
-FR: { dopo:"Téléchargez maintenant l'application iPhone et connectez-vous avec le même compte : vos crédits y sont déjà.", scarica:"Télécharger l'application iPhone", conferma:"Confirmez votre e-mail pour recevoir le cadeau : ouvrez le lien que nous vous avons envoyé, puis revenez ici.", temporanea:"Le cadeau ne peut pas être activé avec une adresse e-mail temporaire : utilisez votre e-mail." },
-ES: { dopo:"Ahora descarga la app para iPhone e inicia sesión con la misma cuenta: tus créditos ya están ahí.", scarica:"Descargar la app para iPhone", conferma:"Confirma tu correo para recibir el regalo: abre el enlace que te hemos enviado y vuelve aquí.", temporanea:"El regalo no se puede activar con un correo temporal: usa tu correo." },
-DE: { dopo:"Laden Sie jetzt die iPhone-App und melden Sie sich mit demselben Konto an: Ihr Guthaben ist bereits dort.", scarica:"iPhone-App laden", conferma:"Bestätigen Sie Ihre E-Mail, um das Geschenk zu erhalten: Öffnen Sie den Link, den wir Ihnen gesendet haben, und kommen Sie hierher zurück.", temporanea:"Mit einer Wegwerf-E-Mail-Adresse lässt sich das Geschenk nicht aktivieren: Verwenden Sie Ihre eigene E-Mail." },
-RU: { dopo:"Теперь скачайте приложение для iPhone и войдите с тем же аккаунтом: кредиты уже там.", scarica:"Скачать приложение для iPhone", conferma:"Подтвердите эл. почту, чтобы получить подарок: откройте ссылку из нашего письма и вернитесь сюда.", temporanea:"С временным адресом эл. почты подарок активировать нельзя: используйте свою почту." },
-ZH: { dopo:"现在下载 iPhone 应用并用同一账户登录：积分已在其中。", scarica:"下载 iPhone 应用", conferma:"请先确认您的邮箱以领取礼物：打开我们发送的链接，然后回到此页。", temporanea:"临时邮箱无法领取礼物：请使用您自己的邮箱。" }
+IT: { dopo:"Ora scarica l'app e accedi con lo stesso account: i crediti sono già lì.", scarica:"Scarica l'app", conferma:"Conferma la tua email per ricevere il regalo: apri il link che ti abbiamo mandato, poi torna qui.", temporanea:"Con un indirizzo email temporaneo il regalo non si può attivare: usa la tua email." },
+EN: { dopo:"Now download the app and sign in with the same account: your credits are already there.", scarica:"Download the app", conferma:"Confirm your email to receive the gift: open the link we sent you, then come back here.", temporanea:"The gift cannot be activated with a temporary email address: use your own email." },
+FR: { dopo:"Téléchargez maintenant l'application et connectez-vous avec le même compte : vos crédits y sont déjà.", scarica:"Télécharger l'application", conferma:"Confirmez votre e-mail pour recevoir le cadeau : ouvrez le lien que nous vous avons envoyé, puis revenez ici.", temporanea:"Le cadeau ne peut pas être activé avec une adresse e-mail temporaire : utilisez votre e-mail." },
+ES: { dopo:"Ahora descarga la app e inicia sesión con la misma cuenta: tus créditos ya están ahí.", scarica:"Descargar la app", conferma:"Confirma tu correo para recibir el regalo: abre el enlace que te hemos enviado y vuelve aquí.", temporanea:"El regalo no se puede activar con un correo temporal: usa tu correo." },
+DE: { dopo:"Laden Sie jetzt die App und melden Sie sich mit demselben Konto an: Ihr Guthaben ist bereits dort.", scarica:"App laden", conferma:"Bestätigen Sie Ihre E-Mail, um das Geschenk zu erhalten: Öffnen Sie den Link, den wir Ihnen gesendet haben, und kommen Sie hierher zurück.", temporanea:"Mit einer Wegwerf-E-Mail-Adresse lässt sich das Geschenk nicht aktivieren: Verwenden Sie Ihre eigene E-Mail." },
+RU: { dopo:"Теперь скачайте приложение и войдите с тем же аккаунтом: кредиты уже там.", scarica:"Скачать приложение", conferma:"Подтвердите эл. почту, чтобы получить подарок: откройте ссылку из нашего письма и вернитесь сюда.", temporanea:"С временным адресом эл. почты подарок активировать нельзя: используйте свою почту." },
+ZH: { dopo:"现在下载应用并用同一账户登录：积分已在其中。", scarica:"下载应用", conferma:"请先确认您的邮箱以领取礼物：打开我们发送的链接，然后回到此页。", temporanea:"临时邮箱无法领取礼物：请使用您自己的邮箱。" }
 };
 var LINGUE = ["IT","EN","FR","ES","DE","RU","ZH"];
 var LOCALE = { IT:"it-IT", EN:"en-GB", FR:"fr-FR", ES:"es-ES", DE:"de-DE", RU:"ru-RU", ZH:"zh-CN" };
 var APP_STORE = "https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct=regalo&mt=8";
+// (13/11/2026) L'app è anche su Google Play: secondo codice nel piede, e su un telefono Android il tasto porta lì.
+var GOOGLE_PLAY = "https://play.google.com/store/apps/details?id=com.itaintasca.app";
+var E_ANDROID = /Android/i.test(navigator.userAgent || "");
 var q = new URLSearchParams(location.search);
 var codice = String(q.get("codice") || q.get("code") || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 30);
 var dati = null, lingua = "IT", linguaScelta = false;
@@ -290,6 +295,7 @@ function applica(l) {
   document.title = "WIP — " + ente;
   disegnaQr($("qr"), indirizzo());
   disegnaQr($("qrapp"), APP_STORE);
+  disegnaQr($("qrplay"), GOOGLE_PLAY);
   var av = $("avviso");
   if (dati.stato !== "attivo") { $("avvisoTesto").textContent = d[dati.stato] || d.finito; av.hidden = false; $("attiva").disabled = true; }
   else av.hidden = true;
@@ -313,7 +319,7 @@ function invitaAScaricare() {
   accreditato = true;
   $("dopoTesto").textContent = T2[lingua].dopo;
   $("scarica").textContent = T2[lingua].scarica;
-  $("scarica").href = APP_STORE;
+  $("scarica").href = E_ANDROID ? GOOGLE_PLAY : APP_STORE;
   $("dopo").hidden = false;
 }
 function versoLApp() { location.href = "/?coupon=" + encodeURIComponent(codice) + "&regalo=1#profilo"; }

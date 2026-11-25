@@ -1,4 +1,6 @@
+import { useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { getDayPassState, DAY_PASS_UPDATED_EVENT } from '../services/dayPassService';
 import { X, Sparkles } from 'lucide-react';
 import DayPassCard from './DayPassCard';
 import { getTranslation, linguaCorrente } from '../lib/i18n';
@@ -25,6 +27,14 @@ interface DayPassOfferModalProps {
  */
 export default function DayPassOfferModal({ isOpen, city, poisCount, onClose, motivo }: DayPassOfferModalProps) {
   const tr = (k: string) => getTranslation(k, linguaCorrente());
+  // (14/11/2026) Aperta da un cancello («per avviare serve il Day Pass»): appena il pass è attivo si chiude da sola.
+  // Prima restava lì con lo stesso titolo, e chi aveva appena pagato doveva chiuderla e ripremere «Avvia».
+  useEffect(() => {
+    if (!isOpen || !motivo) return;
+    const h = () => { getDayPassState().then((s) => { if (s?.active) onClose(); }).catch(() => {}); };
+    window.addEventListener(DAY_PASS_UPDATED_EVENT, h);
+    return () => window.removeEventListener(DAY_PASS_UPDATED_EVENT, h);
+  }, [isOpen, motivo, onClose]);
   const titolo = motivo
     ? motivo
     : poisCount > 0

@@ -108,12 +108,30 @@ object NomiAnnunciabili {
         RegexOption.IGNORE_CASE
     )
     private val CODA_EDIFICIO = Regex(" - (school|residential|office) building$", RegexOption.IGNORE_CASE)
+    // (22/11/2026, collaudo nativo di Cracovia: «Ti stai avvicinando a Punto di interesse») un nome che è solo
+    // un'etichetta di tipo non è un nome. Stessa lista di NOME_GENERICO in nomiAnnunciabili.ts e PoiModels.swift.
+    private val NOME_GENERICO = Regex(
+        "^(punto (di )?interesse|point of interest|points? d'int[ée]r[êe]t|punto de inter[ée]s|sehensw[üu]rdigkeit|poi|attrazione|attraction|attraction touristique|luogo|monumento|chiesa|museo|statua|edificio|scultura|fontana|torre|ponte|cappella|senza nome|unnamed|untitled|no name|sans nom|sin nombre|ohne namen|denkmal|kirche|statue|monument|monumento conmemorativo)$",
+        RegexOption.IGNORE_CASE
+    )
 
     /** Il nome da dire nell'avviso dei 150 m, o null se il nome e' grezzo (regola 2). */
+    // 21/11/2026 (collaudo notturno): la voce leggeva anche la parentesi («Museo egizio (Il Cairo)»,
+    // «Mårten Trotzig (1559–1617)»). Stessa pulizia di nomeDaAnnunciare in nomiAnnunciabili.ts.
+    private val RE_PARENTESI_NOME = Regex("\\s*\\([^)]*\\)\\s*")
+    private val RE_CODA_PUNTEGGIATURA = Regex("[\\s.,;:\\-–]+$")
+    private val RE_SPAZI_NOME = Regex("\\s+")
+
     fun nomeDaAnnunciare(nome: String?, id: String?, categoria: String?, lingua: String?): String? {
-        val grezzo = (nome ?: "").trim()
+        val grezzo = (nome ?: "")
+            .replace(RE_PARENTESI_NOME, " ")
+            .substringBefore(',') // (21/11/2026) «Abaj Kunanbajev Szobra, Asztana út, Budapest.»: fino alla prima virgola
+            .replace(RE_CODA_PUNTEGGIATURA, "")
+            .replace(RE_SPAZI_NOME, " ")
+            .trim()
         if (grezzo.length < 3) return null
         if (SOLO_NUMERI.matches(grezzo)) return null
+        if (NOME_GENERICO.matches(grezzo)) return null
         if (PIETRA_O_TARGA.containsMatchIn(grezzo) || CATEGORIA_TARGA.containsMatchIn(categoria ?: "")) return null
         if ((id ?: "").startsWith("plaque-")) return null
         if (DESCRIZIONE_INGLESE.matches(grezzo) || CODA_EDIFICIO.containsMatchIn(grezzo)) return null

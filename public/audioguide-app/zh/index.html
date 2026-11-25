@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-itunes-app" content="app-id=6806769883">
+<title>边走边自动讲解的语音导览应用 | WIP</title>
+<meta name="description" content="WIP 是为旅行者打造的语音导览应用：走到古迹、博物馆或教堂时，导览会自动开始；步行或驾车均可，锁屏也能用。支持 7 种语言。">
+<link rel="canonical" href="https://www.wip.guide/audioguide-app/zh">
+<link rel="alternate" hreflang="it" href="https://www.wip.guide/audioguide-app">
+<link rel="alternate" hreflang="en" href="https://www.wip.guide/audioguide-app/en">
+<link rel="alternate" hreflang="fr" href="https://www.wip.guide/audioguide-app/fr">
+<link rel="alternate" hreflang="es" href="https://www.wip.guide/audioguide-app/es">
+<link rel="alternate" hreflang="de" href="https://www.wip.guide/audioguide-app/de">
+<link rel="alternate" hreflang="ru" href="https://www.wip.guide/audioguide-app/ru">
+<link rel="alternate" hreflang="zh-Hans" href="https://www.wip.guide/audioguide-app/zh">
+<link rel="alternate" hreflang="x-default" href="https://www.wip.guide/audioguide-app/en">
+<link rel="icon" type="image/png" href="/scopri/logo.png">
+<link rel="apple-touch-icon" href="/scopri/logo.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="WIP · World in Pocket">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:url" content="https://www.wip.guide/audioguide-app/zh">
+<meta property="og:title" content="边走边听：自动开始讲解的语音导览应用">
+<meta property="og:description" content="WIP 是为旅行者打造的语音导览应用：走到古迹、博物馆或教堂时，导览会自动开始；步行或驾车均可，锁屏也能用。支持 7 种语言。">
+<meta property="og:image" content="https://www.wip.guide/scopri/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"MobileApplication","name":"WIP · World in Pocket","alternateName":"WIP","description":"WIP 是为旅行者打造的语音导览应用：走到古迹、博物馆或教堂时，导览会自动开始；步行或驾车均可，锁屏也能用。支持 7 种语言。","url":"https://www.wip.guide/audioguide-app/zh","image":"https://www.wip.guide/scopri/og-image.jpg","applicationCategory":"TravelApplication","operatingSystem":"iOS, Android","inLanguage":["it","en","fr","es","de","ru","zh"],"installUrl":["https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct=audioguide-app&mt=8","https://play.google.com/store/apps/details?id=com.itaintasca.app"],"offers":{"@type":"Offer","price":"0","priceCurrency":"EUR","description":"免费下载；完整语音导览和 Day Pass 使用积分，无需订阅。"},"publisher":{"@type":"Organization","name":"WIP · World in Pocket","url":"https://www.wip.guide/"}}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","inLanguage":"zh-Hans","mainEntity":[{"@type":"Question","name":"需要联网吗？","acceptedAnswer":{"@type":"Answer","text":"第一次获取导览时需要。在应用中可以提前下载区域数据包和行程，无网络也能收听；离线使用完整导览需要有效的 Day Pass 或已购买的导览。"}},{"@type":"Question","name":"锁屏时能用吗？","acceptedAnswer":{"@type":"Answer","text":"可以，在 iPhone 和 Android 应用中，需开启“始终”定位权限。网页端仅在页面打开时可用。"}},{"@type":"Question","name":"多少钱？","acceptedAnswer":{"@type":"Answer","text":"提醒和预告免费。完整导览 15 积分，永久归你所有；Day Pass 200 积分，24 小时内最多 40 个导览。无需订阅，积分永不过期。"}},{"@type":"Question","name":"支持哪些语言？","acceptedAnswer":{"@type":"Answer","text":"意大利语、英语、法语、西班牙语、德语、俄语和中文，由 Nicky 和 Dante 的声音讲解。"}},{"@type":"Question","name":"到达时需要做什么吗？","acceptedAnswer":{"@type":"Answer","text":"不需要：在自动模式下导览会自动开始。如果你愿意，半自动模式会先提醒你，等你轻触“收听”。"}},{"@type":"Question","name":"导览是谁写的？","acceptedAnswer":{"@type":"Answer","text":"由人工智能根据该地点的资料（Wikipedia、Wikidata、官方网站）生成，并由合成语音朗读。"}},{"@type":"Question","name":"不安装也能试用吗？","acceptedAnswer":{"@type":"Answer","text":"可以，wip.guide 可直接在浏览器中打开。锁屏和离线使用语音导览需要安装应用。"}}]}</script>
+<style>
+  :root{--blu:#1e3a8a;--blu-scuro:#14265c;--blu-notte:#0d1a40;--oro-chiaro:#facc15;--testo:#1f2937;--soft:#4b5563;--linea:#e3e7f0;--carta:#f6f7fb;--testo-soft:#c7d2fe}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:var(--carta);color:var(--testo);line-height:1.6;-webkit-font-smoothing:antialiased;overflow-wrap:break-word}
+  img,audio{max-width:100%;display:block}
+  a{color:var(--blu)}
+  a:focus-visible,summary:focus-visible{outline:3px solid #2f56c9;outline-offset:2px}
+  .salta{position:absolute;left:-999px;top:0}.salta:focus{left:8px;background:#fff;padding:6px 10px;z-index:20}
+  .lingue{position:sticky;top:0;z-index:10;display:flex;gap:2px;justify-content:center;flex-wrap:wrap;padding:10px 8px;background:rgba(255,255,255,.94);border-bottom:1px solid var(--linea);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+  .lingue a,.lingue strong{font-size:12px;font-weight:700;letter-spacing:.06em;color:#5b6b85;text-decoration:none;border:1px solid transparent;border-radius:999px;padding:5px 10px}
+  .lingue strong{color:#fff;background:var(--blu);border-color:var(--blu)}
+  .hero{background:linear-gradient(175deg,var(--blu) 0%,var(--blu-scuro) 55%,var(--blu-notte) 100%);color:#fff;text-align:center;padding:40px 16px 52px}
+  .hero .logo{width:80px;height:80px;margin:0 auto 20px;border-radius:20px;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+  .hero h1{font-size:clamp(27px,7vw,42px);line-height:1.18;font-weight:800;letter-spacing:-.01em;max-width:680px;margin:0 auto}
+  .hero h1 em{font-style:normal;color:var(--oro-chiaro)}
+  .hero p{max-width:560px;margin:18px auto 0;font-size:clamp(15px,4.2vw,18px);color:var(--testo-soft)}
+  .badges{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:26px}
+  .badge-store{display:flex;align-items:center;gap:10px;text-align:left;background:#fff;border:1px solid #d6dcea;border-radius:12px;padding:10px 18px;min-width:180px;color:var(--blu-scuro);text-decoration:none;box-shadow:0 4px 14px rgba(30,58,138,.12)}
+  .badge-store .icona{font-size:24px;line-height:1}
+  .badge-store .r1{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#7a879e}
+  .badge-store .r2{font-size:16px;font-weight:700;line-height:1.15}
+  .hero .web{display:inline-block;margin-top:18px;color:#fff;font-weight:700}
+  main{max-width:760px;margin:0 auto;padding:8px 16px 40px}
+  section{margin-top:40px}
+  h2{font-size:clamp(21px,5.6vw,27px);line-height:1.22;color:var(--blu-scuro);font-weight:800;margin-bottom:12px}
+  h3{font-size:18px;color:var(--blu-scuro);margin-bottom:6px}
+  main p{margin:10px 0;color:var(--soft);font-size:16.5px}
+  main p strong,main li strong{color:var(--testo)}
+  ol.passi{counter-reset:p;list-style:none}
+  ol.passi li{counter-increment:p;position:relative;padding:12px 14px 12px 56px;margin:10px 0;background:#fff;border:1px solid var(--linea);border-radius:12px;font-size:16.5px}
+  ol.passi li::before{content:counter(p);position:absolute;left:14px;top:11px;width:30px;height:30px;border-radius:50%;background:var(--blu);color:#fff;display:grid;place-items:center;font-weight:800}
+  .riquadro{background:#fff;border:1px solid var(--linea);border-radius:14px;padding:16px;margin:14px 0}
+  .riquadro audio{width:100%;margin:10px 0 6px}
+  .griglia{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:12px}
+  .griglia .riquadro{margin:0}
+  .griglia .riquadro p{font-size:15.5px}
+  details{background:#fff;border:1px solid var(--linea);border-radius:12px;padding:12px 16px;margin:10px 0}
+  summary{cursor:pointer;font-weight:700;color:var(--testo)}
+  details p{margin-top:8px}
+  ul.link{list-style:none;display:grid;gap:8px;margin-top:10px}
+  ul.link a{display:block;background:#fff;border:1px solid var(--linea);border-radius:12px;padding:12px 14px;text-decoration:none;font-weight:700}
+  .finale{text-align:center;background:#fff;border:1px solid var(--linea);border-radius:16px;padding:26px 16px;margin-top:44px}
+  .finale .badges{margin-top:16px}
+  footer{background:var(--blu-scuro);color:var(--testo-soft);text-align:center;padding:30px 16px 40px;font-size:14px;margin-top:20px}
+  footer .social{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;margin:10px 0 14px}
+  footer a{color:var(--oro-chiaro);text-decoration:none;font-weight:600}
+  footer .sito a{color:#fff;font-weight:800;font-size:16px}
+</style>
+</head>
+<body>
+<a class="salta" href="#contenuto">跳到正文</a>
+<nav class="lingue" aria-label="语言">
+  <a lang="it" hreflang="it" href="/audioguide-app">Italiano</a>
+  <a lang="en" hreflang="en" href="/audioguide-app/en">English</a>
+  <a lang="fr" hreflang="fr" href="/audioguide-app/fr">Français</a>
+  <a lang="es" hreflang="es" href="/audioguide-app/es">Español</a>
+  <a lang="de" hreflang="de" href="/audioguide-app/de">Deutsch</a>
+  <a lang="ru" hreflang="ru" href="/audioguide-app/ru">Русский</a>
+  <strong lang="zh" aria-current="page">中文</strong>
+</nav>
+
+<header class="hero">
+  <img class="logo" src="/scopri/logo.png" alt="WIP" width="80" height="80">
+  <h1>边走边听：<em>自动开始讲解</em>的语音导览应用</h1>
+  <p>不用启动导览，不用输入编号：打开“导览”，把手机放进口袋，走到一个地方时，它的故事就开始了。步行或驾车，支持 7 种语言。</p>
+  <div class="badges">
+      <a class="badge-store" data-store="apple" href="https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&amp;ct=audioguide-app&amp;mt=8">
+        <span class="icona" aria-hidden="true">&#63743;</span>
+        <span><span class="r1">下载于</span><br><span class="r2">App Store</span></span>
+      </a>
+      <a class="badge-store" data-store="google" href="https://play.google.com/store/apps/details?id=com.itaintasca.app">
+        <span class="icona" aria-hidden="true">&#9654;</span>
+        <span><span class="r1">下载于</span><br><span class="r2">Google Play</span></span>
+      </a>
+    </div>
+  <a class="web" data-web="1" href="https://wip.guide/">在浏览器中试用 &rarr; wip.guide</a>
+</header>
+
+<main id="contenuto">
+  <section>
+    <h2>语音导览如何自动开始</h2>
+    <ol class="passi">
+      <li>戴上耳机，轻触底栏的<strong>导览</strong>：语音导览雷达随即开启。</li>
+      <li>在大约<strong>步行 150 米</strong>（驾车 300 米）处，手机振动提示：“你正在接近…”。</li>
+      <li>到达时，大约<strong>步行 30 米</strong>（驾车 50 米）处，播放一段简短的免费语音预告。</li>
+      <li>紧接着开始<strong>完整导览</strong>。在半自动模式下，需要你自己轻触<strong>收听</strong>。</li>
+    </ol>
+    <p>距离是沿道路测量到该地点的到达点，而不是直线距离，可以在 个人资料 › 设置 › 高级地理控制 中调整。应用会根据速度判断步行还是驾车：超过 12 公里/小时切换为“驾车”，低于 6 公里/小时切回“步行”。</p>
+  </section>
+
+  <section>
+    <h2>锁屏、步行与驾车</h2>
+    <p>在 <strong>iPhone 和 Android</strong> 应用中，手机上的服务即使在锁屏时也会持续跟踪位置，因此应用会请求“始终”定位权限。步行导航 WipNav 在锁屏时也会播报。</p>
+    <p>驾车时，声音通过与手机连接的扬声器播放，就像导航一样。在网页端（浏览器中的 wip.guide），语音导览只在页面保持前台打开时有效。</p>
+  </section>
+
+  <section>
+    <h2>哪些地方会讲解</h2>
+    <p>默认会讲解的有：古迹与城堡、博物馆与美术馆、教堂与礼拜场所；全景、自然和提示可在设置中自行开启。<strong>秘境</strong>（不容错过的地方）始终会讲解。听过的地方 24 小时内不会重复。</p>
+    <p>每段导览都根据该地点的资料（Wikipedia、Wikidata、官方网站）撰写，并由合成语音朗读：这是基于核实资料、由人工智能生成的内容。如果某个地点没有资料，就不会编造导览。</p>
+  </section>
+
+  <section>
+    <h2>声音、语言与提问</h2>
+    <p><strong>Nicky</strong>：女声，默认；<strong>Dante</strong>：男声，经典导览风格；或者<strong>对唱</strong>，两种声音的对话。7 种语言：意大利语、英语、法语、西班牙语、德语、俄语和中文。使用<strong>提问</strong>可暂停并通过语音或文字提问；深入收听最多可再增加三个层级。</p>
+    <div class="riquadro">
+      <h3>听一段真实的语音导览</h3>
+      <p>布鲁塞尔大广场，Nicky 的声音，约 2 分钟：应用为真实用户生成的文件，未经修改。</p>
+      <audio controls preload="none" src="/guida/esempi/bruxelles-grand-place-nicky.mp3"></audio>
+      <p>此示例为意大利语；应用会用你的语言讲解。 <a href="/guida/esempi/bruxelles-grand-place-nicky.txt" target="_blank" rel="noopener">阅读文本（意大利语）</a></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>博物馆、行程与离线</h2>
+    <div class="griglia">
+      <div class="riquadro"><h3>博物馆</h3><p><strong>博物馆参观</strong>带你逐个展厅、逐件作品参观，配有音频、趣闻，以及（如有）平面图。可在前一晚下载，离线可用，永久归你所有。使用博物馆通行证，用相机对准作品即可收听讲解（需要联网）。</p></div>
+      <div class="riquadro"><h3>行程</h3><p>规划一天或多天的旅行：每个站点都会逐一核实，附步行距离、超过 1.5 公里路段的公共交通信息以及可打印的 PDF。行程库中还有现成的行程，免费使用。</p></div>
+      <div class="riquadro"><h3>离线</h3><p>在应用中下载区域数据包和行程后，地图和语音导览无需网络即可使用。离线使用完整导览需要有效的 Day Pass 或已购买的导览；从未生成过的导览需要联网。</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>费用</h2>
+    <p>应用免费下载，许多功能也免费：地图、地点卡片、接近提醒和语音预告、步行导航以及行程库。</p>
+    <p>一个地点的完整导览需要 <strong>15 积分</strong>，购买后永久归你所有。<strong>Day Pass</strong>（200 积分）提供 24 小时语音导览，最多 40 个导览，离线和锁屏时也可用。没有订阅：积分在应用内按套餐购买，永不过期。以你所在货币计的价格由应用商店显示，因国家而异；最新价目表始终在应用内。</p>
+  </section>
+
+  <section>
+    <h2>常见问题</h2>
+    <details><summary>需要联网吗？</summary><p>第一次获取导览时需要。在应用中可以提前下载区域数据包和行程，无网络也能收听；离线使用完整导览需要有效的 Day Pass 或已购买的导览。</p></details>
+    <details><summary>锁屏时能用吗？</summary><p>可以，在 iPhone 和 Android 应用中，需开启“始终”定位权限。网页端仅在页面打开时可用。</p></details>
+    <details><summary>多少钱？</summary><p>提醒和预告免费。完整导览 15 积分，永久归你所有；Day Pass 200 积分，24 小时内最多 40 个导览。无需订阅，积分永不过期。</p></details>
+    <details><summary>支持哪些语言？</summary><p>意大利语、英语、法语、西班牙语、德语、俄语和中文，由 Nicky 和 Dante 的声音讲解。</p></details>
+    <details><summary>到达时需要做什么吗？</summary><p>不需要：在自动模式下导览会自动开始。如果你愿意，半自动模式会先提醒你，等你轻触“收听”。</p></details>
+    <details><summary>导览是谁写的？</summary><p>由人工智能根据该地点的资料（Wikipedia、Wikidata、官方网站）生成，并由合成语音朗读。</p></details>
+    <details><summary>不安装也能试用吗？</summary><p>可以，wip.guide 可直接在浏览器中打开。锁屏和离线使用语音导览需要安装应用。</p></details>
+  </section>
+
+  <section>
+    <h2>了解更多</h2>
+    <ul class="link">
+      <li><a href="/guida/zh/audioguide">语音导览如何运作</a></li>
+      <li><a href="/guida/zh/gratis-e-crediti">哪些免费，哪些需要积分</a></li>
+      <li><a href="/guida/zh/visita-museo">博物馆导览</a></li>
+      <li><a href="/guida/zh/web-iphone-android">网页、iPhone 和 Android</a></li>
+      <li><a href="/scopri/zh">了解 WIP</a></li>
+    </ul>
+  </section>
+
+  <div class="finale">
+    <h2>手机放进口袋，出发吧</h2>
+    <div class="badges">
+      <a class="badge-store" data-store="apple" href="https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&amp;ct=audioguide-app&amp;mt=8">
+        <span class="icona" aria-hidden="true">&#63743;</span>
+        <span><span class="r1">下载于</span><br><span class="r2">App Store</span></span>
+      </a>
+      <a class="badge-store" data-store="google" href="https://play.google.com/store/apps/details?id=com.itaintasca.app">
+        <span class="icona" aria-hidden="true">&#9654;</span>
+        <span><span class="r1">下载于</span><br><span class="r2">Google Play</span></span>
+      </a>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <p>关注我们</p>
+  <nav class="social" aria-label="Social">
+    <a href="https://www.tiktok.com/@wipguide" target="_blank" rel="noopener">TikTok</a>
+    <a href="https://www.instagram.com/wipguide" target="_blank" rel="noopener">Instagram</a>
+    <a href="https://www.youtube.com/@wipguide" target="_blank" rel="noopener">YouTube</a>
+    <a href="https://www.facebook.com/profile.php?id=61594265810569" target="_blank" rel="noopener">Facebook</a>
+  </nav>
+  <p class="sito"><a href="https://wip.guide/">wip.guide</a></p>
+  <p style="margin-top:10px"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/support">Support</a></p>
+</footer>
+
+<script>
+/* PostHog come /scopri: niente autocapture, niente registrazione sessioni, solo 3 eventi. */
+!function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug getPageViewId captureTraceFeedback captureTraceMetric".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+posthog.init("phc_Bj6Hv4wYPYQc2a8oDLYWfcJUFbFq9dVUiJfYZJRBfMkr", { api_host: "https://eu.posthog.com", autocapture: false, capture_pageview: false, capture_pageleave: false, disable_session_recording: true });
+posthog.capture("$pageview", { lingua: "zh", pagina: "audioguide-app" });
+document.querySelectorAll("[data-store]").forEach(function (a) {
+  a.addEventListener("click", function () { posthog.capture("landing_store_click", { store: a.getAttribute("data-store"), lingua: "zh", pagina: "audioguide-app" }); });
+});
+document.querySelectorAll("[data-web]").forEach(function (a) {
+  a.addEventListener("click", function () { posthog.capture("landing_try_web", { lingua: "zh", pagina: "audioguide-app" }); });
+});
+</script>
+</body>
+</html>

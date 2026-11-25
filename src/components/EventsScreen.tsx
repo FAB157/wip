@@ -1956,6 +1956,10 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
 
     if (dateA !== dateB) return dateA - dateB;
 
+    // (25/11/2026, committente: «privilegiando sempre gli affiliati che abbiamo provvigione») anche per data: a pari
+    // giorno chi paga la commissione viene prima.
+    const affA = FONTI_AFFILIATE.includes(a.source), affB = FONTI_AFFILIATE.includes(b.source);
+    if (affA !== affB) return affA ? -1 : 1;
     // Secondary sort: Source priority (Ticketmaster > Virgilio)
     const sourcePriority: Record<string, number> = { ticketmaster: 0, virgilio: 1 };
     return (sourcePriority[a.source] || 0) - (sourcePriority[b.source] || 0);
@@ -2644,7 +2648,10 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
                         )}
                         {t.link && (
                           <a
-                            href={getApiUrl(`/api/out?u=${encodeURIComponent(t.link)}&src=ticketmaster`)}
+                            // 21/11/2026 (collaudo notturno, Edimburgo): un evento Ticketmaster può vendere su un altro
+                            // sito (eticketing.co.uk): /api/out lo rifiuta (400, host fuori whitelist). Stessa regola di
+                            // outUrl: /api/out solo per gli host partner, altrimenti link diretto.
+                            href={linkUscitaEvento(t.link, 'ticketmaster')}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="flex items-center gap-1 text-[11px] font-black text-secondary hover:underline"

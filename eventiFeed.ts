@@ -965,3 +965,284 @@ export function validaEventi(grezzi: any[], testoDellaPagina: string, urlPagina:
   }
   return out;
 }
+
+// ── FEED E API STRUTTURATI (25/11/2026, committente: «aggiungiamo feed e api — cerca tutte le api possibili di tutto il
+// mondo»). Un lettore per formato, SENZA AI: titolo, date, luogo e link come li dichiara la fonte. Ogni fonte del registro
+// src/data/fontiEventi.ts con `formato` passa da qui; il risultato ha la stessa forma di eventiDaJsonLd e passa poi da
+// validaEventi (date future, città). `campi` (facoltativo, per opendatasoft/json) dice dove stanno titolo/date/luogo/link
+// nei record: percorsi a punti («fields.title»). Una fonte che non risponde dà [] (mai un errore che ferma i portali).
+export type FormatoFeed = 'rss' | 'ical' | 'tribe' | 'opendatasoft' | 'linkedevents' | 'json' | 'jsonld' | 'csv' | 'xml' | 'opencity' | 'html';
+export interface CampiFeed { elenco?: string; titolo?: string; dal?: string; al?: string; luogo?: string; url?: string; descrizione?: string; immagine?: string;
+  /** (25/11/2026) titoli da scartare (regex, maiuscole indifferenti): i calendari comunali CivicPlus mescolano riunioni e chiusure */
+  escludi?: string }
+
+const valoreA = (o: any, percorso?: string): any => {
+  if (!percorso) return undefined;
+  let v = o;
+  for (const k of percorso.split('.')) { if (v == null) return undefined; v = v[k]; }
+  return v;
+};
+const primoTesto = (v: any, lingue = ['it', 'en', 'fi', 'sv', 'fr', 'de', 'es']): string => {
+  if (v == null) return '';
+  if (typeof v === 'string' || typeof v === 'number') return decodeHtml(String(v)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  if (Array.isArray(v)) return primoTesto(v[0], lingue);
+  if (typeof v === 'object') { for (const l of lingue) if (v[l]) return primoTesto(v[l], lingue); const k = Object.keys(v)[0]; return k ? primoTesto(v[k], lingue) : ''; }
+  return '';
+};
+/** Una data qualunque → YYYY-MM-DD (ISO, «20261125T…» degli iCal, «25/11/2026», «2026-11-25 10:00:00»). */
+const dataIsoFeed = (v: any): string | null => {
+  const s = String(v ?? '').trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = s.match(/^(\d{4})(\d{2})(\d{2})(T|$)/); if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  // giorno/mese/anno; se il secondo numero supera 12 è all'americana (mese/giorno/anno, Boston «11/25/2026»)
+  m = s.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4}|\d{2})\b/); if (m) { const [g, me] = Number(m[2]) > 12 ? [m[2], m[1]] : [m[1], m[2]]; const an = m[3].length === 2 ? `20${m[3]}` : m[3]; return `${an}-${me.padStart(2, '0')}-${g.padStart(2, '0')}`; }
+  const t = Date.parse(s); return Number.isFinite(t) && /\d{4}/.test(s) ? new Date(t).toISOString().slice(0, 10) : null;
+};
+const oraDaFeed = (v: any): string => { const m = String(v ?? '').match(/[T ](\d{2}):?(\d{2})/); return m ? `${m[1]}:${m[2]}` : ''; };
+const eventoDaFeed = (p: { titolo: any; dal: string | null; al?: string | null; luogo?: any; url?: any; descrizione?: any; immagine?: any; orario?: string; tipo?: string }, base: string): MostraStrutturata | null => {
+  const titolo = primoTesto(p.titolo);
+  if (!titolo || titolo.length < 3 || (!p.dal && !p.al)) return null;
+  let url = primoTesto(p.url); try { url = url ? new URL(url, base).toString() : base; } catch { url = base; }
+  const img = primoTesto(p.immagine);
+  return { titolo, titolo_originale: titolo, sottotitolo: '', artista: '', dal: p.dal || null, al: p.al || null, descrizione: primoTesto(p.descrizione).slice(0, 220),
+    prezzo: '', url, immagine: /^https?:/i.test(img) ? img : '', luogo: primoTesto(p.luogo), tipo: p.tipo || 'Event', orario: p.orario || '' };
+};
+
+function daRss(xml: string, base: string, campi?: CampiFeed): MostraStrutturata[] {
+  const out: MostraStrutturata[] = [];
+  const tag = (b: string, ...nomi: string[]) => { for (const n of nomi) { const m = b.match(new RegExp(`<${n}(?:\\s[^>]*)?>([\\s\\S]*?)</${n}>`, 'i')); if (m) return m[1].replace(/^<!\[CDATA\[|\]\]>$/g, '').trim(); } return ''; };
+  for (const b of xml.split(/<item[\s>]|<entry[\s>]/i).slice(1)) {
+    const titolo = tag(b, 'title');
+    let link = tag(b, 'link'); if (!link) link = (b.match(/<link[^>]+href=["']([^"']+)/i) || [])[1] || '';
+    const descr = tag(b, 'description', 'summary', 'content:encoded', 'content');
+    // SOLO date dell'evento (campi dichiarati, o una data scritta nel testo): pubDate è la data dell'articolo, non dell'evento
+    // `campi.dal` = il tag con la data dell'evento quando la fonte lo mette altrove (Lussemburgo: pubDate È l'ora dell'evento)
+    const dichiarata = campi?.dal ? tag(b, campi.dal) : tag(b, 'ev:startdate', 'event:startDate', 'startdate', 'start_date', 'xCal:dtstart', 'trumba:LocalStartDate', 'dtstart');
+    const fine = tag(b, 'ev:enddate', 'event:endDate', 'enddate', 'end_date', 'xCal:dtend', 'trumba:LocalEndDate', 'dtend');
+    const nelTesto = (`${titolo} ${descr}`.match(/\b(\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./](?:\d{4}|\d{2}))\b/) || [])[1];
+    const e = eventoDaFeed({ titolo, dal: dataIsoFeed(dichiarata) || dataIsoFeed(nelTesto), al: dataIsoFeed(fine), url: link, descrizione: descr, luogo: tag(b, 'ev:location', 'location', 'xCal:location', 'trumba:Location'), orario: oraDaFeed(dichiarata) }, base);
+    if (e) out.push(e);
+  }
+  return out;
+}
+function daIcal(ics: string, base: string): MostraStrutturata[] {
+  const testo = ics.replace(/\r?\n[ \t]/g, ''); // righe ripiegate
+  const out: MostraStrutturata[] = [];
+  for (const b of testo.split(/BEGIN:VEVENT/i).slice(1)) {
+    const campo = (n: string) => ((b.match(new RegExp(`^${n}(?:;[^:\\r\\n]*)?:(.*)$`, 'im')) || [])[1] || '').replace(/\\,/g, ',').replace(/\\n/gi, ' ').replace(/\\;/g, ';').trim();
+    const e = eventoDaFeed({ titolo: campo('SUMMARY'), dal: dataIsoFeed(campo('DTSTART')), al: dataIsoFeed(campo('DTEND')), luogo: campo('LOCATION'), url: campo('URL'), descrizione: campo('DESCRIPTION'), orario: oraDaFeed(campo('DTSTART')) }, base);
+    if (e) out.push(e);
+  }
+  return out;
+}
+function daJson(dati: any, formato: FormatoFeed, campi: CampiFeed | undefined, base: string): MostraStrutturata[] {
+  const out: MostraStrutturata[] = [];
+  if (formato === 'tribe') {
+    for (const x of dati?.events || []) { const e = eventoDaFeed({ titolo: x.title, dal: dataIsoFeed(x.start_date), al: dataIsoFeed(x.end_date), luogo: [x.venue?.venue, x.venue?.city].filter(Boolean).join(', '), url: x.url, descrizione: x.description, immagine: x.image?.url, orario: oraDaFeed(x.start_date) }, base); if (e) out.push(e); }
+    return out;
+  }
+  if (formato === 'linkedevents') {
+    for (const x of dati?.data || []) { const e = eventoDaFeed({ titolo: x.name, dal: dataIsoFeed(x.start_time), al: dataIsoFeed(x.end_time), luogo: x.location_extra_info || x.location?.name, url: x.info_url || x['@id'], descrizione: x.short_description, immagine: x.images?.[0]?.url, orario: oraDaFeed(x.start_time) }, base); if (e) out.push(e); }
+    return out;
+  }
+  // opendatasoft (results[]) e json generico: dove stanno i campi lo dice `campi`, altrimenti si tentano i nomi comuni
+  const elenco = campi?.elenco ? valoreA(dati, campi.elenco) : (dati?.results || dati?.records || dati?.data || dati?.items || dati?.events || (Array.isArray(dati) ? dati : []));
+  for (const r0 of Array.isArray(elenco) ? elenco : []) {
+    const r = r0?.record?.fields || r0?.fields || r0;
+    const v = (k: keyof CampiFeed, ...alt: string[]) => { const p = campi?.[k]; if (p) return valoreA(r, p); for (const a of alt) if (r?.[a] != null) return r[a]; return undefined; };
+    const dalGrezzo = v('dal', 'date_start', 'start_date', 'startDate', 'start', 'data_inizio', 'dtstart', 'date');
+    const e = eventoDaFeed({ titolo: v('titolo', 'title', 'name', 'titolo', 'nome', 'summary'), dal: dataIsoFeed(dalGrezzo), al: dataIsoFeed(v('al', 'date_end', 'end_date', 'endDate', 'end', 'data_fine', 'dtend')),
+      luogo: [primoTesto(v('luogo', 'address_name', 'venue', 'location', 'luogo', 'place')), primoTesto(r?.address_city || r?.city)].filter(Boolean).join(', '),
+      url: v('url', 'url', 'link', 'access_link', 'website'), descrizione: v('descrizione', 'lead_text', 'description', 'descrizione'), immagine: v('immagine', 'cover_url', 'image', 'image_url'), orario: oraDaFeed(dalGrezzo) }, base);
+    if (e) out.push(e);
+  }
+  return out;
+}
+
+// ── CSV (25/11/2026, «tutti i lettori»): Montréal, Málaga, il CSV standard giapponese «イベント一覧». Prima riga = nomi
+// delle colonne; separatore indovinato (; , tab) sulla prima riga; virgolette alla RFC 4180. `campi` = nomi delle colonne.
+function righeCsv(testo: string): string[][] {
+  const t = testo.replace(/^﻿/, '');
+  const primaRiga = t.slice(0, t.indexOf('\n') > 0 ? t.indexOf('\n') : t.length);
+  const sep = [';', '\t', ','].map((s) => [s, primaRiga.split(s).length] as const).sort((a, b) => b[1] - a[1])[0][0];
+  const righe: string[][] = []; let riga: string[] = [], campo = '', virg = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (virg) { if (c === '"' && t[i + 1] === '"') { campo += '"'; i++; } else if (c === '"') virg = false; else campo += c; continue; }
+    if (c === '"') virg = true;
+    else if (c === sep) { riga.push(campo); campo = ''; }
+    else if (c === '\n') { riga.push(campo.replace(/\r$/, '')); righe.push(riga); riga = []; campo = ''; }
+    else campo += c;
+  }
+  if (campo || riga.length) { riga.push(campo); righe.push(riga); }
+  return righe.filter((r) => r.some((x) => x.trim()));
+}
+function daCsv(testo: string, campi: CampiFeed | undefined, base: string): MostraStrutturata[] {
+  const righe = righeCsv(testo);
+  if (righe.length < 2) return [];
+  const testa = righe[0].map((h) => h.trim().replace(/^"|"$/g, ''));
+  const col = (nome?: string, ...alt: string[]) => { for (const n of [nome, ...alt].filter(Boolean) as string[]) { const i = testa.findIndex((h) => h.toLowerCase() === n.toLowerCase()); if (i >= 0) return i; } return -1; };
+  const iT = col(campi?.titolo, 'title', 'titre', 'nombre', 'titolo', 'name', 'イベント名'), iD = col(campi?.dal, 'date_debut', 'start_date', 'f_inicio', 'data_inizio', '開始日'),
+    iA = col(campi?.al, 'date_fin', 'end_date', 'f_fin', 'data_fine', '終了日'), iL = col(campi?.luogo, 'emplacement', 'location', 'lugar', 'luogo', '場所名称'),
+    iU = col(campi?.url, 'url_fiche', 'url', 'direccion_web', 'link'), iDe = col(campi?.descrizione, 'description', 'descripcion', 'descrizione', '説明');
+  const out: MostraStrutturata[] = [];
+  for (const r of righe.slice(1)) {
+    const v = (i: number) => (i >= 0 ? r[i] || '' : '');
+    const e = eventoDaFeed({ titolo: v(iT), dal: dataIsoFeed(v(iD).replace(/\//g, '-').replace(/^(\d{4})-(\d)-/, '$1-0$2-').replace(/-(\d)$/, '-0$1')), al: dataIsoFeed(v(iA).replace(/\//g, '-').replace(/^(\d{4})-(\d)-/, '$1-0$2-').replace(/-(\d)$/, '-0$1')),
+      luogo: v(iL), url: v(iU), descrizione: v(iDe), orario: oraDaFeed(v(iD)) }, base);
+    if (e) out.push(e);
+  }
+  return out;
+}
+// ── XML generico (Hong Kong LCSD…): `campi.elenco` = tag del record, gli altri campi = tag figli.
+function daXml(xml: string, campi: CampiFeed | undefined, base: string): MostraStrutturata[] {
+  const tagRec = campi?.elenco || 'event';
+  const tag = (b: string, n?: string) => { if (!n) return ''; const m = b.match(new RegExp(`<${n}(?:\\s[^>]*)?>([\\s\\S]*?)</${n}>`, 'i')); return m ? m[1].replace(/^<!\[CDATA\[|\]\]>$/g, '').trim() : ''; };
+  const out: MostraStrutturata[] = [];
+  for (const b of xml.split(new RegExp(`<${tagRec}[\\s>]`, 'i')).slice(1)) {
+    const blocco = b.split(new RegExp(`</${tagRec}>`, 'i'))[0];
+    const dalG = tag(blocco, campi?.dal);
+    const e = eventoDaFeed({ titolo: tag(blocco, campi?.titolo || 'title'), dal: dataIsoFeed(dalG), al: dataIsoFeed(tag(blocco, campi?.al)), luogo: tag(blocco, campi?.luogo),
+      url: tag(blocco, campi?.url), descrizione: tag(blocco, campi?.descrizione), immagine: tag(blocco, campi?.immagine), orario: oraDaFeed(dalG) }, base);
+    if (e) out.push(e);
+  }
+  return out;
+}
+// ── OpenCity Italia (API «vivere-il-comune/eventi» dei siti comunali Designers Italia): le date sono una regola di
+// ripetizione iCal in `time_interval` («FREQ=DAILY;COUNT=1;DTSTART=20261220T173000;DTEND=20261220T190000;INTERVAL=1»):
+// inizio = DTSTART; fine = UNTIL, altrimenti l'ultima ripetizione stimata da COUNT×INTERVAL, altrimenti DTEND.
+function intervalloOpenCity(t: string): { dal: string | null; al: string | null; ora: string } {
+  const p = Object.fromEntries(String(t || '').split(';').map((x) => x.split('=')).filter((x) => x.length === 2).map(([k, v]) => [k.toUpperCase(), v]));
+  const dal = dataIsoFeed(p.DTSTART);
+  let al = dataIsoFeed(p.UNTIL) || null;
+  if (!al && dal && Number(p.COUNT) > 1) {
+    const passo = (Number(p.INTERVAL) || 1) * ({ DAILY: 1, WEEKLY: 7, MONTHLY: 30, YEARLY: 365 } as any)[String(p.FREQ || 'DAILY').toUpperCase()] || 1;
+    al = new Date(Date.parse(dal) + (Number(p.COUNT) - 1) * passo * 86400_000).toISOString().slice(0, 10);
+  }
+  if (!al) al = dataIsoFeed(p.DTEND);
+  return { dal, al, ora: oraDaFeed(p.DTSTART) };
+}
+function daOpenCity(dati: any, base: string): MostraStrutturata[] {
+  const out: MostraStrutturata[] = [];
+  for (const x of dati?.items || dati?.data || []) {
+    const tempi = Array.isArray(x.time_interval) ? x.time_interval : [x.time_interval];
+    const iv = tempi.map(intervalloOpenCity).filter((y) => y.dal || y.al);
+    if (!iv.length) continue;
+    const dal = iv.map((y) => y.dal).filter(Boolean).sort()[0] || null, al = iv.map((y) => y.al || y.dal).filter(Boolean).sort().at(-1) || null;
+    const luogo = Array.isArray(x.address) ? x.address[0]?.name : (x.luogo?.[0]?.name || x.where?.[0]?.name || x.event_place || '');
+    // l'API non dà la pagina pubblica dell'evento: si porta l'utente alla pagina «Eventi» del comune (uguale su ogni OpenCity)
+    let pagina = base; try { pagina = `${new URL(String(x.uri || base)).origin}/Vivere-il-comune/Eventi`; } catch { /* base */ }
+    const e = eventoDaFeed({ titolo: x.event_title, dal, al, luogo, url: pagina, descrizione: x.event_abstract || x.description, immagine: x.image?.[0]?.url || x.image, orario: iv[0].ora }, base);
+    if (e) out.push(e);
+  }
+  return out;
+}
+
+// ── ESTRATTORE HTML SENZA AI (25/11/2026, committente: «possiamo avere un estrattore da html?»). Le pagine eventi dei
+// comuni e dei portali sono elenchi di SCHEDE ripetute (article, li, card) con titolo (spesso un link) e una data scritta
+// («dal 3 al 10 dicembre 2026», «3 dicembre», «03/12/2026», «Dec 3, 2026»). Si spezza la pagina nelle schede, in ognuna si
+// cercano le date e il titolo; si tengono le schede con almeno una data. Costo zero; meno fine dell'AI sulle pagine strane.
+const MESI: Record<string, number> = {};
+[
+  ['gennaio', 'january', 'janvier', 'enero', 'januar', 'janeiro', 'gen', 'jan', 'janv', 'ene', 'jän'],
+  ['febbraio', 'february', 'fevrier', 'février', 'febrero', 'februar', 'fevereiro', 'feb', 'fev', 'fév', 'febr'],
+  ['marzo', 'march', 'mars', 'märz', 'marz', 'marco', 'março', 'mar', 'mär'],
+  ['aprile', 'april', 'avril', 'abril', 'apr', 'avr', 'abr'],
+  ['maggio', 'may', 'mai', 'mayo', 'maio', 'mag'],
+  ['giugno', 'june', 'juin', 'junio', 'juni', 'junho', 'giu', 'jun'],
+  ['luglio', 'july', 'juillet', 'julio', 'juli', 'julho', 'lug', 'jul', 'juil'],
+  ['agosto', 'august', 'aout', 'août', 'ago', 'aug'],
+  ['settembre', 'september', 'septembre', 'septiembre', 'setembro', 'set', 'sep', 'sept'],
+  ['ottobre', 'october', 'octobre', 'octubre', 'oktober', 'outubro', 'ott', 'oct', 'okt', 'out'],
+  ['novembre', 'november', 'noviembre', 'novembro', 'nov'],
+  ['dicembre', 'december', 'decembre', 'décembre', 'diciembre', 'dezember', 'dezembro', 'dic', 'dec', 'déc', 'dez'],
+].forEach((nomi, i) => nomi.forEach((n) => { MESI[n] = i + 1; }));
+const RE_MESE = Object.keys(MESI).sort((a, b) => b.length - a.length).map((m) => m.replace('.', '\\.')).join('|');
+// «3 dicembre 2026», «3-10 dicembre», «Dec 3, 2026», «03/12/2026», «2026-12-03»
+const RE_DATE_TESTO = new RegExp(`(\\d{4})-(\\d{2})-(\\d{2})|\\b(\\d{1,2})[./](\\d{1,2})[./](\\d{2,4})\\b|\\b(\\d{1,2})(?:\\s*(?:-|–|al|au|bis|to|a)\\s*\\d{1,2})?\\s*(?:°|º|er)?\\s+(${RE_MESE})\\.?\\s*(\\d{4})?\\b|\\b(${RE_MESE})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s*(\\d{4})?\\b`, 'gi');
+function dateNelTesto(t: string, oggi: Date): string[] {
+  const out: string[] = [];
+  const anno = (a: string | undefined, mese: number) => { if (a) return Number(a.length === 2 ? `20${a}` : a); const y = oggi.getFullYear(); return mese < oggi.getMonth() + 1 - 1 ? y + 1 : y; };
+  for (const m of t.matchAll(RE_DATE_TESTO)) {
+    let g: number, me: number, a: number;
+    if (m[1]) { a = +m[1]; me = +m[2]; g = +m[3]; }
+    else if (m[4]) { const x = +m[4], y = +m[5]; [g, me] = y > 12 ? [y, x] : [x, y]; a = anno(m[6], me); }
+    else if (m[7]) { g = +m[7]; me = MESI[m[8].toLowerCase()]; a = anno(m[9], me); }
+    else { me = MESI[m[10].toLowerCase()]; g = +m[11]; a = anno(m[12], me); }
+    if (!me || me > 12 || !g || g > 31 || a < 2000 || a > 2100) continue;
+    out.push(`${a}-${String(me).padStart(2, '0')}-${String(g).padStart(2, '0')}`);
+  }
+  return out;
+}
+const pulisciHtml = (s: string) => decodeHtml(s.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+const TITOLO_VUOTO = /^(leggi( tutto| di più)?|scopri( di più)?|vai|dettagli|more|read more|en savoir plus|más información|mehr|info|prenota|biglietti|tickets?|\d+)$/i;
+// filtri di navigazione per data («Oggi mercoledì 25 novembre», «Weekend 28 novembre - 29 novembre», «This week»): non sono eventi
+const TITOLO_NAVIGAZIONE = /^(oggi|domani|dopodomani|weekend|fine settimana|questa settimana|prossima settimana|questo mese|prossimo mese|today|tomorrow|this (week|weekend|month)|next (week|month)|aujourd'hui|demain|ce week-end|hoy|mañana|este fin de semana|heute|morgen|wochenende)\b/i;
+function daHtml(html: string, base: string): MostraStrutturata[] {
+  const pulito = html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<(nav|header|footer|form)[\s\S]*?<\/\1>/gi, ' ');
+  // schede: article, li, e i div/section con «card|event|evento|item|teaser|agenda|appuntamento» nella classe
+  let schede = [...pulito.matchAll(/<(article|li)\b[^>]*>([\s\S]*?)<\/\1>|<(div|section)\b[^>]*class="[^"]*(?:card|event|evento|eventi|item|teaser|agenda|appuntament|listing|result)[^"]*"[^>]*>([\s\S]{40,3000}?)<\/\3>/gi)]
+    .map((m) => m[2] || m[4] || '').filter((s) => s.length > 30 && s.length < 6000);
+  // secondo metodo (pagine senza schede riconoscibili, es. Comune di Venezia): la pagina spezzata sui TITOLI h2–h4,
+  // ogni pezzo = il titolo e quello che segue fino al titolo dopo (al più 1.500 caratteri)
+  const perTitoli = pulito.split(/(?=<h[2-4][\s>])/i).slice(1).map((s) => s.slice(0, 1500));
+  const conData = (arr: string[]) => arr.filter((s) => dateNelTesto(pulisciHtml(s), new Date()).length).length;
+  if (conData(perTitoli) > conData(schede)) schede = perTitoli;
+  const oggi = new Date();
+  const visti = new Set<string>();
+  const out: MostraStrutturata[] = [];
+  for (const s of schede) {
+    const testo = pulisciHtml(s);
+    const date = dateNelTesto(testo, oggi);
+    if (!date.length) continue;
+    // titolo: un titolo h1–h5, se no il testo del link più lungo, se no l'inizio del testo
+    const h = (s.match(/<h[1-5][^>]*>([\s\S]*?)<\/h[1-5]>/i) || [])[1];
+    // i link a pagine di LUOGO, tag, categoria, autore non sono il titolo dell'evento (MilanoToday: «Eataly Milano Smeraldo»)
+    const link = [...s.matchAll(/<a\b[^>]*href="([^"#][^"]*)"[^>]*>([\s\S]*?)<\/a>/gi)].map((m) => ({ href: m[1], t: pulisciHtml(m[2]) }))
+      .filter((x) => x.t.length >= 6 && !TITOLO_VUOTO.test(x.t) && !/\/(location|luogo|luoghi|venue|venues|lieu|tag|tags|categor[a-z]*|category|autore|author|organizzatore|organizer)\//i.test(x.href))
+      .sort((a, b) => b.t.length - a.t.length)[0];
+    let titolo = h ? pulisciHtml(h) : link?.t || '';
+    if (!titolo || TITOLO_VUOTO.test(titolo) || TITOLO_NAVIGAZIONE.test(titolo) || titolo.length < 6) continue;
+    titolo = titolo.slice(0, 160);
+    const k = titolo.toLowerCase(); if (visti.has(k)) continue; visti.add(k);
+    const ordinate = [...new Set(date)].sort();
+    let url = link?.href || (s.match(/<a\b[^>]*href="([^"#][^"]*)"/i) || [])[1] || base;
+    try { url = new URL(url, base).toString(); } catch { url = base; }
+    const descr = testo.replace(titolo, '').slice(0, 220);
+    out.push({ titolo, titolo_originale: titolo, sottotitolo: '', artista: '', dal: ordinate[0], al: ordinate.length > 1 ? ordinate[ordinate.length - 1] : null, descrizione: descr, prezzo: '', url,
+      immagine: '', luogo: '', tipo: 'Event', orario: (testo.match(/\b(?:ore|h|alle)\s*(\d{1,2})[:.](\d{2})/i) || []).slice(1, 3).join(':') });
+  }
+  return out;
+}
+
+/** Gli eventi di una fonte strutturata, dal testo già scaricato (XML, ICS, JSON, CSV o HTML con JSON-LD). */
+export function eventiDaFeed(testo: string, formato: FormatoFeed, base: string, campi?: CampiFeed): MostraStrutturata[] {
+  const tutti = eventiDaFeedGrezzi(testo, formato, base, campi);
+  if (!campi?.escludi) return tutti;
+  let re: RegExp; try { re = new RegExp(campi.escludi, 'i'); } catch { return tutti; }
+  return tutti.filter((e) => !re.test(e.titolo));
+}
+function eventiDaFeedGrezzi(testo: string, formato: FormatoFeed, base: string, campi?: CampiFeed): MostraStrutturata[] {
+  try {
+    if (formato === 'rss') return daRss(testo, base, campi);
+    if (formato === 'ical') return daIcal(testo, base);
+    if (formato === 'jsonld') return eventiDaJsonLd(testo, base);
+    if (formato === 'csv') return daCsv(testo, campi, base);
+    if (formato === 'xml') return daXml(testo, campi, base);
+    if (formato === 'opencity') return daOpenCity(JSON.parse(testo), base);
+    if (formato === 'html') return daHtml(testo, base);
+    return daJson(JSON.parse(testo), formato, campi, base);
+  } catch { return []; }
+}
+/** (25/11/2026) Quante date FUTURE ci sono nel testo visibile di una pagina (per gli scopritori: pagina da far leggere all'AI). */
+export function dateFutureNelTesto(html: string): number {
+  const oggi = new Date(), iso = oggi.toISOString().slice(0, 10);
+  const t = pulisciHtml(String(html || '').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' '));
+  return dateNelTesto(t, oggi).filter((d) => d >= iso).length;
+}
+/** (25/11/2026) L'estrattore HTML senza AI, usabile anche come primo tentativo sulle pagine dei portali. */
+export function eventiDaHtml(html: string, base: string): MostraStrutturata[] { try { return daHtml(html, base); } catch { return []; } }
+/** Il testo su cui validaEventi cerca titolo e città: per un feed sono le voci stesse (titolo, luogo, descrizione). */
+export function testoDelFeed(ev: MostraStrutturata[]): string {
+  return ev.map((e) => `${e.titolo} — ${e.luogo} — ${e.descrizione}`).join('\n');
+}

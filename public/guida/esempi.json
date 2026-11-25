@@ -1,0 +1,36 @@
+{
+  "_nota": "Esempi VERI presi il 16/11/2026 dall'archivio «I miei download» di un account reale: file generati dall'app esattamente come li riceve un utente. Una grande città e un centro più piccolo per ogni funzione.",
+  "itinerari": [
+    { "tipo": "img", "file": "bruxelles-itinerario.jpg", "titolo": "Bruxelles a piedi, 1 giorno: la schermata dell'itinerario", "nota": "Grande città · 8 tappe, ognuna «verificata», con tempi, km a piedi, CO₂ e taxi fra una tappa e l'altra." },
+    { "tipo": "pdf", "file": "bruxelles-itinerario.pdf", "titolo": "PDF dell'itinerario · Bruxelles", "nota": "Grande città · 4 pagine, il file che scarichi con il tasto stampa." },
+    { "tipo": "pdf", "file": "rimini-itinerario.pdf", "titolo": "PDF dell'itinerario · Rimini", "nota": "Centro più piccolo · 5 pagine: Ponte di Tiberio, Tempio Malatestiano, Domus del Chirurgo, piadina da Rinaldini…" }
+  ],
+  "podcast-e-guida-autore": [
+    { "tipo": "audio", "file": "bruxelles-podcast.mp3", "titolo": "Podcast del giorno · Bruxelles", "nota": "Grande città · nell'app lo legge la voce del tuo telefono; qui una voce italiana di Windows.", "testo": "bruxelles-podcast.txt" },
+    { "tipo": "audio", "file": "rimini-podcast.mp3", "titolo": "Podcast del giorno · Rimini", "nota": "Centro più piccolo · letto dalla voce del telefono.", "testo": "rimini-podcast.txt" },
+    { "tipo": "img", "file": "bruxelles-guida-premium.png", "titolo": "La Guida d'Autore di Bruxelles nell'app", "nota": "Grande città · copertina, introduzione alla città e audio-libro della guida." },
+    { "tipo": "pdf", "file": "bruxelles-guida-premium.pdf", "titolo": "Guida d'Autore · Bruxelles (PDF)", "nota": "Grande città · 9 pagine con foto dei luoghi." },
+    { "tipo": "img", "file": "rimini-guida-premium.png", "titolo": "La Guida d'Autore di Rimini nell'app", "nota": "Centro più piccolo." },
+    { "tipo": "pdf", "file": "rimini-guida-premium.pdf", "titolo": "Guida d'Autore · Rimini (PDF)", "nota": "Centro più piccolo · 11 pagine con foto dei luoghi." }
+  ],
+  "audioguide": [
+    { "tipo": "audio", "file": "bruxelles-grand-place-nicky.mp3", "titolo": "Grand-Place, Bruxelles · voce di Nicky", "nota": "Grande città · l'audioguida vera, come parte quando arrivi in piazza (circa 2 minuti).", "testo": "bruxelles-grand-place-nicky.txt" },
+    { "tipo": "audio", "file": "rimini-domus-del-chirurgo-nicky.mp3", "titolo": "Domus del Chirurgo, Rimini · voce di Nicky", "nota": "Centro più piccolo · scoperta nel 1989, il kit del medico Eutyches (circa 3 minuti).", "testo": "rimini-domus-del-chirurgo-nicky.txt" }
+  ],
+  "audioguida-libera": [
+    { "tipo": "audio", "file": "bruxelles-grand-place-nicky.mp3", "titolo": "Grand-Place, Bruxelles · voce di Nicky", "nota": "Grande città · è ciò che senti quando l'audioguida parte da sola davanti al luogo." },
+    { "tipo": "audio", "file": "rimini-domus-del-chirurgo-nicky.mp3", "titolo": "Domus del Chirurgo, Rimini · voce di Nicky", "nota": "Centro più piccolo." }
+  ],
+  "visita-museo": [
+    { "tipo": "audio", "file": "museo-duomo-madonnina-nicky.mp3", "titolo": "«Ascolta l'opera» · la Madonnina, Duomo di Milano", "nota": "Grande città · il racconto vero di un'opera con la voce di Nicky, come lo senti in visita (circa 3 minuti): misure, tecnica, cosa guardare, la storia.", "testo": "museo-duomo-madonnina-nicky.txt" },
+    { "tipo": "audio", "file": "museo-luni-anfiteatro-nicky.mp3", "titolo": "«Ascolta l'opera» · l'Anfiteatro, Museo archeologico di Luni", "nota": "Centro più piccolo · voce di Nicky (circa 2 minuti), finisce con un dettaglio da cercare con lo sguardo.", "testo": "museo-luni-anfiteatro-nicky.txt" },
+    { "tipo": "img", "file": "duomo-visita-museo.png", "titolo": "La visita del Duomo di Milano nell'app", "nota": "Grande città · biglietti, visite guidate e orari liberi, poi «Inquadra la prossima opera»." },
+    { "tipo": "pdf", "file": "duomo-milano-guida-museo.pdf", "titolo": "Guida museo · Duomo di Milano (PDF)", "nota": "Grande città · 21 pagine, opera per opera con le foto." },
+    { "tipo": "img", "file": "luni-visita-museo.png", "titolo": "La visita del Museo archeologico di Luni nell'app", "nota": "Centro più piccolo · orari e biglietti dal sito ufficiale, poi il racconto del museo." },
+    { "tipo": "pdf", "file": "luni-guida-museo.pdf", "titolo": "Guida museo · Luni (PDF)", "nota": "Centro più piccolo · 10 pagine." }
+  ],
+  "musei-cultura": [
+    { "tipo": "pdf", "file": "duomo-milano-guida-museo.pdf", "titolo": "Guida museo · Duomo di Milano (PDF)", "nota": "Grande città · 21 pagine." },
+    { "tipo": "pdf", "file": "luni-guida-museo.pdf", "titolo": "Guida museo · Luni (PDF)", "nota": "Centro più piccolo · 10 pagine." }
+  ]
+}

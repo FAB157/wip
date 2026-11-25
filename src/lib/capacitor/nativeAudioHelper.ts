@@ -74,6 +74,20 @@ export async function audioPermanenteEsiste(path: string): Promise<boolean> {
 }
 
 /**
+ * L'URI DEL FILE PERMANENTE, RICALCOLATO ADESSO (18/11/2026, iPhone, Museo di Luni: ogni play diceva solo «in questa
+ * sala restano…»). L'URI assoluto salvato nell'archivio contiene l'UUID del contenitore dell'app, che iOS CAMBIA a
+ * ogni aggiornamento/reinstallazione: il file c'è ancora, l'URI vecchio no → il player fallisce. Si salva il percorso
+ * RELATIVO e l'URI si chiede al momento. '' se il file non c'è (o sul web): il chiamante passa alla voce dal cloud.
+ */
+export async function uriAudioPermanente(path: string): Promise<string> {
+  if (!Capacitor.isNativePlatform() || !path) return '';
+  try {
+    await Filesystem.stat({ path, directory: Directory.Data });
+    return (await Filesystem.getUri({ path, directory: Directory.Data })).uri;
+  } catch { return ''; }
+}
+
+/**
  * Prende un Blob audio, lo scrive nella cache nativa del dispositivo
  * e ritorna il percorso nativo (es. file:///) compatibile con ExoPlayer.
  */

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>问题与解决方案：为什么不播放、为什么我看不到…… | WIP Guide</title>
+<meta name="description" content="语音导览无法播放、GPS 定位不准、导航静音或找不到某个地点时最常见的原因及解决方法。">
+<link rel="canonical" href="https://www.wip.guide/guida/zh/problemi-e-soluzioni"><link rel="alternate" hreflang="it" href="https://www.wip.guide/guida/problemi-e-soluzioni"><link rel="alternate" hreflang="en" href="https://www.wip.guide/guida/en/problemi-e-soluzioni"><link rel="alternate" hreflang="fr" href="https://www.wip.guide/guida/fr/problemi-e-soluzioni"><link rel="alternate" hreflang="es" href="https://www.wip.guide/guida/es/problemi-e-soluzioni"><link rel="alternate" hreflang="de" href="https://www.wip.guide/guida/de/problemi-e-soluzioni"><link rel="alternate" hreflang="ru" href="https://www.wip.guide/guida/ru/problemi-e-soluzioni"><link rel="alternate" hreflang="zh-Hans" href="https://www.wip.guide/guida/zh/problemi-e-soluzioni"><link rel="alternate" hreflang="x-default" href="https://www.wip.guide/guida/problemi-e-soluzioni">
+<meta property="og:type" content="website"><meta property="og:title" content="问题与解决方案：为什么不播放、为什么我看不到……"><meta property="og:description" content="语音导览无法播放、GPS 定位不准、导航静音或找不到某个地点时最常见的原因及解决方法。"><meta property="og:url" content="https://www.wip.guide/guida/zh/problemi-e-soluzioni"><meta property="og:site_name" content="WIP Guide"><meta property="og:image" content="https://www.wip.guide/scopri/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/icon.png">
+<style>
+:root{--bg:#fff;--fg:#14213d;--mut:#4b5568;--brand:#1e3a8a;--brand2:#2f56c9;--card:#f4f6fb;--line:#d9dfec;--ok:#0f6b3a;--warn:#8a4b00;--warnbg:#fff4e0;--costbg:#e8f0ff;--on:#fff}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0e1424;--fg:#e8ecf7;--mut:#a9b3c9;--brand:#8fb0ff;--brand2:#b5ccff;--card:#172038;--line:#2a3555;--ok:#6fdc9c;--warn:#ffcf8a;--warnbg:#2a2014;--costbg:#16264a;--on:#0e1424}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--brand)}a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--brand2);outline-offset:2px}
+header.top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.bar{max-width:1040px;margin:0 auto;padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.logo{font-weight:800;color:var(--brand);text-decoration:none;font-size:1.15rem}
+nav.menu{display:flex;gap:4px 14px;flex-wrap:wrap;font-size:.92rem}nav.menu a{text-decoration:none;color:var(--fg);padding:6px 2px}nav.menu a:hover{color:var(--brand)}
+.apri{margin-left:auto}
+main{max-width:1040px;margin:0 auto;padding:20px 16px 56px}
+h1{font-size:clamp(1.7rem,4.5vw,2.6rem);line-height:1.15;margin:.2em 0 .4em;color:var(--brand)}
+h2{font-size:1.45rem;margin:2em 0 .5em;line-height:1.25}h3{font-size:1.1rem}
+.lead{font-size:1.2rem;color:var(--mut);max-width:62ch}
+.crumb{font-size:.9rem;color:var(--mut)}.crumb a{color:var(--mut)}
+.btn{display:inline-block;background:var(--brand);color:var(--on);padding:11px 18px;border-radius:10px;text-decoration:none;font-weight:700;margin:4px 6px 4px 0}
+.btn.sec{background:transparent;color:var(--brand);border:2px solid var(--brand)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:22px 0;padding:16px;background:var(--card);border-radius:14px}
+.stat{display:flex;flex-direction:column}.num{font-size:1.9rem;font-weight:800;color:var(--brand);font-variant-numeric:tabular-nums}.et{font-size:.88rem;color:var(--mut)}
+.nota-stat{grid-column:1/-1;font-size:.82rem;color:var(--mut);margin:4px 0 0}
+ol.passi{counter-reset:p;list-style:none;padding:0}ol.passi li{counter-increment:p;position:relative;padding:10px 12px 10px 52px;margin:8px 0;background:var(--card);border-radius:10px}
+ol.passi li::before{content:counter(p);position:absolute;left:12px;top:9px;width:30px;height:30px;border-radius:50%;background:var(--brand);color:var(--on);display:grid;place-items:center;font-weight:800}
+.nota,.costo,.manca{border-radius:10px;padding:12px 14px;margin:14px 0}.nota{background:var(--warnbg);color:var(--warn)}.costo{background:var(--costbg)}
+.manca{border:2px dashed var(--line)}.manca h2{margin-top:0;font-size:1.1rem}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:420px}th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}th{background:var(--card)}
+figure{margin:18px 0}figure img,figure video{max-width:100%;height:auto;border-radius:12px;border:1px solid var(--line)}.esempi{margin:28px 0}.es-griglia{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}.es{border:1px solid var(--linea,#ddd);border-radius:12px;padding:12px;margin:0}.es img{max-height:360px;width:100%;object-fit:contain}.es audio{width:100%;margin-top:8px}.es-nota{font-size:.9em;margin:6px 0 0;opacity:.85}.es-pdf .btn{display:inline-block;margin-bottom:6px}
+figure img{max-height:640px;width:auto;display:block}figcaption{font-size:.85rem;color:var(--mut)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;margin:18px 0}
+.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;text-decoration:none;color:var(--fg)}
+.card:hover{border-color:var(--brand)}.card .em{font-size:1.8rem}.card h3{margin:.3em 0}.card p{margin:.2em 0;color:var(--mut);font-size:.95rem}.card .cn{font-weight:700;color:var(--brand);font-size:.95rem}
+.ricerca{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.ricerca input{flex:1;min-width:220px;padding:12px 14px;border-radius:10px;border:2px solid var(--line);font:inherit;background:var(--bg);color:var(--fg)}
+.ris{list-style:none;padding:0}.ris li{margin:6px 0}.ris a{display:block;padding:10px 12px;background:var(--card);border-radius:10px;text-decoration:none}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:999px;padding:8px 14px;font:inherit;cursor:pointer}.chip:hover{background:var(--brand);color:var(--on)}
+details{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:8px 0}summary{cursor:pointer;font-weight:700}
+.letto{display:flex;align-items:center;gap:8px;margin:28px 0}.progress{font-size:.9rem;color:var(--mut)}
+.fonte{opacity:.8}.agg{font-size:.85rem;color:var(--mut);margin-top:32px}
+footer{border-top:1px solid var(--line);padding:22px 16px;text-align:center;font-size:.9rem;color:var(--mut)}
+.lingue{max-width:1040px;margin:0 auto;padding:0 16px 8px;font-size:.85rem;color:var(--mut)}.lingue a{color:var(--mut)}.lingue strong{color:var(--fg)}footer .lingue{padding-top:10px}
+@media(max-width:600px){body{font-size:16px}nav.menu{display:none}.apri{margin-left:auto}}
+</style>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"WIP","item":"https://www.wip.guide/"},{"@type":"ListItem","position":2,"name":"指南","item":"https://www.wip.guide/guida/zh/"},{"@type":"ListItem","position":3,"name":"问题与解决方案","item":"https://www.wip.guide/guida/zh/problemi-e-soluzioni"}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"为什么城市里的 GPS 总是很不准？","acceptedAnswer":{"@type":"Answer","text":"在高楼大厦之间，定位精度会变差：请在户外的开阔处等待几秒钟。"}}]}</script>
+</head><body>
+<a href="#main" style="position:absolute;left:-999px" onfocus="this.style.left='8px'">跳到正文</a>
+<header class="top"><div class="bar"><a class="logo" href="/guida/zh/">WIP · 指南</a><nav class="menu" aria-label="指南"><a href="/guida/zh/">指南</a><a href="/guida/zh/categorie">类别</a><a href="/guida/zh/audioguide">语音导览</a><a href="/guida/zh/itinerari">行程</a><a href="/guida/zh/tutorial">教程</a><a href="/guida/zh/domande-frequenti">常见问题</a></nav><a class="btn apri" href="https://wip.guide/">打开 WIP</a></div><nav class="lingue" aria-label="语言"><a lang="it" hreflang="it" href="/guida/problemi-e-soluzioni">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/problemi-e-soluzioni">English</a> · <a lang="fr" hreflang="fr" href="/guida/fr/problemi-e-soluzioni">Français</a> · <a lang="es" hreflang="es" href="/guida/es/problemi-e-soluzioni">Español</a> · <a lang="de" hreflang="de" href="/guida/de/problemi-e-soluzioni">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/problemi-e-soluzioni">Русский</a> · <strong lang="zh">中文</strong></nav></header>
+<main id="main">
+<p class="crumb"><a href="/">WIP</a> › <a href="/guida/zh/">指南</a> › 问题与解决方案</p>
+<h1>问题与解决方案：为什么不播放、为什么我看不到……</h1>
+<p class="lead">当某些功能无法正常使用时，通常是由以下原因之一引起的。</p>
+<p class="agg">译自意大利语。截图、视频和示例显示的是意大利语界面。</p>
+<h2>语音导览无法播放</h2>
+<ul><li>该分类在设置中被<strong>关闭</strong>（个人资料 › 设置 › 语音导览分类）。不过“宝藏”类地点无论如何都会播放。</li><li><strong>GPS 精度</strong>低于 50 米：App 不会触发任何播放。请走到户外。</li><li>你在<strong>过去 24 小时内已经听过</strong>该地点（可在设置中点击“清空历史记录（Azzera storico）”）。</li><li>你正处于<strong>网页端</strong>，但页面已关闭或屏幕已熄灭：必须使用 App。</li><li>你既没有积分也没有 Day Pass 来收听完整导览：不过精选预告仍会播放。</li><li><strong>半自动模式</strong>：请手动点击“收听”。</li><li>该地点属于<strong>没有语音导览</strong>的分类（场所、实用设施、家庭、主题、Community、文化遗产）。</li></ul><h2>导航器或游览静音了</h2>
+<ul><li>多站游览导航需要 <strong>Day Pass</strong>。</li><li>WipNav <strong>仅限步行</strong>；驾车请使用 Google Maps。</li><li>在屏幕关闭的情况下，需要 <strong>app</strong> 并开启“始终”定位权限。</li><li>如果在屏幕关闭时走错路，重新打开 app 即可重新规划路线。</li></ul><h2>找不到某个地点</h2>
+<ul><li>搜索功能针对的是<strong>城市</strong>，而非单个名称：请搜索城市并开启正确的标签。</li><li>有些内容只有在放大<strong>地图</strong>时才会显示（“放大后可见”）。</li><li>栏目中缺少某个分类：请通过 <strong>＋ 更多</strong> 添加。</li><li>发现错误？在卡片中点击“发现错误？请反馈”。</li></ul><h2>离线</h2>
+<p>离线区域包和 Day Pass 在 <strong>app</strong> 中可用。请先在 Wi-Fi 环境下下载你需要的行程和区域（个人资料 › 我的下载）。</p><h2>常见问题</h2><details><summary>为什么城市里的 GPS 总是很不准？</summary><p>在高楼大厦之间，定位精度会变差：请在户外的开阔处等待几秒钟。</p></details><h2>继续阅读</h2><div class="grid"><a class="card" href="/guida/zh/audioguide"><h3>语音导览</h3><p>WIP 语音导览的工作原理：自动播放的提示、预告片和完整导览，Nicky 与 Dante，7 种语言，播放器控制，离线使用，Day Pass 以及费用说明。…</p></a><a class="card" href="/guida/zh/navigatore"><h3>导航器</h3><p>如何使用 WIP 进行导航：WipNav 步行语音导航、带语音导览的行程、定制路线并在 Google Maps 或 Apple Mappe 中打开。屏幕熄灭时的运行情况。…</p></a><a class="card" href="/guida/zh/web-iphone-android"><h3>网页、iPhone 和 Android</h3><p>在浏览器、iPhone 或 Android 使用 WIP 有何不同：关闭屏幕、离线、购买、打开地图、链接到商店。…</p></a></div><div class="letto"><input type="checkbox" id="letto" data-s="problemi-e-soluzioni"><label for="letto">我已读完本指南（仅保存在你的设备上）</label></div><p><a class="btn" href="https://wip.guide/">打开 WIP</a> <a class="btn sec" href="/guida/zh/categorie">全部类别</a></p>
+
+<p class="agg">内容已于 2026 年 11 月 16 日与应用代码核对。如有与您所见不符之处，请写信至 <a href="mailto:support@wip.guide">support@wip.guide</a>.</p>
+</main>
+<footer><a href="/guida/zh/">指南</a> · <a href="/privacy">隐私</a> · <a href="/support">支持</a> · <a href="https://wip.guide/">wip.guide</a><br><nav class="lingue" aria-label="语言"><a lang="it" hreflang="it" href="/guida/problemi-e-soluzioni">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/problemi-e-soluzioni">English</a> · <a lang="fr" hreflang="fr" href="/guida/fr/problemi-e-soluzioni">Français</a> · <a lang="es" hreflang="es" href="/guida/es/problemi-e-soluzioni">Español</a> · <a lang="de" hreflang="de" href="/guida/de/problemi-e-soluzioni">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/problemi-e-soluzioni">Русский</a> · <strong lang="zh">中文</strong></nav></footer>
+<script>(function(){
+function ready(f){document.readyState!='loading'?f():document.addEventListener('DOMContentLoaded',f)}
+ready(function(){
+ var red=matchMedia('(prefers-reduced-motion: reduce)').matches;
+ var els=document.querySelectorAll('.num[data-n]');
+ if('IntersectionObserver' in window&&!red&&els.length){var io=new IntersectionObserver(function(es){es.forEach(function(e){if(!e.isIntersecting)return;io.unobserve(e.target);var el=e.target,n=+el.dataset.n,pre=el.dataset.c||'',t0=null;function st(t){t0=t0||t;var p=Math.min((t-t0)/900,1);el.textContent=pre+Math.round(n*p).toLocaleString('zh-CN');if(p<1)requestAnimationFrame(st)}requestAnimationFrame(st)})},{threshold:.4});els.forEach(function(e){io.observe(e)})}
+ var inp=document.getElementById('q'),out=document.getElementById('ris');
+ if(inp&&out){var idx=null;fetch('/guida/zh/indice.json').then(function(r){return r.json()}).then(function(j){idx=j}).catch(function(){});
+  var norm=function(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\p{L}\p{N} ]+/gu,' ')};
+  var cerca=function(q){q=norm(q).trim();if(!q||!idx){out.innerHTML='';return}var SW='  ';var w=/[\u4e00-\u9fff]/.test(q)?Array.from(q.replace(/\s+/g,'')).reduce(function(a,c,i,s){if(i<s.length-1)a.push(c+s[i+1]);return a},[]):q.split(/\s+/).filter(function(x){return x.length>2&&SW.indexOf(' '+x+' ')<0});
+   var r=idx.map(function(d){var ks=norm(d.k),h=norm(d.t+' '+(d.r||'')+' '+(d.f||'')),s=0;w.forEach(function(x){if(ks.indexOf(x)>-1)s+=5;else if(h.indexOf(x)>-1)s+=1});for(var i=0;i<w.length-1;i++)if(ks.indexOf(w[i]+' '+w[i+1])>-1)s+=8;return {d:d,s:s}}).filter(function(x){return x.s>0}).sort(function(a,b){return b.s-a.s}).slice(0,6);
+   out.innerHTML=r.length?r.map(function(x){return '<li><a href="'+x.d.u+'"><strong>'+x.d.t+'</strong>'+(x.d.r?'<br><span class="et">'+x.d.r+'</span>':'')+'</a></li>'}).join(''):'<li>没有找到相关指南：换个词试试，或浏览类别。</li>'};
+  inp.addEventListener('input',function(){cerca(inp.value)});
+  document.querySelectorAll('[data-q]').forEach(function(b){b.addEventListener('click',function(){inp.value=b.dataset.q;cerca(b.dataset.q);inp.focus()})})}
+ var K='wip-guida-letti';function get(){try{return JSON.parse(localStorage.getItem(K)||'[]')}catch(e){return[]}}function set(a){try{localStorage.setItem(K,JSON.stringify(a))}catch(e){}}
+ var cb=document.getElementById('letto');if(cb){var a=get();cb.checked=a.indexOf(cb.dataset.s)>-1;cb.addEventListener('change',function(){var l=get().filter(function(x){return x!==cb.dataset.s});if(cb.checked)l.push(cb.dataset.s);set(l)})}
+ document.querySelectorAll('[data-lez]').forEach(function(el){var l=get();el.textContent=l.indexOf(el.dataset.lez)>-1?'✓ 已读':''});
+ document.querySelectorAll('[data-perc]').forEach(function(el){var l=get(),s=el.dataset.perc.split(','),n=s.filter(function(x){return l.indexOf(x)>-1}).length;el.textContent='已读 {n}/{t} 课'.replace('{n}',n).replace('{t}',s.length)});
+});})();</script>
+</body></html>

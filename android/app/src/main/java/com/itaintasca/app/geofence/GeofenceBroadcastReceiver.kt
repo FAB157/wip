@@ -1865,7 +1865,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 RoadGraph.misura(
                     info.realDist.toDouble(),
                     RoadSnap.grafo(isDrivingMode)?.da(currentLoc.latitude, currentLoc.longitude, RoadGraph.ricercaM(isDrivingMode)),
-                    poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon, isDrivingMode
+                    poi.entranceLat ?: poi.lat, poi.entranceLon ?: poi.lon, isDrivingMode, arrivalRad.toDouble()
                 )
             } catch (e: Exception) { info.realDist.toDouble() }
             // (05/10/2026, ARBITRATO) L'AGGANCIO ALLA STRADA NON E' CREDUTO DA
@@ -1887,7 +1887,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                             val dallAggancio = RoadGraph.misura(
                                 buf[0].toDouble(),
                                 RoadSnap.grafo(isDrivingMode)?.da(agg.first, agg.second, Arbitrato.ricercaLiberaM(isDrivingMode)),
-                                pLat, pLon, isDrivingMode
+                                pLat, pLon, isDrivingMode, arrivalRad.toDouble()
                             )
                             if (dallAggancio > distStrada) distStrada = dallAggancio
                         }
@@ -2219,11 +2219,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             com.itaintasca.app.service.RegistroCollaudo.scrivi("AVVISO muto-nome-grezzo \"$name\" id=$poiId")
             return
         }
-        if (!isItinerary && !avvisoConcesso()) {
-            Log.d(TAG, "Avviso non emesso per $name ($poiId): un altro avviso da meno di 20 s")
-            com.itaintasca.app.service.RegistroCollaudo.scrivi("AVVISO muto-20s \"$name\" id=$poiId")
-            return
-        }
+        // (22/11/2026) Il turno dei 20 s si controlla più sotto, SOLO per la voce e SOLO quando c'è un teaser da
+        // annunciare: prima si consumava qui anche per un luogo senza teaser (che poi solo vibrava), e zittiva l'avviso
+        // del luogo dopo (collaudo di Cracovia: la Fabbrica di Schindler muta su Android, detta su iOS). Come iOS.
 
         // Messaggio localizzato: prima era italiano fisso anche per utenti EN/FR/ES/DE
         val approachMsg = when (lang) {
@@ -2248,7 +2246,12 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         // per le tappe di un giro: «Ti stai avvicinando a X» e poi nulla era
         // proprio l'annuncio vuoto segnalato. Vibrazione e notifica restano.
         val haContenuto = isItinerary || NomiAnnunciabili.teaserLeggibile(poi.teaserText, null, lang) != null
-        if (speak && !silentMode && haContenuto) {
+        // Al massimo UN avviso a voce ogni 20 s (avvisoConcesso consuma il turno: si chiama solo se la voce parlerà).
+        val vocePermessa = speak && !silentMode && haContenuto && (isItinerary || avvisoConcesso())
+        if (speak && !silentMode && haContenuto && !vocePermessa) {
+            com.itaintasca.app.service.RegistroCollaudo.scrivi("AVVISO muto-20s \"$name\" id=$poiId")
+        }
+        if (vocePermessa) {
             enqueue(context, SpeechItem("$prefix$approachMsg", isGem, isItinerary, poiId, priority, kind = "approach"))
         }
         if (silentMode) {

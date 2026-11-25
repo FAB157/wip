@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>使用 WIP 的行程：创建、阅读、下载 | WIP Guide</title>
+<meta name="description" content="如何使用 WIP 创建行程：天数、预算、节奏、站点、时间、公共交通、下雨B计划、PDF和作者精选指南。哪些免费，哪些收费。">
+<link rel="canonical" href="https://www.wip.guide/guida/zh/itinerari"><link rel="alternate" hreflang="it" href="https://www.wip.guide/guida/itinerari"><link rel="alternate" hreflang="en" href="https://www.wip.guide/guida/en/itinerari"><link rel="alternate" hreflang="fr" href="https://www.wip.guide/guida/fr/itinerari"><link rel="alternate" hreflang="es" href="https://www.wip.guide/guida/es/itinerari"><link rel="alternate" hreflang="de" href="https://www.wip.guide/guida/de/itinerari"><link rel="alternate" hreflang="ru" href="https://www.wip.guide/guida/ru/itinerari"><link rel="alternate" hreflang="zh-Hans" href="https://www.wip.guide/guida/zh/itinerari"><link rel="alternate" hreflang="x-default" href="https://www.wip.guide/guida/itinerari">
+<meta property="og:type" content="website"><meta property="og:title" content="使用 WIP 的行程：创建、阅读、下载"><meta property="og:description" content="如何使用 WIP 创建行程：天数、预算、节奏、站点、时间、公共交通、下雨B计划、PDF和作者精选指南。哪些免费，哪些收费。"><meta property="og:url" content="https://www.wip.guide/guida/zh/itinerari"><meta property="og:site_name" content="WIP Guide"><meta property="og:image" content="https://www.wip.guide/scopri/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/icon.png">
+<style>
+:root{--bg:#fff;--fg:#14213d;--mut:#4b5568;--brand:#1e3a8a;--brand2:#2f56c9;--card:#f4f6fb;--line:#d9dfec;--ok:#0f6b3a;--warn:#8a4b00;--warnbg:#fff4e0;--costbg:#e8f0ff;--on:#fff}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0e1424;--fg:#e8ecf7;--mut:#a9b3c9;--brand:#8fb0ff;--brand2:#b5ccff;--card:#172038;--line:#2a3555;--ok:#6fdc9c;--warn:#ffcf8a;--warnbg:#2a2014;--costbg:#16264a;--on:#0e1424}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--brand)}a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--brand2);outline-offset:2px}
+header.top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.bar{max-width:1040px;margin:0 auto;padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.logo{font-weight:800;color:var(--brand);text-decoration:none;font-size:1.15rem}
+nav.menu{display:flex;gap:4px 14px;flex-wrap:wrap;font-size:.92rem}nav.menu a{text-decoration:none;color:var(--fg);padding:6px 2px}nav.menu a:hover{color:var(--brand)}
+.apri{margin-left:auto}
+main{max-width:1040px;margin:0 auto;padding:20px 16px 56px}
+h1{font-size:clamp(1.7rem,4.5vw,2.6rem);line-height:1.15;margin:.2em 0 .4em;color:var(--brand)}
+h2{font-size:1.45rem;margin:2em 0 .5em;line-height:1.25}h3{font-size:1.1rem}
+.lead{font-size:1.2rem;color:var(--mut);max-width:62ch}
+.crumb{font-size:.9rem;color:var(--mut)}.crumb a{color:var(--mut)}
+.btn{display:inline-block;background:var(--brand);color:var(--on);padding:11px 18px;border-radius:10px;text-decoration:none;font-weight:700;margin:4px 6px 4px 0}
+.btn.sec{background:transparent;color:var(--brand);border:2px solid var(--brand)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:22px 0;padding:16px;background:var(--card);border-radius:14px}
+.stat{display:flex;flex-direction:column}.num{font-size:1.9rem;font-weight:800;color:var(--brand);font-variant-numeric:tabular-nums}.et{font-size:.88rem;color:var(--mut)}
+.nota-stat{grid-column:1/-1;font-size:.82rem;color:var(--mut);margin:4px 0 0}
+ol.passi{counter-reset:p;list-style:none;padding:0}ol.passi li{counter-increment:p;position:relative;padding:10px 12px 10px 52px;margin:8px 0;background:var(--card);border-radius:10px}
+ol.passi li::before{content:counter(p);position:absolute;left:12px;top:9px;width:30px;height:30px;border-radius:50%;background:var(--brand);color:var(--on);display:grid;place-items:center;font-weight:800}
+.nota,.costo,.manca{border-radius:10px;padding:12px 14px;margin:14px 0}.nota{background:var(--warnbg);color:var(--warn)}.costo{background:var(--costbg)}
+.manca{border:2px dashed var(--line)}.manca h2{margin-top:0;font-size:1.1rem}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:420px}th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}th{background:var(--card)}
+figure{margin:18px 0}figure img,figure video{max-width:100%;height:auto;border-radius:12px;border:1px solid var(--line)}.esempi{margin:28px 0}.es-griglia{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}.es{border:1px solid var(--linea,#ddd);border-radius:12px;padding:12px;margin:0}.es img{max-height:360px;width:100%;object-fit:contain}.es audio{width:100%;margin-top:8px}.es-nota{font-size:.9em;margin:6px 0 0;opacity:.85}.es-pdf .btn{display:inline-block;margin-bottom:6px}
+figure img{max-height:640px;width:auto;display:block}figcaption{font-size:.85rem;color:var(--mut)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;margin:18px 0}
+.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;text-decoration:none;color:var(--fg)}
+.card:hover{border-color:var(--brand)}.card .em{font-size:1.8rem}.card h3{margin:.3em 0}.card p{margin:.2em 0;color:var(--mut);font-size:.95rem}.card .cn{font-weight:700;color:var(--brand);font-size:.95rem}
+.ricerca{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.ricerca input{flex:1;min-width:220px;padding:12px 14px;border-radius:10px;border:2px solid var(--line);font:inherit;background:var(--bg);color:var(--fg)}
+.ris{list-style:none;padding:0}.ris li{margin:6px 0}.ris a{display:block;padding:10px 12px;background:var(--card);border-radius:10px;text-decoration:none}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:999px;padding:8px 14px;font:inherit;cursor:pointer}.chip:hover{background:var(--brand);color:var(--on)}
+details{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:8px 0}summary{cursor:pointer;font-weight:700}
+.letto{display:flex;align-items:center;gap:8px;margin:28px 0}.progress{font-size:.9rem;color:var(--mut)}
+.fonte{opacity:.8}.agg{font-size:.85rem;color:var(--mut);margin-top:32px}
+footer{border-top:1px solid var(--line);padding:22px 16px;text-align:center;font-size:.9rem;color:var(--mut)}
+.lingue{max-width:1040px;margin:0 auto;padding:0 16px 8px;font-size:.85rem;color:var(--mut)}.lingue a{color:var(--mut)}.lingue strong{color:var(--fg)}footer .lingue{padding-top:10px}
+@media(max-width:600px){body{font-size:16px}nav.menu{display:none}.apri{margin-left:auto}}
+</style>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"WIP","item":"https://www.wip.guide/"},{"@type":"ListItem","position":2,"name":"指南","item":"https://www.wip.guide/guida/zh/"},{"@type":"ListItem","position":3,"name":"行程","item":"https://www.wip.guide/guida/zh/itinerari"}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"一个行程多少钱？","acceptedAnswer":{"@type":"Answer","text":"每天 10 个积分。现成行程库是免费的。"}},{"@type":"Question","name":"我能只看免费的内容吗？","acceptedAnswer":{"@type":"Answer","text":"可以：“免费”选项仅保留免费站点（不含餐饮）。"}},{"@type":"Question","name":"我可以分享它吗？","acceptedAnswer":{"@type":"Answer","text":"可以：PDF、发送导游、旅行故事以及带 PIN 码的群组旅行。"}}]}</script>
+</head><body>
+<a href="#main" style="position:absolute;left:-999px" onfocus="this.style.left='8px'">跳到正文</a>
+<header class="top"><div class="bar"><a class="logo" href="/guida/zh/">WIP · 指南</a><nav class="menu" aria-label="指南"><a href="/guida/zh/">指南</a><a href="/guida/zh/categorie">类别</a><a href="/guida/zh/audioguide">语音导览</a><a href="/guida/zh/itinerari">行程</a><a href="/guida/zh/tutorial">教程</a><a href="/guida/zh/domande-frequenti">常见问题</a></nav><a class="btn apri" href="https://wip.guide/">打开 WIP</a></div><nav class="lingue" aria-label="语言"><a lang="it" hreflang="it" href="/guida/itinerari">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/itinerari">English</a> · <a lang="fr" hreflang="fr" href="/guida/fr/itinerari">Français</a> · <a lang="es" hreflang="es" href="/guida/es/itinerari">Español</a> · <a lang="de" hreflang="de" href="/guida/de/itinerari">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/itinerari">Русский</a> · <strong lang="zh">中文</strong></nav></header>
+<main id="main">
+<p class="crumb"><a href="/">WIP</a> › <a href="/guida/zh/">指南</a> › 行程</p>
+<h1>使用 WIP 的行程：创建、阅读、下载</h1>
+<p class="lead">在<strong>行程</strong>卡片中，你可以让系统为你生成每日行程，从资料库中选择现成的行程，用语音导览组合一条路线，或者与他人共同规划。</p>
+<p class="agg">译自意大利语。截图、视频和示例显示的是意大利语界面。</p>
+<div class="galleria"><figure><img src="/guida/img/itinerari-1.jpg" alt="苏黎世 2 日游行程的结果，带有“离线”、“重新生成”、“生成大师级指南”、“添加到日历”按钮" loading="lazy" decoding="async"><figcaption>生成的行程（苏黎世，2 天）：上方是控制按钮，然后是 Day Pass、旅行信息以及包含各站的天数。 <span class="fonte">wip.guide 的真实截图 (15/11/2026)。</span></figcaption></figure></div><section class="esempi"><h2>你会得到什么：真实示例</h2><p>应用为真实用户生成的文件，未经修改：一座大城市和一个小城镇。文件为意大利语。</p><div class="es-griglia"><figure class="es"><a href="/guida/esempi/bruxelles-itinerario.jpg" target="_blank" rel="noopener"><img src="/guida/esempi/bruxelles-itinerario.jpg" alt="布鲁塞尔步行 1 天：行程屏幕" loading="lazy" decoding="async"></a><figcaption><strong>布鲁塞尔步行 1 天：行程屏幕</strong><p class="es-nota">大城市 · 8个站点，每个站点都经过“核实”，包含时间、步行公里数、CO₂ 以及站点之间的出租车信息。</p></figcaption></figure><div class="es es-pdf"><a class="btn" href="/guida/esempi/bruxelles-itinerario.pdf" target="_blank" rel="noopener">📄 打开 PDF</a> <strong>行程 PDF · 布鲁塞尔</strong> <span class="fonte">608 KB</span><p class="es-nota">大城市 · 4页，你通过打印按钮下载的文件。</p></div><div class="es es-pdf"><a class="btn" href="/guida/esempi/rimini-itinerario.pdf" target="_blank" rel="noopener">📄 打开 PDF</a> <strong>行程 PDF · 里米尼</strong> <span class="fonte">642 KB</span><p class="es-nota">较小中心 · 5页：台伯桥、马拉泰斯塔教堂、外科医生之屋、Rinaldini 的 piadina……</p></div></div></section><h2>到达行程的几种途径</h2>
+<ul><li><strong>自动模式</strong>：选择目的地和天数，AI为你生成行程。</li><li><strong>行程资料库</strong>：数百个现成行程，<strong>免费</strong>。</li><li><strong>从我的收藏</strong>：从你保存的地点开始。</li><li><strong>半径</strong>：选择一个起点和一个半径，即可获得3种备选方案。</li><li><strong>滑动挑选</strong>：浏览景点并保留你喜欢的。</li><li><strong>团体旅行</strong>：每个人都使用 PIN 码进行投票，WIP 会融合大家的偏好。</li><li><strong>最佳出行时间</strong>：逐月气候情况。</li><li><strong>短暂停留：港口与机场</strong>：只有几个小时该做什么。</li></ul><h2>教程：创建一个行程</h2>
+<ol class="passi"><li>打开<strong>行程</strong>卡片。</li><li>选择目的地和<strong>天数</strong>（1到30天）。</li><li>可选：出行时期或出发日期（用于天气预报）、<strong>每天开始/结束时间</strong>。</li><li>在高级选项中：“包含当地活动”、“包含游览与活动”、<strong>“免费”</strong>（仅限免费站点，不含餐饮）。通过“显示基本选项”，你可以选择预算（经济、标准、豪华）、旅行者（独自、情侣、家庭、团体）、节奏（轻松、标准、紧凑）和向导（Nicky、Dante、两者的声音）。</li><li>确认：创建行程消耗 <strong>10 积分/天</strong>，操作前会弹窗提示。</li><li>阅读结果：地图、旅行信息、每日预算表、<strong>站点之间的真实时间</strong>，对于1.5公里及以上的路段，提供一个<strong>交通</strong>按钮，可打开带有公共交通路线的 Google Maps。</li></ol><h2>你可以在结果中做什么</h2>
+<ul><li><strong>替换</strong>某个站点（每天有一些免费替换额度，之后每个8积分），并且可以通过锁定想保留的站点来<strong>重新生成</strong>。</li><li>如果预测有雨，可以使用<strong>B计划</strong>：一个室内备选方案。</li><li><strong>下载离线使用</strong>并保存到“我的下载”。</li><li><strong>PDF</strong>：可打印的行程单，包含地图和站点编号图例。</li><li><strong>日历</strong>：导出为 .ics 文件。</li><li><strong>作者精选指南</strong>：根据你的行程定制的 PDF 指南（20 积分/天）：提供艺术与历史、家庭、购物与设计、美食美酒、精选风格。也会通过电子邮件发送；附带由有声书、EPUB 和播客等相关工具。</li></ul><h2>你的所有内容，都在一个地方</h2>
+<p><strong>我的下载</strong>屏幕（从“个人资料”、“行程”›“我的离线行程”和“离线”进入）包含五个文件夹：行程、地图、语音导览、高级指南和博物馆指南。每个条目都有“打开”、“导航”、“解说”、“PDF”和“删除”按钮。</p><section class="manca"><h2>WIP 不做什么（以免产生误解）</h2><ul><li>公共交通是指向 Google Maps 的链接：WIP 没有内置的交通规划器。</li><li>没有酒店预订。</li></ul></section><h2>常见问题</h2><details><summary>一个行程多少钱？</summary><p>每天 10 个积分。现成行程库是免费的。</p></details><details><summary>我能只看免费的内容吗？</summary><p>可以：“免费”选项仅保留免费站点（不含餐饮）。</p></details><details><summary>我可以分享它吗？</summary><p>可以：PDF、发送导游、旅行故事以及带 PIN 码的群组旅行。</p></details><h2>继续阅读</h2><div class="grid"><a class="card" href="/guida/zh/libreria-itinerari-gratuiti"><h3>行程库</h3><p>WIP 的行程库：现成、免费的行程，可打开、离线保存并跟随。如何找到并使用它们。…</p></a><a class="card" href="/guida/zh/navigatore"><h3>导航器</h3><p>如何使用 WIP 进行导航：WipNav 步行语音导航、带语音导览的行程、定制路线并在 Google Maps 或 Apple Mappe 中打开。屏幕熄灭时的运行情况。…</p></a><a class="card" href="/guida/zh/gratis-e-crediti"><h3>免费与积分</h3><p>WIP 中哪些是免费的，哪些需要消耗积分：地点卡片、地图、行程库、预告片、WipNav；完整语音导览、行程、Day Pass、博物馆参观。…</p></a></div><div class="letto"><input type="checkbox" id="letto" data-s="itinerari"><label for="letto">我已读完本指南（仅保存在你的设备上）</label></div><p><a class="btn" href="https://wip.guide/">打开 WIP</a> <a class="btn sec" href="/guida/zh/categorie">全部类别</a></p>
+
+<p class="agg">内容已于 2026 年 11 月 16 日与应用代码核对。如有与您所见不符之处，请写信至 <a href="mailto:support@wip.guide">support@wip.guide</a>.</p>
+</main>
+<footer><a href="/guida/zh/">指南</a> · <a href="/privacy">隐私</a> · <a href="/support">支持</a> · <a href="https://wip.guide/">wip.guide</a><br><nav class="lingue" aria-label="语言"><a lang="it" hreflang="it" href="/guida/itinerari">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/itinerari">English</a> · <a lang="fr" hreflang="fr" href="/guida/fr/itinerari">Français</a> · <a lang="es" hreflang="es" href="/guida/es/itinerari">Español</a> · <a lang="de" hreflang="de" href="/guida/de/itinerari">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/itinerari">Русский</a> · <strong lang="zh">中文</strong></nav></footer>
+<script>(function(){
+function ready(f){document.readyState!='loading'?f():document.addEventListener('DOMContentLoaded',f)}
+ready(function(){
+ var red=matchMedia('(prefers-reduced-motion: reduce)').matches;
+ var els=document.querySelectorAll('.num[data-n]');
+ if('IntersectionObserver' in window&&!red&&els.length){var io=new IntersectionObserver(function(es){es.forEach(function(e){if(!e.isIntersecting)return;io.unobserve(e.target);var el=e.target,n=+el.dataset.n,pre=el.dataset.c||'',t0=null;function st(t){t0=t0||t;var p=Math.min((t-t0)/900,1);el.textContent=pre+Math.round(n*p).toLocaleString('zh-CN');if(p<1)requestAnimationFrame(st)}requestAnimationFrame(st)})},{threshold:.4});els.forEach(function(e){io.observe(e)})}
+ var inp=document.getElementById('q'),out=document.getElementById('ris');
+ if(inp&&out){var idx=null;fetch('/guida/zh/indice.json').then(function(r){return r.json()}).then(function(j){idx=j}).catch(function(){});
+  var norm=function(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\p{L}\p{N} ]+/gu,' ')};
+  var cerca=function(q){q=norm(q).trim();if(!q||!idx){out.innerHTML='';return}var SW='  ';var w=/[\u4e00-\u9fff]/.test(q)?Array.from(q.replace(/\s+/g,'')).reduce(function(a,c,i,s){if(i<s.length-1)a.push(c+s[i+1]);return a},[]):q.split(/\s+/).filter(function(x){return x.length>2&&SW.indexOf(' '+x+' ')<0});
+   var r=idx.map(function(d){var ks=norm(d.k),h=norm(d.t+' '+(d.r||'')+' '+(d.f||'')),s=0;w.forEach(function(x){if(ks.indexOf(x)>-1)s+=5;else if(h.indexOf(x)>-1)s+=1});for(var i=0;i<w.length-1;i++)if(ks.indexOf(w[i]+' '+w[i+1])>-1)s+=8;return {d:d,s:s}}).filter(function(x){return x.s>0}).sort(function(a,b){return b.s-a.s}).slice(0,6);
+   out.innerHTML=r.length?r.map(function(x){return '<li><a href="'+x.d.u+'"><strong>'+x.d.t+'</strong>'+(x.d.r?'<br><span class="et">'+x.d.r+'</span>':'')+'</a></li>'}).join(''):'<li>没有找到相关指南：换个词试试，或浏览类别。</li>'};
+  inp.addEventListener('input',function(){cerca(inp.value)});
+  document.querySelectorAll('[data-q]').forEach(function(b){b.addEventListener('click',function(){inp.value=b.dataset.q;cerca(b.dataset.q);inp.focus()})})}
+ var K='wip-guida-letti';function get(){try{return JSON.parse(localStorage.getItem(K)||'[]')}catch(e){return[]}}function set(a){try{localStorage.setItem(K,JSON.stringify(a))}catch(e){}}
+ var cb=document.getElementById('letto');if(cb){var a=get();cb.checked=a.indexOf(cb.dataset.s)>-1;cb.addEventListener('change',function(){var l=get().filter(function(x){return x!==cb.dataset.s});if(cb.checked)l.push(cb.dataset.s);set(l)})}
+ document.querySelectorAll('[data-lez]').forEach(function(el){var l=get();el.textContent=l.indexOf(el.dataset.lez)>-1?'✓ 已读':''});
+ document.querySelectorAll('[data-perc]').forEach(function(el){var l=get(),s=el.dataset.perc.split(','),n=s.filter(function(x){return l.indexOf(x)>-1}).length;el.textContent='已读 {n}/{t} 课'.replace('{n}',n).replace('{t}',s.length)});
+});})();</script>
+</body></html>

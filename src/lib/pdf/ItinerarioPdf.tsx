@@ -8,6 +8,7 @@ import React from 'react';
 import { Document, Page, Text, View, Image } from '@react-pdf/renderer';
 import { PDF_C, pdfStili as S, pulisci, Elenco, PiedePagina } from './base.js';
 import { tappeMappa } from './tappeMappa.js';
+import { totaleViaggioDaGiorni } from '../totaleViaggio.js';
 
 export interface ItinerarioPdfEtichette {
   pagina: string; giorno: string; giorni: string; giornoSingolo: string; curatoDa: string;
@@ -207,10 +208,10 @@ export default function ItinerarioPdf({ plan, etichette: et, mappa }: Itinerario
             <Sezione titolo={et.zoneDaEvitare} voci={info.zone_da_evitare} colore={PDF_C.ambra} />
           </View>
         ) : null}
-        {plan?.totale_viaggio ? (
+        {totaleViaggioDaGiorni(plan, plan?.lingua || plan?.language || 'IT') ? (
           <View style={{ marginTop: 8, borderWidth: 1, borderColor: PDF_C.navy, borderLeftWidth: 4, borderLeftColor: PDF_C.oro, borderRadius: 4, backgroundColor: PDF_C.fondo, paddingVertical: 7, paddingHorizontal: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }} wrap={false}>
             <Text style={[S.sansBold, { fontSize: 9.5, color: PDF_C.navy, letterSpacing: 1, textTransform: 'uppercase' }]}>{et.totaleViaggio}</Text>
-            <Text style={[S.sansBold, { fontSize: 14, color: PDF_C.navy }]}>{pulisci(plan.totale_viaggio)}</Text>
+            <Text style={[S.sansBold, { fontSize: 14, color: PDF_C.navy }]}>{pulisci(totaleViaggioDaGiorni(plan, plan?.lingua || plan?.language || 'IT'))}</Text>
           </View>
         ) : null}
       </Page>

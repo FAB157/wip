@@ -25,13 +25,15 @@ export const TRAD_PROFILO: Record<string, Partial<Record<Language, string>>> = {
     ZH: '⚠️ 注意：在自动模式下，每激活一个新景点将自动扣除{n}积分，即使手机处于锁定状态。要继续吗？',
   },
   pf_auto_mode_banner: {
-    IT: "⚠️ Attenzione: La modalità automatica scarica {n} crediti ad ogni nuovo POI. L'ascolto automatico in background funziona correttamente solo sull'App nativa Android (non su browser web/PWA).",
-    EN: '⚠️ Warning: Automatic mode deducts {n} credits for each new POI. Automatic background listening only works properly on the native Android app (not on web browser/PWA).',
-    FR: "⚠️ Attention : le mode automatique déduit {n} crédits à chaque nouveau POI. L'écoute automatique en arrière-plan ne fonctionne correctement que sur l'app native Android (pas sur navigateur web/PWA).",
-    ES: '⚠️ Atención: el modo automático descuenta {n} créditos por cada nuevo POI. La escucha automática en segundo plano solo funciona correctamente en la app nativa de Android (no en navegador web/PWA).',
-    DE: '⚠️ Achtung: Der Automatikmodus zieht bei jedem neuen POI {n} Credits ab. Das automatische Anhören im Hintergrund funktioniert nur in der nativen Android-App zuverlässig (nicht im Webbrowser/PWA).',
-    RU: '⚠️ Внимание: автоматический режим списывает {n} кредитов за каждый новый POI. Автоматическое воспроизведение в фоне корректно работает только в нативном приложении Android (не в браузере/PWA).',
-    ZH: '⚠️ 注意：自动模式每遇到一个新景点扣除{n}积分。后台自动播放仅在Android原生应用中正常工作（网页浏览器/PWA不支持）。',
+    // 15/11/2026: diceva «solo sull'App nativa Android» — il motore in background esiste anche su iPhone
+    // (ios/App/App/BackgroundPoiManager.swift, stessa logica di Android). Sul web serve la pagina aperta.
+    IT: "⚠️ Attenzione: La modalità automatica scarica {n} crediti ad ogni nuovo POI. L'ascolto automatico a schermo spento funziona nelle app per iPhone e Android; nel browser (web/PWA) solo con la pagina aperta.",
+    EN: '⚠️ Warning: Automatic mode deducts {n} credits for each new POI. Automatic listening with the screen off works in the iPhone and Android apps; in a web browser/PWA only while the page is open.',
+    FR: "⚠️ Attention : le mode automatique déduit {n} crédits à chaque nouveau POI. L'écoute automatique écran éteint fonctionne dans les apps iPhone et Android ; dans un navigateur web/PWA, seulement page ouverte.",
+    ES: '⚠️ Atención: el modo automático descuenta {n} créditos por cada nuevo POI. La escucha automática con la pantalla apagada funciona en las apps de iPhone y Android; en el navegador web/PWA solo con la página abierta.',
+    DE: '⚠️ Achtung: Der Automatikmodus zieht bei jedem neuen POI {n} Credits ab. Das automatische Anhören bei ausgeschaltetem Bildschirm funktioniert in den Apps für iPhone und Android; im Webbrowser/PWA nur bei geöffneter Seite.',
+    RU: '⚠️ Внимание: автоматический режим списывает {n} кредитов за каждый новый POI. Автоматическое прослушивание при выключенном экране работает в приложениях для iPhone и Android; в браузере/PWA — только при открытой странице.',
+    ZH: '⚠️ 注意：自动模式每遇到一个新景点扣除{n}积分。熄屏自动收听适用于iPhone和Android应用；在网页浏览器/PWA中仅在页面打开时可用。',
   },
   pf_fatto: { IT: 'Fatto ✓', EN: 'Done ✓', FR: 'Terminé ✓', ES: 'Hecho ✓', DE: 'Fertig ✓', RU: 'Готово ✓', ZH: '完成 ✓' },
   pf_azzera_storico: { IT: 'Azzera Storico', EN: 'Reset History', FR: "Réinitialiser l'historique", ES: 'Restablecer historial', DE: 'Verlauf zurücksetzen', RU: 'Сбросить историю', ZH: '清除历史' },
@@ -350,6 +352,9 @@ export const TRAD_PROFILO: Record<string, Partial<Record<Language, string>>> = {
   pf_segnala_desc: { IT: 'Email precompilata con i dati diagnostici del dispositivo', EN: "Pre-filled email with your device's diagnostic data", FR: "E-mail préremplie avec les données de diagnostic de l'appareil", ES: 'Email precompilado con los datos de diagnóstico del dispositivo', DE: 'Vorausgefüllte E-Mail mit den Diagnosedaten des Geräts', RU: 'Письмо с предзаполненными диагностическими данными устройства', ZH: '预填设备诊断数据的邮件' },
   pf_manuale_uso: { IT: "Manuale d'uso dell'app", EN: 'App user manual', FR: "Manuel d'utilisation de l'app", ES: 'Manual de uso de la app', DE: 'Benutzerhandbuch der App', RU: 'Руководство пользователя приложения', ZH: '应用使用手册' },
   pf_manuale_desc: { IT: 'Tutte le funzioni spiegate passo passo (anche in PDF)', EN: 'Every feature explained step by step (PDF too)', FR: 'Toutes les fonctions expliquées pas à pas (aussi en PDF)', ES: 'Todas las funciones explicadas paso a paso (también en PDF)', DE: 'Alle Funktionen Schritt für Schritt erklärt (auch als PDF)', RU: 'Все функции объясняются шаг за шагом (есть и PDF)', ZH: '逐步讲解所有功能（含PDF版）' },
+  // (16/11/2026) Link al centro guida wip.guide/guida — per ora solo in italiano, la card si mostra solo con lingua IT.
+  pf_guida_web: { IT: 'Guida completa con video ed esempi', EN: 'Full guide with videos and examples', FR: 'Guide complet avec vidéos et exemples', ES: 'Guía completa con vídeos y ejemplos', DE: 'Vollständige Anleitung mit Videos und Beispielen', RU: 'Полное руководство с видео и примерами', ZH: '含视频和示例的完整指南' },
+  pf_guida_web_desc: { IT: 'Tutorial passo passo, PDF e audio veri di itinerari, guide e audioguide', EN: 'Step-by-step tutorials, real PDFs and audio of itineraries, guides and audio guides', FR: 'Tutoriels pas à pas, vrais PDF et audios d’itinéraires, guides et audioguides', ES: 'Tutoriales paso a paso, PDF y audios reales de itinerarios, guías y audioguías', DE: 'Schritt-für-Schritt-Anleitungen, echte PDFs und Audios von Routen, Guides und Audioguides', RU: 'Пошаговые уроки, настоящие PDF и аудио маршрутов, гидов и аудиогидов', ZH: '分步教程，以及行程、指南和语音导览的真实 PDF 与音频' },
   pf_info_legali: { IT: 'Informazioni Legali', EN: 'Legal Information', FR: 'Informations légales', ES: 'Información legal', DE: 'Rechtliche Informationen', RU: 'Юридическая информация', ZH: '法律信息' },
   pf_privacy_termini: { IT: "Privacy & Termini d'uso", EN: 'Privacy & Terms of Use', FR: "Confidentialité & Conditions d'utilisation", ES: 'Privacidad y Términos de uso', DE: 'Datenschutz & Nutzungsbedingungen', RU: 'Конфиденциальность и условия использования', ZH: '隐私与使用条款' },
 

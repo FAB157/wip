@@ -76,13 +76,24 @@ export function rigaNonParla(poi: any, citta?: string | null): boolean {
 
 const SOLO_NUMERI = /^[\s\d.,:/#№-]+$/;
 const PIETRA_O_TARGA = /\b(stolperstein|pietra d'inciampo|pietre d'inciampo|struikelsteen|pav[ée] de m[ée]moire|plaque|targa|lapide|gedenktafel|placa conmemorativa|memorial plaque|blue plaque)\b|^plaque\s*№?/i;
+// (22/11/2026, collaudo nativo di Cracovia: in auto «Ti stai avvicinando a Punto di interesse», «Sei arrivato a Punto di
+// interesse») Un nome che è solo un'etichetta di tipo, in una delle 7 lingue, non è un nome. Stessa lista in
+// NomiAnnunciabili.kt e PoiModels.swift.
+export const NOME_GENERICO = /^(punto (di )?interesse|point of interest|points? d'int[ée]r[êe]t|punto de inter[ée]s|sehensw[üu]rdigkeit|poi|attrazione|attraction|attraction touristique|luogo|monumento|chiesa|museo|statua|edificio|scultura|fontana|torre|ponte|cappella|senza nome|unnamed|untitled|no name|sans nom|sin nombre|ohne namen|denkmal|kirche|statue|monument|monumento conmemorativo)$/i;
 const DESCRIZIONE_INGLESE = /^(a |an |the )?(school|office|residential|apartment|commercial|industrial|public|private|old|former|historic|small|large)?\s*(building|house|statue|sculpture|monument|bust|fountain|church|chapel|shrine|memorial|tower|gate|wall|bridge|structure|artwork|mural|relief|sign|bench)( of [a-z ]+| building)?$/i;
 
 /** Il nome da dire nell'avviso dei 150 m, o null se il nome è grezzo (vedi regola 2 in cima). */
 export function nomeDaAnnunciare(poi: any, lingua?: string | null): string | null {
-  const grezzo = String(poi?.name_translated || poi?.name || poi?.nome || '').trim();
+  // 21/11/2026 (collaudo notturno): la voce leggeva anche la parentesi — «Museo egizio (Il Cairo)», «Mårten Trotzig
+  // (1559–1617)», «Convento de Santa María de los Reyes. (s. XVI)». Si annuncia il nome, senza la parentesi e senza
+  // la punteggiatura che resta in coda. Stessa pulizia in NomiAnnunciabili.kt e PoiModels.swift.
+  // (21/11/2026, Budapest) «Abaj Kunanbajev Szobra, Asztana út, Budapest.»: un nome con l'indirizzo dentro si dice
+  // fino alla prima virgola.
+  const grezzo = String(poi?.name_translated || poi?.name || poi?.nome || '')
+    .replace(/\s*\([^)]*\)\s*/g, ' ').split(',')[0].replace(/[\s.,;:\-–]+$/, '').replace(/\s+/g, ' ').trim();
   if (!grezzo || grezzo.length < 3) return null;
   if (SOLO_NUMERI.test(grezzo)) return null;
+  if (NOME_GENERICO.test(grezzo)) return null;
   if (PIETRA_O_TARGA.test(grezzo) || /stolperstein|plaque|targa/i.test(String(poi?.category || ''))) return null;
   if (String(poi?.id || '').startsWith('plaque-')) return null;
   if (DESCRIZIONE_INGLESE.test(grezzo) || / - (school|residential|office) building$/i.test(grezzo)) return null;
@@ -106,6 +117,61 @@ export function stessoLuogoAltroAlfabeto(a: any, b: any, metri: number): boolean
   if (!(metri <= 150)) return false;
   const na = alfabeto(a?.name || a?.nome), nb = alfabeto(b?.name || b?.nome);
   return na !== 'nessuno' && nb !== 'nessuno' && na !== nb;
+}
+
+/** Una targa, lapide o pietra d'inciampo (stessa regola di `eTarga` in foregroundTriggers.ts). */
+export function rigaTarga(poi: any): boolean {
+  if (!poi || poi.is_gem === true || poi.premium === true) return false;
+  if (/plaque|targa|lapide|stolperstein/.test(String(poi.category || '').toLowerCase())) return true;
+  if (String(poi.id || '').startsWith('plaque-')) return true;
+  return /\b(plaque|targa|lapide|stolperstein|gedenktafel|placa conmemorativa)\b/i.test(String(poi.name || poi.nome || ''));
+}
+
+/** Un nome che è solo un'etichetta di tipo («Sito UNESCO», «Monumento», «Statue»): non è il nome di un luogo. */
+const NOME_SOLO_TIPO = /^(sito unesco|unesco( world heritage)? site|patrimonio unesco|monumento|monument|statua|statue|scultura|sculpture|chiesa|church|museo|museum|memoriale|memorial|fontana|fountain|piazza|square|parco|park|punto panoramico|viewpoint|attrazione|attraction)$/i;
+export function nomeSoloTipo(nome: string | null | undefined): boolean {
+  return NOME_SOLO_TIPO.test(String(nome || '').replace(/\s+/g, ' ').trim());
+}
+
+const nudoSemplice = (n: any): string => String(n || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/\([^)]*\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').replace(/\b(the|il|la|lo|le|i|gli|l|di|de|dei|degli|del|della|delle|dello|d|des|du|of)\b/g, ' ').replace(/\s+/g, ' ').trim();
+const metriTra = (a: any, b: any): number => {
+  const R = 6371000, r = Math.PI / 180;
+  const la1 = Number(a?.lat), lo1 = Number(a?.lon), la2 = Number(b?.lat), lo2 = Number(b?.lon);
+  if (![la1, lo1, la2, lo2].every(Number.isFinite)) return Infinity;
+  const x = (la2 - la1) * r, y = (lo2 - lo1) * r;
+  const h = Math.sin(x / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(y / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
+
+/**
+ * 21/11/2026 (prova con l'app vera a Budapest, WIP Nav): i luoghi lungo il percorso aprivano schede che l'audioguida
+ * libera non avrebbe mai fatto parlare — «Stone plaque № 49320», «Sito UNESCO», il gemello Overture della META stessa
+ * («Széchenyi Lánchíd» sotto «Ponte delle Catene») e il caffè di PARTENZA. Stessi filtri dell'audioguida libera, più:
+ *  - mai una città, un'entità amministrativa, una targa, un nome che è solo un tipo;
+ *  - mai la meta né i suoi gemelli: stesso QID, stesso nome nudo entro 150 m, altro alfabeto entro 150 m, oppure a
+ *    meno di `GEMELLO_META_M` dal punto della meta (lì parla la meta all'arrivo);
+ *  - mai il luogo da cui si parte (entro `PARTENZA_M` dalla partenza).
+ */
+export const GEMELLO_META_M = 60;
+export const PARTENZA_M = 60;
+export function luoghiPercorsoCheParlano<T = any>(pois: T[], meta: { id?: any; name?: string | null; lat: number; lon: number } | null, partenza: { lat: number; lon: number } | null, citta?: string | null): T[] {
+  const qMeta = meta ? qidDi({ id: meta.id }) : null;
+  const nMeta = meta ? nudoSemplice(meta.name) : '';
+  return (pois || []).filter((p: any) => {
+    if (!p) return false;
+    if (rigaNonParla(p, citta) || rigaTarga(p) || nomeSoloTipo(p.name || p.nome)) return false;
+    if (meta) {
+      if (meta.id != null && String(p.id) === String(meta.id)) return false;
+      const m = metriTra(p, meta);
+      if (m <= GEMELLO_META_M) return false;
+      if (qMeta && qidDi(p) === qMeta) return false;
+      if (m <= 150 && nMeta.length >= 4 && nudoSemplice(p.name || p.nome) === nMeta) return false;
+      if (stessoLuogoAltroAlfabeto(p, { id: meta.id, name: meta.name }, m)) return false;
+    }
+    if (partenza && metriTra(p, partenza) <= PARTENZA_M) return false;
+    return true;
+  });
 }
 
 /**

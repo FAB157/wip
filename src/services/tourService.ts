@@ -1918,7 +1918,9 @@ class TourService {
       let prec = Math.max(0, inizioTratta - 30);
       this.alongPassi = steps.map((s) => {
         const p = punto(s);
-        const a = p ? this.aggancio!.primaCorrispondenza(p.lat, p.lon, prec, 30) : null;
+        // (21/11/2026) Il punto più vicino nei 60 m dopo la prima corrispondenza, non la prima: il segmento che
+        // finisce 20 m prima dell'angolo «corrispondeva» e la svolta si diceva a 43–50 m (Aggancio.corrispondenzaManovra).
+        const a = p ? this.aggancio!.corrispondenzaManovra(p.lat, p.lon, prec, 30) : null;
         if (a != null) prec = a;
         return a;
       });
@@ -2627,6 +2629,15 @@ class TourService {
       const cittaGiro = giro.tappe.find(t => t.citta)?.citta || null;
       if (rigaNonParla(c, cittaGiro) || giro.tappe.some(t => t.citta && nudo(t.citta) === nomeNudo)) continue;
       if (!nomeDaAnnunciare(c, this.lingua)) continue;
+      // (14/11/2026, Zurigo: otto fontane annunciate in 1,5 km — «Brunnen (Hauptbahnhof (Südostseite))», «Wandbrunnen
+      // mit wasserspeiender Bronzemaske», «Züri-Brunnen»…). Le fontane del catalogo Wikidata hanno una fonte e quindi
+      // «pesavano». Una fontana non gemma non vale la voce di un incontro; lo stesso un nome che è una descrizione
+      // (parentesi, sei parole o più) quando la riga non è una gemma.
+      if (c?.is_gem !== true && c?.premium !== true) {
+        const tipoRiga = `${c?.category || ''} ${c?.poi_type || ''} ${c?.source || ''}`;
+        if (/fountain|fontan|drinking_water/i.test(tipoRiga) || /\b(brunnen|fontaine|fountain|fontana|fuente|chafariz)\b|brunnen$/i.test(nome)) continue;
+        if (/[()]/.test(nome) || nome.trim().split(/\s+/).length >= 6) continue;
+      }
       // (Lione 06/10/2026) «Sulla tua strada: Immeuble» cinque volte in 40 s, poi «Maison», «Lione» (la riga della
       // città) e «Musée des Beaux-Arts (Lione)» — la tappa 1 con un altro nome. Niente nomi generici di una parola,
       // niente città/quartieri, niente nome già detto in questo giro, niente nome contenuto in quello di una tappa.

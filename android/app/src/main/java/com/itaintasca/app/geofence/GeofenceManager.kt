@@ -193,6 +193,11 @@ object Arbitrato {
     private val RE_PARENTESI = Regex("\\([^)]*\\)")
     private val RE_ARTICOLO = Regex("^(the|il|la|lo|le|i|gli|l')\\s+")
     private val RE_NON_ALFANUM = Regex("[^a-z0-9]+")
+    // 21/11/2026 (collaudo notturno): articoli e preposizioni interni non distinguono
+    // due righe dello stesso luogo («piazza de' Peruzzi» / «Piazza dei Peruzzi»).
+    // Stessa lista di PARTICELLE_NOME in foregroundTriggers.ts e PoiModels.swift.
+    private val RE_PARTICELLE = Regex("\\b(di|de|dei|degli|del|della|delle|dello|d|l|des|du|of)\\b")
+    private val RE_SPAZI = Regex("\\s+")
 
     /**
      * Il nome senza parentesi, accenti e articolo: «Pantheon (Roma)» e «The
@@ -207,6 +212,8 @@ object Arbitrato {
             .replace(RE_PARENTESI, " ")
             .replace(RE_ARTICOLO, "")
             .replace(RE_NON_ALFANUM, " ")
+            .replace(RE_PARTICELLE, " ")
+            .replace(RE_SPAZI, " ")
             .trim()
     }
 

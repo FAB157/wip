@@ -114,11 +114,18 @@ const FONTE_BONUS_M = 25;
 const ATTESA_IMPORTANTE_M = 100;
 /** 23/10/2026 (c): quanto un luogo senza peso, scattato e non ancora partito, può trattenere chi pesa. */
 const ATTESA_MINORE_MS = 15_000;
+/** 21/11/2026: in auto una guida scattata e non partita trattiene gli altri luoghi al più per questi metri percorsi. */
+const ATTESA_AUTO_M = 150;
+let posUltimoScatto: { lat: number; lon: number } | null = null;
 const haFonte = (poi: any): boolean => /wiki/i.test(String(poi?.source || ''));
 const pesa = (poi: any): boolean => !!poi?.is_gem || !!poi?.premium || haFonte(poi);
-/** Il nome senza parentesi, accenti e articolo: «Pantheon (Roma)» e «The Pantheon» sono lo stesso luogo. */
+/** Il nome senza parentesi, accenti e articolo: «Pantheon (Roma)» e «The Pantheon» sono lo stesso luogo.
+ *  21/11/2026 (collaudo notturno): anche senza articoli e preposizioni INTERNE — «piazza de' Peruzzi» e «Piazza dei
+ *  Peruzzi» sono lo stesso luogo e parlavano entrambe. Stessa lista in GeofenceManager.kt e PoiModels.swift. */
+const PARTICELLE_NOME = /\b(di|de|dei|degli|del|della|delle|dello|d|l|des|du|of)\b/g;
 const nomeNudo = (n: any): string => String(n || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
-  .replace(/\([^)]*\)/g, ' ').replace(/^(the|il|la|lo|le|i|gli|l')\s+/i, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  .replace(/\([^)]*\)/g, ' ').replace(/^(the|il|la|lo|le|i|gli|l')\s+/i, '').replace(/[^a-z0-9]+/g, ' ')
+  .replace(PARTICELLE_NOME, ' ').replace(/\s+/g, ' ').trim();
 
 // Raggi di ingresso di default per categoria quando il POI non porta un
 // geofence_radius calibrato (allineati ai fallback di poiRepository/nativo).
@@ -683,8 +690,12 @@ function onLocationUpdate(e: Event): void {
       // (30/10/2026) IN AUTO SÌ, a piedi no: chi guida non percorre gli ultimi metri fuori rete (la Cattedrale di
       // Palermo a 49 m dalla via, il Castel dell'Ovo a 176) e con i soli metri di strada la guida taceva in 42
       // percorsi su 60 (`sim-auto2`). Decide dove finisce la strada; gli anticipi del 12/10 erano a piedi.
+      // (21/11/2026, committente) A PIEDI anche, ma SOLO dove il sentiero non arriva alla porta: la via raggiunta più
+      // vicina al punto sta oltre il raggio d'arrivo → scatta dove finisce il sentiero (+20 m). Dove il sentiero arriva
+      // alla porta resta la misura di prima (decide con `raggioArrivoPiedi` = la minore delle due). Certosa di San
+      // Martino, Castel Sant'Elmo, Bellagio Conservatory, Pan di Zucchero. Stessa regola in RoadGraph.misura (Kotlin, Swift).
       const misura = (s: SorgenteStrada | null, d: number) =>
-        modo === 'car' && s ? s.decide(arrivo.lat, arrivo.lon, d) : distanzaCheDecide(d, s ? s.verso(arrivo.lat, arrivo.lon) : null);
+        !s ? distanzaCheDecide(d, null) : modo === 'car' ? s.decide(arrivo.lat, arrivo.lon, d) : s.decide(arrivo.lat, arrivo.lon, d, radius);
       let dist = aria > limiteStrada ? aria : misura(sorgenteStrada, aria);
       if (sorgenteLibera && dist <= radius) {
         const ariaLibera = haversineMeters(latLibero, lonLibero, arrivo.lat, arrivo.lon);
@@ -946,6 +957,13 @@ function onLocationUpdate(e: Event): void {
       // la guida non è partita e non si tiene muto tutto il resto.
       // 23/10/2026 — REGOLA (c): un luogo SENZA PESO la cui guida non parte (nessun testo, richiesta fallita)
       // blocca chi pesa al più ATTESA_MINORE_MS, non 75–92 s (Manchester: la Whitworth taceva dietro un minore).
+      // 21/11/2026 (prova con l'app vera a Budapest, in auto): il luogo prima «pesava», la sua guida non partiva (niente
+      // Day Pass, guida non avviata) e la META restava in attesa 75 s ≈ 800 m di strada: non scattava mai. In AUTO la
+      // finestra si misura in METRI: oltre ATTESA_AUTO_M percorsi dallo scatto, una guida non partita non trattiene più.
+      if (modo === 'car' && pendingConfirmId && posUltimoScatto
+          && haversineMeters(lat, lon, posUltimoScatto.lat, posUltimoScatto.lon) > ATTESA_AUTO_M) {
+        pendingConfirmId = null; pendingConfirmPesa = false;
+      }
       const attesaMax = davanti.some(c => pesa(c.poi)) && !pendingConfirmPesa ? ATTESA_MINORE_MS : 75_000;
       const inPartenza = !!pendingConfirmId && now - lastGlobalFireTs < attesaMax;
       // (prova a Parigi) La pausa era 20 s: finita la guida della piazza, Notre-Dame
@@ -1015,6 +1033,7 @@ function onLocationUpdate(e: Event): void {
     diagnosi(`scatta ${winner.poi?.name || winner.id}`, davanti);
 
     lastGlobalFireTs = now;
+    posUltimoScatto = { lat, lon };
     // Il cooldown 24 h (markFired/st.passed) NON si marca qui: si aspetta la
     // conferma "audio partito" in onAudioStateChange. Il dedupe condiviso a
     // 60 s (__wipLastPoiTrigger, poco sotto) resta immediato: basta a evitare

@@ -271,6 +271,12 @@ async function getOrCreateAudioguideTextInterno(
       const cost = Number(j?.cost) || 0;
       if (j?.error === 'insufficient_credits') return { status: 'insufficient_credits', cost };
       return { status: 'credits_required', cost, preview: typeof j?.preview === 'string' ? j.preview : '' };
+    } else if (res.status === 503) {
+      // (13/11/2026) `non_generata`: il server non è riuscito a scrivere la narrazione (motori saturi) e NON manda più
+      // il materiale grezzo. Niente ripiego qui sotto: rifare la stessa generazione dal client finirebbe uguale, e
+      // il suo ultimo ripiego è il riassunto grezzo. Il prossimo arrivo riprova.
+      const j = await res.json().catch(() => ({} as any));
+      if (j?.error === 'non_generata') return { status: 'error', text: null };
     } else if (res.status === 401) {
       // Sessione assente/scaduta: App.tsx rinnova o riporta al login.
       try { window.dispatchEvent(new CustomEvent('wip-auth-required', { detail: { route: '/api/poi/audioguide' } })); } catch { /* SSR */ }
@@ -295,7 +301,8 @@ async function getOrCreateAudioguideTextInterno(
     mode: character,
     lang: language,
   });
-  return { status: 'error', text: text || baseInfo };
+  // Mai il riassunto grezzo (o «Nome (categoria)») letto come se fosse la guida (13/11/2026): senza narrazione, niente.
+  return { status: 'error', text: text || null };
 }
 
 /**

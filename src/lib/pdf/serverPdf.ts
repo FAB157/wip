@@ -60,7 +60,14 @@ async function numeraPagine(buf: Buffer, etichetta: string, daPagina: number): P
       p.drawText(testo, { x: p.getWidth() - X - w, y: Y + 1, size: DIM, font, color: rgb(0.47, 0.47, 0.47) });
     });
     return Buffer.from(await doc.save());
-  } catch { return buf; }
+  } catch (e: any) {
+    // MAI in silenzio (18/11/2026): se pdf-lib non si carica (nel collaudo notturno su Oracle e' una dipendenza
+    // esterna del bundle: «npm i pdf-lib» accanto a server-pdf.bundle.mjs) le pagine escono senza numero e
+    // nessuno lo sapeva. Il PDF parte comunque, ma l'errore si vede nel log e in `ultimoErrore`.
+    ultimoErrore = `numerazione pagine non riuscita: ${e?.message || e}`;
+    console.warn('[pdf server] numerazione pagine non riuscita (pdf-lib mancante?):', e?.message || e);
+    return buf;
+  }
 }
 
 /** PDF della guida premium; null se non realizzabile. */
@@ -95,11 +102,42 @@ export async function pdfGuidaServer(content: any, mediaManifest: Record<string,
   }
 }
 
+/**
+ * 21/11/2026 (collaudo notturno, Seoul e Kyoto: email del piano senza allegato). Il controllo dei caratteri guardava
+ * TUTTO il JSON del piano (campi tecnici compresi: nome della riga agganciata, note interne) e rinunciava al PDF se un
+ * solo nome era in coreano o giapponese. Ora: un titolo di tappa in un altro alfabeto prende il titolo del modello
+ * (`titolo_ai`, nella lingua dell'utente) quando quello è latino; si rinuncia solo se resta testo STAMPATO non latino
+ * (i campi che ItinerarioPdf mette sulla pagina).
+ */
+function pianoPerStampa(plan: any): any {
+  const copia = JSON.parse(JSON.stringify(plan));
+  for (const g of Array.isArray(copia?.giorni) ? copia.giorni : []) {
+    for (const t of Array.isArray(g?.tappe) ? g.tappe : []) {
+      const alternativa = [t?.titolo_ai, t?.sostituito_da_archivio].find((x) => typeof x === 'string' && x.trim() && !haCaratteriNonLatini(x));
+      if (!alternativa) continue;
+      for (const k of ['titolo_tappa', 'titolo']) if (typeof t[k] === 'string' && haCaratteriNonLatini(t[k])) t[k] = alternativa;
+    }
+  }
+  return copia;
+}
+function testoStampato(plan: any): string {
+  const s = (v: unknown) => (v == null ? '' : typeof v === 'string' ? v : JSON.stringify(v));
+  const pezzi: string[] = [s(plan?.titolo), s(plan?.info_viaggio)];
+  for (const g of Array.isArray(plan?.giorni) ? plan.giorni : []) {
+    pezzi.push(s(g?.tabella_budget));
+    for (const t of Array.isArray(g?.tappe) ? g.tappe : []) {
+      pezzi.push(...['titolo_tappa', 'titolo', 'attivita', 'consiglio_guida', 'mezzi_precedente', 'spostamento_precedente', 'tipo', 'tempo_necessario', 'ora'].map((k) => s(t?.[k])));
+    }
+  }
+  return pezzi.join('\n');
+}
+
 /** PDF dell'itinerario; null se non realizzabile. */
-export async function pdfItinerarioServer(plan: any, language: unknown): Promise<Buffer | null> {
+export async function pdfItinerarioServer(planIn: any, language: unknown): Promise<Buffer | null> {
   try {
-    if (!Array.isArray(plan?.giorni) || !plan.giorni.length) return null;
-    if (haCaratteriNonLatini(JSON.stringify(plan).slice(0, 20000))) return null;
+    if (!Array.isArray(planIn?.giorni) || !planIn.giorni.length) return null;
+    const plan = pianoPerStampa(planIn);
+    if (haCaratteriNonLatini(testoStampato(plan))) return null;
     const L = lingua(language);
     // Stessa mappa del PDF fatto dal telefono (07/09: l'allegato usciva senza).
     const urlMappa = urlMappaStatica(plan, process.env.VITE_MAPBOX_TOKEN || process.env.MAPBOX_TOKEN);

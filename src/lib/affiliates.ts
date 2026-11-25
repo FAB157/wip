@@ -191,6 +191,26 @@ export function viatorSearchUrl(city: string): string {
 }
 
 /**
+ * (25/11/2026, committente: «il tasto Viator non funziona») La pagina di DESTINAZIONE Viator ricavata da un prodotto
+ * dell'API (…/tours/<Città>/<titolo>/d<id>-<codice>?…pid=…): elenca tutte le esperienze della zona, mentre la ricerca
+ * testuale (searchResults/all?text=) per i luoghi piccoli non trova nulla. Il pid resta quello del prodotto (generato
+ * dalla nostra chiave API, quindi nostro), medium=link. null se l'URL non ha la forma attesa.
+ */
+export function viatorDestinazioneDaProdotto(urlProdotto: string): string | null {
+  try {
+    const u = new URL(urlProdotto);
+    const m = u.pathname.match(/^\/(?:([a-z]{2}-[A-Z]{2})\/)?tours\/([^/]+)\/[^/]+\/d(\d+)-/);
+    if (!m) return null;
+    const d = new URL(`https://www.viator.com/${m[1] ? `${m[1]}/` : ''}${m[2]}/d${m[3]}-ttd`);
+    const pid = u.searchParams.get('pid') || VIATOR_PARTNER_ID;
+    if (pid) d.searchParams.set('pid', pid);
+    d.searchParams.set('mcid', u.searchParams.get('mcid') || VIATOR_MCID);
+    d.searchParams.set('medium', 'link');
+    return pid ? d.toString() : ensureViatorAffiliateUrl(d.toString());
+  } catch { return null; }
+}
+
+/**
  * Home Tiqets nella lingua dell'utente: ripiego quando la chip mappa non
  * trova biglietti nella zona (vedi MapArea/wip-open-experiences). A
  * differenza di Viator/GYG, Tiqets non ha una pagina di ricerca generica per

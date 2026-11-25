@@ -80,7 +80,10 @@ const SOLO_AMPIO = process.argv.includes('--solo-ampio');
 // si può chiedere: `source=eq.datatourisme` su shared_pois va in statement timeout (misurato: 8 s, 57014), l'intervallo
 // di id sulla chiave primaria risponde in 0,14 s.
 const PREFISSI = (arg('prefissi', '') || '').split(',').map(s => s.trim()).filter(Boolean);
-const NOME_LAVORO = PREFISSI.length ? 'foto-nuovi' : SOLO_AMPIO ? 'foto-poi' : 'foto-gemme';
+// (25/11/2026, committente: «anche le foto dobbiamo inserire», «cerca ovunque, sia siti che blog ecc.») Quarto modo:
+// un ELENCO di luoghi (file .jsonl con un campo id per riga, separati da virgola) — natura e tematici dell'arricchimento.
+const ELENCO = (arg('elenco', '') || '').split(',').map(s => s.trim()).filter(Boolean);
+const NOME_LAVORO = ELENCO.length ? 'foto-elenco' : PREFISSI.length ? 'foto-nuovi' : SOLO_AMPIO ? 'foto-poi' : 'foto-gemme';
 const STATO_FILE = path.join(BASE_DIR, 'scratch', `${NOME_LAVORO}-stato.json`);
 const VISTI_FILE = path.join(BASE_DIR, 'scratch', `${NOME_LAVORO}-visti.tsv`);
 const UA = 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)';
@@ -253,7 +256,9 @@ async function fetchHtml(url) {
 function estraiImmagine(html, baseUrl, soloMeta = false) {
   // Anche le og:image «di servizio»: il 18/09 le «piazze dei Teatri» di Reggio
   // Emilia prendevano dal sito del teatro «simboli-tv-e-newsletter.jpg».
-  const scartare = /logo|icon|sprite|favicon|placeholder|avatar|pixel\.gif|spinner|loader|credits?|sponsor|partner|banner|footer|cookie|badge|button|bg[-_.]|background|newsletter|simbol|default[-_.]|social[-_]?(share|card|image)|og[-_]?image|cover[-_]?default/i;
+  // (25/11/2026, prova sui parchi: un poster stagionale, un banner «_FB_», un'immagine «Untitled (256 x 256)») anche poster,
+  // locandine, volantini e file senza nome.
+  const scartare = /logo|icon|sprite|favicon|placeholder|avatar|pixel\.gif|spinner|loader|credits?|sponsor|partner|banner|footer|cookie|badge|button|bg[-_.]|background|newsletter|simbol|default[-_.]|social[-_]?(share|card|image)|og[-_]?image|cover[-_]?default|poster|plakat|affiche|locandina|flyer|volantino|untitled|[-_]fb[-_]|gutschein|voucher|coupon|einladung|invit|share[-_]?thumb|thumb[-_]?share/i;
   const og = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
     || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
   if (og?.[1] && !scartare.test(og[1])) return risolviUrl(og[1], baseUrl);
@@ -269,20 +274,72 @@ function estraiImmagine(html, baseUrl, soloMeta = false) {
   return '';
 }
 function risolviUrl(src, base) {
-  try { return new URL(src, base).href; } catch { return ''; }
+  // (25/11/2026) «&amp;» dell'HTML e il tracciamento ?utm_ di Wikimedia rendono l'indirizzo un 404 (regola del 06/10).
+  try {
+    const u = new URL(String(src).replace(/&amp;/g, '&'), base);
+    for (const k of [...u.searchParams.keys()]) if (/^utm_/i.test(k)) u.searchParams.delete(k);
+    return u.href;
+  } catch { return ''; }
 }
 
-/** L'immagine esiste, è davvero un'immagine, e non è minuscola (icona travestita). */
+/** Larghezza e altezza dai primi byte di un PNG, JPEG, GIF o WebP; null se non si capisce. */
+function dimensioni(b) {
+  try {
+    if (b[0] === 0x89 && b[1] === 0x50) return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) };
+    if (b[0] === 0x47 && b[1] === 0x49) return { w: b.readUInt16LE(6), h: b.readUInt16LE(8) };
+    if (b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP') {
+      const t = b.toString('ascii', 12, 16);
+      if (t === 'VP8X') return { w: 1 + b.readUIntLE(24, 3), h: 1 + b.readUIntLE(27, 3) };
+      if (t === 'VP8 ') return { w: b.readUInt16LE(26) & 0x3fff, h: b.readUInt16LE(28) & 0x3fff };
+      if (t === 'VP8L') { const n = b.readUInt32LE(21); return { w: (n & 0x3fff) + 1, h: ((n >> 14) & 0x3fff) + 1 }; }
+    }
+    if (b[0] === 0xff && b[1] === 0xd8) {
+      let i = 2;
+      while (i + 9 < b.length) {
+        if (b[i] !== 0xff) { i++; continue; }
+        const m = b[i + 1];
+        if ((m >= 0xc0 && m <= 0xc3) || (m >= 0xc5 && m <= 0xc7) || (m >= 0xc9 && m <= 0xcb) || (m >= 0xcd && m <= 0xcf)) return { w: b.readUInt16BE(i + 7), h: b.readUInt16BE(i + 5) };
+        i += 2 + b.readUInt16BE(i + 2);
+      }
+    }
+  } catch { /* file strano */ }
+  return null;
+}
+
+/**
+ * L'immagine esiste, è davvero un'immagine, e non è un'icona. (25/11/2026) Si misura la DIMENSIONE VERA dai primi 256 KB:
+ * almeno 600 px di larghezza, e niente quadrati sotto i 700 px (loghi, icone «256 x 256»). Dimensione illeggibile = scartata.
+ */
 async function verificaImmagine(url) {
   try {
-    const r = await fetch(url, { method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WorldInPocketBot/1.0)' }, signal: AbortSignal.timeout(10000) });
+    const r = await fetch(url, { method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WorldInPocketBot/1.0)' }, signal: AbortSignal.timeout(15000) });
     if (!r.ok) return false;
     const ct = String(r.headers.get('content-type') || '');
-    if (!/^image\//i.test(ct)) return false;
+    if (!/^image\//i.test(ct) || /svg/i.test(ct)) return false;
     const len = parseInt(r.headers.get('content-length') || '0', 10);
     if (len && len < 8000) return false; // sotto 8 KB è quasi sempre un'icona
+    const reader = r.body?.getReader(); if (!reader) return false;
+    const pezzi = []; let letti = 0;
+    while (letti < 262144) { const { done, value } = await reader.read(); if (done) break; pezzi.push(Buffer.from(value)); letti += value.length; }
+    try { reader.cancel(); } catch {}
+    const d = dimensioni(Buffer.concat(pezzi));
+    if (!d || d.w < 600) return false;
+    if (Math.abs(d.w - d.h) / Math.max(d.w, d.h) < 0.05 && d.w < 700) return false;
     return true;
   } catch { return false; }
+}
+
+/** Il dominio «di base» (example.co.uk, example.com): per sapere se due indirizzi sono dello stesso sito. */
+function dominioBase(host) {
+  const p = String(host || '').toLowerCase().replace(/^www\./, '').split('.');
+  return p.length > 2 && /^(co|com|org|net|gov|ac|or|ne|go)$/.test(p[p.length - 2]) ? p.slice(-3).join('.') : p.slice(-2).join('.');
+}
+// Servizi che ospitano le immagini dei siti (non sono un altro marchio).
+const RE_CDN = /cdn|cloudfront|akamai|sanity\.io|website-files\.com|wp\.com|wixstatic|squarespace|shopify|imgix|cloudinary|azureedge|amazonaws|googleusercontent|ctfassets|prismic|storyblok|contentstack|hubspot|b-cdn|bunny|fastly|imagekit|cloudimg|staticflickr|ytimg/i;
+/** (25/11/2026, Sea Life Nagoya ← foto di legoland.jp) La foto deve stare sul sito stesso o su un servizio di immagini. */
+function stessoSitoOCdn(fotoUrl, paginaUrl) {
+  const hf = hostDi(fotoUrl), hp = hostDi(paginaUrl);
+  return dominioBase(hf) === dominioBase(hp) || RE_CDN.test(hf);
 }
 
 const hostDi = (u) => { try { return new URL(u).hostname.toLowerCase(); } catch { return ''; } };
@@ -311,7 +368,7 @@ async function daSitoUfficiale(g, { sitoNoto = true, ricerca = true } = {}) {
     const html = await fetchHtml(u);
     if (!html || sovrapposizione(g.name, html.slice(0, 6000)) < sogliaPagina) return null;
     const foto = estraiImmagine(html, u, true); // scrittura diretta: solo l'immagine scelta dal sito
-    if (!foto || eAraldico(foto) || !(await verificaImmagine(foto))) return null;
+    if (!foto || eAraldico(foto) || !stessoSitoOCdn(foto, u) || !(await verificaImmagine(foto))) return null;
     const dominio = hostDi(u).replace(/^www\./, '');
     // Secondo parere di Gonka: un catalogo di terzi che parla del luogo
     // (monestirs.cat per la cattedrale di Mondoñedo) non è il sito ufficiale.
@@ -352,8 +409,12 @@ async function daSitoUfficiale(g, { sitoNoto = true, ricerca = true } = {}) {
 
 // ── 2. FONTI APERTE VERIFICATE (Wikipedia collegata, P18, geosearch) ────────
 
-const RE_ARALDICO = /gonfalone|stemma|coat[_ ]of[_ ]arms|coa[_-]|bandiera|flag[_ ]of|blazon|logo[_-]|wappen|armoiries|escudo|seal[_ ]of|emblem/i;
+// (25/11/2026) «logo» ovunque nel nome del file: «Acuario_Michin_Guadalajara_logo.png» passava (la regola chiedeva «logo_»).
+const RE_ARALDICO = /gonfalone|stemma|coat[_ ]of[_ ]arms|coa[_-]|bandiera|flag[_ ]of|blazon|logo|wappen|armoiries|escudo|seal[_ ]of|emblem|wordmark|signet/i;
 function eAraldico(url) { return RE_ARALDICO.test(String(url || '')); }
+// (25/11/2026, Dinosaur World) upload.wikimedia.org/wikipedia/<lingua>/… è un file caricato SOLO su quella Wikipedia, non su
+// Commons: spesso è «non libero» (fair use, loghi, locandine) e non si può riusare. Solo Commons (/wikipedia/commons/).
+function fileLocaleWikipedia(url) { return /upload\.wikimedia\.org\/wikipedia\/(?!commons\/)[a-z-]+\//i.test(String(url || '')); }
 
 const STOP_NOME = new Set(['di','del','della','dei','delle','degli','the','of','la','le','il','lo','san','santa','santo','chiesa','church','museo','museum','palazzo','villa','via','piazza','torre','castello','castle','cattedrale','cathedral','basilica','passeggiata','lungomare','promenade','seafront','waterfront','square','plaza','place','platz',
   // Anche il TIPO non è un pezzo proprio del nome (18/09): «Beach Promenade d'Annunzio» prendeva «Lido beach, Venice» per il solo «beach».
@@ -387,7 +448,7 @@ async function viaWikipediaCollegata(g) {
   const html = await fetchHtml(voce);
   if (!html || sovrapposizione(g.name, html.slice(0, 6000)) < 0.4) return null;
   const foto = estraiImmagine(html, voce, true);
-  if (!foto || eAraldico(foto) || !(await verificaImmagine(foto))) return null;
+  if (!foto || eAraldico(foto) || fileLocaleWikipedia(foto) || !(await verificaImmagine(foto))) return null;
   const titolo = (html.match(/<title[^>]*>([^<]{0,200})/i) || [])[1] || '';
   if (!articoloDelLuogo(titolo, g)) return { url: foto, fonte: `wikipedia:${hostDi(voce)}`, certa: false, pagina: voce, dominioCandidata: hostDi(voce), tipoCandidata: 'commons' };
   return { url: foto, fonte: `wikipedia:${hostDi(voce)}` };
@@ -417,8 +478,8 @@ async function viaWikipediaGeosearch(lingua, g) {
       { signal: AbortSignal.timeout(8000), headers: { 'User-Agent': UA } });
     if (!s.ok) return null;
     const j = await s.json();
-    const foto = j.thumbnail?.source || j.originalimage?.source || '';
-    if (!foto || eAraldico(foto)) return null;
+    const foto = risolviUrl(j.thumbnail?.source || j.originalimage?.source || '', `https://${lingua}.wikipedia.org/`);
+    if (!foto || eAraldico(foto) || fileLocaleWikipedia(foto)) return null;
     return { url: foto, fonte: `wikipedia_${lingua}` };
   } catch { return null; }
 }
@@ -604,7 +665,41 @@ async function* scorriPrefissi(stato) {
   }
 }
 
+/** Le righe di un elenco di id, a lotti di 100, solo quelle ancora senza foto. Il punto raggiunto sta nello stato. */
+async function* scorriElenco(stato) {
+  const ids = [], visti = new Set();
+  for (const f of ELENCO) for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
+    if (!l.trim()) continue;
+    try { const id = JSON.parse(l).id; if (id && !visti.has(id)) { visti.add(id); ids.push(id); } } catch {}
+  }
+  stato.cursori = stato.cursori || {};
+  const c = (stato.cursori.elenco = stato.cursori.elenco || { indice: 0, finitaIl: 0 });
+  if (c.finitaIl && Date.now() - c.finitaIl < RITENTA_GIORNI * 86_400_000) return;
+  if (c.finitaIl) { c.indice = 0; c.finitaIl = 0; }
+  console.log(`[foto-elenco] ${ids.length} luoghi nell'elenco, riparto da ${c.indice}`);
+  while (c.indice < ids.length) {
+    const lotto = ids.slice(c.indice, c.indice + 100);
+    let blocco = null;
+    for (let tentativo = 1; tentativo <= 5 && !blocco; tentativo++) {
+      try {
+        const u = `${SB}/rest/v1/shared_pois?select=id,name,category,lat,lon,city,country,wikidata,wikipedia_url,contact_website,photo_url,image_url,status,is_gem&id=in.(${encodeURIComponent(lotto.map(i => `"${i}"`).join(','))})&image_url=is.null&photo_url=is.null&is_hidden=eq.false`;
+        const r = await fetch(u, { headers: H, signal: AbortSignal.timeout(40000) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        blocco = await r.json();
+      } catch (e) {
+        console.log(`  [elenco] lotto da ${c.indice}: tentativo ${tentativo}/5 fallito (${e.message})`);
+        await new Promise(res => setTimeout(res, 15_000 * tentativo));
+      }
+    }
+    if (blocco) for (const p of blocco) yield p;
+    c.indice += lotto.length;
+  }
+  c.finitaIl = Date.now();
+  console.log('  [elenco] elenco completato');
+}
+
 async function* gemme(stato) {
+  if (ELENCO.length) { yield* scorriElenco(stato); return; }
   if (PREFISSI.length) { yield* scorriPrefissi(stato); return; }
   if (!SOLO_AMPIO) yield* scorri(CATEGORIE, true, null);
   if (SOLO_GEMME) return;

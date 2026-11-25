@@ -38,7 +38,10 @@
   .tasto { display:inline-block; text-decoration:none; border-radius:999px; padding:13px 24px; font-weight:800; font-size:15px; }
   .tasto.bianco { background:#fff; color:var(--notte); }
   .tasto.vetro { background:rgba(255,255,255,.14); color:#fff; border:1px solid rgba(255,255,255,.4); }
-  .nota-android { font-size:13px; opacity:.85; width:100%; margin-top:2px; }
+  .qr-store { display:flex; gap:14px; width:100%; margin-top:8px; }
+  .qr-store div { text-align:center; font-size:12px; font-weight:700; }
+  .qr-store span { display:block; width:104px; padding:6px; background:#fff; border-radius:12px; margin-bottom:4px; }
+  .qr-store svg { display:block; width:100%; height:auto; }
   .telefoni { position:relative; height:430px; }
   .telefoni img { position:absolute; border-radius:26px; border:6px solid #0b1b4a; background:#0b1b4a; box-shadow:0 18px 40px rgba(0,0,0,.4); }
   .telefoni img.a { width:210px; right:20px; top:10px; transform:rotate(4deg); z-index:2; }
@@ -94,9 +97,12 @@
         <p class="sotto" id="sotto"></p>
         <div class="tasti">
           <a class="tasto bianco" id="store" href="https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct=presentazione&mt=8"></a>
+          <a class="tasto bianco" id="android" href="https://play.google.com/store/apps/details?id=com.itaintasca.app"></a>
           <a class="tasto vetro" id="prova" href="https://www.wip.guide/"></a>
           <a class="tasto vetro" id="pdf" href="#pdf"></a>
-          <div class="nota-android" id="android"></div>
+          <!-- (13/11/2026, committente: «nella presentazione metti i QR code Apple e Android») Android è su Google Play:
+               i due codici sono disegnati in locale con /regalo/qrcode.min.js, nessun servizio esterno. -->
+          <div class="qr-store"><div><span id="qr_ios"></span><small>App Store</small></div><div><span id="qr_play"></span><small>Google Play</small></div></div>
         </div>
       </div>
       <div class="telefoni"><img class="b" src="/presentazione/02-mappa.jpg" alt=""><img class="a" src="/presentazione/01-scheda.jpg" alt=""></div>
@@ -127,8 +133,14 @@
 <footer><div class="dentro"><b>www.wip.guide</b> · <a href="mailto:marketing@wip.guide">marketing@wip.guide</a> · <span id="fatto"></span></div></footer>
 
 <script src="/presentazione/testi.js"></script>
+<script src="/regalo/qrcode.min.js"></script>
 <script>
-var NOMI = { IT:"Italiano", EN:"English", FR:"Français", ES:"Español", DE:"Deutsch", RU:"Русский", ZH:"中文" };
+(function () {
+  function disegna(id, indirizzo) { try { var q = qrcode(0, "M"); q.addData(indirizzo); q.make(); document.getElementById(id).innerHTML = q.createSvgTag(4, 0); } catch (e) {} }
+  disegna("qr_ios", "https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct=presentazione-qr&mt=8");
+  disegna("qr_play", "https://play.google.com/store/apps/details?id=com.itaintasca.app");
+})();
+var NOMI ={ IT:"Italiano", EN:"English", FR:"Français", ES:"Español", DE:"Deutsch", RU:"Русский", ZH:"中文" };
 var lingua = wipLingua();
 try { var salvata = localStorage.getItem("wip_comuni_lang"); if (!new URLSearchParams(location.search).get("lang") && salvata && WIP_LINGUE.indexOf(salvata) >= 0) lingua = salvata; } catch (e) {}
 var CAMPAGNA = (new URLSearchParams(location.search).get("c") || "").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40);

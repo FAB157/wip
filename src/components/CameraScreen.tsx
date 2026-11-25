@@ -783,6 +783,18 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       schedaPassRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
+    // (14/11/2026) LA VISITA SI COMPRA PER UN MUSEO: senza un museo scelto il tasto chiedeva 200 crediti «al buio».
+    // Prima si sceglie (elenco «Visite», ricerca o «sei qui»), e la cassa si apre dalla scheda di quel museo.
+    if (tier === 'tour' && !passVenueKey && !passPerLuogo && !riavviaDopoPassRef.current && !visit) {
+      const SCEGLI: Record<string, string> = {
+        IT: 'Scegli prima il museo o la chiesa: la Visita vale per quel luogo.', EN: 'Choose the museum or church first: the Visit is for that place.',
+        FR: 'Choisissez d’abord le musée ou l’église : la Visite vaut pour ce lieu.', ES: 'Elige primero el museo o la iglesia: la Visita vale para ese lugar.',
+        DE: 'Wähle zuerst das Museum oder die Kirche: der Besuch gilt für diesen Ort.', RU: 'Сначала выберите музей или церковь: визит действует для этого места.', ZH: '请先选择博物馆或教堂：参观仅适用于该地点。',
+      };
+      notify(SCEGLI[String(language || 'IT').toUpperCase()] || SCEGLI.EN);
+      setMode('visite'); void caricaMuseiVicini();
+      return;
+    }
     const { data } = await supabase.auth.getSession();
     const uid = data?.session?.user?.id;
     if (!uid) { setError(tr('vis_pass_login')); return; }

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The WIP interface explained: bar, chips, buttons | WIP Guide</title>
+<meta name="description" content="What each WIP button does: the bottom bar (Explore, Itinerary, Events, camera, WIP AI, Guide, Profile), category chips, map buttons.">
+<link rel="canonical" href="https://www.wip.guide/guida/en/interfaccia"><link rel="alternate" hreflang="it" href="https://www.wip.guide/guida/interfaccia"><link rel="alternate" hreflang="en" href="https://www.wip.guide/guida/en/interfaccia"><link rel="alternate" hreflang="fr" href="https://www.wip.guide/guida/fr/interfaccia"><link rel="alternate" hreflang="es" href="https://www.wip.guide/guida/es/interfaccia"><link rel="alternate" hreflang="de" href="https://www.wip.guide/guida/de/interfaccia"><link rel="alternate" hreflang="ru" href="https://www.wip.guide/guida/ru/interfaccia"><link rel="alternate" hreflang="zh-Hans" href="https://www.wip.guide/guida/zh/interfaccia"><link rel="alternate" hreflang="x-default" href="https://www.wip.guide/guida/interfaccia">
+<meta property="og:type" content="website"><meta property="og:title" content="The WIP interface explained: bar, chips, buttons"><meta property="og:description" content="What each WIP button does: the bottom bar (Explore, Itinerary, Events, camera, WIP AI, Guide, Profile), category chips, map buttons."><meta property="og:url" content="https://www.wip.guide/guida/en/interfaccia"><meta property="og:site_name" content="WIP Guide"><meta property="og:image" content="https://www.wip.guide/scopri/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/icon.png">
+<style>
+:root{--bg:#fff;--fg:#14213d;--mut:#4b5568;--brand:#1e3a8a;--brand2:#2f56c9;--card:#f4f6fb;--line:#d9dfec;--ok:#0f6b3a;--warn:#8a4b00;--warnbg:#fff4e0;--costbg:#e8f0ff;--on:#fff}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0e1424;--fg:#e8ecf7;--mut:#a9b3c9;--brand:#8fb0ff;--brand2:#b5ccff;--card:#172038;--line:#2a3555;--ok:#6fdc9c;--warn:#ffcf8a;--warnbg:#2a2014;--costbg:#16264a;--on:#0e1424}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--brand)}a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--brand2);outline-offset:2px}
+header.top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.bar{max-width:1040px;margin:0 auto;padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.logo{font-weight:800;color:var(--brand);text-decoration:none;font-size:1.15rem}
+nav.menu{display:flex;gap:4px 14px;flex-wrap:wrap;font-size:.92rem}nav.menu a{text-decoration:none;color:var(--fg);padding:6px 2px}nav.menu a:hover{color:var(--brand)}
+.apri{margin-left:auto}
+main{max-width:1040px;margin:0 auto;padding:20px 16px 56px}
+h1{font-size:clamp(1.7rem,4.5vw,2.6rem);line-height:1.15;margin:.2em 0 .4em;color:var(--brand)}
+h2{font-size:1.45rem;margin:2em 0 .5em;line-height:1.25}h3{font-size:1.1rem}
+.lead{font-size:1.2rem;color:var(--mut);max-width:62ch}
+.crumb{font-size:.9rem;color:var(--mut)}.crumb a{color:var(--mut)}
+.btn{display:inline-block;background:var(--brand);color:var(--on);padding:11px 18px;border-radius:10px;text-decoration:none;font-weight:700;margin:4px 6px 4px 0}
+.btn.sec{background:transparent;color:var(--brand);border:2px solid var(--brand)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:22px 0;padding:16px;background:var(--card);border-radius:14px}
+.stat{display:flex;flex-direction:column}.num{font-size:1.9rem;font-weight:800;color:var(--brand);font-variant-numeric:tabular-nums}.et{font-size:.88rem;color:var(--mut)}
+.nota-stat{grid-column:1/-1;font-size:.82rem;color:var(--mut);margin:4px 0 0}
+ol.passi{counter-reset:p;list-style:none;padding:0}ol.passi li{counter-increment:p;position:relative;padding:10px 12px 10px 52px;margin:8px 0;background:var(--card);border-radius:10px}
+ol.passi li::before{content:counter(p);position:absolute;left:12px;top:9px;width:30px;height:30px;border-radius:50%;background:var(--brand);color:var(--on);display:grid;place-items:center;font-weight:800}
+.nota,.costo,.manca{border-radius:10px;padding:12px 14px;margin:14px 0}.nota{background:var(--warnbg);color:var(--warn)}.costo{background:var(--costbg)}
+.manca{border:2px dashed var(--line)}.manca h2{margin-top:0;font-size:1.1rem}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:420px}th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}th{background:var(--card)}
+figure{margin:18px 0}figure img,figure video{max-width:100%;height:auto;border-radius:12px;border:1px solid var(--line)}.esempi{margin:28px 0}.es-griglia{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}.es{border:1px solid var(--linea,#ddd);border-radius:12px;padding:12px;margin:0}.es img{max-height:360px;width:100%;object-fit:contain}.es audio{width:100%;margin-top:8px}.es-nota{font-size:.9em;margin:6px 0 0;opacity:.85}.es-pdf .btn{display:inline-block;margin-bottom:6px}
+figure img{max-height:640px;width:auto;display:block}figcaption{font-size:.85rem;color:var(--mut)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;margin:18px 0}
+.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;text-decoration:none;color:var(--fg)}
+.card:hover{border-color:var(--brand)}.card .em{font-size:1.8rem}.card h3{margin:.3em 0}.card p{margin:.2em 0;color:var(--mut);font-size:.95rem}.card .cn{font-weight:700;color:var(--brand);font-size:.95rem}
+.ricerca{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.ricerca input{flex:1;min-width:220px;padding:12px 14px;border-radius:10px;border:2px solid var(--line);font:inherit;background:var(--bg);color:var(--fg)}
+.ris{list-style:none;padding:0}.ris li{margin:6px 0}.ris a{display:block;padding:10px 12px;background:var(--card);border-radius:10px;text-decoration:none}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:999px;padding:8px 14px;font:inherit;cursor:pointer}.chip:hover{background:var(--brand);color:var(--on)}
+details{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:8px 0}summary{cursor:pointer;font-weight:700}
+.letto{display:flex;align-items:center;gap:8px;margin:28px 0}.progress{font-size:.9rem;color:var(--mut)}
+.fonte{opacity:.8}.agg{font-size:.85rem;color:var(--mut);margin-top:32px}
+footer{border-top:1px solid var(--line);padding:22px 16px;text-align:center;font-size:.9rem;color:var(--mut)}
+.lingue{max-width:1040px;margin:0 auto;padding:0 16px 8px;font-size:.85rem;color:var(--mut)}.lingue a{color:var(--mut)}.lingue strong{color:var(--fg)}footer .lingue{padding-top:10px}
+@media(max-width:600px){body{font-size:16px}nav.menu{display:none}.apri{margin-left:auto}}
+</style>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"WIP","item":"https://www.wip.guide/"},{"@type":"ListItem","position":2,"name":"Guide","item":"https://www.wip.guide/guida/en/"},{"@type":"ListItem","position":3,"name":"The interface","item":"https://www.wip.guide/guida/en/interfaccia"}]}</script>
+</head><body>
+<a href="#main" style="position:absolute;left:-999px" onfocus="this.style.left='8px'">Skip to content</a>
+<header class="top"><div class="bar"><a class="logo" href="/guida/en/">WIP · Guide</a><nav class="menu" aria-label="Guide"><a href="/guida/en/">Guide</a><a href="/guida/en/categorie">Categories</a><a href="/guida/en/audioguide">Audio guides</a><a href="/guida/en/itinerari">Itineraries</a><a href="/guida/en/tutorial">Tutorials</a><a href="/guida/en/domande-frequenti">FAQ</a></nav><a class="btn apri" href="https://wip.guide/">Open WIP</a></div><nav class="lingue" aria-label="Language"><a lang="it" hreflang="it" href="/guida/interfaccia">Italiano</a> · <strong lang="en">English</strong> · <a lang="fr" hreflang="fr" href="/guida/fr/interfaccia">Français</a> · <a lang="es" hreflang="es" href="/guida/es/interfaccia">Español</a> · <a lang="de" hreflang="de" href="/guida/de/interfaccia">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/interfaccia">Русский</a> · <a lang="zh" hreflang="zh" href="/guida/zh/interfaccia">中文</a></nav></header>
+<main id="main">
+<p class="crumb"><a href="/">WIP</a> › <a href="/guida/en/">Guide</a> › The interface</p>
+<h1>The WIP interface explained: bar, chips, buttons</h1>
+<p class="lead">A visual guide to the controls: where everything is and what it does when you tap it.</p>
+<p class="agg">Translated from Italian. Screenshots, videos and examples show the app in Italian.</p>
+<div class="galleria"><figure><img src="/guida/img/interfaccia-1.jpg" alt="WIP map screenshot with chips at the top, sub-filters, Map layers button at bottom left, Find nearby, All, magnifying glass, crosshair, weather indicator, and bottom bar" loading="lazy" decoding="async"><figcaption>The interface: chips and sub-filters at the top, Map layers at the bottom left, search, position and weather in the center, the bar with Explore, Itinerary, Events, camera, WIP AI, Guide and Profile. <span class="fonte">Real screenshot of wip.guide (11/15/2026). Map © OpenStreetMap, CARTO.</span></figcaption></figure></div><h2>The bottom bar</h2>
+<div class="tw"><table><thead><tr><th>Entry</th><th>What it does</th></tr></thead><tbody><tr><td>Explore</td><td>The map with places and levels.</td></tr><tr><td>Itinerary</td><td>Create, open, and download itineraries; Library; group travel.</td></tr><tr><td>Events</td><td>Events, exhibitions, and seasonal content.</td></tr><tr><td>Camera button</td><td>Vision: recognizes places, artworks, nature; AR Radar; Museum visits.</td></tr><tr><td>WIP AI</td><td>Chat with the assistant (3 credits every 10 messages).</td></tr><tr><td>Guide</td><td>Turns the audio guide radar on or off; the button above mutes it.</td></tr><tr><td>Profile</td><td>Settings, credits, Shop, price list, archive, manual, group tour.</td></tr></tbody></table></div><h2>At the top of the map</h2>
+<ul><li><strong>Category chips</strong>: Gems, Monuments, WIP Community, Experiences, Events; use <strong>＋ More</strong> to add Nature, Places, Venues, Utilities, Families, Cultural Heritage, Themed.</li><li><strong>Sub-chips</strong>: these appear below the bar when the chip is turned on and refine your search (for example Churches, Museums, Viewpoints).</li></ul><h2>On the map</h2>
+<ul><li><strong>Layers</strong> (bottom left): trails, cycle paths, wine and food, snow, sun, climate, sea quality, satellite, and more.</li><li><strong>Lens 🔍</strong>: search for a city.</li><li><strong>Crosshairs</strong>: centers on your location; hold down to make the map follow you.</li><li><strong>Weather indicator</strong> at the bottom center: temperature and, if it is raining, an alert.</li><li><strong>Numbered pins</strong>: multiple nearby places grouped together; zoom in to separate them.</li></ul><h2>Continue with</h2><div class="grid"><a class="card" href="/guida/en/primi-5-minuti"><h3>First 5 minutes</h3><p>For those opening WIP for the first time: five steps to view the map, find a place, listen to a guide, and und…</p></a><a class="card" href="/guida/en/mappa-e-ricerca"><h3>Map and search</h3><p>How to use the WIP map: category chips, layers, city search, location, weather and place card with photos, des…</p></a><a class="card" href="/guida/en/glossario"><h3>Glossary</h3><p>Gems, teasers, Day Pass, credits, radar, tour, WipNav, GeoControl: the meaning of every word used in WIP.…</p></a></div><div class="letto"><input type="checkbox" id="letto" data-s="interfaccia"><label for="letto">I have read this guide (saved only on your device)</label></div><p><a class="btn" href="https://wip.guide/">Open WIP</a> <a class="btn sec" href="/guida/en/categorie">All categories</a></p>
+
+<p class="agg">Content checked against the app code on 16 November 2026. If something does not match what you see, write to <a href="mailto:support@wip.guide">support@wip.guide</a>.</p>
+</main>
+<footer><a href="/guida/en/">Guide</a> · <a href="/privacy">Privacy</a> · <a href="/support">Support</a> · <a href="https://wip.guide/">wip.guide</a><br><nav class="lingue" aria-label="Language"><a lang="it" hreflang="it" href="/guida/interfaccia">Italiano</a> · <strong lang="en">English</strong> · <a lang="fr" hreflang="fr" href="/guida/fr/interfaccia">Français</a> · <a lang="es" hreflang="es" href="/guida/es/interfaccia">Español</a> · <a lang="de" hreflang="de" href="/guida/de/interfaccia">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/interfaccia">Русский</a> · <a lang="zh" hreflang="zh" href="/guida/zh/interfaccia">中文</a></nav></footer>
+<script>(function(){
+function ready(f){document.readyState!='loading'?f():document.addEventListener('DOMContentLoaded',f)}
+ready(function(){
+ var red=matchMedia('(prefers-reduced-motion: reduce)').matches;
+ var els=document.querySelectorAll('.num[data-n]');
+ if('IntersectionObserver' in window&&!red&&els.length){var io=new IntersectionObserver(function(es){es.forEach(function(e){if(!e.isIntersecting)return;io.unobserve(e.target);var el=e.target,n=+el.dataset.n,pre=el.dataset.c||'',t0=null;function st(t){t0=t0||t;var p=Math.min((t-t0)/900,1);el.textContent=pre+Math.round(n*p).toLocaleString('en-GB');if(p<1)requestAnimationFrame(st)}requestAnimationFrame(st)})},{threshold:.4});els.forEach(function(e){io.observe(e)})}
+ var inp=document.getElementById('q'),out=document.getElementById('ris');
+ if(inp&&out){var idx=null;fetch('/guida/en/indice.json').then(function(r){return r.json()}).then(function(j){idx=j}).catch(function(){});
+  var norm=function(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\p{L}\p{N} ]+/gu,' ')};
+  var cerca=function(q){q=norm(q).trim();if(!q||!idx){out.innerHTML='';return}var SW=' how can find where want would like use the and for with near what are see look into from ';var w=/[\u4e00-\u9fff]/.test(q)?Array.from(q.replace(/\s+/g,'')).reduce(function(a,c,i,s){if(i<s.length-1)a.push(c+s[i+1]);return a},[]):q.split(/\s+/).filter(function(x){return x.length>2&&SW.indexOf(' '+x+' ')<0});
+   var r=idx.map(function(d){var ks=norm(d.k),h=norm(d.t+' '+(d.r||'')+' '+(d.f||'')),s=0;w.forEach(function(x){if(ks.indexOf(x)>-1)s+=5;else if(h.indexOf(x)>-1)s+=1});for(var i=0;i<w.length-1;i++)if(ks.indexOf(w[i]+' '+w[i+1])>-1)s+=8;return {d:d,s:s}}).filter(function(x){return x.s>0}).sort(function(a,b){return b.s-a.s}).slice(0,6);
+   out.innerHTML=r.length?r.map(function(x){return '<li><a href="'+x.d.u+'"><strong>'+x.d.t+'</strong>'+(x.d.r?'<br><span class="et">'+x.d.r+'</span>':'')+'</a></li>'}).join(''):'<li>No guide found: try other words or browse the categories.</li>'};
+  inp.addEventListener('input',function(){cerca(inp.value)});
+  document.querySelectorAll('[data-q]').forEach(function(b){b.addEventListener('click',function(){inp.value=b.dataset.q;cerca(b.dataset.q);inp.focus()})})}
+ var K='wip-guida-letti';function get(){try{return JSON.parse(localStorage.getItem(K)||'[]')}catch(e){return[]}}function set(a){try{localStorage.setItem(K,JSON.stringify(a))}catch(e){}}
+ var cb=document.getElementById('letto');if(cb){var a=get();cb.checked=a.indexOf(cb.dataset.s)>-1;cb.addEventListener('change',function(){var l=get().filter(function(x){return x!==cb.dataset.s});if(cb.checked)l.push(cb.dataset.s);set(l)})}
+ document.querySelectorAll('[data-lez]').forEach(function(el){var l=get();el.textContent=l.indexOf(el.dataset.lez)>-1?'✓ read':''});
+ document.querySelectorAll('[data-perc]').forEach(function(el){var l=get(),s=el.dataset.perc.split(','),n=s.filter(function(x){return l.indexOf(x)>-1}).length;el.textContent='{n} of {t} lessons read'.replace('{n}',n).replace('{t}',s.length)});
+});})();</script>
+</body></html>

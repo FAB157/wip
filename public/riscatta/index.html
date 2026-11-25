@@ -13,7 +13,7 @@
   alla pagina di riscatto quando si invia il coupon, ricordando che si potranno usare con app Android e Apple»).
   Apple (Guideline 3.1.1) non ammette nell'app iOS un codice che regala crediti: il riscatto avviene QUI, sul
   sito, dentro l'app web (Profilo › Impostazioni, riquadro coupon, che su iOS non esiste). I crediti sono
-  dell'account e si usano poi nell'app per iPhone e, a breve, Android. Il codice arriva con ?codice=…; il tasto
+  dell'account e si usano poi nell'app per iPhone e per Android (su Google Play dal 13/11/2026). Il codice arriva con ?codice=…; il tasto
   manda a /?coupon=… (App.tsx apre il Profilo con il codice già scritto).
 -->
 <style>
@@ -64,7 +64,7 @@
     </ol>
     <a class="tasto" id="vai" href="/" data-t="tasto"></a>
     <p class="nota"><b data-t="n1"></b> <span data-t="n2"></span></p>
-    <p class="nota"><span data-t="n3"></span> <a href="https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct=riscatta&mt=8">App Store</a></p>
+    <p class="nota"><span data-t="n3"></span> <a href="https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct=riscatta&mt=8">App Store</a> · <a href="https://play.google.com/store/apps/details?id=com.itaintasca.app">Google Play</a></p>
   </div>
 </main>
 <footer><a href="https://www.wip.guide/">wip.guide</a></footer>
@@ -72,25 +72,25 @@
 var T = {
 IT: { titolo:"Riscatta il tuo coupon", sotto:"Un regalo per te: crediti per le audioguide complete e gli itinerari su misura di WIP.", vuoto:"Non c'è nessun codice in questo link: scrivilo tu nella pagina successiva.",
  p1:"Premi il tasto qui sotto: si apre l'app web di WIP con il codice già inserito.", p2:"Accedi o crea un account gratuito (basta un'email).", p3:"Premi «Riscatta»: i crediti arrivano subito sul tuo account.",
- tasto:"Riscatta sul sito", n1:"Perché sul sito?", n2:"Il riscatto dei coupon avviene qui, non dentro l'app per iPhone. I crediti sono del tuo account: una volta riscattati li usi nell'app per iPhone e, a breve, anche su Android.", n3:"Scarica l'app per iPhone:" },
+ tasto:"Riscatta sul sito", n1:"Perché sul sito?", n2:"Il riscatto dei coupon avviene qui, non dentro l'app per iPhone. I crediti sono del tuo account: una volta riscattati li usi nell'app per iPhone e per Android.", n3:"Scarica l'app:" },
 EN: { titolo:"Redeem your coupon", sotto:"A gift for you: credits for WIP's full audio guides and custom itineraries.", vuoto:"There is no code in this link: type it on the next page.",
  p1:"Press the button below: the WIP web app opens with the code already filled in.", p2:"Sign in or create a free account (an email is enough).", p3:"Press “Redeem”: the credits land on your account right away.",
- tasto:"Redeem on the website", n1:"Why on the website?", n2:"Coupons are redeemed here, not inside the iPhone app. The credits belong to your account: once redeemed you use them in the iPhone app and, soon, on Android too.", n3:"Download the iPhone app:" },
+ tasto:"Redeem on the website", n1:"Why on the website?", n2:"Coupons are redeemed here, not inside the iPhone app. The credits belong to your account: once redeemed you use them in the iPhone and Android apps.", n3:"Download the app:" },
 FR: { titolo:"Utilisez votre coupon", sotto:"Un cadeau pour vous : des crédits pour les audioguides complets et les itinéraires sur mesure de WIP.", vuoto:"Ce lien ne contient aucun code : saisissez-le sur la page suivante.",
  p1:"Appuyez sur le bouton ci-dessous : l'application web WIP s'ouvre avec le code déjà saisi.", p2:"Connectez-vous ou créez un compte gratuit (un e-mail suffit).", p3:"Appuyez sur « Utiliser » : les crédits arrivent aussitôt sur votre compte.",
- tasto:"Utiliser sur le site", n1:"Pourquoi sur le site ?", n2:"Les coupons s'utilisent ici, pas dans l'application iPhone. Les crédits appartiennent à votre compte : une fois obtenus, vous les utilisez dans l'application iPhone et, bientôt, sur Android.", n3:"Téléchargez l'application iPhone :" },
+ tasto:"Utiliser sur le site", n1:"Pourquoi sur le site ?", n2:"Les coupons s'utilisent ici, pas dans l'application iPhone. Les crédits appartiennent à votre compte : une fois obtenus, vous les utilisez dans l'application iPhone ou Android.", n3:"Téléchargez l'application :" },
 ES: { titolo:"Canjea tu cupón", sotto:"Un regalo para ti: créditos para las audioguías completas y los itinerarios a medida de WIP.", vuoto:"Este enlace no contiene ningún código: escríbelo en la página siguiente.",
  p1:"Pulsa el botón de abajo: se abre la app web de WIP con el código ya puesto.", p2:"Inicia sesión o crea una cuenta gratuita (basta un correo).", p3:"Pulsa «Canjear»: los créditos llegan enseguida a tu cuenta.",
- tasto:"Canjear en la web", n1:"¿Por qué en la web?", n2:"Los cupones se canjean aquí, no dentro de la app para iPhone. Los créditos son de tu cuenta: una vez canjeados los usas en la app para iPhone y, pronto, también en Android.", n3:"Descarga la app para iPhone:" },
+ tasto:"Canjear en la web", n1:"¿Por qué en la web?", n2:"Los cupones se canjean aquí, no dentro de la app para iPhone. Los créditos son de tu cuenta: una vez canjeados los usas en la app para iPhone y para Android.", n3:"Descarga la app:" },
 DE: { titolo:"Gutschein einlösen", sotto:"Ein Geschenk für Sie: Guthaben für die vollständigen Audioguides und maßgeschneiderten Routen von WIP.", vuoto:"Dieser Link enthält keinen Code: Geben Sie ihn auf der nächsten Seite ein.",
  p1:"Tippen Sie auf die Schaltfläche unten: Die WIP-Web-App öffnet sich mit bereits eingetragenem Code.", p2:"Melden Sie sich an oder erstellen Sie ein kostenloses Konto (eine E-Mail genügt).", p3:"Tippen Sie auf „Einlösen“: Das Guthaben ist sofort auf Ihrem Konto.",
- tasto:"Auf der Website einlösen", n1:"Warum auf der Website?", n2:"Gutscheine werden hier eingelöst, nicht in der iPhone-App. Das Guthaben gehört zu Ihrem Konto: Einmal eingelöst, nutzen Sie es in der iPhone-App und bald auch auf Android.", n3:"iPhone-App laden:" },
+ tasto:"Auf der Website einlösen", n1:"Warum auf der Website?", n2:"Gutscheine werden hier eingelöst, nicht in der iPhone-App. Das Guthaben gehört zu Ihrem Konto: Einmal eingelöst, nutzen Sie es in der iPhone- und der Android-App.", n3:"App laden:" },
 RU: { titolo:"Активируйте купон", sotto:"Подарок для вас: кредиты на полные аудиогиды и индивидуальные маршруты WIP.", vuoto:"В этой ссылке нет кода: введите его на следующей странице.",
  p1:"Нажмите кнопку ниже: откроется веб-приложение WIP с уже введённым кодом.", p2:"Войдите или создайте бесплатный аккаунт (достаточно эл. почты).", p3:"Нажмите «Активировать»: кредиты сразу поступят на ваш аккаунт.",
- tasto:"Активировать на сайте", n1:"Почему на сайте?", n2:"Купоны активируются здесь, а не в приложении для iPhone. Кредиты принадлежат вашему аккаунту: после активации вы используете их в приложении для iPhone, а вскоре и на Android.", n3:"Скачать приложение для iPhone:" },
+ tasto:"Активировать на сайте", n1:"Почему на сайте?", n2:"Купоны активируются здесь, а не в приложении для iPhone. Кредиты принадлежат вашему аккаунту: после активации вы используете их в приложении для iPhone и Android.", n3:"Скачать приложение:" },
 ZH: { titolo:"兑换您的优惠券", sotto:"送给您的礼物：用于 WIP 完整语音导览和定制行程的积分。", vuoto:"此链接中没有代码：请在下一页输入。",
  p1:"点击下方按钮：WIP 网页版会打开，并已填入代码。", p2:"登录或免费注册账户（一个邮箱即可）。", p3:"点击「兑换」：积分立即到账。",
- tasto:"在网站上兑换", n1:"为什么在网站上？", n2:"优惠券在这里兑换，而不是在 iPhone 应用内。积分属于您的账户：兑换后可在 iPhone 应用中使用，不久也将支持 Android。", n3:"下载 iPhone 应用：" }
+ tasto:"在网站上兑换", n1:"为什么在网站上？", n2:"优惠券在这里兑换，而不是在 iPhone 应用内。积分属于您的账户：兑换后可在 iPhone 和 Android 应用中使用。", n3:"下载应用：" }
 };
 var LINGUE = ["IT","EN","FR","ES","DE","RU","ZH"];
 var q = new URLSearchParams(location.search);

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>❄️ Neve: piste, impianti e rifugi : comment fonctionne le calque de la carte | WIP Guide</title>
+<meta name="description" content="Le calque « Neige : pistes, remontées et refuges » de la carte WIP : ce qu'il dessine, à partir de quel zoom il est visible, ce qu'on lit en touchant, la source des données et les limites. 9 569 pistes dessinées + couverture satellite NASA (quotidienne).">
+<link rel="canonical" href="https://www.wip.guide/guida/fr/livello-neve"><link rel="alternate" hreflang="it" href="https://www.wip.guide/guida/livello-neve"><link rel="alternate" hreflang="en" href="https://www.wip.guide/guida/en/livello-neve"><link rel="alternate" hreflang="fr" href="https://www.wip.guide/guida/fr/livello-neve"><link rel="alternate" hreflang="es" href="https://www.wip.guide/guida/es/livello-neve"><link rel="alternate" hreflang="de" href="https://www.wip.guide/guida/de/livello-neve"><link rel="alternate" hreflang="ru" href="https://www.wip.guide/guida/ru/livello-neve"><link rel="alternate" hreflang="zh-Hans" href="https://www.wip.guide/guida/zh/livello-neve"><link rel="alternate" hreflang="x-default" href="https://www.wip.guide/guida/livello-neve">
+<meta property="og:type" content="website"><meta property="og:title" content="❄️ Neve: piste, impianti e rifugi : comment fonctionne le calque de la carte"><meta property="og:description" content="Le calque « Neige : pistes, remontées et refuges » de la carte WIP : ce qu'il dessine, à partir de quel zoom il est visible, ce qu'on lit en touchant, la source des données et les limites. 9 569 pistes dessinées + couverture satellite NASA (quotidienne)."><meta property="og:url" content="https://www.wip.guide/guida/fr/livello-neve"><meta property="og:site_name" content="WIP Guide"><meta property="og:image" content="https://www.wip.guide/scopri/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/icon.png">
+<style>
+:root{--bg:#fff;--fg:#14213d;--mut:#4b5568;--brand:#1e3a8a;--brand2:#2f56c9;--card:#f4f6fb;--line:#d9dfec;--ok:#0f6b3a;--warn:#8a4b00;--warnbg:#fff4e0;--costbg:#e8f0ff;--on:#fff}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0e1424;--fg:#e8ecf7;--mut:#a9b3c9;--brand:#8fb0ff;--brand2:#b5ccff;--card:#172038;--line:#2a3555;--ok:#6fdc9c;--warn:#ffcf8a;--warnbg:#2a2014;--costbg:#16264a;--on:#0e1424}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--brand)}a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid var(--brand2);outline-offset:2px}
+header.top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.bar{max-width:1040px;margin:0 auto;padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.logo{font-weight:800;color:var(--brand);text-decoration:none;font-size:1.15rem}
+nav.menu{display:flex;gap:4px 14px;flex-wrap:wrap;font-size:.92rem}nav.menu a{text-decoration:none;color:var(--fg);padding:6px 2px}nav.menu a:hover{color:var(--brand)}
+.apri{margin-left:auto}
+main{max-width:1040px;margin:0 auto;padding:20px 16px 56px}
+h1{font-size:clamp(1.7rem,4.5vw,2.6rem);line-height:1.15;margin:.2em 0 .4em;color:var(--brand)}
+h2{font-size:1.45rem;margin:2em 0 .5em;line-height:1.25}h3{font-size:1.1rem}
+.lead{font-size:1.2rem;color:var(--mut);max-width:62ch}
+.crumb{font-size:.9rem;color:var(--mut)}.crumb a{color:var(--mut)}
+.btn{display:inline-block;background:var(--brand);color:var(--on);padding:11px 18px;border-radius:10px;text-decoration:none;font-weight:700;margin:4px 6px 4px 0}
+.btn.sec{background:transparent;color:var(--brand);border:2px solid var(--brand)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:22px 0;padding:16px;background:var(--card);border-radius:14px}
+.stat{display:flex;flex-direction:column}.num{font-size:1.9rem;font-weight:800;color:var(--brand);font-variant-numeric:tabular-nums}.et{font-size:.88rem;color:var(--mut)}
+.nota-stat{grid-column:1/-1;font-size:.82rem;color:var(--mut);margin:4px 0 0}
+ol.passi{counter-reset:p;list-style:none;padding:0}ol.passi li{counter-increment:p;position:relative;padding:10px 12px 10px 52px;margin:8px 0;background:var(--card);border-radius:10px}
+ol.passi li::before{content:counter(p);position:absolute;left:12px;top:9px;width:30px;height:30px;border-radius:50%;background:var(--brand);color:var(--on);display:grid;place-items:center;font-weight:800}
+.nota,.costo,.manca{border-radius:10px;padding:12px 14px;margin:14px 0}.nota{background:var(--warnbg);color:var(--warn)}.costo{background:var(--costbg)}
+.manca{border:2px dashed var(--line)}.manca h2{margin-top:0;font-size:1.1rem}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:420px}th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}th{background:var(--card)}
+figure{margin:18px 0}figure img,figure video{max-width:100%;height:auto;border-radius:12px;border:1px solid var(--line)}.esempi{margin:28px 0}.es-griglia{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}.es{border:1px solid var(--linea,#ddd);border-radius:12px;padding:12px;margin:0}.es img{max-height:360px;width:100%;object-fit:contain}.es audio{width:100%;margin-top:8px}.es-nota{font-size:.9em;margin:6px 0 0;opacity:.85}.es-pdf .btn{display:inline-block;margin-bottom:6px}
+figure img{max-height:640px;width:auto;display:block}figcaption{font-size:.85rem;color:var(--mut)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;margin:18px 0}
+.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;text-decoration:none;color:var(--fg)}
+.card:hover{border-color:var(--brand)}.card .em{font-size:1.8rem}.card h3{margin:.3em 0}.card p{margin:.2em 0;color:var(--mut);font-size:.95rem}.card .cn{font-weight:700;color:var(--brand);font-size:.95rem}
+.ricerca{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.ricerca input{flex:1;min-width:220px;padding:12px 14px;border-radius:10px;border:2px solid var(--line);font:inherit;background:var(--bg);color:var(--fg)}
+.ris{list-style:none;padding:0}.ris li{margin:6px 0}.ris a{display:block;padding:10px 12px;background:var(--card);border-radius:10px;text-decoration:none}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:999px;padding:8px 14px;font:inherit;cursor:pointer}.chip:hover{background:var(--brand);color:var(--on)}
+details{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:8px 0}summary{cursor:pointer;font-weight:700}
+.letto{display:flex;align-items:center;gap:8px;margin:28px 0}.progress{font-size:.9rem;color:var(--mut)}
+.fonte{opacity:.8}.agg{font-size:.85rem;color:var(--mut);margin-top:32px}
+footer{border-top:1px solid var(--line);padding:22px 16px;text-align:center;font-size:.9rem;color:var(--mut)}
+.lingue{max-width:1040px;margin:0 auto;padding:0 16px 8px;font-size:.85rem;color:var(--mut)}.lingue a{color:var(--mut)}.lingue strong{color:var(--fg)}footer .lingue{padding-top:10px}
+@media(max-width:600px){body{font-size:16px}nav.menu{display:none}.apri{margin-left:auto}}
+</style>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"WIP","item":"https://www.wip.guide/"},{"@type":"ListItem","position":2,"name":"Guide","item":"https://www.wip.guide/guida/fr/"},{"@type":"ListItem","position":3,"name":"Couches de la carte","item":"https://www.wip.guide/guida/fr/livelli-della-mappa"},{"@type":"ListItem","position":4,"name":"Neve : pistes, remontées mécaniques et refuges","item":"https://www.wip.guide/guida/fr/livello-neve"}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Le calque « Neige : pistes, remontées et refuges » a-t-il un filtre ?","acceptedAnswer":{"@type":"Answer","text":"Aucune."}},{"@type":"Question","name":"Pourquoi je ne le vois pas ?","acceptedAnswer":{"@type":"Answer","text":"Vérifiez que vous avez activé le calque et que vous êtes assez près : si « zoomez pour les voir » apparaît, zoomez sur la zone."}}]}</script>
+</head><body>
+<a href="#main" style="position:absolute;left:-999px" onfocus="this.style.left='8px'">Aller au contenu</a>
+<header class="top"><div class="bar"><a class="logo" href="/guida/fr/">WIP · Guide</a><nav class="menu" aria-label="Guide"><a href="/guida/fr/">Guide</a><a href="/guida/fr/categorie">Catégories</a><a href="/guida/fr/audioguide">Audioguides</a><a href="/guida/fr/itinerari">Itinéraires</a><a href="/guida/fr/tutorial">Tutoriels</a><a href="/guida/fr/domande-frequenti">FAQ</a></nav><a class="btn apri" href="https://wip.guide/">Ouvrir WIP</a></div><nav class="lingue" aria-label="Langue"><a lang="it" hreflang="it" href="/guida/livello-neve">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/livello-neve">English</a> · <strong lang="fr">Français</strong> · <a lang="es" hreflang="es" href="/guida/es/livello-neve">Español</a> · <a lang="de" hreflang="de" href="/guida/de/livello-neve">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/livello-neve">Русский</a> · <a lang="zh" hreflang="zh" href="/guida/zh/livello-neve">中文</a></nav></header>
+<main id="main">
+<p class="crumb"><a href="/">WIP</a> › <a href="/guida/fr/">Guide</a> › <a href="/guida/fr/livelli-della-mappa">Couches de la carte</a> › Neve : pistes, remontées mécaniques et refuges</p>
+<h1>❄️ Neve: piste, impianti e rifugi : comment fonctionne le calque de la carte</h1>
+<p class="lead"><strong>❄️ Neige : piste, impianti e rifugi</strong> (groupe « C'est comment maintenant ») — 9 569 pistes dessinées + couverture satellite NASA (quotidienne).</p>
+<p class="agg">Traduit de l'italien. Les captures, vidéos et exemples montrent l'app en italien.</p>
+<h2>Comment l'activer</h2>
+<ol class="passi"><li>Sur la carte, touchez le <strong>cercle avec les couches</strong> (« Couches de la carte ») en bas à gauche.</li><li>Cherchez le groupe (<strong>« Où aller »</strong>, <strong>« Météo et conditions »</strong> ou <strong>« Fond de carte »</strong>) et touchez la ligne de la couche : la ligne se colore et une ✓ apparaît (un indicateur de chargement pendant le chargement).</li><li>Fermez le panneau : à côté du bouton restent les <strong>émojis des couches activées</strong> et un petit point avec le <strong>numéro</strong>. Touchez-les pour les rouvrir.</li><li>Pour l'éteindre, touchez à nouveau la ligne, ou <strong>« Tout désactiver (n) »</strong>.</li></ol><h2>Ce qu'il dessine sur la carte</h2>
+<ul><li>Pin par type : ⛷ domaine skiable · 🚡 remontée mécanique · 🏔 refuge de montagne · 🎿 piste de ski.</li><li><strong>Pistes</strong> sous forme de lignes bleues.</li><li><strong>Couverture neigeuse</strong> (satellite NASA MODIS) comme un voile sur la carte : indique seulement « il y à de la neige / il n'y en a pas », à environ 500 m de résolution.</li></ul><h2>À partir de quel zoom il s'affiche</h2>
+<p>Pin à partir du zoom 2 ; pistes à partir du zoom 4. Le voile de neige s'active immédiatement.</p><h2>Ce qu'on lit en touchant</h2>
+<ul><li>Bulle avec le type (« Domaine skiable », « Remontée mécanique », « Refuge de montagne », « Piste de ski »), la <strong>température</strong> (« N°C · ressentie N° », ou « conditions indisponibles ») et, au Tyrol, dans le Haut-Adige et le Trentin, le <strong>risque d'avalanche</strong> (niveau 0 à 5 avec lien vers la source ; hors saison, indique « dernier bulletin de la saison, non mis à jour »).</li></ul><h2>D'où viennent les données</h2>
+<p>Base de données WIP (depuis OpenStreetMap), NASA GIBS (la date du voile date de deux jours avant), température MET Norway, avalanches avalanche.report (CC BY 4.0, Euregio uniquement).</p><h2>Options et combinaisons</h2>
+<p><strong>Options :</strong> Aucune.</p>
+<p><strong>Avec les autres calques :</strong> Lorsque Neige est activé, les refuges sont dessinés par Neige et non par Sentiers.</p><section class="manca"><h2>Ce que WIP ne fait pas (pour éviter les fausses attentes)</h2><ul><li><strong>Pas de centimètres de neige, d'ouverture des remontées et des pistes, ni de difficulté des pistes.</strong></li><li>Le nombre « 9 569 pistes » est écrit dans le texte de l'application.</li><li>Bulletin des avalanches uniquement pour la zone Euregio.</li></ul></section><h2>Questions fréquentes</h2><details><summary>Le calque « Neige : pistes, remontées et refuges » a-t-il un filtre ?</summary><p>Aucune.</p></details><details><summary>Pourquoi je ne le vois pas ?</summary><p>Vérifiez que vous avez activé le calque et que vous êtes assez près : si « zoomez pour les voir » apparaît, zoomez sur la zone.</p></details><h2>Continuer avec</h2><div class="grid"><a class="card" href="/guida/fr/livelli-della-mappa"><h3>Couches de la carte</h3><p>Toutes les 12 couches de la carte WIP : sentiers, pistes cyclables, vin et gastronomie, fontaines, zones proté…</p></a><a class="card" href="/guida/fr/meteo-neve"><h3>Météo et neige</h3><p>Météo sur la carte, alerte pluie avec des lieux à l'abri, niveau Neve avec pistes et remontées mécaniques, UV …</p></a><a class="card" href="/guida/fr/natura-percorsi"><h3>Nature et parcours</h3><p>Comment trouver lacs, cascades, sommets, grottes, parcs, sentiers et pistes cyclables avec WIP, et quelles don…</p></a></div><div class="letto"><input type="checkbox" id="letto" data-s="livello-neve"><label for="letto">J'ai lu ce guide (enregistré uniquement sur votre appareil)</label></div><p><a class="btn" href="https://wip.guide/">Ouvrir WIP</a> <a class="btn sec" href="/guida/fr/categorie">Toutes les catégories</a></p>
+
+<p class="agg">Contenu vérifié sur le code de l'app le 16 novembre 2026. Si quelque chose ne correspond pas à ce que vous voyez, écrivez à <a href="mailto:support@wip.guide">support@wip.guide</a>.</p>
+</main>
+<footer><a href="/guida/fr/">Guide</a> · <a href="/privacy">Confidentialité</a> · <a href="/support">Assistance</a> · <a href="https://wip.guide/">wip.guide</a><br><nav class="lingue" aria-label="Langue"><a lang="it" hreflang="it" href="/guida/livello-neve">Italiano</a> · <a lang="en" hreflang="en" href="/guida/en/livello-neve">English</a> · <strong lang="fr">Français</strong> · <a lang="es" hreflang="es" href="/guida/es/livello-neve">Español</a> · <a lang="de" hreflang="de" href="/guida/de/livello-neve">Deutsch</a> · <a lang="ru" hreflang="ru" href="/guida/ru/livello-neve">Русский</a> · <a lang="zh" hreflang="zh" href="/guida/zh/livello-neve">中文</a></nav></footer>
+<script>(function(){
+function ready(f){document.readyState!='loading'?f():document.addEventListener('DOMContentLoaded',f)}
+ready(function(){
+ var red=matchMedia('(prefers-reduced-motion: reduce)').matches;
+ var els=document.querySelectorAll('.num[data-n]');
+ if('IntersectionObserver' in window&&!red&&els.length){var io=new IntersectionObserver(function(es){es.forEach(function(e){if(!e.isIntersecting)return;io.unobserve(e.target);var el=e.target,n=+el.dataset.n,pre=el.dataset.c||'',t0=null;function st(t){t0=t0||t;var p=Math.min((t-t0)/900,1);el.textContent=pre+Math.round(n*p).toLocaleString('fr-FR');if(p<1)requestAnimationFrame(st)}requestAnimationFrame(st)})},{threshold:.4});els.forEach(function(e){io.observe(e)})}
+ var inp=document.getElementById('q'),out=document.getElementById('ris');
+ if(inp&&out){var idx=null;fetch('/guida/fr/indice.json').then(function(r){return r.json()}).then(function(j){idx=j}).catch(function(){});
+  var norm=function(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\p{L}\p{N} ]+/gu,' ')};
+  var cerca=function(q){q=norm(q).trim();if(!q||!idx){out.innerHTML='';return}var SW=' comment trouver trouve veux voudrais peux faire utiliser une pour avec dans des les près quoi sont voir ';var w=/[\u4e00-\u9fff]/.test(q)?Array.from(q.replace(/\s+/g,'')).reduce(function(a,c,i,s){if(i<s.length-1)a.push(c+s[i+1]);return a},[]):q.split(/\s+/).filter(function(x){return x.length>2&&SW.indexOf(' '+x+' ')<0});
+   var r=idx.map(function(d){var ks=norm(d.k),h=norm(d.t+' '+(d.r||'')+' '+(d.f||'')),s=0;w.forEach(function(x){if(ks.indexOf(x)>-1)s+=5;else if(h.indexOf(x)>-1)s+=1});for(var i=0;i<w.length-1;i++)if(ks.indexOf(w[i]+' '+w[i+1])>-1)s+=8;return {d:d,s:s}}).filter(function(x){return x.s>0}).sort(function(a,b){return b.s-a.s}).slice(0,6);
+   out.innerHTML=r.length?r.map(function(x){return '<li><a href="'+x.d.u+'"><strong>'+x.d.t+'</strong>'+(x.d.r?'<br><span class="et">'+x.d.r+'</span>':'')+'</a></li>'}).join(''):'<li>Aucun guide trouvé : essayez d\'autres mots ou parcourez les catégories.</li>'};
+  inp.addEventListener('input',function(){cerca(inp.value)});
+  document.querySelectorAll('[data-q]').forEach(function(b){b.addEventListener('click',function(){inp.value=b.dataset.q;cerca(b.dataset.q);inp.focus()})})}
+ var K='wip-guida-letti';function get(){try{return JSON.parse(localStorage.getItem(K)||'[]')}catch(e){return[]}}function set(a){try{localStorage.setItem(K,JSON.stringify(a))}catch(e){}}
+ var cb=document.getElementById('letto');if(cb){var a=get();cb.checked=a.indexOf(cb.dataset.s)>-1;cb.addEventListener('change',function(){var l=get().filter(function(x){return x!==cb.dataset.s});if(cb.checked)l.push(cb.dataset.s);set(l)})}
+ document.querySelectorAll('[data-lez]').forEach(function(el){var l=get();el.textContent=l.indexOf(el.dataset.lez)>-1?'✓ lu':''});
+ document.querySelectorAll('[data-perc]').forEach(function(el){var l=get(),s=el.dataset.perc.split(','),n=s.filter(function(x){return l.indexOf(x)>-1}).length;el.textContent='{n} leçons lues sur {t}'.replace('{n}',n).replace('{t}',s.length)});
+});})();</script>
+</body></html>

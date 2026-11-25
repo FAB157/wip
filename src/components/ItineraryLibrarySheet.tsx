@@ -95,6 +95,8 @@ export interface LibraryResult {
   score?: number;
   verifiedBy?: number | string[] | null;
   createdAt?: string;
+  /** Itinerario VERIFICATO dal collaudo notturno (voto ≥ 8): data del test e voto generale. */
+  verificato?: { data?: string; voto_generale?: number; giorni?: number } | null;
 }
 
 /** Descrittore non ancora generato (da searchDescriptors, forma libera). */
@@ -964,6 +966,8 @@ export default function ItineraryLibrarySheet({
     const q = norm(query.trim());
     const peso = (x: any, pronto: boolean) => {
       let p = pronto ? 12 + (Number(x.score) || 0) / 10 : 0;
+      // VERIFICATI per primi (sezione «Itinerari verificati»), qualunque sia la ricerca: il +1000 li tiene sopra.
+      if (pronto && x?.verificato) p += 1000;
       if (!q) return p;
       const t = norm(x?.title || x?.slug || '');
       const c = norm(x?.city || '');
@@ -1465,7 +1469,23 @@ export default function ItineraryLibrarySheet({
               </div>
             )}
 
-            {!loading && vociVisibili.map(v => v.tipo === 'pronto' ? (
+            {!loading && vociVisibili.map((v, iVoce) => (
+              <React.Fragment key={v.tipo === 'pronto' ? `pf-${v.r.slug}` : `gf-${v.key}`}>
+              {/* DUE SEZIONI: «Itinerari verificati» (collaudati, per primi) e «Itinerari veloci» (il resto, senza garanzia).
+                  L'intestazione dei veloci compare solo se sopra c'è almeno un verificato. */}
+              {iVoce === 0 && v.tipo === 'pronto' && v.r.verificato && (
+                <div className="pt-1">
+                  <div className="text-[11px] font-black text-emerald-700 uppercase tracking-wide flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> {t('verified_section')}</div>
+                  <p className="text-[10px] font-medium text-gray-500 leading-snug">{t('verified_section_hint')}</p>
+                </div>
+              )}
+              {iVoce > 0 && !(v.tipo === 'pronto' && v.r.verificato) && (() => { const p = vociVisibili[iVoce - 1]; return p.tipo === 'pronto' && !!p.r.verificato; })() && (
+                <div className="pt-3">
+                  <div className="text-[11px] font-black text-gray-500 uppercase tracking-wide flex items-center gap-1"><Sparkles className="w-3.5 h-3.5" /> {t('quick_section')}</div>
+                  <p className="text-[10px] font-medium text-gray-400 leading-snug">{t('quick_section_hint')}</p>
+                </div>
+              )}
+              {v.tipo === 'pronto' ? (
               /* Contenitore: il tasto di selezione non può stare DENTRO il
                  bottone che apre la scheda (un bottone dentro un bottone non
                  è valido e su iOS il tocco finisce a quello sbagliato). */
@@ -1481,9 +1501,17 @@ export default function ItineraryLibrarySheet({
                   <div className="min-w-0">
                     <div className="text-xs font-black text-primary leading-tight">{titoliTradotti[v.r.slug] || v.r.title || v.r.slug}</div>
                     <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                      <span className="text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
-                        ✓ Pronto
-                      </span>
+                      {v.r.verificato ? (
+                        <span className="text-[10px] font-black bg-emerald-600 text-white px-2 py-0.5 rounded-full">
+                          ✓ {t('verified_badge')}
+                          {v.r.verificato.data ? ` · ${t('verified_tested_on')} ${new Date(String(v.r.verificato.data)).toLocaleDateString(String(language).toLowerCase(), { day: 'numeric', month: 'short' })}` : ''}
+                          {Number(v.r.verificato.voto_generale) > 0 ? ` · ${t('verified_vote')} ${Number(v.r.verificato.voto_generale).toFixed(1)}` : ''}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
+                          ✓ Pronto
+                        </span>
+                      )}
                       {metaLine(v.r) && (
                         <span className="text-[10px] font-black bg-primary/5 text-primary px-2 py-0.5 rounded-full">
                           {metaLine(v.r)}
@@ -1556,6 +1584,8 @@ export default function ItineraryLibrarySheet({
                   </button>
                 </div>
               </div>
+            )}
+              </React.Fragment>
             ))}
 
             {/* LUOGHI DELLE OPERE: nel chip di un medium con ricerca on-demand

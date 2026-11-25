@@ -18,6 +18,7 @@ export const PRICING_LIST = {
   extend_itinerary_day: 12,
   premium_guide_daily: 20, // Guida in PDF (per giorno)
   podcast_daily: 15,       // Podcast (per giorno)
+  podcast_tappa: 1,        // Podcast di UNA tappa (18/11/2026, committente). Allineare a SERVER_PRICING in server.ts.
   chat_session: 3,         // Chat sessione (10 messaggi)
   day_pass: 200,           // WIP Day Pass: 24h hands-free, max 40 audioguide (mappe offline gratuite)
   museum_pass: 100,        // Pass Museo: 40 scansioni in 4 ore con la fotocamera, schede ascoltabili di ciò che inquadri; serve internet

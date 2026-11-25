@@ -217,13 +217,16 @@
       <span class="icona" aria-hidden="true">&#63743;</span>
       <span><span class="r1" data-i18n="badge_su">Scarica su</span><br><span class="r2">App Store</span></span>
     </a>
-    <span class="badge-store" id="badge-google" role="button" tabindex="0">
+    <!-- (13/11/2026) Google Play: l'app è pubblica, il badge è un collegamento vero. -->
+    <a class="badge-store" id="badge-google" href="https://play.google.com/store/apps/details?id=com.itaintasca.app" style="text-decoration:none;color:inherit">
       <span class="icona" aria-hidden="true">&#9654;</span>
-      <span><span class="r1" data-i18n="badge_presto">Presto su</span><br><span class="r2">Google Play</span></span>
-    </span>
+      <span><span class="r1" data-i18n="badge_su">Scarica su</span><br><span class="r2">Google Play</span></span>
+    </a>
   </div>
   <a class="cta" id="cta-web" href="https://wip.guide/"><span data-i18n="cta">Provala subito dal browser</span> &rarr; wip.guide</a>
   <p class="cta-nota" data-i18n="cta_nota">È una web app: si apre e funziona già, senza installare nulla.</p>
+  <!-- (21/11/2026) Landing SEO «app audioguida che parte da sola», una pagina statica per lingua in /audioguide-app/. -->
+  <p class="cta-nota"><a id="link-audioguide-app" href="/audioguide-app" data-i18n="audio_link">Come funziona l'app audioguida, passo per passo</a> &rarr;</p>
 </section>
 
 <footer>
@@ -256,6 +259,7 @@ var I18N = {
     badge_presto: "Presto su",
     cta: "Provala subito dal browser",
     cta_nota: "È una web app: si apre e funziona già, senza installare nulla.",
+    audio_link: "Come funziona l'app audioguida, passo per passo",
     segui: "Seguici"
   },
   en: {
@@ -273,6 +277,7 @@ var I18N = {
     badge_presto: "Soon on",
     cta: "Try it now in your browser",
     cta_nota: "It's a web app: it opens and just works, nothing to install.",
+    audio_link: "How the self-guided audio tour app works, step by step",
     segui: "Follow us"
   },
   fr: {
@@ -290,6 +295,7 @@ var I18N = {
     badge_presto: "Bientôt sur",
     cta: "Essaie-la tout de suite dans ton navigateur",
     cta_nota: "C'est une web app : elle s'ouvre et fonctionne déjà, rien à installer.",
+    audio_link: "Comment fonctionne l'appli d'audioguide, étape par étape",
     segui: "Suis-nous"
   },
   es: {
@@ -307,6 +313,7 @@ var I18N = {
     badge_presto: "Pronto en",
     cta: "Pruébala ya desde el navegador",
     cta_nota: "Es una web app: se abre y funciona, sin instalar nada.",
+    audio_link: "Cómo funciona la app de audioguía, paso a paso",
     segui: "Síguenos"
   },
   de: {
@@ -324,6 +331,7 @@ var I18N = {
     badge_presto: "Bald im",
     cta: "Probier sie jetzt im Browser",
     cta_nota: "Eine Web-App: öffnen und loslegen, ohne Installation.",
+    audio_link: "So funktioniert die Audioguide-App, Schritt für Schritt",
     segui: "Folge uns"
   },
   ru: {
@@ -341,6 +349,7 @@ var I18N = {
     badge_presto: "Скоро в",
     cta: "Попробуй прямо в браузере",
     cta_nota: "Это веб-приложение: открывается и сразу работает, ничего устанавливать не нужно.",
+    audio_link: "Как работает приложение-аудиогид, шаг за шагом",
     segui: "Подписывайся"
   },
   zh: {
@@ -358,6 +367,7 @@ var I18N = {
     badge_presto: "即将上线",
     cta: "现在就在浏览器里试试",
     cta_nota: "这是一个网页应用：打开即用，无需安装。",
+    audio_link: "语音导览应用如何运作，一步步了解",
     segui: "关注我们"
   }
 };
@@ -375,6 +385,8 @@ var linguaCorrente = lingaDefault();
 
 function applicaLingua(lang) {
   if (!I18N[lang]) lang = "en";
+  var la = document.getElementById("link-audioguide-app");
+  if (la) la.setAttribute("href", lang === "it" ? "/audioguide-app" : "/audioguide-app/" + lang);
   linguaCorrente = lang;
   var d = I18N[lang];
   document.querySelectorAll("[data-i18n]").forEach(function (el) {

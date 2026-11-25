@@ -174,6 +174,18 @@ Orders of the committente, all in force, identical on web, Android and iOS:
   (`/root/simauto/scratch/simula-trigger-auto3.mts` on Oracle, web and Android models): 18 → 48 fired, earliest 51 m
   from the end of the route. Still silent: the arrival point is beyond 250 m of road (San Marco) or the car route ends on
   a different way from the nearest one.
+  **21/11/2026**: (a) in the car, when the nearest way is NOT reached by the graph, the nearest REACHED way within 250 m
+  decides (road + tail ≤ 20 m) instead of Infinity (SFMOMA, Jemaa el-Fna, Városliget). (b) **On foot too, but only where
+  the path does not reach the door** (committente): road metres stay the rule; only when the nearest REACHED way is
+  farther from the arrival point than the user's arrival radius (way searched up to 250 m) the guide fires where the
+  path ends (road + 20 m) — the lower of the two, so nothing fires later and nothing changes where the path reaches the
+  door. The arrival point is never moved (rule of 12/10); the 15 m guard, the «long known road» rule of 11/10 and
+  `luogoSenzaPorta` stay. Same `decide(…, raggioArrivoPiedi)` / `Sorgente.decide` / `RoadGraph.misura(…, raggio)` on
+  web, Kotlin and Swift. Cases: Certosa di San Martino, Castel Sant'Elmo, Bellagio Conservatory, Pan di Zucchero. On foot
+  the path end counts only within max(arrival radius + 20, 210 m) in a straight line (`ariaMaxFineStrada`); in the car
+  there is NO straight-line cap (rule of 30/10, Castel dell'Ovo at 176 m) — the Gellért statue firing 203 m from the road
+  below the hill is a known, accepted limit. Tours
+  (`tourService`) keep their own track-end rule of 23/10 (45 m cap): not changed.
 - **The «extra» road tiles**: `generate_road_tiles.py` never extracted `service`, `cycleway`, `road`,
   `corridor`, `platform`, `bridleway` — Rome centre matched OSRM on 10 pairs of 20. They are ADDED as a
   third file per cell, `x{gx}_y{gy}_extra.json.gz` (`scripts/offline_routing/strade-extra-*`: Geofabrik
@@ -440,6 +452,18 @@ places that were not La Spezia (22/08/2026).
   migration `20260917080000_foto_pois_da_verificare.sql`), invisible in the
   app until a human approves that exact row. Never write a third-party URL
   into `image_url` directly, no matter how good the name match looks.
+  **Exception for the queue that existed on 17/11/2026** (committente, twice: «con persone e scritte eliminale — il
+  resto approva anche se non sai luogo»): `scratch/foto-visione-clip.py` (CLIP on Oracle, free) classifies each
+  `da_verificare` candidate; `scratch/foto-visione-applica.mjs` (nightly timer `wip-foto-visione-applica`, 23–7 IT)
+  rejects persons/text (`auto:visione_persone|testo`), leaves the doubtful ones (vision unsure, small, not downloadable)
+  in the queue (final word, same evening: «persone e scritte cancellale, quelle dubbie lasciale da approvare») and approves the rest (`image_source='approvata_auto_visione:…'`,
+  `deciso_da='auto:visione'`), never over a photo the place already has; previous values in
+  `/root/citta/foto-visione-prima.jsonl`. Measured on 300: the vision tells place vs person/text well but NOT whether it
+  is the RIGHT place (Lungomare di Taranto ← a church) — accepted by the committente. **Since 20/11/2026 it is continuous
+  for new candidates too** (committente: «sì»): `scratch/foto-visione-notte.sh` = Oracle `/root/locale/foto-visione-notte.sh`,
+  timer `wip-foto-visione-notte` every day at 18:00 Italian time — classifies the never-seen `da_verificare` candidates
+  (read-only, up to 15,000, Python env `/root/foto-visione/venv`), then from 23 to 7 applies with the same rules; the doubtful
+  ones still stay for the committente. The old one-shot timer `wip-foto-visione-applica` (17–19/11) is stopped.
 - **Whoever hides a duplicate inherits its content first** (19/09/2026,
   committente: «avevo molte più foto giuste… evita che risucceda»). Mass jobs
   of 10–14/09 hid ~55,000 rows of `shared_pois` that carried a photo, without
@@ -703,6 +727,14 @@ per-work button answered «nessuna fonte».
     63 venue names appear twice; `official_site` missing on 754 IT guides (British Museum → no hours, no
     exhibitions); `/api/museums/exhibitions` returned 0 for every venue tried; web «Scarica tutto» cannot fetch
     Commons photos (CORS); an owned Visita is matched by `venueKey`, not by name.
+- **Where you stand, and under 8 works free (21/11/2026, committente at the Chiesa del Carmine, Carrara).**
+  `/api/museums/where-am-i`: a church/museum WITH A SOURCE (gem, QID, Wikipedia) within 60 m beats a library guide of
+  another place farther away (it said «Palazzo delle Logge», 149 m). `/api/museums/library`: places within 500 m are
+  read in a box of their own and enter the 30 archive slots first (museums up to 14 km used to fill them). A guide
+  with fewer than 8 works (`guidaGratuita`) is FREE also at its first generation and in translation («se ha meno di 8
+  opere deve essere gratuita» — supersedes «free only if already generated»): `venue-guide` estimates the works from
+  the sources (`passDopo`), generates without the pass under 8, and asks the pass only if the real guide comes out
+  ≥ 8 (saved in the library anyway, the user gets the sample). No background pre-generation: the first tap generates.
 - **Experiences and tickets of THIS museum**: the product TITLE must carry the museum's proper words
   (city words don't count; «british» used to let in Westminster Abbey); links go through `/api/out`
   with `u=` (with `url=` it answered 400). A Visita bought for the museum opens experiences and
@@ -1042,7 +1074,7 @@ Read-only keys for the admin "Diagnostica" → Monitoraggio esterno panel (`/api
 
 Ricerca web nella lingua locale per la scheda Eventi (`/api/events/portali`, 07/09/2026): il fornitore si sceglie dalla chiave presente, `BRAVE_SEARCH_API_KEY` (Brave Search API) oppure `GOOGLE_CSE_API_KEY` + `GOOGLE_CSE_CX` (Google Programmable Search su tutto il web). Senza chiave la ricerca è spenta e restano i portali del registro `src/data/fontiEventi.ts`. Cache 7 giorni per query, tetto di 40 città «fredde» al giorno.
 
-Ricerca web per i MUSEI (sale e piante, `/api/admin/museums/web-search`, 12/09/2026 sera): passa da SearXNG auto-ospitato (`SEARXNG_URL` + `SEARXNG_TOKEN`, header `X-Searx-Token`), gratis e senza crediti; la rotta lo sceglie da sola quando la variabile esiste, con ripiego su `BRAVE_SEARCH_API_KEY_MUSEI` e poi sul fornitore degli Eventi. Brave resta agli Eventi. **Dal 22/09/2026 l'istanza di produzione è sul droplet 201 (`https://201-79-2-241.nip.io`, 512 MB, dedicata al traffico in diretta)**; quella del 104 resta per i job di sfondo che girano lì (foto-gemme, foto-poi). In `eventiFeed.ricercaWeb` c'è un interruttore: dopo 3 fallimenti di rete/timeout/5xx di fila SearXNG non viene chiamato per 3 minuti (nessuno aspetta un droplet spento); schede dei luoghi e guide passano `senzaRiserva` e NON ripiegano mai su Brave (regola del committente: mai un motore a pagamento per quelle).
+Ricerca web per i MUSEI (sale e piante, `/api/admin/museums/web-search`, 12/09/2026 sera): passa da SearXNG auto-ospitato (`SEARXNG_URL` + `SEARXNG_TOKEN`, header `X-Searx-Token`), gratis e senza crediti; la rotta lo sceglie da sola quando la variabile esiste, con ripiego su `BRAVE_SEARCH_API_KEY_MUSEI` e poi sul fornitore degli Eventi. Brave resta agli Eventi. **Dal 22/09/2026 l'istanza di produzione è sul droplet 201 (`https://201-79-2-241.nip.io`, 512 MB, dedicata al traffico in diretta)**. Il droplet 104 NON esiste più (distrutto il 02/10/2026; il suo IP ora è di altri: non collegarsi); i job di sfondo girano su Oracle (79.76.119.22). In `eventiFeed.ricercaWeb` c'è un interruttore: dopo 3 fallimenti di rete/timeout/5xx di fila SearXNG non viene chiamato per 3 minuti (nessuno aspetta un droplet spento); schede dei luoghi e guide passano `senzaRiserva` e NON ripiegano mai su Brave (regola del committente: mai un motore a pagamento per quelle).
 
 Affiliazioni Klook e Trip.com (07/09/2026) sono costanti in `klookCities.ts` (`KLOOK_AID`, `KLOOK_ADS`: un widget per città creato nel pannello affiliati) e `eventiFeed.ts` (`TRIPCOM_ALLIANCE_ID`, `TRIPCOM_SID`); non sono chiavi segrete.
 
@@ -1633,3 +1665,15 @@ Corretti a mano: Museo della città di Rimini (coordinate, `wd-Q3868075`) e Gall
 - **La scheda non legge la guida del luogo precedente.** Il primo render dopo un cambio di POI ha ancora testo e `toggleSpeech` del POI prima: l'autoplay lo salta (`vecchio` in `PoiDetailSheet`). A Villa Ciani partiva la guida del MASI.
 - **«Nel radar» applica le regole anche ai piani vecchi.** Una via di negozi resta una tappa muta. Una tappa che non diventa POI prende un id locale `tappa-…`, mai un `iti-` finto. Il nome di una tappa agganciata passa da `displayName`.
 - **La svolta «detta prima del preavviso» erano due manovre sulla stessa via.** Una svolta che resta sulla stessa via non ripete «in Via X» (`istruzionePerStep(..., prev)`).
+
+## Collaudo continuo e itinerari verificati (18–20/11/2026, deploy 20/11)
+
+Ordini del committente dopo il collaudo di Malta («questi errori non devono mai più succedere per nessun itinerario e/o guida»). Dettagli e comandi: memoria `collaudo-notturno-oracle-2026-11-18.md`, `collaudo-malta-2026-11-18.md`.
+
+- **DeepSeek scrive, il codice garantisce.** Le regole nate dai collaudi diventano CODICE + CASI nel banco, non solo frasi nel prompt. Il prompt ha in più una prevenzione unica (`REGOLE_PREVENZIONE_ITINERARIO`: niente formule, pasti solo in ristoranti veri, luoghi col nome ufficiale, niente attività-prodotto).
+- **Catena di ogni itinerario** (stream, «Aggiungi giorno», cron, Guida d'Autore): aggancio (`agganciaTappeAlDatabase`: lettere maltesi/nordiche con `pianaLettere`, nomi tradotti `TRADUZIONI_NOMI`, QID Wikidata per nome in tutte le lingue `qidsPerNomeTappa`, mai righe cinema/città/località/«Nome (Paese)», riga più ricca a parità di luogo) → **giudice Groq** sui casi dubbi (`giudicaAgganciDubbi`, sì/no) → verifica con tetto dinamico (località entro il raggio del viaggio NON è «un'altra città», `localitaNelRaggio`) → **controllo qualità** deterministico (`controlloQualitaItinerario`, esito in `qualita.controllo`) → tappe non confermate: conferma forte (Wikidata, Nominatim con etichette, web) e solo se nessuna fonte le cita si sostituiscono o si tolgono (`risolviTappeNonConfermate`) → filtro formule su tutti i testi delle tappe → totale dalla somma dei giorni (`ricalcolaTotaleViaggio`).
+- **Cron `/api/cron/completa-verifiche`** (ogni 5 min): completa verifiche rimandate per tempo, revisore parziale, crea i POI delle tappe verificate (`poiDalleTappeServer`: mai con posizione non confermata, mai per una città) e arricchisce TUTTI i luoghi culturali dell'itinerario (scheda, foto, audioguida IT da fonti).
+- **Banco di prova** `node scratch/banco-prova-itinerari.mjs` (+ `--motori` per Groq/giudice veri) con registro `scratch/banco-prova-regole.json`: verde prima di ogni deploy. Ogni errore nuovo = regola + caso.
+- **Collaudo notturno su Oracle** (01:30 IT, istanza `wip-collaudo-server` :3030): 9 itinerari da 2 giorni + 1 da 3–4, Guida d'Autore completa con PDF verificato, guida museo, simulazione del telefono (ingressi, scatto, navigatore), traduzioni a rotazione, voti 0–10 e pagella, regole proposte raggruppate. Risultati nell'app solo per gli admin: «I miei download» › Test (itinerari, guide, musei, Registro regole, Pagella), rotta `/api/admin/collaudo`. Gli itinerari di collaudo portano `dati_itinerario.collaudo` e `collaudo: true` nel corpo (niente email/push).
+- **Itinerari verificati**: un itinerario del collaudo con voto ≥ 8 e nessun problema grave DELL'ITINERARIO (schede, ingressi e scatto non contano) diventa base della città (`/api/library/promuovi-verificato`, `lib_item_verificato-…`). In libreria «Itinerari verificati» sopra «Itinerari veloci». Con `BASE_VERIFICATE_ATTIVE=1` il generatore parte dalla base (attrazioni collaudate, pasti sempre rifatti, giorni in più generati): **stesso prezzo**, l'utente non sa del riuso.
+- **Guasto trovato in produzione e corretto (20/11):** `/api/poi/audioguide` usava `poiName` prima della dichiarazione → 500 su ogni audioguida servita dalla cache (dal 07/11).

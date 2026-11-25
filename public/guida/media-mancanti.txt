@@ -1,0 +1,105 @@
+home: screenshot/hero
+home: video
+categorie: screenshot (img/categorie-1..n)
+categorie: video
+ristoranti-gastronomia: video
+ristoranti-stellati: video
+vino-e-gusto: screenshot (img/vino-e-gusto-1..n)
+vino-e-gusto: video
+natura-percorsi: screenshot (img/natura-percorsi-1..n)
+natura-percorsi: video
+sentieri-e-ciclovie: screenshot (img/sentieri-e-ciclovie-1..n)
+sentieri-e-ciclovie: video
+mare-spiagge: screenshot (img/mare-spiagge-1..n)
+mare-spiagge: video
+meteo-neve: screenshot (img/meteo-neve-1..n)
+meteo-neve: video
+musei-cultura: video
+audioguide: video
+itinerari: video
+libreria-itinerari-gratuiti: screenshot (img/libreria-itinerari-gratuiti-1..n)
+libreria-itinerari-gratuiti: video
+navigatore: video
+eventi: screenshot (img/eventi-1..n)
+eventi: video
+servizi-utili: screenshot (img/servizi-utili-1..n)
+servizi-utili: video
+gratis-e-crediti: video
+web-iphone-android: screenshot (img/web-iphone-android-1..n)
+web-iphone-android: video
+tutorial: screenshot (img/tutorial-1..n)
+tutorial: video
+giro-con-audioguida: screenshot (img/giro-con-audioguida-1..n)
+giro-con-audioguida: video
+creare-itinerario-tutte-le-modalita: screenshot (img/creare-itinerario-tutte-le-modalita-1..n)
+creare-itinerario-tutte-le-modalita: video
+sosta-breve-porti-aeroporti: screenshot (img/sosta-breve-porti-aeroporti-1..n)
+sosta-breve-porti-aeroporti: video
+modificare-itinerario: video
+tutte-le-categorie: screenshot (img/tutte-le-categorie-1..n)
+tutte-le-categorie: video
+beni-culturali: screenshot (img/beni-culturali-1..n)
+beni-culturali: video
+percorso-su-misura: screenshot (img/percorso-su-misura-1..n)
+percorso-su-misura: video
+mappe-tematiche: screenshot (img/mappe-tematiche-1..n)
+mappe-tematiche: video
+come-si-compra: video
+vision-riconoscimento: video
+visita-museo: video
+tour-di-gruppo: screenshot (img/tour-di-gruppo-1..n)
+tour-di-gruppo: video
+podcast-e-guida-autore: screenshot (img/podcast-e-guida-autore-1..n)
+podcast-e-guida-autore: video
+profilo-e-setup: video
+archivio-download-punti: video
+primi-5-minuti: screenshot (img/primi-5-minuti-1..n)
+primi-5-minuti: video
+interfaccia: video
+glossario: screenshot (img/glossario-1..n)
+glossario: video
+problemi-e-soluzioni: screenshot (img/problemi-e-soluzioni-1..n)
+problemi-e-soluzioni: video
+domande-frequenti: screenshot (img/domande-frequenti-1..n)
+domande-frequenti: video
+catalogo-terme: screenshot (img/catalogo-terme-1..n)
+catalogo-terme: video
+catalogo-cinema: screenshot (img/catalogo-cinema-1..n)
+catalogo-cinema: video
+catalogo-cieli: screenshot (img/catalogo-cieli-1..n)
+catalogo-cieli: video
+catalogo-street-art: screenshot (img/catalogo-street-art-1..n)
+catalogo-street-art: video
+catalogo-mercati: screenshot (img/catalogo-mercati-1..n)
+catalogo-mercati: video
+catalogo-fioriture: screenshot (img/catalogo-fioriture-1..n)
+catalogo-fioriture: video
+catalogo-memoria: screenshot (img/catalogo-memoria-1..n)
+catalogo-memoria: video
+catalogo-lento: screenshot (img/catalogo-lento-1..n)
+catalogo-lento: video
+eventi-passo-passo: video
+borghi-e-villaggi: screenshot (img/borghi-e-villaggi-1..n)
+borghi-e-villaggi: video
+livello-sentieri: video
+livello-ciclovie: screenshot (img/livello-ciclovie-1..n)
+livello-ciclovie: video
+livello-vino-gusto: screenshot (img/livello-vino-gusto-1..n)
+livello-vino-gusto: video
+livello-fontanelle: screenshot (img/livello-fontanelle-1..n)
+livello-fontanelle: video
+livello-natura2000: screenshot (img/livello-natura2000-1..n)
+livello-natura2000: video
+livello-shopping: screenshot (img/livello-shopping-1..n)
+livello-shopping: video
+livello-lusso: screenshot (img/livello-lusso-1..n)
+livello-lusso: video
+livello-neve: screenshot (img/livello-neve-1..n)
+livello-neve: video
+livello-sole: video
+livello-clima: screenshot (img/livello-clima-1..n)
+livello-clima: video
+livello-mare: screenshot (img/livello-mare-1..n)
+livello-mare: video
+livello-satellite: screenshot (img/livello-satellite-1..n)
+livello-satellite: video

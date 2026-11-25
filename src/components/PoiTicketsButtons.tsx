@@ -3,6 +3,7 @@ import { Ticket } from 'lucide-react';
 import { getApiUrl } from '../lib/api';
 import { getTranslation, type Language } from '../lib/i18n';
 import { isTouristicPoi } from './PoiContactButtons';
+import { eAttrazioneFamiglie } from './PoiAttrazioneInfo';
 
 /**
  * Biglietti d'ingresso reali (Tiqets) nella scheda POI: prezzo, rating e link
@@ -35,7 +36,9 @@ interface Props {
 }
 
 export default function PoiTicketsButtons({ poi, language }: Props) {
-  const touristic = isTouristicPoi(poi.category, poi.poiType, poi.isGem);
+  // (23/11/2026) Zoo, acquari e parchi hanno il loro blocco (PoiAttrazioneInfo: orari, prezzo, biglietto di
+  // tutti i partner): qui non si ripete lo stesso biglietto Tiqets.
+  const touristic = isTouristicPoi(poi.category, poi.poiType, poi.isGem) && !eAttrazioneFamiglie(poi.category, poi.poiType);
   const [tickets, setTickets] = useState<TicketItem[]>([]);
 
   useEffect(() => {

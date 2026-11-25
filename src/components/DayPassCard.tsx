@@ -143,7 +143,8 @@ export default function DayPassCard({ compact = false }: { compact?: boolean }) 
             )}
           </div>
         </div>
-        {!dayPass?.active && (
+        {/* (14/11/2026) Con la conferma aperta il tasto in alto sparisce: prima c'erano due «Acquista ora» insieme. */}
+        {!dayPass?.active && !chiedeConferma && (
           <button
             onClick={handleActivate}
             disabled={activating}

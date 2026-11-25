@@ -1620,7 +1620,10 @@ class LocationService {
       // comunque ma lascia un <audio> in errore e un avviso in console a ogni
       // avvio: se siamo offline non si prova nemmeno.
       if (!this.isOnline || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
-      const player = new Audio("https://assets.mixkit.co/music/preview/mixkit-ambient-tone-340.mp3");
+      // (21/11/2026) Il file remoto (assets.mixkit.co/…/mixkit-ambient-tone-340.mp3) risponde 403: non suonava già più
+      // nulla, restava solo l'errore. Al suo posto lo stesso silenzio locale del player vocale (nessuna rete, nessun
+      // errore; si sente esattamente quello che si sentiva: niente). foregroundTriggers.unaVoceSuona lo ignora (data:audio).
+      const player = new Audio("data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq");
       player.loop = true;
       // Col mute attivo l'ambiente parte a zero: si rialza al de-mute.
       player.volume = this.isGuideMuted ? 0 : 0.15;

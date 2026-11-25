@@ -270,6 +270,11 @@ enum Arbitrato {
         out = out.replacingOccurrences(of: "\\([^)]*\\)", with: " ", options: .regularExpression)
         out = out.replacingOccurrences(of: "^(the|il|la|lo|le|i|gli|l')\\s+", with: "", options: .regularExpression)
         out = out.replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression)
+        // 21/11/2026 (collaudo notturno): articoli e preposizioni interni non
+        // distinguono due righe dello stesso luogo («piazza de' Peruzzi» / «Piazza
+        // dei Peruzzi»). Stessa lista di PARTICELLE_NOME in foregroundTriggers.ts.
+        out = out.replacingOccurrences(of: "\\b(di|de|dei|degli|del|della|delle|dello|d|l|des|du|of)\\b", with: " ", options: .regularExpression)
+        out = out.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -403,6 +408,9 @@ enum NomiAnnunciabili {
     }
 
     private static let soloNumeri = "^[\\s\\d.,:/#№-]+$"
+    // (22/11/2026, collaudo nativo di Cracovia: «Ti stai avvicinando a Punto di interesse») un nome che è solo
+    // un'etichetta di tipo non è un nome. Stessa lista di NOME_GENERICO in nomiAnnunciabili.ts e NomiAnnunciabili.kt.
+    private static let nomeGenerico = "^(punto (di )?interesse|point of interest|points? d'int[ée]r[êe]t|punto de inter[ée]s|sehensw[üu]rdigkeit|poi|attrazione|attraction|attraction touristique|luogo|monumento|chiesa|museo|statua|edificio|scultura|fontana|torre|ponte|cappella|senza nome|unnamed|untitled|no name|sans nom|sin nombre|ohne namen|denkmal|kirche|statue|monument|monumento conmemorativo)$"
     private static let pietraOTarga = "\\b(stolperstein|pietra d'inciampo|pietre d'inciampo|struikelsteen|pav[ée] de m[ée]moire|plaque|targa|lapide|gedenktafel|placa conmemorativa|memorial plaque|blue plaque)\\b|^plaque\\s*№?"
     private static let descrizioneInglese = "^(a |an |the )?(school|office|residential|apartment|commercial|industrial|public|private|old|former|historic|small|large)?\\s*(building|house|statue|sculpture|monument|bust|fountain|church|chapel|shrine|memorial|tower|gate|wall|bridge|structure|artwork|mural|relief|sign|bench)( of [a-z ]+| building)?$"
 
@@ -410,8 +418,18 @@ enum NomiAnnunciabili {
     static func nomeDaAnnunciare(_ poi: Poi, lingua: String?) -> String? {
         var grezzo = pulito(poi.nameTranslated)
         if grezzo.isEmpty { grezzo = pulito(poi.nome) }
+        // 21/11/2026 (collaudo notturno): la voce leggeva anche la parentesi
+        // («Museo egizio (Il Cairo)», «Mårten Trotzig (1559–1617)»). Stessa
+        // pulizia di nomeDaAnnunciare in nomiAnnunciabili.ts e NomiAnnunciabili.kt.
+        grezzo = grezzo.replacingOccurrences(of: "\\s*\\([^)]*\\)\\s*", with: " ", options: .regularExpression)
+        // (21/11/2026) «Abaj Kunanbajev Szobra, Asztana út, Budapest.»: fino alla prima virgola.
+        grezzo = String(grezzo.split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false).first ?? Substring(grezzo))
+        grezzo = grezzo.replacingOccurrences(of: "[\\s.,;:\\-–]+$", with: "", options: .regularExpression)
+        grezzo = grezzo.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        grezzo = grezzo.trimmingCharacters(in: .whitespacesAndNewlines)
         if grezzo.count < 3 { return nil }
         if combacia(grezzo, soloNumeri) { return nil }
+        if combacia(grezzo, nomeGenerico) { return nil }
         if combacia(grezzo, pietraOTarga) || combacia(poi.poiType ?? "", "stolperstein|plaque|targa") { return nil }
         if poi.id.hasPrefix("plaque-") { return nil }
         if combacia(grezzo, descrizioneInglese) || combacia(grezzo, " - (school|residential|office) building$") { return nil }

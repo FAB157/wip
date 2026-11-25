@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-itunes-app" content="app-id=6806769883">
+<title>App de audioguía que arranca sola mientras caminas | WIP</title>
+<meta name="description" content="WIP es la app de audioguías para viajar: al llegar a un monumento, museo o iglesia, la guía arranca sola, a pie o en coche, incluso con la pantalla apagada.">
+<link rel="canonical" href="https://www.wip.guide/audioguide-app/es">
+<link rel="alternate" hreflang="it" href="https://www.wip.guide/audioguide-app">
+<link rel="alternate" hreflang="en" href="https://www.wip.guide/audioguide-app/en">
+<link rel="alternate" hreflang="fr" href="https://www.wip.guide/audioguide-app/fr">
+<link rel="alternate" hreflang="es" href="https://www.wip.guide/audioguide-app/es">
+<link rel="alternate" hreflang="de" href="https://www.wip.guide/audioguide-app/de">
+<link rel="alternate" hreflang="ru" href="https://www.wip.guide/audioguide-app/ru">
+<link rel="alternate" hreflang="zh-Hans" href="https://www.wip.guide/audioguide-app/zh">
+<link rel="alternate" hreflang="x-default" href="https://www.wip.guide/audioguide-app/en">
+<link rel="icon" type="image/png" href="/scopri/logo.png">
+<link rel="apple-touch-icon" href="/scopri/logo.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="WIP · World in Pocket">
+<meta property="og:locale" content="es_ES">
+<meta property="og:url" content="https://www.wip.guide/audioguide-app/es">
+<meta property="og:title" content="La app de audioguía que arranca sola mientras caminas">
+<meta property="og:description" content="WIP es la app de audioguías para viajar: al llegar a un monumento, museo o iglesia, la guía arranca sola, a pie o en coche, incluso con la pantalla apagada.">
+<meta property="og:image" content="https://www.wip.guide/scopri/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"MobileApplication","name":"WIP · World in Pocket","alternateName":"WIP","description":"WIP es la app de audioguías para viajar: al llegar a un monumento, museo o iglesia, la guía arranca sola, a pie o en coche, incluso con la pantalla apagada.","url":"https://www.wip.guide/audioguide-app/es","image":"https://www.wip.guide/scopri/og-image.jpg","applicationCategory":"TravelApplication","operatingSystem":"iOS, Android","inLanguage":["it","en","fr","es","de","ru","zh"],"installUrl":["https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&ct=audioguide-app&mt=8","https://play.google.com/store/apps/details?id=com.itaintasca.app"],"offers":{"@type":"Offer","price":"0","priceCurrency":"EUR","description":"Descarga gratuita; audioguías completas y Day Pass con créditos, sin suscripción."},"publisher":{"@type":"Organization","name":"WIP · World in Pocket","url":"https://www.wip.guide/"}}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","inLanguage":"es","mainEntity":[{"@type":"Question","name":"¿Hace falta conexión?","acceptedAnswer":{"@type":"Answer","text":"Para recibir una guía la primera vez, sí. En la app puedes descargar antes paquetes de zona e itinerarios y escuchar sin red; las guías completas sin conexión requieren el Day Pass activo o guías ya compradas."}},{"@type":"Question","name":"¿Funciona con la pantalla apagada?","acceptedAnswer":{"@type":"Answer","text":"Sí, en la app para iPhone y Android, con el permiso de ubicación «Siempre». En la web solo con la página abierta."}},{"@type":"Question","name":"¿Cuánto cuesta?","acceptedAnswer":{"@type":"Answer","text":"Los avisos y los avances son gratis. Una guía completa cuesta 15 créditos y es tuya para siempre; el Day Pass cuesta 200 créditos por 24 horas, hasta 40 guías. Sin suscripciones, los créditos no caducan."}},{"@type":"Question","name":"¿En qué idiomas habla?","acceptedAnswer":{"@type":"Answer","text":"Italiano, inglés, francés, español, alemán, ruso y chino, con las voces de Nicky y Dante."}},{"@type":"Question","name":"¿Tengo que hacer algo al llegar?","acceptedAnswer":{"@type":"Answer","text":"No: en modo Automático la guía arranca sola. Si lo prefieres, el modo Semiautomático te avisa y espera a que toques Escuchar."}},{"@type":"Question","name":"¿Quién escribe las guías?","acceptedAnswer":{"@type":"Answer","text":"Se generan con inteligencia artificial a partir de fuentes sobre ese lugar (Wikipedia, Wikidata, web oficial) y las leen voces sintéticas."}},{"@type":"Question","name":"¿Puedo probarla sin instalar nada?","acceptedAnswer":{"@type":"Answer","text":"Sí, wip.guide se abre en el navegador. Para la audioguía con la pantalla apagada y sin conexión necesitas la app."}}]}</script>
+<style>
+  :root{--blu:#1e3a8a;--blu-scuro:#14265c;--blu-notte:#0d1a40;--oro-chiaro:#facc15;--testo:#1f2937;--soft:#4b5563;--linea:#e3e7f0;--carta:#f6f7fb;--testo-soft:#c7d2fe}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:var(--carta);color:var(--testo);line-height:1.6;-webkit-font-smoothing:antialiased;overflow-wrap:break-word}
+  img,audio{max-width:100%;display:block}
+  a{color:var(--blu)}
+  a:focus-visible,summary:focus-visible{outline:3px solid #2f56c9;outline-offset:2px}
+  .salta{position:absolute;left:-999px;top:0}.salta:focus{left:8px;background:#fff;padding:6px 10px;z-index:20}
+  .lingue{position:sticky;top:0;z-index:10;display:flex;gap:2px;justify-content:center;flex-wrap:wrap;padding:10px 8px;background:rgba(255,255,255,.94);border-bottom:1px solid var(--linea);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+  .lingue a,.lingue strong{font-size:12px;font-weight:700;letter-spacing:.06em;color:#5b6b85;text-decoration:none;border:1px solid transparent;border-radius:999px;padding:5px 10px}
+  .lingue strong{color:#fff;background:var(--blu);border-color:var(--blu)}
+  .hero{background:linear-gradient(175deg,var(--blu) 0%,var(--blu-scuro) 55%,var(--blu-notte) 100%);color:#fff;text-align:center;padding:40px 16px 52px}
+  .hero .logo{width:80px;height:80px;margin:0 auto 20px;border-radius:20px;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+  .hero h1{font-size:clamp(27px,7vw,42px);line-height:1.18;font-weight:800;letter-spacing:-.01em;max-width:680px;margin:0 auto}
+  .hero h1 em{font-style:normal;color:var(--oro-chiaro)}
+  .hero p{max-width:560px;margin:18px auto 0;font-size:clamp(15px,4.2vw,18px);color:var(--testo-soft)}
+  .badges{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:26px}
+  .badge-store{display:flex;align-items:center;gap:10px;text-align:left;background:#fff;border:1px solid #d6dcea;border-radius:12px;padding:10px 18px;min-width:180px;color:var(--blu-scuro);text-decoration:none;box-shadow:0 4px 14px rgba(30,58,138,.12)}
+  .badge-store .icona{font-size:24px;line-height:1}
+  .badge-store .r1{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#7a879e}
+  .badge-store .r2{font-size:16px;font-weight:700;line-height:1.15}
+  .hero .web{display:inline-block;margin-top:18px;color:#fff;font-weight:700}
+  main{max-width:760px;margin:0 auto;padding:8px 16px 40px}
+  section{margin-top:40px}
+  h2{font-size:clamp(21px,5.6vw,27px);line-height:1.22;color:var(--blu-scuro);font-weight:800;margin-bottom:12px}
+  h3{font-size:18px;color:var(--blu-scuro);margin-bottom:6px}
+  main p{margin:10px 0;color:var(--soft);font-size:16.5px}
+  main p strong,main li strong{color:var(--testo)}
+  ol.passi{counter-reset:p;list-style:none}
+  ol.passi li{counter-increment:p;position:relative;padding:12px 14px 12px 56px;margin:10px 0;background:#fff;border:1px solid var(--linea);border-radius:12px;font-size:16.5px}
+  ol.passi li::before{content:counter(p);position:absolute;left:14px;top:11px;width:30px;height:30px;border-radius:50%;background:var(--blu);color:#fff;display:grid;place-items:center;font-weight:800}
+  .riquadro{background:#fff;border:1px solid var(--linea);border-radius:14px;padding:16px;margin:14px 0}
+  .riquadro audio{width:100%;margin:10px 0 6px}
+  .griglia{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:12px}
+  .griglia .riquadro{margin:0}
+  .griglia .riquadro p{font-size:15.5px}
+  details{background:#fff;border:1px solid var(--linea);border-radius:12px;padding:12px 16px;margin:10px 0}
+  summary{cursor:pointer;font-weight:700;color:var(--testo)}
+  details p{margin-top:8px}
+  ul.link{list-style:none;display:grid;gap:8px;margin-top:10px}
+  ul.link a{display:block;background:#fff;border:1px solid var(--linea);border-radius:12px;padding:12px 14px;text-decoration:none;font-weight:700}
+  .finale{text-align:center;background:#fff;border:1px solid var(--linea);border-radius:16px;padding:26px 16px;margin-top:44px}
+  .finale .badges{margin-top:16px}
+  footer{background:var(--blu-scuro);color:var(--testo-soft);text-align:center;padding:30px 16px 40px;font-size:14px;margin-top:20px}
+  footer .social{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;margin:10px 0 14px}
+  footer a{color:var(--oro-chiaro);text-decoration:none;font-weight:600}
+  footer .sito a{color:#fff;font-weight:800;font-size:16px}
+</style>
+</head>
+<body>
+<a class="salta" href="#contenuto">Ir al contenido</a>
+<nav class="lingue" aria-label="Idioma">
+  <a lang="it" hreflang="it" href="/audioguide-app">Italiano</a>
+  <a lang="en" hreflang="en" href="/audioguide-app/en">English</a>
+  <a lang="fr" hreflang="fr" href="/audioguide-app/fr">Français</a>
+  <strong lang="es" aria-current="page">Español</strong>
+  <a lang="de" hreflang="de" href="/audioguide-app/de">Deutsch</a>
+  <a lang="ru" hreflang="ru" href="/audioguide-app/ru">Русский</a>
+  <a lang="zh" hreflang="zh-Hans" href="/audioguide-app/zh">中文</a>
+</nav>
+
+<header class="hero">
+  <img class="logo" src="/scopri/logo.png" alt="WIP" width="80" height="80">
+  <h1>La app de audioguía que <em>arranca sola</em> mientras caminas</h1>
+  <p>Ningún tour que iniciar, ningún número que marcar: activa la Guía, guarda el móvil en el bolsillo y, cuando llegas a un lugar, empieza su historia. A pie o en coche, en 7 idiomas.</p>
+  <div class="badges">
+      <a class="badge-store" data-store="apple" href="https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&amp;ct=audioguide-app&amp;mt=8">
+        <span class="icona" aria-hidden="true">&#63743;</span>
+        <span><span class="r1">Descárgala en el</span><br><span class="r2">App Store</span></span>
+      </a>
+      <a class="badge-store" data-store="google" href="https://play.google.com/store/apps/details?id=com.itaintasca.app">
+        <span class="icona" aria-hidden="true">&#9654;</span>
+        <span><span class="r1">Disponible en</span><br><span class="r2">Google Play</span></span>
+      </a>
+    </div>
+  <a class="web" data-web="1" href="https://wip.guide/">Pruébala en el navegador &rarr; wip.guide</a>
+</header>
+
+<main id="contenuto">
+  <section>
+    <h2>Cómo se activa la audioguía</h2>
+    <ol class="passi">
+      <li>Ponte los auriculares y toca <strong>Guía</strong> en la barra inferior: se enciende el radar de las audioguías.</li>
+      <li>A unos <strong>150 m a pie</strong> (300 m en coche) el móvil vibra: «Te estás acercando a…».</li>
+      <li>Al llegar, a unos <strong>30 m a pie</strong> (50 m en coche), suena un breve avance de voz, gratuito.</li>
+      <li>Justo después empieza la <strong>guía completa</strong>. En modo Semiautomático eres tú quien toca <strong>Escuchar</strong>.</li>
+    </ol>
+    <p>Las distancias se miden por la calle hasta el punto de llegada del lugar, no en línea recta, y las cambias en Perfil › SETUP › GeoControl Avanzado. La app distingue si vas a pie o en coche por la velocidad: por encima de 12 km/h pasa a «coche», por debajo de 6 km/h vuelve a «a pie».</p>
+  </section>
+
+  <section>
+    <h2>Con la pantalla apagada, a pie y en coche</h2>
+    <p>En la app para <strong>iPhone y Android</strong>, un servicio del teléfono sigue tu posición incluso con la pantalla apagada: por eso pide el permiso de ubicación «Siempre». El navegador a pie WipNav también habla con la pantalla apagada.</p>
+    <p>En el coche la voz sale por los altavoces conectados al móvil, como un navegador. En la web (wip.guide en el navegador) las audioguías solo funcionan con la página abierta en primer plano.</p>
+  </section>
+
+  <section>
+    <h2>Qué lugares hablan</h2>
+    <p>Por defecto hablan monumentos y castillos, museos y galerías, iglesias y lugares de culto; miradores, naturaleza y consejos los activas tú en el Setup. Las <strong>joyas</strong>, los lugares imprescindibles, hablan siempre. Un lugar ya escuchado no se repite durante 24 horas.</p>
+    <p>Cada guía se escribe a partir de fuentes sobre ese lugar (Wikipedia, Wikidata, su web oficial) y la lee una voz sintética: es contenido generado con inteligencia artificial sobre material verificado. Si no hay material sobre un lugar, no se inventa una guía.</p>
+  </section>
+
+  <section>
+    <h2>Voces, idiomas y preguntas</h2>
+    <p><strong>Nicky</strong>, voz femenina y predeterminada; <strong>Dante</strong>, voz masculina de guía clásica; o el <strong>Dúo</strong>, un diálogo a dos voces. 7 idiomas: italiano, inglés, francés, español, alemán, ruso y chino. Con <strong>Preguntar</strong> pausas y haces una pregunta por voz o por escrito; la opción de profundizar añade hasta tres niveles más.</p>
+    <div class="riquadro">
+      <h3>Escucha una audioguía real</h3>
+      <p>Grand-Place de Bruselas, voz de Nicky, unos 2 minutos: el archivo que la app generó para un usuario real, sin retoques.</p>
+      <audio controls preload="none" src="/guida/esempi/bruxelles-grand-place-nicky.mp3"></audio>
+      <p>Este ejemplo está en italiano; la app habla tu idioma. <a href="/guida/esempi/bruxelles-grand-place-nicky.txt" target="_blank" rel="noopener">Leer el texto (italiano)</a></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Museos, itinerarios y sin conexión</h2>
+    <div class="griglia">
+      <div class="riquadro"><h3>Museos</h3><p>La <strong>Visita Museo</strong> te lleva de sala en sala y de obra en obra, con audio, curiosidades y, donde existe, el plano. Se descarga la noche antes, funciona sin conexión y es tuya sin caducidad. Con el Pase Museo encuadras una obra con la cámara y la escuchas (requiere internet).</p></div>
+      <div class="riquadro"><h3>Itinerarios</h3><p>Pide un viaje de uno o varios días: las paradas se comprueban una a una, con distancias a pie, transporte público para los tramos de más de 1,5 km y PDF para imprimir. En la Biblioteca hay itinerarios ya hechos, gratis.</p></div>
+      <div class="riquadro"><h3>Sin conexión</h3><p>En la app descargas paquetes de zona e itinerarios: mapa y audioguías funcionan sin red. Las guías completas sin conexión requieren el Day Pass activo o guías ya compradas; una guía nunca generada necesita la red.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Cuánto cuesta</h2>
+    <p>Descargar la app es gratis y muchas funciones también: mapa, fichas de los lugares, avisos de proximidad y avances de voz, navegador a pie y Biblioteca de itinerarios.</p>
+    <p>La guía completa de un lugar cuesta <strong>15 créditos</strong> y es tuya para siempre. El <strong>Day Pass</strong> (200 créditos) da 24 horas de audioguías, hasta 40 guías, también sin conexión y con la pantalla apagada. Sin suscripciones: los créditos se compran en paquetes en la app y no caducan. El precio en tu moneda lo muestra la tienda y varía según el país; la lista de precios actualizada está siempre en la app.</p>
+  </section>
+
+  <section>
+    <h2>Preguntas frecuentes</h2>
+    <details><summary>¿Hace falta conexión?</summary><p>Para recibir una guía la primera vez, sí. En la app puedes descargar antes paquetes de zona e itinerarios y escuchar sin red; las guías completas sin conexión requieren el Day Pass activo o guías ya compradas.</p></details>
+    <details><summary>¿Funciona con la pantalla apagada?</summary><p>Sí, en la app para iPhone y Android, con el permiso de ubicación «Siempre». En la web solo con la página abierta.</p></details>
+    <details><summary>¿Cuánto cuesta?</summary><p>Los avisos y los avances son gratis. Una guía completa cuesta 15 créditos y es tuya para siempre; el Day Pass cuesta 200 créditos por 24 horas, hasta 40 guías. Sin suscripciones, los créditos no caducan.</p></details>
+    <details><summary>¿En qué idiomas habla?</summary><p>Italiano, inglés, francés, español, alemán, ruso y chino, con las voces de Nicky y Dante.</p></details>
+    <details><summary>¿Tengo que hacer algo al llegar?</summary><p>No: en modo Automático la guía arranca sola. Si lo prefieres, el modo Semiautomático te avisa y espera a que toques Escuchar.</p></details>
+    <details><summary>¿Quién escribe las guías?</summary><p>Se generan con inteligencia artificial a partir de fuentes sobre ese lugar (Wikipedia, Wikidata, web oficial) y las leen voces sintéticas.</p></details>
+    <details><summary>¿Puedo probarla sin instalar nada?</summary><p>Sí, wip.guide se abre en el navegador. Para la audioguía con la pantalla apagada y sin conexión necesitas la app.</p></details>
+  </section>
+
+  <section>
+    <h2>Para saber más</h2>
+    <ul class="link">
+      <li><a href="/guida/es/audioguide">Cómo funcionan las audioguías</a></li>
+      <li><a href="/guida/es/gratis-e-crediti">Qué es gratis y qué usa créditos</a></li>
+      <li><a href="/guida/es/visita-museo">Las guías de museos</a></li>
+      <li><a href="/guida/es/web-iphone-android">Web, iPhone y Android</a></li>
+      <li><a href="/scopri/es">Descubre WIP</a></li>
+    </ul>
+  </section>
+
+  <div class="finale">
+    <h2>Móvil en el bolsillo, y a caminar</h2>
+    <div class="badges">
+      <a class="badge-store" data-store="apple" href="https://apps.apple.com/app/apple-store/id6806769883?pt=129382959&amp;ct=audioguide-app&amp;mt=8">
+        <span class="icona" aria-hidden="true">&#63743;</span>
+        <span><span class="r1">Descárgala en el</span><br><span class="r2">App Store</span></span>
+      </a>
+      <a class="badge-store" data-store="google" href="https://play.google.com/store/apps/details?id=com.itaintasca.app">
+        <span class="icona" aria-hidden="true">&#9654;</span>
+        <span><span class="r1">Disponible en</span><br><span class="r2">Google Play</span></span>
+      </a>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <p>Síguenos</p>
+  <nav class="social" aria-label="Social">
+    <a href="https://www.tiktok.com/@wipguide" target="_blank" rel="noopener">TikTok</a>
+    <a href="https://www.instagram.com/wipguide" target="_blank" rel="noopener">Instagram</a>
+    <a href="https://www.youtube.com/@wipguide" target="_blank" rel="noopener">YouTube</a>
+    <a href="https://www.facebook.com/profile.php?id=61594265810569" target="_blank" rel="noopener">Facebook</a>
+  </nav>
+  <p class="sito"><a href="https://wip.guide/">wip.guide</a></p>
+  <p style="margin-top:10px"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/support">Support</a></p>
+</footer>
+
+<script>
+/* PostHog come /scopri: niente autocapture, niente registrazione sessioni, solo 3 eventi. */
+!function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug getPageViewId captureTraceFeedback captureTraceMetric".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+posthog.init("phc_Bj6Hv4wYPYQc2a8oDLYWfcJUFbFq9dVUiJfYZJRBfMkr", { api_host: "https://eu.posthog.com", autocapture: false, capture_pageview: false, capture_pageleave: false, disable_session_recording: true });
+posthog.capture("$pageview", { lingua: "es", pagina: "audioguide-app" });
+document.querySelectorAll("[data-store]").forEach(function (a) {
+  a.addEventListener("click", function () { posthog.capture("landing_store_click", { store: a.getAttribute("data-store"), lingua: "es", pagina: "audioguide-app" }); });
+});
+document.querySelectorAll("[data-web]").forEach(function (a) {
+  a.addEventListener("click", function () { posthog.capture("landing_try_web", { lingua: "es", pagina: "audioguide-app" }); });
+});
+</script>
+</body>
+</html>

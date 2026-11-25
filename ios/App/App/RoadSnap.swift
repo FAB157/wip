@@ -412,10 +412,24 @@ final class RoadGraph {
         return max(aria, s)
     }
 
-    /// La misura di ogni chiamante: in auto `decide`, a piedi `cheDecide` sui metri di strada.
-    static func misura(aria: Double, sorgente: Sorgente?, lat: Double, lon: Double, isDriving: Bool) -> Double {
-        if isDriving, let s = sorgente { return s.decide(lat: lat, lon: lon, aria: aria) }
-        return cheDecide(aria: aria, strada: sorgente?.verso(lat: lat, lon: lon))
+    /// Raggio d'arrivo a piedi quando il chiamante non lo passa (il predefinito dell'utente).
+    static let raggioArrivoPiediM = 30.0
+    /// (21/11/2026, committente: «il risultato non peggiora mai») Linea d'aria massima allo scatto per la fine strada:
+    /// in auto NESSUN tetto (regola del 30/10; Gellért sotto la collina = limite noto e accettato), a piedi
+    /// max(raggio+20, 210) (Certosa 64, Sant'Elmo 55, Bellagio 158, Pan di Zucchero 201 coperti).
+    static let fineStradaAriaAutoM = Double.infinity
+    static let fineSentieroAriaMinM = 210.0
+    static func ariaMaxFineStrada(_ raggioArrivoPiedi: Double?) -> Double {
+        guard let r = raggioArrivoPiedi else { return fineStradaAriaAutoM }
+        return max(r + codaLiberaM, fineSentieroAriaMinM)
+    }
+
+    /// La misura di ogni chiamante: in auto `decide`; a piedi `decide` con il raggio d'arrivo (21/11/2026: metri di
+    /// strada, e «fine sentiero» solo dove il sentiero non arriva alla porta).
+    static func misura(aria: Double, sorgente: Sorgente?, lat: Double, lon: Double, isDriving: Bool, raggioArrivoPiedi: Double = raggioArrivoPiediM) -> Double {
+        guard let s = sorgente else { return cheDecide(aria: aria, strada: nil) }
+        if isDriving { return s.decide(lat: lat, lon: lon, aria: aria) }
+        return s.decide(lat: lat, lon: lon, aria: aria, raggioArrivoPiedi: raggioArrivoPiedi)
     }
 
     private struct Segmento {
@@ -624,6 +638,30 @@ final class RoadGraph {
         return [(s.catN[i], abs(t - s.catT[i]) * s.len), (s.catN[i + 1], abs(s.catT[i + 1] - t) * s.len)]
     }
 
+    /// (21/11/2026) Tutti i segmenti (non isole) entro `maxM` dal luogo, dal più vicino. Solo per `Sorgente.decide`.
+    fileprivate func segmentiVicini(lat: Double, lon: Double, maxM: Double) -> [Aggancio] {
+        let px = x(lon), py = y(lat)
+        guard px.isFinite, py.isFinite, abs(px) < 1_000_000, abs(py) < 1_000_000 else { return [] }
+        let cx = RoadGraph.cella(px), cy = RoadGraph.cella(py)
+        let r = Int((maxM / RoadGraph.cellaM).rounded(.up))
+        var out: [Aggancio] = []
+        var visti = Set<Int>()
+        for dx in -r...r {
+            for dy in -r...r {
+                guard let lista = griglia[Cella(x: cx + dx, y: cy + dy)] else { continue }
+                for i in lista where !visti.contains(i) {
+                    visti.insert(i)
+                    let s = seg[i]
+                    if s.isola { continue }
+                    let t = RoadGraph.tSu(s, px, py)
+                    let d = hypot(px - (s.ax + t * (s.bx - s.ax)), py - (s.ay + t * (s.by - s.ay)))
+                    if d <= maxM { out.append(Aggancio(seg: i, t: t, d: d)) }
+                }
+            }
+        }
+        return out.sorted { $0.d < $1.d }
+    }
+
     fileprivate func lunghezza(_ iSeg: Int) -> Double { seg[iSeg].len }
     fileprivate func agganciaLuogo(lat: Double, lon: Double, maxM: Double = RoadGraph.luogoMaxM) -> Aggancio? { aggancia(x(lon), y(lat), maxM) }
 
@@ -704,7 +742,28 @@ final class RoadGraph {
 
         /// (30/10/2026, = `decide` di distanzaStrada.ts) SOLO IN AUTO: se la via resta a più di `codaLiberaM` dal punto,
         /// decide la strada fino a dove finisce e quel tratto fuori rete conta `codaLiberaM`.
-        func decide(lat: Double, lon: Double, aria: Double) -> Double {
+        func decide(lat: Double, lon: Double, aria: Double, raggioArrivoPiedi: Double? = nil) -> Double {
+            // A PIEDI (21/11/2026, = decide di distanzaStrada.ts): metri di strada come sempre; «fine sentiero» solo se
+            // la via raggiunta più vicina al punto sta OLTRE il raggio d'arrivo. Vale la minore: mai più tardi di prima.
+            // (21/11/2026, statua di Gellért: 203 m in linea d'aria dalla via sotto la collina) La fine strada/sentiero
+            // vale solo entro `ariaMaxFineStrada` in linea d'aria (= distanzaStrada.ts, RoadGraph.kt).
+            let ariaMax = RoadGraph.ariaMaxFineStrada(raggioArrivoPiedi)
+            if let raggio = raggioArrivoPiedi {
+                let normale = RoadGraph.cheDecide(aria: aria, strada: verso(lat: lat, lon: lon))
+                for c in (aria <= ariaMax ? grafo.segmentiVicini(lat: lat, lon: lon, maxM: RoadGraph.fineAutoMaxM) : []) {
+                    var b = Double.infinity
+                    if c.seg == partenza.seg { b = partenza.d + abs(c.t - partenza.t) * grafo.lunghezza(c.seg) }
+                    for (n, w) in grafo.vicini(c.seg, c.t) { if let d = dist[n], d + w < b { b = d + w } }
+                    if b.isFinite {
+                        if c.d > raggio {
+                            let tot = b + RoadGraph.codaLiberaM
+                            if tot <= maxM { return min(normale, tot) }
+                        }
+                        break
+                    }
+                }
+                return normale
+            }
             guard let arrivo = grafo.agganciaLuogo(lat: lat, lon: lon, maxM: RoadGraph.fineAutoMaxM) else { return aria }
             var best = Double.infinity
             if arrivo.seg == partenza.seg {
@@ -713,9 +772,24 @@ final class RoadGraph {
             for (n, w) in grafo.vicini(arrivo.seg, arrivo.t) {
                 if let d = dist[n], d + w < best { best = d + w }
             }
-            if arrivo.d > RoadGraph.codaLiberaM && best.isFinite {
+            if arrivo.d > RoadGraph.codaLiberaM && best.isFinite && aria <= ariaMax {
                 let tot = best + RoadGraph.codaLiberaM
                 if tot <= maxM { return tot }
+            }
+            // 21/11/2026 (= decide di distanzaStrada.ts): la via più vicina al punto può non essere RAGGIUNTA dal grafo
+            // (SFMOMA, Jemaa el-Fna, Városliget: in auto la guida taceva a 27 m). Decide la via raggiunta più vicina
+            // entro `fineAutoMaxM`: strada fino lì + la coda (al più `codaLiberaM`).
+            if best.isInfinite && aria <= ariaMax {
+                for c in grafo.segmentiVicini(lat: lat, lon: lon, maxM: RoadGraph.fineAutoMaxM) {
+                    var b = Double.infinity
+                    if c.seg == partenza.seg { b = partenza.d + abs(c.t - partenza.t) * grafo.lunghezza(c.seg) }
+                    for (n, w) in grafo.vicini(c.seg, c.t) { if let d = dist[n], d + w < b { b = d + w } }
+                    if b.isFinite {
+                        let tot = b + min(c.d, RoadGraph.codaLiberaM)
+                        if tot <= maxM { return tot }
+                        break
+                    }
+                }
             }
             let tot = best.isFinite ? best + arrivo.d : Double.infinity
             return RoadGraph.cheDecide(aria: aria, strada: tot > maxM ? .infinity : tot)

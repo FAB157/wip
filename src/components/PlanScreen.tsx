@@ -6,6 +6,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { saveOfflineItinerary, getOfflineItinerary } from '../lib/offlineStorage';
 import { scaricaPacchettoOffline } from '../lib/pacchettoOffline';
 import { registraDownload } from '../lib/downloadsRegistry';
+import { totaleViaggioDaGiorni } from '../lib/totaleViaggio';
 import DownloadsScreen from './DownloadsScreen';
 import { tourService, MAX_TAPPE } from '../services/tourService';
 import { getDayPassState } from '../services/dayPassService';
@@ -29,6 +30,7 @@ import { Language, getTranslation, linguaCorrente } from '../lib/i18n';
 import PrintView from './PrintView';
 import { FAVORITES_EVENT } from '../lib/favorites';
 import { useWalkingNavigation } from '../hooks/useWalkingNavigation';
+import { registraPercorsiCollaudati } from '../lib/nav/percorsiCollaudati';
 import NavigationOverlay from './NavigationOverlay';
 import ClimaReportSheet from './ClimaReportSheet';
 import PlanMap from './PlanMap';
@@ -1049,6 +1051,9 @@ export default function PlanScreen({
   const [selectedFavoriteIds, setSelectedFavoriteIds] = useState<string[]>([]);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [generatedPlan, setGeneratedPlanState] = useState<GeneratedItinerary | null>(null);
+  // (20/11/2026) Le tratte camminate dal collaudo notturno (itinerari verificati) diventano il percorso iniziale del
+  // navigatore a piedi fra quelle tappe (fetchWalkingRoute): un piano senza tratte collaudate svuota il registro.
+  useEffect(() => { try { registraPercorsiCollaudati(generatedPlan); } catch { /* il navigatore calcola come sempre */ } }, [generatedPlan]);
   // (20/09/2026) Vero appena QUALCUNO ha messo un piano a schermo (l'utente da
   // «I miei itinerari», un download, una generazione). fetchCurrentPlan — il
   // ripristino dell'ultimo piano all'apertura del tab — lo guarda prima di
@@ -4143,6 +4148,20 @@ export default function PlanScreen({
         return;
       }
 
+      await suonaTestoPodcast(podcastText, dayNum);
+
+    } catch (e: any) {
+      console.error('[Podcast]', e);
+      // Addebito e rimborso sono server-side: qui si riallinea solo il saldo.
+      notifyCreditsChanged({});
+      setPlayingDay(null);
+      setIsGeneratingPodcast(null);
+      notify(getTranslation('err_generation_refunded', language));
+    }
+  };
+
+  /** Lettura di un testo di podcast con la voce del dispositivo (giorno o tappa: `chiave` = giorno, o «g_tN»). */
+  const suonaTestoPodcast = async (podcastText: string, chiave: number | string) => {
       // ── Fix pronuncia: WIP → "Uip" per TTS ──
       const ttsText = podcastText
         .replace(/\bWIP\b/g, 'Uip')
@@ -4209,11 +4228,58 @@ export default function PlanScreen({
 
       if (chunks.length === 0) return;
 
-      startTtsPlayback(chunks, utteranceLang, chosenVoice, pitch, dayNum);
+      startTtsPlayback(chunks, utteranceLang, chosenVoice, pitch, chiave);
+  };
 
+  /**
+   * PODCAST DI UNA TAPPA (18/11/2026, committente: «anche podcast per ogni singola tappa», 1 credito). Stesso lettore
+   * del podcast del giorno; il testo lo scrive /api/podcast/tappa dalle FONTI del luogo (mai dall'`attivita`): una tappa
+   * senza luogo nel database o senza fonti non ha podcast, e lo si dice senza addebitare nulla.
+   */
+  const handlePlayTappaPodcast = async (dayNum: number | string, tappa: any, tIdx: number) => {
+    import('../services/ttsService').then(({ unlockSpeech }) => unlockSpeech()).catch(() => {});
+    const chiave = `${dayNum}_t${tIdx}`;
+    if (playingDay === chiave) { handleStopPodcast(); return; }
+    podcastCancelRef.current = true;
+    window.speechSynthesis?.cancel();
+    setPlayingDay(null);
+    setIsPodcastPaused(false);
+    const planKey = generatedPlan?.id || generatedPlan?.titolo || 'plan';
+    const cacheKey = `${planKey}_day${dayNum}_t${tIdx}`;
+    const poiId = String(tappa?.poi_id || '');
+    if (!poiId) { notify(getTranslation('podcast_tappa_senza_fonti', language)); return; }
+    if (!('speechSynthesis' in window)) { notify(getTranslation('err_tts_unsupported', language)); return; }
+    setIsGeneratingPodcast(chiave);
+    try {
+      let testo = podcastCache[cacheKey];
+      if (!testo) {
+        const { data: sess } = await supabase.auth.getSession();
+        const currentUserId = sess?.session?.user?.id || 'mock-user-id';
+        const intestazioni = { 'Content-Type': 'application/json', Authorization: `Bearer ${sess?.session?.access_token || ''}` };
+        const corpo = { poiId, nome: tappa.titolo_tappa || tappa.name || '', destination: generatedPlan?.citta || generatedPlan?.titolo || '', language: language || 'IT' };
+        // Prima la domanda gratuita: già pronto (200) → si ascolta; senza fonti (422) → si dice; 204 → va generato.
+        const probe = await fetch(getApiUrl('/api/podcast/tappa'), { method: 'POST', headers: intestazioni, body: JSON.stringify({ ...corpo, soloCache: true }) }).catch(() => null);
+        if (probe?.status === 422) { notify(getTranslation('podcast_tappa_senza_fonti', language)); setIsGeneratingPodcast(null); return; }
+        if (probe?.status === 200) testo = String((await probe.json())?.text || '').trim();
+        if (!testo) {
+          const bal = await getWalletBalance(currentUserId);
+          const ok = await creditConfirm.requestConfirmation(PRICING_LIST.podcast_tappa, `Podcast · ${corpo.nome}`, bal.total);
+          if (!ok) { setIsGeneratingPodcast(null); return; }
+          const res = await fetch(getApiUrl('/api/podcast/tappa'), { method: 'POST', headers: intestazioni, body: JSON.stringify(corpo) });
+          if (res.status === 402) { notify(getTranslation('err_insufficient_credits', language)); setIsGeneratingPodcast(null); return; }
+          if (res.status === 422) { notify(getTranslation('podcast_tappa_senza_fonti', language)); setIsGeneratingPodcast(null); return; }
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          testo = String((await res.json())?.text || '').trim();
+          notifyCreditsChanged({ userId: currentUserId });
+        }
+        if (!testo) { notify(getTranslation('err_generation_refunded', language)); setIsGeneratingPodcast(null); return; }
+        setPodcastCache(prev => ({ ...prev, [cacheKey]: testo! }));
+        if (generatedPlan?.id) savePodcastToSupabase(generatedPlan.id, cacheKey, testo);
+      }
+      setIsGeneratingPodcast(null);
+      await suonaTestoPodcast(testo, chiave);
     } catch (e: any) {
-      console.error('[Podcast]', e);
-      // Addebito e rimborso sono server-side: qui si riallinea solo il saldo.
+      console.error('[Podcast tappa]', e);
       notifyCreditsChanged({});
       setPlayingDay(null);
       setIsGeneratingPodcast(null);
@@ -5565,10 +5631,22 @@ export default function PlanScreen({
     // 25/09/2026: l'id del LUOGO (idPoiDaTappa), mai `id_tappa`. «t1_0» era un id
     // di posizione: la prima tappa di ogni itinerario apriva (e riscriveva) la
     // stessa riga di shared_pois — Piazza Maggiore mostrava Greve in Chianti.
-    const stableId = idPoiDaTappa(tappa, lat, lon);
+    let stableId = idPoiDaTappa(tappa, lat, lon);
 
     const category = mapItineraryCategoryToMapCategory(tappa.tipo || 'monumenti');
-    const desc = tappa.attivita || '';
+
+    // (18/11/2026, Malta) IL TOCCO SU UNA TAPPA ERA IL BUCO DELLE REGOLE: qui si scriveva una riga `iti-` per OGNI
+    // tappa toccata, anche quelle che la verifica aveva segnalato («Chiesa… Monte Carmelo (St. Julian's)», «Giardini di
+    // San Ġorġ»: da_verificare) — tutti gli altri percorsi (from-itinerary, salvataggio, «Nel radar») le tenevano fuori.
+    // Stesse regole ora anche qui; prima si cerca un luogo con fonte con lo stesso nome a ≤ 50 m.
+    if (stableId.startsWith('iti-') && lat !== 0 && lon !== 0) {
+      try {
+        const gemello = await cercaGemelloConFonte(String(tappa.titolo_tappa || ''), lat, lon);
+        if (gemello?.id) stableId = String(gemello.id);
+      } catch { /* si resta sulla tappa */ }
+    }
+    const nonDiventaLuogo = stableId.startsWith('iti-') && (tappaSegnalata(tappa) || !tappaDiventaPoi(String(tappa.tipo || ''), String(tappa.titolo_tappa || ''), String(tappa.attivita || '')));
+    if (nonDiventaLuogo) stableId = `tappa-${stableId.slice(4)}`;
 
     // Riga propria solo per le tappe senza POI vero (`iti-…`): un poi_id agganciato
     // è una riga del catalogo e non si sovrascrive dal client.
@@ -5592,7 +5670,9 @@ export default function PlanScreen({
     onSelectPoi({
       id: stableId,
       name: tappa.titolo_tappa,
-      description: desc,
+      // (18/11/2026) Niente `attivita`: è prosa del modello scritta a memoria. Passata come descrizione finiva sotto
+      // Nicky e veniva letta come audioguida (Malta). La scheda usa solo i testi del database, cioè delle fonti.
+      description: '',
       category: category,
       lat: lat,
       lon: lon,
@@ -7754,11 +7834,15 @@ export default function PlanScreen({
                   >
                     <Printer className="w-5 h-5" />
                   </button>
-                  <button 
+                  {/* (18/11/2026, committente) Era una freccia circolare grigia senza scritta: nessuno capiva che
+                      serve a tornare indietro. Ora freccia a sinistra + «Torna indietro», in rosso. */}
+                  <button
                     onClick={() => setPlannerMode('selection')}
-                    className="p-3 bg-white rounded-2xl border border-outline-variant/10 text-on-surface-variant/40 hover:text-primary transition-colors shadow-sm"
+                    aria-label={getTranslation('go_back', language)}
+                    className="px-4 py-3 min-h-[44px] bg-red-600 text-white rounded-2xl font-black text-sm flex items-center gap-2 hover:bg-red-700 active:scale-95 transition-all shadow-sm"
                   >
-                    <RotateCcw className="w-5 h-5" />
+                    <ArrowLeft className="w-5 h-5" />
+                    {getTranslation('go_back', language)}
                   </button>
                 </div>
               </div>
@@ -8020,6 +8104,11 @@ export default function PlanScreen({
                           onSelectPoi={onSelectPoi ? handleSelectItineraryPoi : undefined}
                           legToNext={dayLegs[gIdx]?.[tIdx] || null}
                           legFromPrev={tIdx > 0 ? (dayLegs[gIdx]?.[tIdx - 1] || null) : null}
+                          podcast={tappa.poi_id ? {
+                            stato: isGeneratingPodcast === `${giorno.giorno}_t${tIdx}` ? 'genera' : playingDay === `${giorno.giorno}_t${tIdx}` ? 'suona' : 'pronto',
+                            costo: PRICING_LIST.podcast_tappa,
+                            onPlay: () => handlePlayTappaPodcast(giorno.giorno, tappa, tIdx),
+                          } : undefined}
                         />
                         </div>
                       ))}
@@ -8453,7 +8542,7 @@ export default function PlanScreen({
                   );
                 })()}
 
-                {generatedPlan.totale_viaggio && (
+                {totaleViaggioDaGiorni(generatedPlan, language) && (
                   <div className="mt-8 bg-primary p-6 rounded-[2rem] text-white shadow-xl flex flex-col sm:flex-row justify-between items-center print:break-inside-avoid">
                     <div className="flex items-center gap-3 mb-2 sm:mb-0">
                       <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center">
@@ -8462,7 +8551,7 @@ export default function PlanScreen({
                       <h3 className="text-lg font-black uppercase tracking-wide">{getTranslation("total_estimated_trip", language)}</h3>
                     </div>
                     <div className="text-xl font-black font-mono bg-white text-primary px-6 py-3 rounded-2xl shadow-inner">
-                      {generatedPlan.totale_viaggio}
+                      {totaleViaggioDaGiorni(generatedPlan, language)}
                     </div>
                   </div>
                 )}

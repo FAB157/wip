@@ -11,6 +11,7 @@ import TargaSala from './TargaSala';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { scaricaPacchettoMuseo, museoScaricato, museoCompleto, operaDallArchivio, conservaVisita, conservaOpera, prescaricaPrimeOpere } from '../lib/pacchettoMuseo';
 import { speakAudioguide, speakAudioguideFile, stopSpeech, pauseSpeech, resumeSpeech, speakWithSystemVoice, setSpeechSpeed } from '../services/ttsService';
+import { uriAudioPermanente } from '../lib/capacitor/nativeAudioHelper';
 import { Capacitor } from '@capacitor/core';
 import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
 import { printScoped } from '../lib/printScoped';
@@ -1258,7 +1259,11 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         // Voce dal file nel telefono se c'è (stessa voce anche senza rete),
         // altrimenti dal cloud.
         // Il nome dell'opera anche sulla barra in app (etichetta), non solo sul lettore nativo (meta).
-        if (guida.audioFile) await speakAudioguideFile(guida.audioFile, guida.testo, lingua, getGuideCharacter(), fineOpera, metaOpera(i), tappa.nome);
+        // (18/11/2026) L'URI salvato muore su iOS a ogni aggiornamento dell'app: si ricalcola dal percorso relativo.
+        // File sparito → voce dal cloud (mai il teaser al posto dell'opera).
+        let fileVoce = guida.audioFile || '';
+        if (guida.audioPath) fileVoce = await uriAudioPermanente(guida.audioPath);
+        if (fileVoce) await speakAudioguideFile(fileVoce, guida.testo, lingua, getGuideCharacter(), fineOpera, metaOpera(i), tappa.nome);
         else await speakAudioguide(guida.testo, lingua, getGuideCharacter(), fineOpera, tappa.nome, metaOpera(i));
         setOperaParla(i);
         // Ascoltata = vista: la spunta parte con l'ascolto, non alla fine.

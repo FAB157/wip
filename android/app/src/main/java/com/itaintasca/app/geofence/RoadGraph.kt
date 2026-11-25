@@ -70,7 +70,21 @@ class RoadGraph private constructor(
          * (30/10/2026, = `decide` di distanzaStrada.ts) SOLO IN AUTO: se la via resta a piu' di CODA_LIBERA_M dal punto,
          * decide la strada fino a dove finisce e quel tratto fuori rete conta CODA_LIBERA_M.
          */
-        fun decide(lat: Double, lon: Double, aria: Double): Double {
+        fun decide(lat: Double, lon: Double, aria: Double, raggioArrivoPiedi: Double? = null): Double {
+            // A PIEDI (21/11/2026, = decide di distanzaStrada.ts): metri di strada come sempre; «fine sentiero» solo se
+            // la via raggiunta piu' vicina al punto sta OLTRE il raggio d'arrivo. Vale la minore: mai piu' tardi di prima.
+            // (21/11/2026, statua di Gellért: scattava a 203 m in linea d'aria dalla via sotto la collina) La fine
+            // strada/sentiero vale solo entro ariaMaxFineStrada in linea d'aria (= distanzaStrada.ts).
+            val ariaMax = ariaMaxFineStrada(raggioArrivoPiedi)
+            if (raggioArrivoPiedi != null) {
+                val normale = cheDecide(aria, verso(lat, lon))
+                val r = if (aria <= ariaMax) raggiuntoPiuVicino(x(lon), y(lat), FINE_AUTO_MAX_M) else null
+                if (r != null && r[1] > raggioArrivoPiedi) {
+                    val tot = r[0] + CODA_LIBERA_M
+                    if (tot <= maxM) return kotlin.math.min(normale, tot)
+                }
+                return normale
+            }
             val arrivo = aggancia(x(lon), y(lat), FINE_AUTO_MAX_M) ?: return aria
             var best = Double.POSITIVE_INFINITY
             if (arrivo.seg == partenza.seg) {
@@ -80,12 +94,52 @@ class RoadGraph private constructor(
                 val d = dist[n]
                 if (d != null && d + w < best) best = d + w
             }
-            if (arrivo.d > CODA_LIBERA_M && best.isFinite()) {
+            if (arrivo.d > CODA_LIBERA_M && best.isFinite() && aria <= ariaMax) {
                 val tot = best + CODA_LIBERA_M
                 if (tot <= maxM) return tot
             }
+            // 21/11/2026 (= decide di distanzaStrada.ts): la via piu' vicina al punto puo' non essere RAGGIUNTA dal
+            // grafo (SFMOMA, Jemaa el-Fna, Városliget: in auto la guida taceva a 27 m). Decide la via raggiunta piu'
+            // vicina entro FINE_AUTO_MAX_M: strada fino li' + la coda (al piu' CODA_LIBERA_M).
+            if (best.isInfinite() && aria <= ariaMax) {
+                val r = raggiuntoPiuVicino(x(lon), y(lat), FINE_AUTO_MAX_M)
+                if (r != null) {
+                    val tot = r[0] + kotlin.math.min(r[1], CODA_LIBERA_M)
+                    if (tot <= maxM) return tot
+                }
+            }
             val tot = if (best.isFinite()) best + arrivo.d else Double.POSITIVE_INFINITY
             return cheDecide(aria, if (tot > maxM) Double.POSITIVE_INFINITY else tot)
+        }
+
+        /** (21/11/2026) Fra i segmenti entro maxMetri dal punto, il piu' vicino che la partenza raggiunge:
+         *  [metri di strada fino alla proiezione, distanza punto-segmento], o null. Solo per decide. */
+        private fun raggiuntoPiuVicino(px: Double, py: Double, maxMetri: Double): DoubleArray? {
+            val cx = cella(px); val cy = cella(py)
+            val r = kotlin.math.ceil(maxMetri / CELLA_M).toInt()
+            val candidati = ArrayList<AggancioStrada>()
+            val visti = HashSet<Int>()
+            for (dx in -r..r) for (dy in -r..r) {
+                val lista = griglia[chiave(cx + dx, cy + dy)] ?: continue
+                for (i in lista) {
+                    val s = seg[i]
+                    if (s.isola || !visti.add(i)) continue
+                    val t = tSu(s, px, py)
+                    val d = hypot(px - (s.ax + t * (s.bx - s.ax)), py - (s.ay + t * (s.by - s.ay)))
+                    if (d <= maxMetri) candidati.add(AggancioStrada(i, t, d))
+                }
+            }
+            candidati.sortBy { it.d }
+            for (c in candidati) {
+                var best = Double.POSITIVE_INFINITY
+                if (c.seg == partenza.seg) best = partenza.d + abs(c.t - partenza.t) * seg[c.seg].len
+                vicini(c.seg, c.t) { n, w ->
+                    val d = dist[n]
+                    if (d != null && d + w < best) best = d + w
+                }
+                if (best.isFinite()) return doubleArrayOf(best, c.d)
+            }
+            return null
         }
     }
 
@@ -189,10 +243,22 @@ class RoadGraph private constructor(
             return max(aria, strada)
         }
 
-        /** La misura di ogni chiamante: in auto `decide`, a piedi `cheDecide` sui metri di strada. */
-        fun misura(aria: Double, sorgente: Sorgente?, lat: Double, lon: Double, isDriving: Boolean): Double =
-            if (isDriving && sorgente != null) sorgente.decide(lat, lon, aria)
-            else cheDecide(aria, sorgente?.verso(lat, lon))
+        /** Raggio d'arrivo a piedi quando il chiamante non lo passa (il predefinito dell'utente). */
+        const val RAGGIO_ARRIVO_PIEDI_M = 30.0
+        /** (21/11/2026, committente: «il risultato non peggiora mai») Linea d'aria massima allo scatto per la fine strada:
+         *  in auto NESSUN tetto (regola del 30/10; Gellért sotto la collina = limite noto e accettato), a piedi
+         *  max(raggio+20, 210) (Certosa 64, Sant'Elmo 55, Bellagio 158, Pan di Zucchero 201 coperti). */
+        const val FINE_STRADA_ARIA_AUTO_M = Double.POSITIVE_INFINITY
+        const val FINE_SENTIERO_ARIA_MIN_M = 210.0
+        fun ariaMaxFineStrada(raggioArrivoPiedi: Double?): Double =
+            if (raggioArrivoPiedi == null) FINE_STRADA_ARIA_AUTO_M else kotlin.math.max(raggioArrivoPiedi + CODA_LIBERA_M, FINE_SENTIERO_ARIA_MIN_M)
+
+        /** La misura di ogni chiamante: in auto `decide`; a piedi `decide` con il raggio d'arrivo (21/11/2026: metri di
+         *  strada, e «fine sentiero» solo dove il sentiero non arriva alla porta). */
+        fun misura(aria: Double, sorgente: Sorgente?, lat: Double, lon: Double, isDriving: Boolean, raggioArrivoPiedi: Double = RAGGIO_ARRIVO_PIEDI_M): Double =
+            if (sorgente == null) cheDecide(aria, null)
+            else if (isDriving) sorgente.decide(lat, lon, aria)
+            else sorgente.decide(lat, lon, aria, raggioArrivoPiedi)
 
         /** Grafo dalle polilinee di una rete: ogni polilinea e' [lat0, lon0, lat1, lon1, ...]. */
         fun crea(polilinee: List<DoubleArray>): RoadGraph? {
